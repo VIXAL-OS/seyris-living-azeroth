@@ -5,11 +5,13 @@
 
 #include <windows.h>
 #include <d3d9.h>
+#include <tlhelp32.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -25,6 +27,8 @@ namespace wxl_livingazeroth::prof
             "other (game logic, unlisted)", "world: rest (sky, misc.)", "terrain", "grass (detail doodads)",
             "M2 models", "M2 animation (main thread)", "particles", "ribbons", "WMOs", "liquids",
             "shadow maps", "weather", "UI + overlay",
+            "Lua (addons + Blizzard UI)", "game: units & objects update", "game: world tick (after render)",
+            "mods: per-frame update (OnUpdate)", "present (incl. waiting for GPU)",
             "ours: climate / wind / fields", "ours: lights (scan, grid, baking)", "ours: light textures",
             "ours: surface cover update", "ours: surface cover draw", "ours: anti-aliasing",
         };
@@ -32,8 +36,13 @@ namespace wxl_livingazeroth::prof
         const WXL_Api* g_api = nullptr;
         int   g_enabled = 0;     // panel
         int   g_gpu = 1;         // panel: timestamp queries
+        int   g_sample = 1;      // panel: main thread by module
         bool  g_frameOn = false; // this frame is being measured (fixed at the frame's start)
         DWORD g_mainThread = 0;
+
+        // Categories that issue no GPU work of their own and are entered very often: they move the CPU
+        // clock but not the GPU timeline, which keeps the timestamp count per frame small.
+        bool CpuOnly(int category) { return category == kLua; }
 
         // --- category stack and accounting ----------------------------------------------------------
         constexpr int kMaxDepth = 256;
@@ -51,6 +60,14 @@ namespace wxl_livingazeroth::prof
 
         int Current() { return g_depth > 0 ? g_stack[g_depth - 1] : kOther; }
 
+        // The innermost category that owns GPU time.
+        int GpuCurrent()
+        {
+            for (int i = g_depth - 1; i >= 0; --i)
+                if (!CpuOnly(g_stack[i])) return g_stack[i];
+            return kOther;
+        }
+
         int64_t Now()
         {
             LARGE_INTEGER t;
@@ -59,6 +76,48 @@ namespace wxl_livingazeroth::prof
         }
 
         bool OnMainThread() { return GetCurrentThreadId() == g_mainThread; }
+
+        // --- client functions wrapped by the generic stubs (see below) --------------------------------
+        // A named core hook point, or (address != 0) a raw client address for functions the core has no
+        // point for: those were read off the 12340 disassembly and a sampled profile of the main thread.
+        struct HookDef { const char* point; uintptr_t address; int category; };
+        const HookDef kHooks[] = {
+            { "World.Render",                  0, kWorld },
+            { "Adt.RenderChunks",              0, kTerrain },
+            { "Adt.RenderChunksSinglePass",    0, kTerrain },
+            { "Adt.RenderDetailDoodads",       0, kDetail },
+            { "M2.SceneDraw",                  0, kM2 },
+            { "M2.SceneRenderDraw",            0, kM2 },
+            { "M2.SceneAnimate",               0, kM2Anim },
+            { "M2.DrawBatchedParticles",       0, kParticles },
+            { "M2.DrawParticleBatch",          0, kParticles },
+            { "M2.DrawRibbonBatch",            0, kRibbons },
+            { "Wmo.SceneRenderInstanceGroups", 0, kWmo },
+            { "Gx.LiquidRenderPass",           0, kLiquids },
+            { "M2.RenderBatchListShadowMap",   0, kShadows },
+            { "Wmo.RenderShadowMapGroups",     0, kShadows },
+            { "Weather.Render",                0, kWeather },
+            { "Gx.WorldRenderFinalize",        0, kWorldTick },  // FrameWorldUpdate, PrepareUpdate, World tick
+            // lua_pcall (core offsets engine/Lua.hpp kLuaPCall): every script call, events and OnUpdate.
+            { "prof: lua_pcall",               0x0084EC50, kLua },
+            // The object manager's per-frame update: the clock, the active player, then every object
+            // (unit movement, collision against the map, entity links).
+            { "prof: object update",           0x006F1490, kUnits },
+            // The engine's per-frame tick that calls the frame pump (Frame.Pump), where the core emits
+            // OnUpdate: wraps every module's OnUpdate handler.
+            { "prof: frame pump caller",       0x004020E0, kModsTick },
+            // The flip: clear, then the Gx device's present slot (+0x98): EndScene, Present, the queue wait.
+            { "prof: flip",                    0x00682A00, kPresent },
+        };
+        constexpr int kHookCount = static_cast<int>(sizeof(kHooks) / sizeof(kHooks[0]));
+        constexpr int kMaxHooks = 24;
+        static_assert(kHookCount <= kMaxHooks, "add stubs");
+
+        struct RetEntry { int slot; uintptr_t ret; };
+        RetEntry g_ret[kMaxDepth];
+        int      g_retDepth = 0;
+        bool     g_hooked[kMaxHooks] = {};
+        unsigned g_hookCalls[kMaxHooks] = {};   // this frame
 
         // --- GPU timestamps ---------------------------------------------------------------------
         // A ring of frames; each holds its timestamps in issue order and, per timestamp, the category
@@ -114,14 +173,189 @@ namespace wxl_livingazeroth::prof
             ++f.used;
         }
 
-        // Charges the time since the last transition to the current category, then stamps the GPU.
-        void Transition()
+        // Charges the time since the last transition to the current category.
+        void Charge()
         {
             const int64_t now = Now();
-            const int cur = Current();
-            g_frame.cpu[cur] += now - g_last;
+            g_frame.cpu[Current()] += now - g_last;
             g_last = now;
-            Stamp(cur);
+        }
+
+        // --- main thread by module (sampled) -----------------------------------------------------
+        // A background thread suspends the main thread about a thousand times a second, reads its
+        // instruction and stack pointers and resumes it at once; nothing between the two allocates or
+        // takes a lock, so the main thread can't be left waiting on the sampler. A sample whose
+        // instruction pointer is in Windows or driver code is charged to the first game or extension
+        // module found above it on the stack (the first value there that points just past a call into
+        // one of them), so each module's row includes the Direct3D, driver and CRT work it calls.
+        // Wall-clock sampling: waits count as well as work, like the frame time they explain.
+        struct SampledModule
+        {
+            uintptr_t lo, hi;
+            bool      system;
+            char      name[48];
+        };
+        constexpr int kMaxModules = 256;
+        constexpr int kUnattributed = kMaxModules;        // counter slot for samples with no module
+        constexpr unsigned kMaxStackScan = 8192;          // dwords
+        SampledModule g_mods[kMaxModules];                // sorted by lo; rebuilt only while stopped
+        int g_modCount = 0;
+        volatile LONG g_modSamples[kMaxModules + 1];      // sampler: ++, main thread: read and clear
+        volatile LONG g_modSystem[kMaxModules + 1];       // of which the instruction pointer was in system code
+        HANDLE g_samplerThread = nullptr;
+        HANDLE g_samplerTarget = nullptr;
+        volatile LONG g_samplerStop = 0;
+        uintptr_t g_stackBase = 0;
+        int64_t g_samplerWindowStart = 0;
+
+        bool StartsWithI(const wchar_t* s, const wchar_t* prefix) { return _wcsnicmp(s, prefix, std::wcslen(prefix)) == 0; }
+
+        void BuildModuleTable()
+        {
+            g_modCount = 0;
+            wchar_t windows[MAX_PATH] = {};
+            const UINT wl = GetSystemWindowsDirectoryW(windows, MAX_PATH);
+            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
+            if (snap == INVALID_HANDLE_VALUE) return;
+            MODULEENTRY32W me;
+            me.dwSize = sizeof(me);
+            for (BOOL ok = Module32FirstW(snap, &me); ok && g_modCount < kMaxModules; ok = Module32NextW(snap, &me))
+            {
+                SampledModule& m = g_mods[g_modCount++];
+                m.lo = reinterpret_cast<uintptr_t>(me.modBaseAddr);
+                m.hi = m.lo + me.modBaseSize;
+                const wchar_t* name = me.szModule;
+                // Windows, its driver store, and the C runtimes (the client ships its own msvcr80): their
+                // time belongs to whoever called them.
+                m.system = (wl > 0 && wl < MAX_PATH && _wcsnicmp(me.szExePath, windows, wl) == 0) ||
+                           StartsWithI(name, L"msvc") || StartsWithI(name, L"ucrtbase") || StartsWithI(name, L"vcruntime") ||
+                           StartsWithI(name, L"api-ms-") || _wcsicmp(name, L"dbghelp.dll") == 0;
+                if (!WideCharToMultiByte(CP_UTF8, 0, name, -1, m.name, sizeof(m.name), nullptr, nullptr)) m.name[0] = '\0';
+                m.name[sizeof(m.name) - 1] = '\0';
+                if (char* dot = std::strrchr(m.name, '.')) *dot = '\0';
+            }
+            CloseHandle(snap);
+            std::sort(g_mods, g_mods + g_modCount, [](const SampledModule& a, const SampledModule& b) { return a.lo < b.lo; });
+        }
+
+        int FindModule(uintptr_t a)
+        {
+            int lo = 0, hi = g_modCount - 1;
+            while (lo <= hi)
+            {
+                const int mid = (lo + hi) / 2;
+                if (a < g_mods[mid].lo) hi = mid - 1;
+                else if (a >= g_mods[mid].hi) lo = mid + 1;
+                else return mid;
+            }
+            return -1;
+        }
+
+        // Does r point just past a call instruction? (call rel32, and call r/m32 in its encodings.)
+        bool LooksLikeReturn(uintptr_t r, const SampledModule& m)
+        {
+            if (r < m.lo + 7) return false;
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(r);
+            if (p[-5] == 0xE8) return true;                                                    // call rel32
+            if (p[-2] == 0xFF && ((p[-1] & 0xF8) == 0xD0 ||                                    // call reg
+                                  ((p[-1] & 0xF8) == 0x10 && (p[-1] & 7) != 4 && (p[-1] & 7) != 5))) return true; // call [reg]
+            if (p[-3] == 0xFF && (((p[-2] & 0xF8) == 0x50 && (p[-2] & 7) != 4) || p[-2] == 0x14)) return true;   // [reg+d8], [sib]
+            if (p[-4] == 0xFF && p[-3] == 0x54) return true;                                   // [sib+d8]
+            if (p[-6] == 0xFF && (p[-5] == 0x15 || ((p[-5] & 0xF8) == 0x90 && (p[-5] & 7) != 4))) return true; // [d32], [reg+d32]
+            if (p[-7] == 0xFF && p[-6] == 0x94) return true;                                   // [sib+d32]
+            return false;
+        }
+
+        // Runs with the main thread suspended: reads only, no allocation, no locks.
+        int AttributeSample(uintptr_t eip, uintptr_t esp, bool& viaSystem)
+        {
+            viaSystem = false;
+            const int at = FindModule(eip);
+            if (at >= 0 && !g_mods[at].system) return at;
+            viaSystem = true;
+            const uintptr_t top = g_stackBase;
+            if (!top || esp >= top || (esp & 3) != 0) return -1;
+            const uintptr_t end = (std::min)(top, esp + static_cast<uintptr_t>(kMaxStackScan) * 4);
+            __try
+            {
+                for (uintptr_t p = esp; p + 4 <= end; p += 4)
+                {
+                    const uintptr_t v = *reinterpret_cast<const uint32_t*>(p);
+                    const int k = FindModule(v);
+                    if (k < 0 || g_mods[k].system) continue;
+                    if (LooksLikeReturn(v, g_mods[k])) return k;
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            return -1;
+        }
+
+        DWORD WINAPI SamplerMain(void*)
+        {
+            // A high-resolution timer where Windows has one (1803+), else the normal one (the sample rate
+            // then follows the system timer, which only lowers the count, not the shares).
+            HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+            if (!timer) timer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+            if (timer)
+            {
+                LARGE_INTEGER due;
+                due.QuadPart = -10000; // 1 ms
+                if (!SetWaitableTimer(timer, &due, 1, nullptr, nullptr, FALSE)) { CloseHandle(timer); timer = nullptr; }
+            }
+            while (!g_samplerStop)
+            {
+                if (timer) WaitForSingleObject(timer, 50);
+                else Sleep(1);
+                if (g_samplerStop) break;
+                if (SuspendThread(g_samplerTarget) == static_cast<DWORD>(-1)) continue;
+                CONTEXT ctx;
+                std::memset(&ctx, 0, sizeof(ctx));
+                ctx.ContextFlags = CONTEXT_CONTROL;
+                int at = -1;
+                bool viaSystem = false;
+                if (GetThreadContext(g_samplerTarget, &ctx)) at = AttributeSample(ctx.Eip, ctx.Esp, viaSystem);
+                ResumeThread(g_samplerTarget);
+                const int slot = at >= 0 ? at : kUnattributed;
+                InterlockedIncrement(&g_modSamples[slot]);
+                if (viaSystem) InterlockedIncrement(&g_modSystem[slot]);
+            }
+            if (timer) CloseHandle(timer);
+            return 0;
+        }
+
+        void StopSampler()
+        {
+            if (!g_samplerThread) return;
+            InterlockedExchange(&g_samplerStop, 1);
+            WaitForSingleObject(g_samplerThread, 2000);
+            CloseHandle(g_samplerThread);
+            g_samplerThread = nullptr;
+            if (g_samplerTarget) CloseHandle(g_samplerTarget);
+            g_samplerTarget = nullptr;
+        }
+
+        // Main thread only.
+        void StartSampler()
+        {
+            if (g_samplerThread) return;
+            BuildModuleTable();
+            if (g_modCount == 0) return;
+            g_stackBase = reinterpret_cast<uintptr_t>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackBase);
+            g_samplerTarget = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, GetCurrentThreadId());
+            if (!g_samplerTarget) return;
+            for (int i = 0; i <= kMaxModules; ++i) { g_modSamples[i] = 0; g_modSystem[i] = 0; }
+            g_samplerStop = 0;
+            g_samplerWindowStart = Now();
+            g_samplerThread = CreateThread(nullptr, 64 * 1024, &SamplerMain, nullptr, 0, nullptr);
+            if (!g_samplerThread)
+            {
+                CloseHandle(g_samplerTarget);
+                g_samplerTarget = nullptr;
+                return;
+            }
+            SetThreadPriority(g_samplerThread, THREAD_PRIORITY_HIGHEST);
         }
 
         // --- the averaged results the panel shows ---------------------------------------------------
@@ -133,16 +367,51 @@ namespace wxl_livingazeroth::prof
             unsigned frames = 0, gpuFrames = 0;
             int64_t  frameTicks = 0;
             double   gpuFrameMs = 0.0;
+            uint64_t hookCalls[kMaxHooks] = {};
         } g_window;
+        struct ModuleRow { char name[48]; double share, systemShare; };
         struct Shown
         {
             double   cpuMs[kCount] = {}, gpuMs[kCount] = {};
             double   draws[kCount] = {}, tris[kCount] = {};
             double   frameMs = 0.0, gpuFrameMs = 0.0;
             unsigned frames = 0, gpuFrames = 0;
+            double   hookCalls[kMaxHooks] = {};   // per frame
+            std::vector<ModuleRow> modules;        // biggest first
+            unsigned samples = 0;
+            double   sampleRate = 0.0;             // per second
             bool     valid = false;
         } g_shown;
         int64_t g_frameStart = 0, g_windowStart = 0;
+
+        // Takes the sampler's counts since the last call (main thread).
+        void CollectSamples(Shown& s, int64_t now)
+        {
+            if (!g_samplerThread) return;
+            LONG counts[kMaxModules + 1], system[kMaxModules + 1];
+            unsigned total = 0;
+            for (int i = 0; i <= kMaxModules; ++i)
+            {
+                counts[i] = InterlockedExchange(&g_modSamples[i], 0);
+                system[i] = InterlockedExchange(&g_modSystem[i], 0);
+                total += static_cast<unsigned>(counts[i]);
+            }
+            const double seconds = static_cast<double>(now - g_samplerWindowStart) / static_cast<double>(g_qpcFreq);
+            g_samplerWindowStart = now;
+            s.samples = total;
+            s.sampleRate = seconds > 0.0 ? total / seconds : 0.0;
+            if (!total) return;
+            for (int i = 0; i <= kMaxModules; ++i)
+            {
+                if (!counts[i] || (i < kMaxModules && i >= g_modCount)) continue;
+                ModuleRow row;
+                std::snprintf(row.name, sizeof(row.name), "%s", i == kUnattributed ? "(unattributed)" : g_mods[i].name);
+                row.share = static_cast<double>(counts[i]) / total;
+                row.systemShare = static_cast<double>(system[i]) / total;
+                s.modules.push_back(row);
+            }
+            std::sort(s.modules.begin(), s.modules.end(), [](const ModuleRow& a, const ModuleRow& b) { return a.share > b.share; });
+        }
 
         void ReadGpuFrame(GpuFrame& f)
         {
@@ -175,7 +444,8 @@ namespace wxl_livingazeroth::prof
 
             if (g_frameOn)
             {
-                Transition();
+                Charge();
+                Stamp(GpuCurrent());
                 if (g_gpuFrameOn)
                 {
                     GpuFrame& f = g_gpuFrames[g_gpuCur];
@@ -189,11 +459,16 @@ namespace wxl_livingazeroth::prof
                     g_window.draws[c] += g_frame.draws[c];
                     g_window.tris[c] += g_frame.tris[c];
                 }
+                for (int k = 0; k < kHookCount; ++k) g_window.hookCalls[k] += g_hookCalls[k];
                 g_window.frameTicks += now - g_frameStart;
                 ++g_window.frames;
             }
             g_frame = FrameAccum{};
+            for (int k = 0; k < kHookCount; ++k) g_hookCalls[k] = 0;
+            // This event fires inside the client's flip (and anything else still open): those wrappers
+            // close in the next frame, so their categories carry over into it.
             g_depth = 0;
+            for (int i = 0; i < g_retDepth && g_depth < kMaxDepth; ++i) g_stack[g_depth++] = kHooks[g_ret[i].slot].category;
 
             // Publish about once a second.
             if (now - g_windowStart >= g_qpcFreq)
@@ -209,16 +484,23 @@ namespace wxl_livingazeroth::prof
                         s.tris[c] = static_cast<double>(g_window.tris[c]) / n;
                         if (g_window.gpuFrames) s.gpuMs[c] = g_window.gpu[c] / g_window.gpuFrames;
                     }
+                    for (int k = 0; k < kHookCount; ++k) s.hookCalls[k] = static_cast<double>(g_window.hookCalls[k]) / n;
                     s.frameMs = static_cast<double>(g_window.frameTicks) * toMs / n;
                     s.gpuFrameMs = g_window.gpuFrames ? g_window.gpuFrameMs / g_window.gpuFrames : 0.0;
                     s.frames = g_window.frames;
                     s.gpuFrames = g_window.gpuFrames;
                     s.valid = true;
                 }
+                CollectSamples(s, now);
                 g_shown = s;
                 g_window = Window{};
                 g_windowStart = now;
             }
+
+            // The sampler follows the panel (started and stopped here, on the main thread).
+            const bool wantSampler = g_enabled != 0 && g_sample != 0;
+            if (wantSampler && !g_samplerThread) StartSampler();
+            else if (!wantSampler && g_samplerThread) StopSampler();
 
             // The next frame.
             g_frameOn = g_enabled != 0;
@@ -248,48 +530,18 @@ namespace wxl_livingazeroth::prof
             g_gpuFrameOn = true;
             Stamp(-1);
         }
-
-        // --- client passes: the generic wrapper ------------------------------------------------------
-        // Each hooked function gets a naked stub. On entry (main thread, profiler on) it records the
-        // caller's return address, opens the category and replaces the return address with its leave
-        // stub; then it jumps to the next link of the chain with every register as it found them. The
-        // leave stub closes the category and returns to the saved address, keeping eax/edx and the FPU
-        // state (a float result) intact. No signature or calling convention is involved.
-        struct HookDef { const char* point; int category; };
-        const HookDef kHooks[] = {
-            { "World.Render",                  kWorld },
-            { "Adt.RenderChunks",              kTerrain },
-            { "Adt.RenderChunksSinglePass",    kTerrain },
-            { "Adt.RenderDetailDoodads",       kDetail },
-            { "M2.SceneDraw",                  kM2 },
-            { "M2.SceneRenderDraw",            kM2 },
-            { "M2.SceneAnimate",               kM2Anim },
-            { "M2.DrawBatchedParticles",       kParticles },
-            { "M2.DrawParticleBatch",          kParticles },
-            { "M2.DrawRibbonBatch",            kRibbons },
-            { "Wmo.SceneRenderInstanceGroups", kWmo },
-            { "Gx.LiquidRenderPass",           kLiquids },
-            { "M2.RenderBatchListShadowMap",   kShadows },
-            { "Wmo.RenderShadowMapGroups",     kShadows },
-            { "Weather.Render",                kWeather },
-        };
-        constexpr int kHookCount = static_cast<int>(sizeof(kHooks) / sizeof(kHooks[0]));
-        constexpr int kMaxHooks = 16;
-        static_assert(kHookCount <= kMaxHooks, "add stubs");
-
-        struct RetEntry { int slot; uintptr_t ret; };
-        RetEntry g_ret[kMaxDepth];
-        int      g_retDepth = 0;
-        bool     g_hooked[kMaxHooks] = {};
-        unsigned g_hookCalls[kMaxHooks] = {};
     }
 
+    // CPU time goes to the innermost category; a GPU timestamp is issued only when the innermost
+    // category that owns GPU time changes (it closes that one's interval).
     void Enter(int category)
     {
         if (!g_frameOn || !OnMainThread()) return;
         if (g_depth >= kMaxDepth) return;
-        Transition();
+        const int gpuBefore = GpuCurrent();
+        Charge();
         g_stack[g_depth++] = category;
+        if (GpuCurrent() != gpuBefore) Stamp(gpuBefore);
     }
 
     void Leave(int category)
@@ -300,9 +552,11 @@ namespace wxl_livingazeroth::prof
         for (int i = g_depth - 1; i >= 0; --i)
             if (g_stack[i] == category)
             {
-                Transition();
+                const int gpuBefore = GpuCurrent();
+                Charge();
                 for (int k = i; k + 1 < g_depth; ++k) g_stack[k] = g_stack[k + 1];
                 --g_depth;
+                if (GpuCurrent() != gpuBefore) Stamp(gpuBefore);
                 return;
             }
     }
@@ -330,9 +584,15 @@ extern "C" uintptr_t __cdecl LaProfHookLeave(int /*slot*/)
 
 // Plain C globals, so the inline assembly below can name them: per stub, the next link of its chain,
 // and its leave stub.
-extern "C" void* g_laProfOriginal[16] = {};
-extern "C" void* g_laProfLeave[16] = {};
+extern "C" void* g_laProfOriginal[24] = {};
+extern "C" void* g_laProfLeave[24] = {};
 
+// Each hooked function gets a naked stub. On entry (main thread, profiler on) it records the caller's
+// return address, opens the category and replaces the return address with its leave stub; then it
+// jumps to the next link of the chain with every register as it found them. The leave stub closes the
+// category and returns to the saved address, keeping eax/edx and the FPU state (a float result)
+// intact. No signature or calling convention is involved.
+//
 // pushfd + pushad = 36 bytes, so the caller's return address sits at [esp + 36] in the enter stub.
 // The leave stub pushes a slot for the return address first, then flags, registers and the 108-byte
 // FPU state: the slot is at [esp + 36] again once the FPU state is popped.
@@ -375,6 +635,8 @@ LA_PROF_STUBS(0)  LA_PROF_STUBS(1)  LA_PROF_STUBS(2)  LA_PROF_STUBS(3)
 LA_PROF_STUBS(4)  LA_PROF_STUBS(5)  LA_PROF_STUBS(6)  LA_PROF_STUBS(7)
 LA_PROF_STUBS(8)  LA_PROF_STUBS(9)  LA_PROF_STUBS(10) LA_PROF_STUBS(11)
 LA_PROF_STUBS(12) LA_PROF_STUBS(13) LA_PROF_STUBS(14) LA_PROF_STUBS(15)
+LA_PROF_STUBS(16) LA_PROF_STUBS(17) LA_PROF_STUBS(18) LA_PROF_STUBS(19)
+LA_PROF_STUBS(20) LA_PROF_STUBS(21) LA_PROF_STUBS(22) LA_PROF_STUBS(23)
 
 namespace wxl_livingazeroth::prof
 {
@@ -382,10 +644,12 @@ namespace wxl_livingazeroth::prof
     {
         void (*const kEnterStubs[kMaxHooks])() = {
             &LaProfEnter0, &LaProfEnter1, &LaProfEnter2, &LaProfEnter3, &LaProfEnter4, &LaProfEnter5, &LaProfEnter6, &LaProfEnter7,
-            &LaProfEnter8, &LaProfEnter9, &LaProfEnter10, &LaProfEnter11, &LaProfEnter12, &LaProfEnter13, &LaProfEnter14, &LaProfEnter15 };
+            &LaProfEnter8, &LaProfEnter9, &LaProfEnter10, &LaProfEnter11, &LaProfEnter12, &LaProfEnter13, &LaProfEnter14, &LaProfEnter15,
+            &LaProfEnter16, &LaProfEnter17, &LaProfEnter18, &LaProfEnter19, &LaProfEnter20, &LaProfEnter21, &LaProfEnter22, &LaProfEnter23 };
         void (*const kLeaveStubs[kMaxHooks])() = {
             &LaProfLeave0, &LaProfLeave1, &LaProfLeave2, &LaProfLeave3, &LaProfLeave4, &LaProfLeave5, &LaProfLeave6, &LaProfLeave7,
-            &LaProfLeave8, &LaProfLeave9, &LaProfLeave10, &LaProfLeave11, &LaProfLeave12, &LaProfLeave13, &LaProfLeave14, &LaProfLeave15 };
+            &LaProfLeave8, &LaProfLeave9, &LaProfLeave10, &LaProfLeave11, &LaProfLeave12, &LaProfLeave13, &LaProfLeave14, &LaProfLeave15,
+            &LaProfLeave16, &LaProfLeave17, &LaProfLeave18, &LaProfLeave19, &LaProfLeave20, &LaProfLeave21, &LaProfLeave22, &LaProfLeave23 };
 
         // Draws, at the client's own Gx draw (batch: +0x08 index count; core offsets/engine/Gx.hpp).
         using DeviceDrawFn = void(__fastcall*)(void* device, void* edx, uint32_t* batch, int indexed);
@@ -421,6 +685,13 @@ namespace wxl_livingazeroth::prof
             return ok;
         }
 
+        // The name a hook shows in the calls-per-frame line.
+        const char* ShortHookName(int k)
+        {
+            const char* p = kHooks[k].point;
+            return std::strncmp(p, "prof: ", 6) == 0 ? p + 6 : p;
+        }
+
         std::string Report()
         {
             const Shown& s = g_shown;
@@ -451,6 +722,31 @@ namespace wxl_livingazeroth::prof
             }
             std::snprintf(line, sizeof(line), "%-34s %6.0f %7.1f\n", "total", draws, tris / 1000.0);
             out += line;
+
+            if (!s.modules.empty())
+            {
+                std::snprintf(line, sizeof(line), "\nmain thread by module (%u samples, %.0f/s; a module's row includes the Windows/driver code it calls)\n",
+                              s.samples, s.sampleRate);
+                out += line;
+                out += "module                              share   ms/frame   in Windows/driver\n";
+                int shown = 0;
+                for (const ModuleRow& m : s.modules)
+                {
+                    if (shown >= 16 || (m.share < 0.003 && shown >= 6)) break;
+                    std::snprintf(line, sizeof(line), "%-34s %5.1f%% %9.2f %10.1f%%\n", m.name, 100.0 * m.share, m.share * s.frameMs, 100.0 * m.systemShare);
+                    out += line;
+                    ++shown;
+                }
+            }
+
+            out += "\ncalls per frame:";
+            for (int k = 0; k < kHookCount; ++k)
+            {
+                if (!g_hooked[k]) continue;
+                std::snprintf(line, sizeof(line), " %s %.1f;", ShortHookName(k), s.hookCalls[k]);
+                out += line;
+            }
+            out += "\n";
             return out;
         }
 
@@ -458,6 +754,7 @@ namespace wxl_livingazeroth::prof
         {
             g_api->UiCheckbox("profile the frame (a little overhead while on)", &g_enabled);
             g_api->UiCheckbox("GPU time per category (timestamp queries; read back 3 frames late)", &g_gpu);
+            g_api->UiCheckbox("main thread by module (sampled about 1000 times a second; ~1-3% overhead)", &g_sample);
             if (!g_gpuSupported) g_api->UiText("GPU timestamps are not supported by this device.");
             unsigned hooked = 0;
             for (int k = 0; k < kHookCount; ++k) hooked += g_hooked[k] ? 1 : 0;
@@ -493,11 +790,16 @@ namespace wxl_livingazeroth::prof
         for (int k = 0; k < kHookCount; ++k)
         {
             g_laProfLeave[k] = reinterpret_cast<void*>(kLeaveStubs[k]);
+            void* const stub = reinterpret_cast<void*>(kEnterStubs[k]);
             // First in every chain: everything else on the same point runs inside the measurement. A chain
             // that's already live (core installs some of its own detours at start-up) refuses a new head,
             // so then behind its current head.
-            g_hooked[k] = api->HookAttachByName(kHooks[k].point, reinterpret_cast<void*>(kEnterStubs[k]), &g_laProfOriginal[k], -1000) != 0 ||
-                          api->HookAttachByName(kHooks[k].point, reinterpret_cast<void*>(kEnterStubs[k]), &g_laProfOriginal[k], 1000) != 0;
+            if (kHooks[k].address)
+                g_hooked[k] = api->HookAttach(kHooks[k].point, kHooks[k].address, stub, &g_laProfOriginal[k], -1000) != 0 ||
+                              api->HookAttach(kHooks[k].point, kHooks[k].address, stub, &g_laProfOriginal[k], 1000) != 0;
+            else
+                g_hooked[k] = api->HookAttachByName(kHooks[k].point, stub, &g_laProfOriginal[k], -1000) != 0 ||
+                              api->HookAttachByName(kHooks[k].point, stub, &g_laProfOriginal[k], 1000) != 0;
             if (!g_hooked[k])
             {
                 char msg[160];

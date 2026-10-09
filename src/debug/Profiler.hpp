@@ -9,6 +9,11 @@
 // Gx draw (Gx.DeviceDraw). GPU time comes from D3D9 timestamp queries issued whenever the innermost
 // category changes, read back a few frames later. Times are exclusive: a nested category's time
 // isn't counted again in the one around it.
+//
+// What the wrapped passes leave over ("other") is split two ways: a few more client functions are
+// wrapped the same way (Lua, the object update, the world tick, the frame pump, the flip), and a
+// sampler thread reads where the main thread is about a thousand times a second, which charges the
+// frame to the modules it is spent in -- the game, the core, each extension.
 #pragma once
 
 #include "wxl/PluginApi.h"
@@ -30,7 +35,12 @@ namespace wxl_livingazeroth::prof
         kShadows,
         kWeather,
         kUi,              // after the world: interface, overlay
-        kOursEnv,         // this module: climate, regional, wind, actors, fields
+        kLua,             // every lua_pcall: addons and Blizzard's UI scripts (CPU only, no GPU stamps)
+        kUnits,           // the object manager's per-frame update: units, movement, collision, map links
+        kWorldTick,       // the world update after the render (streaming, map objects, the world tick)
+        kModsTick,        // the frame pump: WarcraftXL modules' OnUpdate work outside our own rows below
+        kPresent,         // the client's flip: EndScene + Present, including any wait for the GPU
+        kOursEnv,        // this module: climate, regional, wind, actors, fields
         kOursLights,      // this module: light scan, grid, baking
         kOursLightUpload, // this module: light / moisture textures before the terrain
         kOursCoverFill,   // this module: surface cover update (sampling, trenches)
