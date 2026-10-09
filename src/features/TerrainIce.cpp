@@ -174,18 +174,19 @@ namespace wxl_livingazeroth::terrainice
             for (int k = 0; k < octaves; ++k, amp *= 0.5f) { sum += amp * ValueNoise(x, y, period << k, seed + k); norm += amp; }
             return sum / norm;
         }
-        // Distances (in cells) to the nearest and second-nearest feature point, n x n cells, tiling.
+        // Distances (in cells) to the nearest and second-nearest feature point, n x n cells, tiling. The
+        // points roam almost their whole cell, so the second-nearest can be two cells away: 5 x 5 search.
         void Voronoi(float x, float y, int n, uint32_t seed, float& f1, float& f2)
         {
             const float fx = x * n, fy = y * n;
             const int ix = static_cast<int>(std::floor(fx)), iy = static_cast<int>(std::floor(fy));
             f1 = f2 = 9.0f;
-            for (int dj = -1; dj <= 1; ++dj)
-                for (int di = -1; di <= 1; ++di)
+            for (int dj = -2; dj <= 2; ++dj)
+                for (int di = -2; di <= 2; ++di)
                 {
                     const int ci = ix + di, cj = iy + dj;
-                    const float px = ci + 0.15f + 0.7f * Rand(Wrap(ci, n), Wrap(cj, n), seed);
-                    const float py = cj + 0.15f + 0.7f * Rand(Wrap(ci, n), Wrap(cj, n), seed + 101);
+                    const float px = ci + 0.05f + 0.9f * Rand(Wrap(ci, n), Wrap(cj, n), seed);
+                    const float py = cj + 0.05f + 0.9f * Rand(Wrap(ci, n), Wrap(cj, n), seed + 101);
                     const float d = std::sqrt((px - fx) * (px - fx) + (py - fy) * (py - fy));
                     if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
                 }
@@ -425,14 +426,19 @@ namespace wxl_livingazeroth::terrainice
             for (int x = 0; x < size; ++x)
             {
                 const float u = (x + 0.5f) / size, w = (y + 0.5f) / size;
-                // Cracks: the edges between Voronoi cells, two scales, faded in and out by noise.
+                // Cracks: the edges between Voronoi cells at two scales, drawn thin and sketchy rather than as
+                // a honeycomb (the user's word): the lookup is warped by noise so no cell wall is straight,
+                // the edges are broken into fragments by finer noise, and their strength wanders along them.
+                const float wu = u + 0.22f * (Fbm(u, w, 6, 4, 71) - 0.5f), ww = w + 0.22f * (Fbm(u, w, 6, 4, 83) - 0.5f);
                 float a1, a2, b1, b2;
-                Voronoi(u, w, 5, 11, a1, a2);
-                Voronoi(u, w, 11, 23, b1, b2);
+                Voronoi(wu, ww, 5, 11, a1, a2);
+                Voronoi(wu, ww, 11, 23, b1, b2);
                 const float wobble = Fbm(u, w, 8, 3, 31);
-                const float big = (1.0f - SmoothStep(0.0f, 0.07f, a2 - a1)) * SmoothStep(0.3f, 0.6f, wobble);
-                const float fine = (1.0f - SmoothStep(0.0f, 0.06f, b2 - b1)) * SmoothStep(0.45f, 0.75f, Fbm(u, w, 8, 3, 47)) * 0.6f;
-                const float crack = std::min(1.0f, big + fine);
+                const float bigKeep = SmoothStep(0.42f, 0.56f, Fbm(u, w, 16, 2, 91)) * SmoothStep(0.3f, 0.6f, wobble);
+                const float fineKeep = SmoothStep(0.5f, 0.62f, Fbm(u, w, 24, 2, 97)) * SmoothStep(0.45f, 0.75f, Fbm(u, w, 8, 3, 47));
+                const float big = (1.0f - SmoothStep(0.0f, 0.03f, a2 - a1)) * bigKeep;
+                const float fine = (1.0f - SmoothStep(0.0f, 0.035f, b2 - b1)) * fineKeep * 0.6f;
+                const float crack = std::min(1.0f, (big + fine) * (0.55f + 0.45f * Fbm(u, w, 32, 2, 103)));
                 const float cloud = SmoothStep(0.25f, 0.8f, Fbm(u, w, 4, 4, 59));
                 const float bubble = bubbles[static_cast<size_t>(y) * size + x];
                 const auto b8 = [](float f) { return static_cast<uint32_t>(std::lround(std::clamp(f, 0.0f, 1.0f) * 255.0f)); };
