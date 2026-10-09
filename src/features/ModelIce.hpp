@@ -10,10 +10,13 @@
 // batch draws (M2.DrawBatch, M2.DrawBatchDoodad) switch b7 on for ice models only, so every other
 // model draw skips the block and comes out exactly as before.
 // Registers: r12..r31, b7, c174..c178 (defined), c179 (the batch's ice weight and style), c180..c189
-// (the look), s14. Stock M2 pixel shaders use r0..r11, c0..c14, s0..s7 and no b/i registers.
+// (the look), c190 (more of the style), s14. Stock M2 pixel shaders use r0..r11, c0..c14, s0..s7 and no
+// b/i registers.
 //
 // Frozen waterfalls get their own style: brighter, glassier ice whose detail is streaked along the
 // flow, at a scale that still reads from a distance (Bor's Fall in the Storm Peaks is 366 yd tall).
+// Buildings (features/WmoIce) get a lighter one: their ice textures are already bright, saturated ice,
+// so the texture's own colour stays the body and only the cracks, the sheen and the glint go on top.
 #pragma once
 
 #include "wxl/PluginApi.h"
@@ -30,18 +33,20 @@ namespace wxl_livingazeroth::modelice
     /// The pixel edit on its own (offline tests).
     bool EditPixelForTests(std::string& src, std::string& why);
 
-    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2 };
+    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Building = 3 };
     /// Which look a model path (stem or file name, any case or slashes) gets: none, ice, or frozen fall.
     Style StyleOf(const char* path);
     /// Whether a model path is one of the ice models (any style).
     bool IsIceModel(const char* path);
     /// One batch's constants for a style: the shared look (terrainice::FillModelConstants, c180..c189)
-    /// adjusted in place, and c179 = (weight, vertical stretch, extra brightness, extra reflection), where
-    /// zeros leave the shared look exactly as it is.
-    void StyleConstants(Style style, float weight, float* look, float c179[4]);
+    /// adjusted in place, c179 = (weight, vertical stretch, extra brightness, extra reflection) and
+    /// c190 = (the texture's own colour as the body, how much of the cloudy depth stays on it, extra
+    /// crack strength, 0), where zeros leave the shared look exactly as it is.
+    void StyleConstants(Style style, float weight, float* look, float c179[4], float c190[4]);
 
     constexpr int kWeightConstant = 179;
     constexpr int kLookConstant = 180;
+    constexpr int kStyleConstant = 190;
     constexpr int kSwitch = 7;   // PS bool register b7
 
     void SetEnabled(bool enabled);

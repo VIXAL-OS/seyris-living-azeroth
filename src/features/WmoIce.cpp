@@ -144,10 +144,11 @@ namespace wxl_livingazeroth::wmoice
             if (!detail) return;
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
-            float weight[4];
-            modelice::StyleConstants(modelice::Style::Ice, terrainice::Strength(), look, weight);
+            float weight[4], more[4];
+            modelice::StyleConstants(modelice::Style::Building, terrainice::Strength(), look, weight, more);
             dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
+            dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);
             dev->SetTexture(kSampler, detail);
             dev->SetSamplerState(kSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
             dev->SetSamplerState(kSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);

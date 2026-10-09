@@ -87,10 +87,11 @@ namespace wxl_livingazeroth::modelice
             if (!detail) return false;
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
-            float weight[4];
-            StyleConstants(style, terrainice::Strength(), look, weight);
+            float weight[4], more[4];
+            StyleConstants(style, terrainice::Strength(), look, weight, more);
             dev->SetPixelShaderConstantF(kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(kLookConstant, look, terrainice::kModelConstantCount);
+            dev->SetPixelShaderConstantF(kStyleConstant, more, 1);
             dev->SetTexture(kSampler, detail);
             dev->SetSamplerState(kSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
             dev->SetSamplerState(kSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
@@ -133,6 +134,9 @@ namespace wxl_livingazeroth::modelice
         // Fresnel sky reflection, sun glint) and r31 = weight x (ice - base) + weight x debug tint.
         // The batch's style (c179.yzw, zero for plain ice): the detail's world height scaled by 1 - y
         // (streaks along a fall), the body brightened by 1 + z, and w added to the Fresnel reflection.
+        // More of it (c190, zero for plain ice): x moves the body from the deep ice colour, scaled by the
+        // texture's brightness, to the texture's own colour (with y of the cloudy depth left on it), and
+        // the cracks and bubbles are strengthened by 1 + z.
         // ps_3_0 reads at most one constant register per instruction; lrp's destination can't be its
         // first or third source.
         std::string Block(const std::string& vP, const std::string& vN)
@@ -189,15 +193,22 @@ namespace wxl_livingazeroth::modelice
                 "\n      mad r25.xyz, r24, c177.y, r25"
                 "\n      mul r26.x, r25.z, c177.w"
                 "\n      add r26.x, r26.x, c177.z"
-                "\n      mul r26.xyz, r26.x, c186"
+                "\n      mov r29.w, c190.y"
+                "\n      lrp r30.y, r29.w, r26.x, c175.x"
+                "\n      mul r29.xyz, r12, r30.y"
+                "\n      mul r28.xyz, r26.x, c186"
+                "\n      lrp r26.xyz, c190.x, r29, r28"
                 "\n      mul r27.x, r25.y, c178.w"
                 "\n      mad_sat r27.x, r25.x, c178.z, r27.x"
+                "\n      mad_sat r27.x, r27.x, c190.z, r27.x"
                 "\n      mov r29.xyz, c188"
                 "\n      lrp r28.xyz, r27.x, r29, r26"
                 "\n      dp3 r27.y, r12, c176"
                 "\n      mul r27.y, r27.y, c175.w"
                 "\n      min r27.y, r27.y, c174.x"
-                "\n      mul r26.xyz, r28, r27.y"
+                "\n      mov r29.w, c190.x"
+                "\n      lrp r30.z, r29.w, c175.x, r27.y"
+                "\n      mul r26.xyz, r28, r30.z"
                 "\n      mad r26.xyz, r26, c179.z, r26"
                 "\n      lrp r28.xyz, c186.w, r26, r12"
                 "\n      dp3 r27.w, r13, r14"
@@ -230,7 +241,7 @@ namespace wxl_livingazeroth::modelice
         bool EditPixel(std::string& src, std::string& why)
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
-            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c17[4-9]|c18[0-9])\b)");
+            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c17[4-9]|c18[0-9]|c190)\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
             // The variant's view-space position and normal: what its shadow fade reads (dp3 with c3) and
             // what its sun-facing term reads (dp3 with c4). Shadow-less variants have neither.
@@ -325,9 +336,23 @@ namespace wxl_livingazeroth::modelice
 
     bool IsIceModel(const char* path) { return StyleOf(path) != Style::None; }
 
-    void StyleConstants(Style style, float weight, float* look, float c179[4])
+    void StyleConstants(Style style, float weight, float* look, float c179[4], float c190[4])
     {
         c179[0] = weight; c179[1] = 0.0f; c179[2] = 0.0f; c179[3] = 0.0f;
+        c190[0] = 0.0f; c190[1] = 0.0f; c190[2] = 0.0f; c190[3] = 0.0f;
+        if (style == Style::Building)
+        {
+            // Buildings: the texture's own colour is the body (Icecrown's and the Nexus's ice is already
+            // bright, saturated ice, which the deep body only dulled), with a little of the cloudy depth
+            // left on it and a touch of brightness to make up for it. Whiter, stronger cracks and bubbles,
+            // so they read against a bright surface, and a softer Fresnel sheen; the glint as it is.
+            c190[0] = 1.0f; c190[1] = 0.3f; c190[2] = 0.6f;
+            c179[2] = 0.1f;
+            look[23] = 0.45f;                                          // c185.w Fresnel strength
+            look[27] = 1.0f;                                           // c186.w clarity
+            look[32] = 0.85f; look[33] = 0.95f; look[34] = 1.0f;       // c188.xyz crack/bubble highlight
+            return;
+        }
         if (style != Style::FrozenFall) return;
         // Frozen falls: the detail stretched 5x along the flow at 2.5x the scale (streaks that still read
         // from far off: Bor's Fall is 366 yd tall), layers 4x deeper, a paler glacial body brightened 1.5x
