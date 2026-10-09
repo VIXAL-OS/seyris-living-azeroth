@@ -22,10 +22,16 @@
 
 #include "WorldQuery.hpp"
 
+#include "wxl/PluginApi.h"
+
 #include <cstdint>
 
 namespace wxl_livingazeroth::fields
 {
+    /// The shore worker (SetShoreWorker): off (the synchronous pass), running, or fell back to the
+    /// synchronous pass after an error.
+    enum class ShoreWorkerState { Off, Running, Failed };
+
     /// A field's handle by name ("temperature", "moisture"); -1 if unknown. Names are resolved once;
     /// sampling by handle costs nothing extra.
     int         Find(const char* name);
@@ -118,11 +124,37 @@ namespace wxl_livingazeroth::fields
     /// of painted snow's kept share; remains conservative across the entire map.
     bool     FallenSnowActive();
 
-    struct Stats { unsigned filled = 0, cells = 0, water = 0; double fillMs = 0.0, transformMs = 0.0, tickMs = 0.0; float rainSoak = 0.0f; unsigned hotGround = 0; unsigned snowPublished = 0; };
+    struct Stats
+    {
+        unsigned filled = 0, cells = 0, water = 0; double fillMs = 0.0, transformMs = 0.0, tickMs = 0.0; float rainSoak = 0.0f; unsigned hotGround = 0; unsigned snowPublished = 0;
+        // The shore pass on the worker thread (ShoreWorker): transformMs is then its time there, and
+        // the game thread only copies the grid out and the result back in.
+        ShoreWorkerState shoreWorker = ShoreWorkerState::Off;
+        bool     shorePending = false;            // a result is on its way
+        unsigned shoreApplied = 0, shoreStale = 0; // results applied / dropped (the grid moved or reset)
+        double   shoreCopyMs = 0.0, shoreApplyMs = 0.0;
+    };
     Stats GetStats();
 
     /// Once per frame, after world::Refresh(), climate::Update() and wind::Update().
     void Update(float dt, const world::Snapshot& snap);
+
+    /// The API, for log lines. Optional (without it nothing is logged).
+    void Init(const WXL_Api* api);
+
+    /// The shore pass (distance to liquids and hot ground, twice a second while the grid changes) on
+    /// one background thread instead of the game thread. Same numbers, applied a frame or so later.
+    /// Off: the original synchronous pass. Default on; any error falls back to the synchronous pass
+    /// until this is switched off and on again. Takes effect on the next Update. Main thread.
+    void SetShoreWorker(bool enabled);
+    bool ShoreWorker();
+    /// Why the worker fell back to the synchronous pass ("" if it hasn't).
+    const char* ShoreWorkerError();
+
+    /// The world is about to be torn down (WXL OnWorldLeave, before a loading screen): stop the
+    /// worker thread and drop what it was doing. Leaving the world without one (logout) stops it in
+    /// Update. It starts again when the grid next needs a shore pass.
+    void OnWorldLeave();
 
     /// Forget everything (materials or climate reloaded: refill).
     void Reset();

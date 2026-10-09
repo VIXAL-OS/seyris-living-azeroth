@@ -1,6 +1,7 @@
 #include "Config.hpp"
 
 #include "debug/WindView.hpp"
+#include "env/Fields.hpp"
 #include "env/Shelter.hpp"
 #include "features/GrassInstanced.hpp"
 #include "features/GrassMotion.hpp"
@@ -99,6 +100,10 @@ namespace wxl_livingazeroth::config
 
         terrainwet::SetEnabled(Bool(s, "TerrainWetness", "The terrain itself looks darker where the ground is wet (rain, water nearby).", terrainwet::Enabled()));
         terrainwet::SetStrength(Float(s, "TerrainWetnessStrength", "How much darker soaked ground gets, 0..1: the terrain and the surface cover alike.", terrainwet::Strength()));
+
+        fields::SetShoreWorker(Bool(s, "ShoreWorker",
+            "Work out the ground's distance to water and hot ground (the shore pass) on a background thread instead of the game thread. Same results, a frame later. 0 = the original pass on the game thread.",
+            fields::ShoreWorker()));
 
         shelter::SetEnabled(Bool(s, "WindShelter", "Roofs and overhangs shelter the ground below from wind.", shelter::Enabled()));
         shelter::SetLeeEnabled(Bool(s, "WindLee", "Walls and cliffs cast a wind shadow on their downwind side.", shelter::LeeEnabled()));

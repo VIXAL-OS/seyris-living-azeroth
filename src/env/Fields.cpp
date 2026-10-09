@@ -1,8 +1,10 @@
 #include "Fields.hpp"
 
 #include "Climate.hpp"
+#include "LatestWorker.hpp"
 #include "Regional.hpp"
 #include "Shelter.hpp"
+#include "ShoreField.hpp"
 #include "Snow.hpp"
 #include "TerrainHeight.hpp"
 #include "Wind.hpp"
@@ -10,9 +12,14 @@
 #include "../features/GroundMaterialTable.hpp"
 #include "../features/SurfaceCoverTable.hpp"
 
+#include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <limits>
+#include <optional>
+#include <thread>
 #include <vector>
 
 namespace wxl_livingazeroth::fields
@@ -59,6 +66,7 @@ namespace wxl_livingazeroth::fields
         {
             int      i = std::numeric_limits<int>::min(), j = 0; // world cell this slot holds
             bool     filled = false;  // static parts sampled (terrain loaded)
+            uint32_t fillStamp = 0;   // which fill this is (never 0 once filled): a shore result copied from an older fill doesn't apply
             float    z = 0.0f;
             float    rest = 0.3f, absorbency = 0.5f;
             uint32_t area = 0;
@@ -143,6 +151,17 @@ namespace wxl_livingazeroth::fields
         float    g_tickTime = 0.0f, g_shoreTime = 0.0f;
         uint32_t g_climateGeneration = 0, g_materialGeneration = 0;
         Stats    g_stats;
+
+        // What a shore result copied on the worker must match before it applies (see "the shore pass
+        // on a worker thread" below): every reset starts a new epoch; every change to the shore pass's
+        // inputs (a cell filled, the grid refilled) a new revision; every fill its own stamp.
+        uint64_t g_shoreEpoch = 1, g_shoreRevision = 1;
+        uint32_t g_fillSerial = 0;
+        uint32_t NextFillStamp()
+        {
+            if (++g_fillSerial == 0) ++g_fillSerial; // 0 means "no cell"
+            return g_fillSerial;
+        }
         // How much rain has soaked each zone lives in env/Regional. Ground entering the grid starts at
         // its own zone's value (x its absorbency and open sky), so walking on in the rain doesn't
         // leave a dry ring where the grid only just arrived, and a neighbouring zone isn't wet just
@@ -237,6 +256,8 @@ namespace wxl_livingazeroth::fields
             const float pos[3] = { x, y, z + 0.5f };
             c.open = shelter::Openness(pos);
             c.value = c.rest;
+            c.fillStamp = NextFillStamp();
+            ++g_shoreRevision;
             c.filled = true;
             return true;
         }
@@ -333,6 +354,173 @@ namespace wxl_livingazeroth::fields
             g_stats.water = water;
             g_stats.hotGround = hot;
             g_stats.transformMs = grassperf::Now() - t0;
+        }
+
+        // --- the shore pass on a worker thread (setting ShoreWorker) ------------------------------
+        // The same calculation (env/ShoreField) on a copy, on one background thread (env/LatestWorker).
+        // Everything here runs on the main thread, inside Update or the world-leave event: the copy is
+        // taken after this frame's fills, the result is applied at the start of a later Update, before
+        // that frame's fills. A result applies only to the grid it was copied from (epoch, map, origin)
+        // and, cell by cell, only where the slot still holds the very fill it was copied from; cells
+        // filled since keep what their fill gave them until the next pass, as with UpdateShore. Only
+        // the shore pass's own fields are written, so moisture, snow and climate changes made in the
+        // meantime stay. The dirty flag clears once a result for the current inputs is applied; until
+        // then the last values stay. Any error falls back to UpdateShore.
+        constexpr const char* kTag = "wxl-seyris-living-azeroth";
+        using ShoreThread = shore::LatestWorker<shore::Snapshot, shore::Result>;
+
+        const WXL_Api*   g_api = nullptr;
+        bool             g_shoreWanted = true;                  // the setting
+        ShoreWorkerState g_shoreState = ShoreWorkerState::Off;
+        // Owned, on the heap and never in a static object: process exit (static destructors run inside
+        // DllMain) must not join it. The core never unloads an extension, and the module is pinned
+        // before the first start, so the code the thread runs stays mapped while it exists.
+        ShoreThread*     g_shoreThread = nullptr;
+        std::atomic<std::thread::id> g_shoreOwner{};            // the thread that started it (the main thread)
+        std::atomic<bool> g_shoreStopRequested{ false };
+        bool             g_shorePending = false, g_shorePinned = false, g_shoreLogged = false;
+        unsigned         g_shoreApplied = 0, g_shoreStale = 0;
+        double           g_shoreCopyMs = 0.0, g_shoreApplyMs = 0.0;
+        char             g_shoreError[192] = "";
+        // The two buffers that travel with each job (copy out, result back), kept between passes.
+        std::vector<shore::Input>  g_shoreSpareInputs;
+        std::vector<shore::Output> g_shoreSpareOutputs;
+
+        shore::GridKey ShoreKey() { return { g_shoreEpoch, g_map, g_firstI, g_firstJ, kSize }; }
+
+        // Joins the thread: at most the one calculation running now (about a millisecond).
+        void ShoreStop()
+        {
+            g_shorePending = false;
+            ShoreThread* thread = g_shoreThread;
+            if (!thread) return;
+            g_shoreThread = nullptr;
+            if (g_shoreState == ShoreWorkerState::Running) g_shoreState = ShoreWorkerState::Off;
+            try { thread->Stop(); } catch (...) {} // only refuses on another thread; the destructor joins anyway
+            delete thread;
+            std::vector<shore::Input>().swap(g_shoreSpareInputs);
+            std::vector<shore::Output>().swap(g_shoreSpareOutputs);
+        }
+
+        void ShoreFail(const char* what, const char* detail)
+        {
+            std::snprintf(g_shoreError, sizeof(g_shoreError), "%s%s%s", what, detail && *detail ? ": " : "", detail ? detail : "");
+            ShoreStop();
+            g_shoreState = ShoreWorkerState::Failed;
+            g_shoreDirty = true; // UpdateShore redoes the pass at the next half-second mark
+            if (g_api) g_api->Log(WXL_LOG_WARN, kTag, "fields: shore worker off, back to the synchronous pass (%s).", g_shoreError);
+        }
+
+        void ShoreFail(const char* what, const std::exception_ptr& error)
+        {
+            try { if (error) std::rethrow_exception(error); ShoreFail(what, "no result"); }
+            catch (const std::exception& e) { ShoreFail(what, e.what()); }
+            catch (...) { ShoreFail(what, "unknown exception"); }
+        }
+
+        bool ShoreStart()
+        {
+            if (g_shoreThread) return true;
+            if (!g_shoreWanted || g_shoreState == ShoreWorkerState::Failed) return false;
+            try
+            {
+                if (!g_shorePinned && !(g_shorePinned = shore::PinModule()))
+                {
+                    ShoreFail("could not pin the module for a worker thread", "");
+                    return false;
+                }
+                const shore::ComputeFn compute = shore::ComputeForTests();
+                g_shoreThread = new ShoreThread([compute](shore::Snapshot& s) { return shore::RunJob(s, compute); });
+                g_shoreOwner = std::this_thread::get_id();
+                g_shoreState = ShoreWorkerState::Running;
+                if (g_api && !g_shoreLogged) g_api->Log(WXL_LOG_INFO, kTag, "fields: shore pass on a worker thread (ShoreWorker = 1).");
+                g_shoreLogged = true;
+                return true;
+            }
+            catch (const std::exception& e) { ShoreFail("could not start the worker thread", e.what()); }
+            catch (...) { ShoreFail("could not start the worker thread", "unknown exception"); }
+            return false;
+        }
+
+        // Copies the grid (logical order, not storage slots) and queues it. False: run UpdateShore.
+        bool ShoreSubmit()
+        {
+            if (!ShoreStart()) return false;
+            try
+            {
+                const double t0 = grassperf::Now();
+                shore::Snapshot s;
+                s.key = ShoreKey();
+                s.revision = g_shoreRevision;
+                s.params = { kCell, kShoreNear, kShoreFar, kShoreLow, kShoreHigh, kHeatNear, kHeatFar, kHeatLow, kHeatHigh, kHotGroundShare };
+                s.fp = shore::CaptureFpControl();
+                s.cells.swap(g_shoreSpareInputs); // every element is written below
+                s.cells.resize(static_cast<size_t>(kSize) * kSize);
+                s.spare.swap(g_shoreSpareOutputs);
+                for (int b = 0; b < kSize; ++b)
+                    for (int a = 0; a < kSize; ++a)
+                    {
+                        shore::Input& in = s.cells[static_cast<size_t>(b) * kSize + a];
+                        const Cell* c = Live(a, b);
+                        if (!c) { in.stamp = 0; continue; } // no cell here: the rest is ignored
+                        in.stamp = c->fillStamp;
+                        in.submerged = c->submerged; in.liquidHot = c->liquidHot;
+                        in.z = c->z; in.waterZ = c->waterZ;
+                        in.liquidMoisture = c->liquidMoisture; in.liquidTemp = c->liquidTemp;
+                        in.hotShare = c->hotShare; in.hotTemp = c->hotTemp;
+                        in.liquid = c->liquid;
+                    }
+                g_shoreThread->Submit(std::move(s));
+                g_shorePending = true;
+                g_shoreCopyMs = grassperf::Now() - t0;
+                return true;
+            }
+            catch (const std::exception& e) { ShoreFail("could not hand the grid to the worker", e.what()); }
+            catch (...) { ShoreFail("could not hand the grid to the worker", "unknown exception"); }
+            return false;
+        }
+
+        // A finished result for this grid goes in. Never waits for the worker.
+        void ShorePoll()
+        {
+            if (!g_shoreThread) return;
+            try
+            {
+                std::optional<ShoreThread::Completion> done = g_shoreThread->TryTake();
+                if (!done) return;
+                g_shorePending = false;
+                if (done->error || !done->value) { ShoreFail("the worker's calculation failed", done->error); return; }
+                shore::Result& r = *done->value;
+                struct Recycle // the buffers go back for the next pass, applied or not
+                {
+                    shore::Result& r;
+                    ~Recycle() { g_shoreSpareInputs.swap(r.inputs); g_shoreSpareOutputs.swap(r.cells); }
+                } recycle{ r };
+                if (!shore::SameGrid(r.key, ShoreKey()) || r.cells.size() != static_cast<size_t>(kSize) * kSize)
+                {
+                    ++g_shoreStale;
+                    g_shoreDirty = true; // whatever moved the grid has asked for a pass already; make sure
+                    return;
+                }
+                const double t0 = grassperf::Now();
+                for (int b = 0; b < kSize; ++b)
+                    for (int a = 0; a < kSize; ++a)
+                    {
+                        const shore::Output& o = r.cells[static_cast<size_t>(b) * kSize + a];
+                        if (!o.stamp) continue;      // no cell when copied: UpdateShore wouldn't have touched it
+                        Cell* c = Live(a, b);
+                        if (!c || c->fillStamp != o.stamp) continue; // refilled since: its fill's values stay
+                        shore::Apply(*c, o);
+                    }
+                g_stats.water = r.water;
+                g_stats.hotGround = r.hotGround;
+                g_stats.transformMs = r.computeMs;
+                if (r.revision == g_shoreRevision) g_shoreDirty = false; // else: a newer pass follows on schedule
+                ++g_shoreApplied;
+                g_shoreApplyMs = grassperf::Now() - t0;
+            }
+            catch (const std::exception& e) { ShoreFail("could not apply the worker's result", e.what()); }
+            catch (...) { ShoreFail("could not apply the worker's result", "unknown exception"); }
         }
 
         float Equilibrium(const Cell& c, float temperature, float humidity)
@@ -764,17 +952,44 @@ namespace wxl_livingazeroth::fields
         Stats s = g_stats;
         s.rainSoak = regional::RainSoak(g_map, regional::PlayerZone());
         s.snowPublished = g_snowPublishes;
+        s.shoreWorker = g_shoreState;
+        s.shorePending = g_shorePending;
+        s.shoreApplied = g_shoreApplied;
+        s.shoreStale = g_shoreStale;
+        s.shoreCopyMs = g_shoreCopyMs;
+        s.shoreApplyMs = g_shoreApplyMs;
         return s;
+    }
+
+    void Init(const WXL_Api* api) { g_api = api; }
+
+    void SetShoreWorker(bool enabled)
+    {
+        g_shoreWanted = enabled;
+        if (!enabled && g_shoreState == ShoreWorkerState::Failed) { g_shoreState = ShoreWorkerState::Off; g_shoreError[0] = '\0'; }
+    }
+    bool        ShoreWorker() { return g_shoreWanted; }
+    const char* ShoreWorkerError() { return g_shoreError; }
+
+    void OnWorldLeave()
+    {
+        // The core emits it on the main thread (its world-enter detour); anywhere else, the next
+        // Update stops the thread instead.
+        g_shoreStopRequested = true;
+        if (g_shoreOwner.load() == std::this_thread::get_id()) ShoreStop();
     }
 
     void Refill()
     {
         for (Cell& c : g_cells) c.filled = false;
         g_fillCursor = 0;
+        ++g_shoreRevision;
     }
 
     void Reset()
     {
+        ++g_shoreEpoch; // a shore result still on its way belongs to the grid being dropped
+        ++g_shoreRevision;
         for (Cell& c : g_cells) c = Cell{};
         std::fill(g_excess.begin(), g_excess.end(), 0);
         g_haveGrid = false;
@@ -787,6 +1002,8 @@ namespace wxl_livingazeroth::fields
 
     void Update(float dt, const world::Snapshot& snap)
     {
+        // The worker thread stops here (ordinary main-thread callback): switched off, world left.
+        if (g_shoreStopRequested.exchange(false) || (!g_shoreWanted && g_shoreThread) || !snap.inWorld) ShoreStop();
         if (!snap.inWorld) { if (g_haveGrid) Reset(); g_map = -1; return; }
         if (snap.mapId != g_map || climate::Generation() != g_climateGeneration || materials::Generation() != g_materialGeneration)
         {
@@ -807,6 +1024,10 @@ namespace wxl_livingazeroth::fields
         }
         g_wet.size = kSize; g_wet.cellSize = kCell; g_wet.firstI = g_firstI; g_wet.firstJ = g_firstJ; g_wet.excess = g_excess.data();
         g_wet.normal = g_normal.data();
+
+        // A shore result from the worker for this grid goes in before this frame's fills (with fills
+        // every frame while terrain streams in, after them it would always be a revision behind).
+        ShorePoll();
 
         // Static sampling within the budget: cells whose slot holds another world cell, or that
         // weren't loaded yet. One pass over the grid per sweep; unloaded ones are retried next sweep.
@@ -836,7 +1057,12 @@ namespace wxl_livingazeroth::fields
         }
 
         g_shoreTime += dt;
-        if (g_shoreDirty && g_shoreTime >= 0.5f) { UpdateShore(); g_shoreDirty = false; g_shoreTime = 0.0f; }
+        if (g_shoreDirty && g_shoreTime >= 0.5f)
+        {
+            // Worker: copy and queue; dirty stays until a result for these inputs is applied.
+            if (ShoreSubmit()) g_shoreTime = 0.0f;
+            else { UpdateShore(); g_shoreDirty = false; g_shoreTime = 0.0f; }
+        }
 
         g_tickTime += dt;
         if (g_tickTime >= kTick) { Tick(g_tickTime); g_tickTime = 0.0f; }

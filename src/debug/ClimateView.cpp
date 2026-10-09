@@ -105,6 +105,17 @@ namespace wxl_livingazeroth::debug
             std::snprintf(line, sizeof(line), "moisture grid: %u / %u cells sampled, %u under water, %u hot ground; rain soak so far %.2f; fill %.2f ms, shore pass %.2f ms, step %.2f ms",
                           st.filled, st.cells, st.water, st.hotGround, st.rainSoak, st.fillMs, st.transformMs, st.tickMs);
             g_api->UiText(line);
+            int shoreWorker = fields::ShoreWorker() ? 1 : 0;
+            if (g_api->UiCheckbox("shoreline on a worker thread", &shoreWorker)) fields::SetShoreWorker(shoreWorker != 0);
+            if (st.shoreWorker == fields::ShoreWorkerState::Failed)
+                std::snprintf(line, sizeof(line), "  shore pass back on the game thread after an error (untick and tick to retry): %s", fields::ShoreWorkerError());
+            else if (!shoreWorker)
+                std::snprintf(line, sizeof(line), "  shore pass on the game thread");
+            else
+                std::snprintf(line, sizeof(line), "  shore pass on the worker%s (game thread: copy %.2f ms + apply %.2f ms); %u results applied, %u dropped (grid moved)%s",
+                              st.shoreWorker == fields::ShoreWorkerState::Running ? "" : " (starts when needed)",
+                              st.shoreCopyMs, st.shoreApplyMs, st.shoreApplied, st.shoreStale, st.shorePending ? "; one on its way" : "");
+            g_api->UiText(line);
 
             // The regional layer: every zone seen this session.
             if (g_api->UiCollapsingHeader("Zones (regional layer)"))
