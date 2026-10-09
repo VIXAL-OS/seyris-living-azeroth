@@ -1,5 +1,6 @@
 #include "SurfaceCover.hpp"
 
+#include "../debug/Profiler.hpp"
 #include "../env/Actors.hpp"
 #include "../env/Climate.hpp"
 #include "../env/Fields.hpp"
@@ -1561,6 +1562,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         // bound. Otherwise (end of scene) both have to be put back first.
         void Draw(IDirect3DDevice9* dev, IDirect3DSurface9* sceneDepth, bool inPass)
         {
+            prof::Scope scope(prof::kOursCoverDraw);
             g_drawPatches = g_emptyLevels = 0;
             g_drawMs = 0;
             if (!dev || !EnsureGpu(dev)) return;
@@ -1909,8 +1911,11 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         void __cdecl hkTerrainStage()
         {
             // The patched terrain shaders read the ground moisture (features/TerrainWetness).
-            terrainwet::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
-            terrainlights::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
+            {
+                prof::Scope scope(prof::kOursLightUpload);
+                terrainwet::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
+                terrainlights::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
+            }
             g_origTerrainStage();
             if (g_settings.enabled && g_settings.drawPoint == 0)
                 Draw(static_cast<IDirect3DDevice9*>(gx::RawDevice()), nullptr, true);
