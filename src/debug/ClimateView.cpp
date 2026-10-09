@@ -133,7 +133,7 @@ namespace wxl_livingazeroth::debug
             }
 
             g_api->UiSeparator();
-            g_api->UiTextWrapped(terrainwet::StatusLine());
+            g_api->UiText(terrainwet::StatusLine());
             int terrainOn = terrainwet::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("wet terrain (darker where the ground is wetter than its rest)", &terrainOn)) terrainwet::SetEnabled(terrainOn != 0);
             static const char* const kDebugViews[] = { "debug: off", "debug: whole moisture grid (+-128 yd)", "debug: whole terrain", "debug: 10 yd stripes" };

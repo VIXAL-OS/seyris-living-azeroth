@@ -70,7 +70,7 @@ namespace wxl_livingazeroth::debug
             const grassinst::TerrainProbe& p = grassinst::Probe();
             if (!p.valid)
             {
-                g_api->UiTextWrapped("terrain under the player: not seen (needs instanced grass on and ground effects in this chunk)");
+                g_api->UiText("terrain under the player: not seen (needs instanced grass on and ground effects in this chunk)");
                 return;
             }
             std::snprintf(line, sizeof(line), "chunk %08X, player at local (%.1f, %.1f), cell (%d, %d)",
@@ -94,14 +94,14 @@ namespace wxl_livingazeroth::debug
             Describe(tb, b, sizeof(b));
             std::snprintf(line, sizeof(line), "cell's dominant layer: A = layer %d -> %s   B (axes swapped) = layer %d -> %s",
                           p.dominantA, a, p.dominantB, b);
-            g_api->UiTextWrapped(line);
+            g_api->UiText(line);
 
             const char* verdict =
                 ta >= 0 && ta == s.playerTerrainType ? "MATCH (A): the client's value is the cell's dominant layer -> ground effect -> last column" :
                 tb >= 0 && tb == s.playerTerrainType ? "MATCH (B): same, with the axes the other way round" :
                 anyMatch                             ? "PARTIAL: one of the chunk's layers matches, but not the cell's dominant one" :
                                                        "NO MATCH: the client's value doesn't come from these layers (or you're on a WMO/object)";
-            g_api->UiTextWrapped(verdict);
+            g_api->UiText(verdict);
         }
 
         void __cdecl Panel(void* user)

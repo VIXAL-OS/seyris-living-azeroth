@@ -222,7 +222,7 @@ namespace wxl_livingazeroth::debug
                 char bakeLine[256];
                 std::snprintf(bakeLine, sizeof(bakeLine), "baking: %u drawn light(s) want occlusion, %u ready; %u rays this frame (%.2f ms); %u light(s) cached (%d rays x 5 per light)",
                               bs.bakeWanted, bs.bakeDone, bs.bakeRays, bs.bakeMs, bs.bakeCached, lights::kOccCells);
-                g_api->UiTextWrapped(bakeLine);
+                g_api->UiText(bakeLine);
             }
             g_api->UiSliderFloat("merge lights closer than (yd)", &cfg.mergeDistance, 0.0f, 3.0f);
             g_api->UiSliderFloat("flicker (how much a flame's light dips)", &cfg.flicker, 0.0f, 0.8f);
@@ -237,7 +237,7 @@ namespace wxl_livingazeroth::debug
                 g_api->UiCombo("models: debug view", &modellights::DebugView(), kViews, 6);
                 g_api->UiCheckbox("models: probe the light texture at every model draw", &modellights::Probe());
                 const std::string probe = modellights::ProbeLine();
-                g_api->UiTextWrapped(probe.c_str());
+                g_api->UiText(probe.c_str());
                 if (g_api->UiButton("Copy model-light status##mlcopy"))
                     CopyToClipboard(std::string(modellights::StatusLine()) + "\r\n" + probe + "\r\n");
 
@@ -248,13 +248,13 @@ namespace wxl_livingazeroth::debug
                 const std::string report = WmoBindProbeReport();
                 if (g_api->UiButton("Copy WMO bind probe##wmoprobecopy"))
                     CopyToClipboard(std::string(modellights::StatusLine()) + "\r\n" + report);
-                g_api->UiTextWrapped(report.c_str());
+                g_api->UiText(report.c_str());
             }
             const lights::Stats ls = lights::GetStats();
             char head[320];
             std::snprintf(head, sizeof(head), "DoodadLightProperties / DoodadLightAssignment: %s%s; in range: %u table light(s), %u model(s) with their own lights suppressed, %u attachment(s) not found (at the origin instead)",
                           lighttable::Status(), lighttable::Dirty() ? " (edited, not saved)" : "", ls.tableLights, ls.suppressedModels, ls.attachFallbacks);
-            g_api->UiTextWrapped(head);
+            g_api->UiText(head);
             if (g_api->UiButton("Reload light tables from disk")) lighttable::Load(g_cdbc);
             // Research for M2 receivers: the M2 shaders the client has loaded so far.
             std::snprintf(head, sizeof(head), "Dump M2 shaders (%u effect(s) loaded; Logs\\living-azeroth)",
@@ -262,11 +262,11 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiButton(head)) DumpM2Shaders(g_api);
             std::snprintf(head, sizeof(head), "attached models in range (items in hands, ...): %u, of those %u at the parent's rest pose (not animated now); indoor lights (kept off the terrain): %u (%u locate call(s) this frame)",
                           ls.attachedModels, ls.attachedAtRest, ls.indoor, ls.indoorTests);
-            g_api->UiTextWrapped(head);
+            g_api->UiText(head);
             std::snprintf(head, sizeof(head), "our lights: %u models in the scene, %u in range (scan %.2f ms), %u model lights (%u placed by the client, %u via the world matrix, %u with the file's colour), %u in range, %u merged, %u drawn (max %d%s)",
                           ls.models, ls.modelsInRange, ls.scanMs, ls.modelLights, ls.fromClient, ls.fromWorldMatrix, ls.fileColor,
                           ls.inRange, ls.merged, ls.active, lights::kMaxPool, ls.poolDropped ? ", the farthest dropped" : "");
-            g_api->UiTextWrapped(head);
+            g_api->UiText(head);
             {
                 const lights::Grid& grid = lights::CellGrid();
                 unsigned patchMost = 0, patchFull = 0;
@@ -275,11 +275,11 @@ namespace wxl_livingazeroth::debug
                 std::snprintf(gridLine, sizeof(gridLine), "light grid: %d x %d cells of %.0f yd (%.0f yd across), up to %d lights each; busiest cell %u lights; %u cell(s) over the limit (%u light entries left out: raise \"lights per cell\" if this stays above 0 where it matters). Surface cover: busiest patch %u lights, %u patch(es) over %d",
                               grid.cells, grid.cells, grid.cellSize, grid.cells * grid.cellSize, grid.perCell, ls.busiestCell, ls.fullCells, ls.droppedFromCells,
                               patchMost, patchFull, lights::kMaxLights);
-                g_api->UiTextWrapped(gridLine);
+                g_api->UiText(gridLine);
             }
-            g_api->UiTextWrapped(terrainlights::StatusLine());
-            g_api->UiTextWrapped(modellights::StatusLine());
-            g_api->UiTextWrapped(terrainwet::StatusLine());
+            g_api->UiText(terrainlights::StatusLine());
+            g_api->UiText(modellights::StatusLine());
+            g_api->UiText(terrainwet::StatusLine());
             g_api->UiSeparator();
 
             g_api->UiSliderFloat("range (yd)", &g_range, 5.0f, 300.0f);
@@ -341,7 +341,7 @@ namespace wxl_livingazeroth::debug
                 std::snprintf(status, sizeof(status), CopyToClipboard(text) ? "copied" : "clipboard unavailable");
             }
             if (status[0]) { g_api->UiSameLine(); g_api->UiText(status); }
-            for (const std::string& t : lines) g_api->UiTextWrapped(t.c_str());
+            for (const std::string& t : lines) g_api->UiText(t.c_str());
         }
     }
 

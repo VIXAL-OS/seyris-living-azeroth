@@ -151,7 +151,7 @@ namespace wxl_livingazeroth::debug
                 std::snprintf(line, sizeof(line), "WindProfile.cdbc: %u row(s)", wind::ProfileRowCount());
             else
                 std::snprintf(line, sizeof(line), "WindProfile.cdbc: %s", wind::ProfileError());
-            g_api->UiTextWrapped(line);
+            g_api->UiText(line);
             if (g_api->UiButton("Reload WindProfile.cdbc"))
                 wind::LoadProfiles(g_cdbc);
 
@@ -177,7 +177,7 @@ namespace wxl_livingazeroth::debug
             if (const char* why = grass::DisabledReason())
             {
                 std::snprintf(line, sizeof(line), "Grass motion OFF: %s", why);
-                g_api->UiTextWrapped(line);
+                g_api->UiText(line);
             }
             else
             {
@@ -186,7 +186,7 @@ namespace wxl_livingazeroth::debug
                     std::snprintf(line, sizeof(line), "shader patch '%s': %u applied, %u failed%s%s",
                                   st.name.c_str(), st.applied, st.failed,
                                   st.lastError.empty() ? "" : " -- ", st.lastError.c_str());
-                    g_api->UiTextWrapped(line);
+                    g_api->UiText(line);
                 }
                 std::snprintf(line, sizeof(line), "grass chunks fed last frame: %u", grass::ChunkUploadsLastFrame());
                 g_api->UiText(line);
@@ -238,7 +238,7 @@ namespace wxl_livingazeroth::debug
                     if (const char* why = grassinst::Problem())
                     {
                         std::snprintf(line, sizeof(line), "UNAVAILABLE: %s", why);
-                        g_api->UiTextWrapped(line);
+                        g_api->UiText(line);
                     }
                     const grassinst::Stats st = grassinst::GetStats();
                     g_api->UiSliderFloat("Build budget (ms per frame)", &is.buildBudgetMs, 0.5f, 20.0f);
@@ -246,7 +246,7 @@ namespace wxl_livingazeroth::debug
                                   "drawn stock: %u (over budget), %u (model loading), %u (failed)",
                                   st.slotsInstanced, st.drawCalls, st.builds, st.buildMs, st.buildDeviceMs,
                                   st.fallbackBudget, st.fallbackNotLoaded, st.fallbackFailed);
-                    g_api->UiTextWrapped(line);
+                    g_api->UiText(line);
                     std::snprintf(line, sizeof(line), "grass distance cap (groundEffectDist): %.0f yd", grassdistance::CurrentCap());
                     g_api->UiText(line);
                     g_api->UiSliderFloat("Memory limit (MB)", &is.memoryLimitMB, 16.0f, 1024.0f);
@@ -261,14 +261,14 @@ namespace wxl_livingazeroth::debug
                     g_api->UiSliderFloat("Max density radius (yards)", &is.maxRadius, 10.0f, 1000.0f);
                     g_api->UiSliderFloat("Max copy spread (yards)", &is.maxSpread, 0.2f, 3.0f);
                     std::snprintf(line, sizeof(line), "GroundEffectDoodadDensity.cdbc: %s", grassdensity::Status());
-                    g_api->UiTextWrapped(line);
+                    g_api->UiText(line);
                     if (g_api->UiButton("Reload GroundEffectDoodadDensity.cdbc")) grassdensity::Load(g_cdbc);
                     if (st.lastContextValid)
                         std::snprintf(line, sizeof(line), "last layer built: area %u, %u ground effect(s), %u of %u doodads traced to one",
                                       st.lastArea, st.lastEffects, st.lastDoodadsWithEffect, st.lastDoodads);
                     else
                         std::snprintf(line, sizeof(line), "last layer built: chunk not found (density uses map/global rows only)");
-                    g_api->UiTextWrapped(line);
+                    g_api->UiText(line);
                     std::snprintf(line, sizeof(line), "last frame: %u layers densified, %u extra plants drawn", st.densifiedLayers, st.densityCopies);
                     g_api->UiText(line);
                     g_api->UiSeparator();
@@ -277,7 +277,7 @@ namespace wxl_livingazeroth::debug
                                                                    : "Verify against the client's bake (next layer build)##iv"))
                         grassinst::RequestVerify();
                     std::snprintf(line, sizeof(line), "verification: %s", grassinst::VerifyReport().c_str());
-                    g_api->UiTextWrapped(line);
+                    g_api->UiText(line);
                 }
 
                 // Per-doodad: what was worked out from each model, with live wind/push switches.
@@ -312,12 +312,12 @@ namespace wxl_livingazeroth::debug
                         grassdoodads::LoadOverrides(g_cdbc);
                         std::snprintf(saveMessage, sizeof(saveMessage), "reloaded: %u row(s)", grassdoodads::OverrideCount());
                     }
-                    if (saveMessage[0]) g_api->UiTextWrapped(saveMessage);
+                    if (saveMessage[0]) g_api->UiText(saveMessage);
 
                     for (const grassdoodads::DoodadInfo& d : grassdoodads::Seen())
                     {
                         std::snprintf(line, sizeof(line), "#%u %s%s", d.id, d.modelPath, d.hasOverride ? "   [override]" : "");
-                        g_api->UiTextWrapped(line);
+                        g_api->UiText(line);
                         if (!d.analyzed)
                             std::snprintf(line, sizeof(line), "   model not loaded yet");
                         else

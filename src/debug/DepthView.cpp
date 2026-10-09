@@ -132,7 +132,7 @@ namespace wxl_livingazeroth::debug
             }
 
             if (g_shaderFailed)
-                g_api->UiTextWrapped("Overlay shader failed to compile (d3dcompiler_47.dll missing?).");
+                g_api->UiText("Overlay shader failed to compile (d3dcompiler_47.dll missing?).");
         }
 
         void __cdecl OnWorldSceneEndThunk(void* /*user*/, const void* args) { OnWorldSceneEnd(args); }

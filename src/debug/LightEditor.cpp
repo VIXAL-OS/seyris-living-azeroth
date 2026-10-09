@@ -387,12 +387,12 @@ namespace wxl_livingazeroth::debug
             const world::Snapshot& s = world::Current();
             char line[512];
             std::snprintf(line, sizeof(line), "DoodadLightProperties / DoodadLightAssignment: %s%s", lt::Status(), lt::Dirty() ? " -- EDITED, not saved" : "");
-            g_api->UiTextWrapped(line);
+            g_api->UiText(line);
             if (g_api->UiButton("Save to DBFilesClient")) lt::Save(g_message, sizeof(g_message));
             g_api->UiSameLine();
             if (g_api->UiButton("Reload from disk (discards edits)")) { lt::Load(g_cdbc); std::snprintf(g_message, sizeof(g_message), "reloaded: %s", lt::Status()); }
-            if (g_message[0]) g_api->UiTextWrapped(g_message);
-            if (!lights::Config().enabled) g_api->UiTextWrapped("(our point lights are switched off in the lights panel: edits won't show)");
+            if (g_message[0]) g_api->UiText(g_message);
+            if (!lights::Config().enabled) g_api->UiText("(our point lights are switched off in the lights panel: edits won't show)");
             if (!s.inWorld) { g_api->UiText("not in world"); return; }
 
             g_api->UiSeparator();
@@ -406,7 +406,7 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiCollapsingHeader("Models near you"))
             {
                 // Coloured text is a newer core call (UiTextColored); an older core gets tags instead.
-                const bool colour = g_api->structSize >= offsetof(WXL_Api, UiTextColored) + sizeof(g_api->UiTextColored) && g_api->UiTextColored;
+                const bool colour = false; // Released core: use the existing text-tag fallback.
                 static const float kOurs[4] = { 0.45f, 1.0f, 0.45f, 1.0f }, kStock[4] = { 1.0f, 0.8f, 0.35f, 1.0f };
                 g_api->UiText("Show:");
                 for (int c = 0; c < kCategoryCount; ++c)
@@ -417,9 +417,9 @@ namespace wxl_livingazeroth::debug
                 }
                 if (colour)
                 {
-                    g_api->UiTextColored(kOurs, "green: has our light (DoodadLightAssignment)");
+                    g_api->UiText("green: has our light (DoodadLightAssignment)");
                     g_api->UiSameLine();
-                    g_api->UiTextColored(kStock, "  amber: only its own (stock) lights");
+                    g_api->UiText("  amber: only its own (stock) lights");
                     g_api->UiSameLine();
                     g_api->UiText("  white: no light");
                 }
@@ -448,7 +448,7 @@ namespace wxl_livingazeroth::debug
                                   colour ? "" : (ours ? "[ours] " : (stock ? "[stock] " : "")),
                                   m.nearest, m.path.c_str(), where.c_str(), m.placed, m.bones, m.attachments, m.emitters, m.lights,
                                   suppressed && m.lights ? ", suppressed" : "", static_cast<unsigned>(rows.size()));
-                    if (colour && (ours || stock)) g_api->UiTextColored(ours ? kOurs : kStock, line);
+                    if (colour && (ours || stock)) g_api->UiText(line);
                     else g_api->UiText(line);
                 }
                 if (models.empty()) g_api->UiText("(no placed models within range)");
@@ -463,13 +463,13 @@ namespace wxl_livingazeroth::debug
             }
 
             g_api->UiSeparator();
-            if (!selected) g_api->UiTextWrapped("Select a model above to add lights to it.");
+            if (!selected) g_api->UiText("Select a model above to add lights to it.");
             else
             {
-                std::snprintf(line, sizeof(line), "Selected: %s", selected->path.c_str()); g_api->UiTextWrapped(line);
-                std::snprintf(line, sizeof(line), "  attachment points (ID:bone): %s", Indexed(selected->header, 0xF0, 0x28, 4, true).c_str()); g_api->UiTextWrapped(line);
-                std::snprintf(line, sizeof(line), "  particle emitters (index:bone): %s", Indexed(selected->header, 0x128, 0x1DC, 0x14, false).c_str()); g_api->UiTextWrapped(line);
-                std::snprintf(line, sizeof(line), "  own lights (index:bone): %s;  bones: %u", Indexed(selected->header, 0x108, 0x9C, 2, false).c_str(), selected->bones); g_api->UiTextWrapped(line);
+                std::snprintf(line, sizeof(line), "Selected: %s", selected->path.c_str()); g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "  attachment points (ID:bone): %s", Indexed(selected->header, 0xF0, 0x28, 4, true).c_str()); g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "  particle emitters (index:bone): %s", Indexed(selected->header, 0x128, 0x1DC, 0x14, false).c_str()); g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "  own lights (index:bone): %s;  bones: %u", Indexed(selected->header, 0x108, 0x9C, 2, false).c_str(), selected->bones); g_api->UiText(line);
                 EditAssignments(*selected);
             }
 

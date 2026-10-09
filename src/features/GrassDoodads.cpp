@@ -401,6 +401,9 @@ namespace wxl_livingazeroth::grassdoodads
 
     void LoadOverrides(const void* cdbcApi)
     {
+        // GrassMotion skips Install when another grass module owns the shaders.
+        // In that case this subsystem has no API/logger or installed hooks.
+        if (!g_api) return;
         const auto* cdbc = static_cast<const WXL_SeyrisCdbcApi*>(cdbcApi);
         if (!cdbc || !cdbc->HasFeature("cdbc-load")) return;
 
@@ -469,7 +472,7 @@ namespace wxl_livingazeroth::grassdoodads
             return false;
         }
         std::snprintf(message, messageSize, "saved %u row(s) to %s", static_cast<unsigned>(ids.size()), kOverrideFile);
-        g_api->Log(WXL_LOG_INFO, kTag, "grass doodads: %s", message);
+        if (g_api) g_api->Log(WXL_LOG_INFO, kTag, "grass doodads: %s", message);
         return true;
     }
 

@@ -254,7 +254,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 std::snprintf(line, sizeof(line), "%s: not running -- %s", ModeName(g_settings.mode), why);
             else
                 std::snprintf(line, sizeof(line), "%s: running, %.3f ms CPU per frame", ModeName(g_settings.mode), g_lastMs);
-            g_api->UiTextWrapped(line);
+            g_api->UiText(line);
         }
     }
 

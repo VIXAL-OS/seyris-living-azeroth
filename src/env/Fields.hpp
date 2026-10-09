@@ -114,6 +114,9 @@ namespace wxl_livingazeroth::fields
     /// centimetre, or the grid moved). Active: anything differs from "no fallen snow, everything kept".
     uint32_t SnowVersion();
     bool     SnowActive();
+    /// True if any published near/far/outside value can add fallen snow. Independent
+    /// of painted snow's kept share; remains conservative across the entire map.
+    bool     FallenSnowActive();
 
     struct Stats { unsigned filled = 0, cells = 0, water = 0; double fillMs = 0.0, transformMs = 0.0, tickMs = 0.0; float rainSoak = 0.0f; unsigned hotGround = 0; unsigned snowPublished = 0; };
     Stats GetStats();

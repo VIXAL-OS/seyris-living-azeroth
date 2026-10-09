@@ -45,6 +45,8 @@
 #include "render/SceneDepth.hpp"
 #include "render/ShaderPatch.hpp"
 #include "wxl_seyris/CdbcApi.hpp"
+#include "RainSignal.hpp"
+#include <cmath>
 
 namespace
 {
@@ -59,6 +61,14 @@ namespace
     };
 
     const WXL_Api* g_api = nullptr;
+
+    float __cdecl RainIntensity()
+    {
+        const auto& s = wxl_livingazeroth::world::Current();
+        if (!s.inWorld || !s.outdoors || s.weatherType != 1 || !std::isfinite(s.weatherIntensity)) return 0.0f;
+        return s.weatherIntensity < 0.0f ? 0.0f : (s.weatherIntensity > 1.0f ? 1.0f : s.weatherIntensity);
+    }
+    WxlRainSignalV1 g_rainSignal{sizeof(WxlRainSignalV1), &RainIntensity};
 
     // Resolved on the first frame, never in WXL_Load: extensions load alphabetically on one thread,
     // so GetInterface from WXL_Load can see a false NULL for a module that loads later.
@@ -128,6 +138,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
 {
     if (!api) return 0;
     g_api = api;
+    if (api->PublishInterface) api->PublishInterface(kWxlRainSignalName, kWxlRainSignalVersion, &g_rainSignal);
 
     wxl_livingazeroth::depth::Init(api);
     api->Subscribe(static_cast<uint32_t>(ev::Event::OnFrame), &OnFrame, nullptr);

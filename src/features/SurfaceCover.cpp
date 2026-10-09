@@ -69,6 +69,7 @@ namespace wxl_livingazeroth::cover
         constexpr int   kDeformFullCells = 120;    // level 0: trenches at full strength inside this (Chebyshev, cells)...
         constexpr int   kDeformZeroCells = 140;    // ...gone by this, before the morph band starts
         constexpr float kOuterFadeStart = 0.80f, kOuterFadeEnd = 0.97f; // outermost level: cover fades out (share of its half)
+        constexpr float kEdgeRadiusShare = 0.85f, kEdgeFullShare = 0.65f;
         constexpr float kHole = -100000.0f;        // base height of a hole / unloaded spot
 
         // "Everywhere" (test): no painted cover, but fallen snow may lie anywhere (with the plain look);
@@ -98,6 +99,21 @@ namespace wxl_livingazeroth::cover
         const WXL_Api* g_api = nullptr;
         Settings       g_settings;
 
+        // Physical texture rows, not world rows. A bounding interval deliberately includes
+        // unchanged rows between edits (including toroidal wrap); at most one lock per texture.
+        struct LookDirtyRows
+        {
+            int first = 0, end = kTex; // new/recreated textures require every row
+            bool Empty() const { return first == end; }
+            void All() { first = 0; end = kTex; }
+            void Clear() { first = end = 0; }
+            void Mark(int row)
+            {
+                if (Empty()) { first = row; end = row + 1; }
+                else { first = std::min(first, row); end = std::max(end, row + 1); }
+            }
+        };
+
         struct Level
         {
             float cell = kCell0;
@@ -123,6 +139,11 @@ namespace wxl_livingazeroth::cover
             uint32_t snowVersion = 0;       // the snow values last folded in (fields::SnowVersion)
             bool     snowFolded = false;    // whether that fold had any snow in it
             double   foldMs = 0;            // the last full depth pass (upload)
+            // Conservative: only a successful full upload may prove the entire depth
+            // texture empty. Include apron/stale slots and positive depths below the
+            // shader's cutoff. Footprint rims can amplify small positive depths later.
+            bool     coverMayDraw = true;
+            bool ShouldDraw() const { return haveGrid && coverMayDraw; }
             std::vector<uint8_t>  drift = std::vector<uint8_t>(kTex * kTex, 128);
             std::vector<uint8_t>  edgeNoise = std::vector<uint8_t>(kTex * kTex, 128);
             std::vector<uint32_t> tint = std::vector<uint32_t>(kTex * kTex, 0);
@@ -134,7 +155,7 @@ namespace wxl_livingazeroth::cover
             // A = wetness, RGB = the terrain's vertex colour where rows use it (0x80 = neutral).
             std::vector<uint32_t> props = std::vector<uint32_t>(kTex * kTex, 0x00808080u);
             uint32_t slotsUploaded = 0;     // the slot generation the weight textures were built with
-            bool lookDirty = true;
+            LookDirtyRows lookDirty;
             int boostRows = 0;              // rows left to re-sample at full speed after a setting change
             bool  haveGrid = false;         // drawn: its grid at gridI/gridJ is filled
             // A fill in progress, worked through within the per-frame budget. The level keeps drawing
@@ -315,6 +336,8 @@ namespace wxl_livingazeroth::cover
 
         // stats
         double   g_simMs = 0, g_uploadMs = 0, g_drawMs = 0;
+        unsigned g_drawPatches = 0, g_emptyLevels = 0;
+        unsigned g_snowLookups = 0; // actual SnowAt calls in the last cover draw
         unsigned g_stamps = 0;
         const char* g_inactive = "not started";
 
@@ -538,6 +561,7 @@ float4 wetMap : register(c11);  // 1 / grid extent (yd), uv offset (x, y), on
 float4 wetBox : register(c12);  // the grid's valid box, camera-relative (min x, min y, max x, max y)
 float4 misc : register(c13);     // x = 1: the terrain's dynamic shadows apply; y = (unused), z = 1 / the near grid's edge fade (yd),
                                  // w = how much darker soaked ground gets (the wet terrain's strength, so both match)
+float4 edgeFade : register(c14); // player centre relative to camera (xy), fully covered radius, zero coverage radius (yd)
 float4 pcf[8] : register(c20);   // the terrain's PCF offsets (its PS c3..c10)
 float4 shadowM[12] : register(c30); // the terrain's shadow matrices (its VS c37..c48), from view space
 sampler2D cover0 : register(s0);
@@ -595,8 +619,28 @@ float Shadow(float3 vp)
     return edge * (s * 0.2 - 1) + 1;
 }
 
-float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, float fog : TEXCOORD3, float4 tint : TEXCOORD4, float2 wuv : TEXCOORD5, float3 vpos : TEXCOORD6, float far : TEXCOORD7, float3 lamps : TEXCOORD8) : COLOR
+// Coverage, rather than only height, must fade or thin snow still ends as an
+// opaque square. Every clipmap level uses the same circle to avoid LOD seams.
+float CoverVisibility(float2 rel)
 {
+    float t = saturate((edgeFade.w - length(rel - edgeFade.xy)) / max(edgeFade.w - edgeFade.z, 0.001));
+    return t * t * (3 - 2 * t);
+}
+float CoverThreshold(float2 pixel)
+{
+    // Stable 8x8 ordered coverage: discarded pixels keep the terrain's depth.
+    // Alpha-blending while writing depth would leave an invisible occluding sheet.
+    float2 b0 = frac(floor(pixel) * 0.5) * 2;
+    float2 b1 = frac(floor(pixel * 0.5) * 0.5) * 2;
+    float2 b2 = frac(floor(pixel * 0.25) * 0.5) * 2;
+    float3 b = float3(2*b0.x + 3*b0.y - 4*b0.x*b0.y,
+                      2*b1.x + 3*b1.y - 4*b1.x*b1.y,
+                      2*b2.x + 3*b2.y - 4*b2.x*b2.y);
+    return (dot(b, float3(16, 4, 1)) + 0.5) / 64;
+}
+float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, float fog : TEXCOORD3, float4 tint : TEXCOORD4, float2 wuv : TEXCOORD5, float3 vpos : TEXCOORD6, float far : TEXCOORD7, float3 lamps : TEXCOORD8, float2 pixel : VPOS) : COLOR
+{
+    clip(CoverVisibility(rel) - CoverThreshold(pixel));
     clip(d.x - opts.x);
     clip(0.5 - d.y);
     float2 a = step(inner.xy, rel) * step(rel, inner.zw);
@@ -979,7 +1023,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             if (tint != L.tint[s] || ids != L.texIds[s] || shares != L.texShares[s] || props != L.props[s])
             {
                 L.tint[s] = tint; L.texIds[s] = ids; L.texShares[s] = shares; L.props[s] = props;
-                L.lookDirty = true;
+                L.lookDirty.Mark(s / kTex);
             }
             if (isLevel0)
             {
@@ -1069,7 +1113,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             L.haveGrid = true;
             L.coverDirty = true;
             L.baseDirty = true;
-            L.lookDirty = true;
+            L.lookDirty.All();
             if (L.jobFull) { L.firstFillMs = L.jobMs; L.boostRows = kFilled; } // chunks still streaming in get picked up quickly
             L.fillMs = L.jobMs;
             L.jobActive = false;
@@ -1151,7 +1195,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         {
             auto rel = [](auto*& p) { if (p) { p->Release(); p = nullptr; } };
             rel(g_vb); rel(g_ib); rel(g_decl); rel(g_vs); rel(g_ps); moisturetex::Release();
-            for (Level& L : g_levels) { rel(L.baseTex); rel(L.coverTex); rel(L.lookTex); rel(L.texWTex[0]); rel(L.texWTex[1]); rel(L.propsTex); L.baseDirty = L.coverDirty = L.lookDirty = true; }
+            for (Level& L : g_levels) { rel(L.baseTex); rel(L.coverTex); rel(L.lookTex); rel(L.texWTex[0]); rel(L.texWTex[1]); rel(L.propsTex); L.baseDirty = L.coverDirty = true; L.coverMayDraw = true; L.lookDirty.All(); }
             for (auto& e : g_textureCache) if (e.second) e.second->Release();
             g_textureCache.clear();
             for (IDirect3DTexture9*& t : g_coverTextures) t = nullptr;
@@ -1356,10 +1400,11 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
 
         bool UploadLook(Level& L)
         {
-            if (L.slotsUploaded != g_slotGeneration) L.lookDirty = true;
-            if (!L.lookDirty) return true;
+            if (L.slotsUploaded != g_slotGeneration) L.lookDirty.All();
+            if (L.lookDirty.Empty()) return true;
+            const int first = L.lookDirty.first, end = L.lookDirty.end;
             // The cells' cover texture IDs -> weights of whichever slots hold those IDs now.
-            for (int sl = 0; sl < kTex * kTex; ++sl)
+            for (int sl = first * kTex; sl < end * kTex; ++sl)
             {
                 uint8_t w[8] = {};
                 for (int k = 0; k < 2; ++k)
@@ -1372,19 +1417,22 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     L.texWeights[q][sl] = (static_cast<uint32_t>(w[q * 4 + 3]) << 24) | (static_cast<uint32_t>(w[q * 4]) << 16) |
                                           (static_cast<uint32_t>(w[q * 4 + 1]) << 8) | w[q * 4 + 2];
             }
-            L.slotsUploaded = g_slotGeneration;
             IDirect3DTexture9* const textures[4] = { L.lookTex, L.texWTex[0], L.texWTex[1], L.propsTex };
             const std::vector<uint32_t>* const data[4] = { &L.tint, &L.texWeights[0], &L.texWeights[1], &L.props };
+            const RECT rect{ 0, first, kTex, end };
             for (int t = 0; t < 4; ++t)
             {
                 if (!textures[t]) continue;
                 D3DLOCKED_RECT lr{};
-                if (FAILED(textures[t]->LockRect(0, &lr, nullptr, 0))) return false;
-                for (int row = 0; row < kTex; ++row)
-                    std::memcpy(static_cast<uint8_t*>(lr.pBits) + row * lr.Pitch, &(*data[t])[row * kTex], kTex * 4);
-                textures[t]->UnlockRect(0);
+                if (FAILED(textures[t]->LockRect(0, &lr, &rect, 0))) return false;
+                for (int row = first; row < end; ++row)
+                    std::memcpy(static_cast<uint8_t*>(lr.pBits) + (row - first) * lr.Pitch, &(*data[t])[row * kTex], kTex * 4);
+                if (FAILED(textures[t]->UnlockRect(0))) return false;
             }
-            L.lookDirty = false;
+            // Keep the entire interval pending until all textures succeeded. A partial failure
+            // retries already-written rows too; a slot-generation change forces a full retry.
+            L.slotsUploaded = g_slotGeneration;
+            L.lookDirty.Clear();
             return true;
         }
 
@@ -1419,8 +1467,11 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     const float cover = g_static0[sl];
                     const float deformed = cover * (1.0f + g_rimCell[sl] * g_settings.rimMul * g_rim[sl]) * (1.0f - g_press[sl] * (1.0f - L.stiff[sl] / 255.0f));
                     *out = cover + (deformed - cover) * g_deformK[sl];
+                    // Fail open even for an unexpected non-finite result. A partial
+                    // update may make drawing necessary, but never proves emptiness.
+                    if (*out != 0.0f) L.coverMayDraw = true;
                 }
-                L.coverTex->UnlockRect(0);
+                if (FAILED(L.coverTex->UnlockRect(0))) return false;
                 g_changed.clear();
                 g_changedPending = false;
                 return UploadLook(L);
@@ -1432,6 +1483,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             const float depthMul = g_settings.depthMul, driftMul = g_settings.driftMul, breakupMul = g_settings.breakupMul;
             const int slotI0 = Slot(L.gridI), slotJ0 = Slot(L.gridJ);
             const bool snowOn = fields::SnowActive();
+            const bool fallenSnowOn = snowOn && fields::FallenSnowActive();
+            bool coverMayDraw = false;
             // Material shaping: steeper with more breakup, and the fine edge noise moves the
             // threshold, so the transition breaks into patches. Fully covered and bare stay so.
             auto shape = [](uint8_t coverage, float b, uint8_t edgeNoise)
@@ -1458,11 +1511,14 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     float cover = L.depth[s] > 0.0f ? depthMul * L.depth[s] * shape(L.material[s], b, L.edgeNoise[s]) * slope * driftF : 0.0f;
                     // Snow: painted snow thinned by its kept share (patchy: where the drift and edge
                     // noise are low it opens first), fallen snow on top.
-                    if (snowOn && (L.snowShare[s] || L.paintedSnow[s]))
+                    // With no fallen snow anywhere, the lookup can only thin existing
+                    // painted snow. Bare ground and zero-depth cover cannot be affected.
+                    if (snowOn && ((fallenSnowOn && L.snowShare[s]) || (L.paintedSnow[s] && cover > 0.0f)))
                     {
                         const int di = (col - slotI0 + kTex) % kTex;
                         const float wx = static_cast<float>(L.gridI + (di >= kTex - kApron ? di - kTex : di)) * L.cell;
                         float fallen, keep;
+                        ++g_snowLookups;
                         fields::SnowAt(wx, wy, fallen, keep);
                         if (L.paintedSnow[s] && keep < 1.0f && cover > 0.0f)
                         {
@@ -1474,6 +1530,10 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                         }
                         if (L.snowShare[s] && fallen > 0.0f) cover += fallen * shape(L.snowShare[s], b, L.edgeNoise[s]) * slope * driftF;
                     }
+                    // Measure the undeformed depth: a fully pressed footprint can
+                    // relax later without a full upload. Zero stays zero under all
+                    // normal footprint transforms; non-finite depths fail open.
+                    if (!(cover <= 0.0f)) coverMayDraw = true;
                     if (!isLevel0) { out[col] = cover > 0.0f ? cover : 0.0f; continue; }
                     g_static0[s] = cover > 0.0f ? cover : 0.0f;
                     if (cover <= 0.0f) { g_deformK[s] = 0.0f; out[col] = 0.0f; continue; }
@@ -1489,7 +1549,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     out[col] = cover + (deformed - cover) * k;
                 }
             }
-            L.coverTex->UnlockRect(0);
+            if (FAILED(L.coverTex->UnlockRect(0))) return false;
+            L.coverMayDraw = coverMayDraw;
             L.coverDirty = false;
             L.foldMs = grassperf::Now() - foldStart;
             if (isLevel0) { g_changed.clear(); g_changedPending = false; } // the full pass included them
@@ -1500,6 +1561,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         // bound. Otherwise (end of scene) both have to be put back first.
         void Draw(IDirect3DDevice9* dev, IDirect3DSurface9* sceneDepth, bool inPass)
         {
+            g_drawPatches = g_emptyLevels = 0;
+            g_drawMs = 0;
             if (!dev || !EnsureGpu(dev)) return;
             const int levels = ActiveLevels();
             // Levels still filling a new place aren't drawn yet; the others are (near ones first).
@@ -1516,10 +1579,25 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
 
             EnsureCoverTextures(dev);
             double t0 = grassperf::Now();
+            g_snowLookups = 0;
             for (int k = 0; k < levels; ++k)
                 if (g_levels[k].haveGrid && !UploadLevel(g_levels[k], k == 0)) { g_inactive = "texture upload failed"; return; }
             g_uploadMs = grassperf::Now() - t0;
             t0 = grassperf::Now();
+
+            // Keep sampling/uploading empty grids so terrain streaming, snow, and
+            // settings changes can bring cover back. Skip only drawing. Logical
+            // grid extents still determine morphing and finer-level masks below.
+            for (int k = 0; k < levels; ++k)
+                if (g_levels[k].haveGrid && !g_levels[k].ShouldDraw()) ++g_emptyLevels;
+            if (g_emptyLevels == static_cast<unsigned>(drawn))
+            {
+                g_inactive = "empty surface-cover grids (sampling continues)";
+                g_seenScene = false;
+                g_shadowUsed = false;
+                for (bool& b : g_shadowBound) b = false;
+                return;
+            }
 
             // Right after the terrain stage its shader constants are still on the device: read them
             // before setting ours. Terrain VS (dumped 2026-10-02): c12 fog (min(pow(max(viewZ * x + y,
@@ -1596,6 +1674,18 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             float eye[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
             wxl::game::camera::GetPosition(eye);
             dev->SetVertexShaderConstantF(6, eye, 1);
+            // Follow the player continuously, not the clipmap's snapped origin.
+            // Leave room for normal recentring, and shorten the circle if a slow
+            // fill means an old grid edge is closer than the nominal radius.
+            const Level& outer = g_levels[lastDrawn];
+            const world::Snapshot& snapshot = world::Current();
+            const float cx = snapshot.inWorld ? snapshot.playerPos[0] : (outer.gridI + kHalfCells) * outer.cell;
+            const float cy = snapshot.inWorld ? snapshot.playerPos[1] : (outer.gridJ + kHalfCells) * outer.cell;
+            const float available = std::min({cx - outer.gridI * outer.cell, cy - outer.gridJ * outer.cell,
+                (outer.gridI + kGridCells) * outer.cell - cx, (outer.gridJ + kGridCells) * outer.cell - cy});
+            const float radius = std::max(0.0f, std::min(kHalfCells * outer.cell * kEdgeRadiusShare, available - 2 * outer.cell));
+            const float edge[4] = {cx - eye[0], cy - eye[1], radius * kEdgeFullShare, radius};
+            dev->SetPixelShaderConstantF(14, edge, 1);
             const float c8[4] = { 80.0f, 400.0f, g_settings.farLift, 0.0f };
             dev->SetVertexShaderConstantF(8, c8, 1);
 
@@ -1744,7 +1834,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             for (int k = 0; k < levels; ++k)
             {
                 const Level& L = g_levels[k];
-                if (!L.haveGrid) continue;
+                if (!L.ShouldDraw()) continue;
                 const bool outermost = k == lastDrawn;
                 dev->SetTexture(D3DVERTEXTEXTURESAMPLER0, L.baseTex);
                 dev->SetTexture(D3DVERTEXTEXTURESAMPLER1, L.coverTex);
@@ -1797,6 +1887,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                             static_cast<float>(static_cast<double>(L.gridJ + (pj + 1) * kPatchCells) * L.cell) };
                         PatchLights(dev, patch, innerWorld, eye);
                         dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kPatchVerts * kPatchVerts, 0, kPatchCells * kPatchCells * 2);
+                        ++g_drawPatches;
                     }
             }
 
@@ -1993,11 +2084,14 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 else { std::snprintf(line, sizeof(line), "here (snow): not sampled yet"); add(); }
                 const climate::Sun& sun = climate::SunNow();
                 std::snprintf(line, sizeof(line), "snow: published %u time(s), %s; sun %.2f %.2f %.2f (%s), daylight %.2f; last depth folds %.2f / %.2f / %.2f / %.2f / %.2f ms",
-                              fields::GetStats().snowPublished, fields::SnowActive() ? "some snow around" : "none around",
+                              fields::GetStats().snowPublished, fields::SnowActive() ? "snow/melt state active" : "no snow/melt effect",
                               sun.dir[0], sun.dir[1], sun.dir[2], sun.fromClient ? "client" : "from the time", sun.daylight,
                               g_levels[0].foldMs, g_levels[1].foldMs, g_levels[2].foldMs, g_levels[3].foldMs, g_levels[4].foldMs); add();
             }
             std::snprintf(line, sizeof(line), "CPU: sim %.2f ms, upload %.2f ms, draw submit %.2f ms", g_simMs, g_uploadMs, g_drawMs); add();
+            std::snprintf(line, sizeof(line), "cover submitted: %u patches (%u vertices); empty levels skipped: %u; GPU completion is not timed",
+                          g_drawPatches, g_drawPatches * kPatchVerts * kPatchVerts, g_emptyLevels); add();
+            std::snprintf(line, sizeof(line), "snow depth lookups in last draw: %u; published fallen snow: %s", g_snowLookups, fields::FallenSnowActive() ? "present" : "none"); add();
             if (g_seenScene)
             {
                 std::snprintf(line, sizeof(line), "terrain light: sun (view) %.3f %.3f %.3f, ambient %.3f %.3f %.3f, diffuse %.3f %.3f %.3f",
@@ -2018,7 +2112,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 std::snprintf(status, sizeof(status), CopyToClipboard(text) ? "copied" : "clipboard unavailable");
             }
             if (status[0]) { g_api->UiSameLine(); g_api->UiText(status); }
-            for (const std::string& l : lines) g_api->UiTextWrapped(l.c_str());
+            for (const std::string& l : lines) g_api->UiText(l.c_str());
         }
     }
 

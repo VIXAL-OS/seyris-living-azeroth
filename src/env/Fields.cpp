@@ -109,8 +109,20 @@ namespace wxl_livingazeroth::fields
             int   firstI = 0, firstJ = 0, farFirstI = 0, farFirstJ = 0, farSize = 0;
             float farCell = 0.0f;
             float outsideFallen = 0.0f, outsideKeep = 1.0f; // beyond the zone map: the player's zone
-            bool  valid = false, active = false;
+            bool  valid = false, active = false, fallenActive = false;
         };
+
+        // Separate actual fallen depth from painted-snow melting. A warm, bare zone
+        // can have keep < 1 everywhere without any fallen snow to add to the cover.
+        // Use > 0, not the publication threshold: tiny published depths still count.
+        bool HasFallenSnow(const SnowMap& map)
+        {
+            if (map.outsideFallen > 0.0f) return true;
+            for (float value : map.fallen) if (value > 0.0f) return true;
+            if (map.farSize > 0)
+                for (float value : map.farFallen) if (value > 0.0f) return true;
+            return false;
+        }
         SnowMap  g_snowNow, g_snowPub;
         uint32_t g_snowVersion = 1;
         unsigned g_snowPublishes = 0;
@@ -396,6 +408,7 @@ namespace wxl_livingazeroth::fields
                 for (size_t q = 0; q < now.fallen.size() && !publish; ++q) publish = (now.fallen[q] >= 0.0f) != (pub.fallen[q] >= 0.0f);
             }
             if (!publish) return;
+            now.fallenActive = HasFallenSnow(now);
             g_snowPub = now;
             ++g_snowVersion;
             ++g_snowPublishes;
@@ -718,6 +731,7 @@ namespace wxl_livingazeroth::fields
 
     uint32_t SnowVersion() { return g_snowVersion; }
     bool     SnowActive()  { return g_snowPub.valid && g_snowPub.active; }
+    bool     FallenSnowActive() { return g_snowPub.valid && g_snowPub.fallenActive; }
 
     MoistureDetail Moisture(const float pos[3])
     {
