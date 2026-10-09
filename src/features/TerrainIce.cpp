@@ -332,16 +332,17 @@ namespace wxl_livingazeroth::terrainice
             "\n    mad r13.xy, r12, -c220.y, v9"
             "\n    mul r13.xy, r13, c220.w"
             "\n    texld r15, r13, s14"
-            // (cracks, bubbles, cloud), the nearer layer stronger.
-            "\n    mul r16.xyz, r14, c192.x"
-            "\n    mad r16.xyz, r15, c192.y, r16"
+            // (sketchy cracks, bubbles, cloud, bold cracks), the nearer layer stronger. The ground uses the
+            // bold cracks (w); the ice models the sketchy ones (x).
+            "\n    mul r16, r14, c192.x"
+            "\n    mad r16, r15, c192.y, r16"
             // The deep body, cloudier in places; the cracks and bubbles inside it blend it toward the
             // highlight colour (at most all the way: never brighter than that).
             "\n    mul r17.x, r16.z, c192.w"
             "\n    add r17.x, r17.x, c192.z"
             "\n    mul r17.xyz, r17.x, c219"
             "\n    mul r18.x, r16.y, c193.w"
-            "\n    mad_sat r18.x, r16.x, c193.z, r18.x"
+            "\n    mad_sat r18.x, r16.w, c193.z, r18.x"
             "\n    mov r20.xyz, c221"
             "\n    lrp r22.xyz, r18.x, r20, r17"
             // Lit like the surface: twice its brightness (the stock lighting is 2 x the vertex colour),
@@ -439,10 +440,15 @@ namespace wxl_livingazeroth::terrainice
                 const float big = (1.0f - SmoothStep(0.0f, 0.03f, a2 - a1)) * bigKeep;
                 const float fine = (1.0f - SmoothStep(0.0f, 0.035f, b2 - b1)) * fineKeep * 0.6f;
                 const float crack = std::min(1.0f, (big + fine) * (0.55f + 0.45f * Fbm(u, w, 32, 2, 103)));
+                // Bold cracks for the ground (alpha; the user missed them there): the same warped cells, edges
+                // as wide as before and only faded in and out, not broken up.
+                const float boldBig = (1.0f - SmoothStep(0.0f, 0.07f, a2 - a1)) * SmoothStep(0.3f, 0.6f, wobble);
+                const float boldFine = (1.0f - SmoothStep(0.0f, 0.06f, b2 - b1)) * SmoothStep(0.45f, 0.75f, Fbm(u, w, 8, 3, 47)) * 0.6f;
+                const float bold = std::min(1.0f, boldBig + boldFine);
                 const float cloud = SmoothStep(0.25f, 0.8f, Fbm(u, w, 4, 4, 59));
                 const float bubble = bubbles[static_cast<size_t>(y) * size + x];
                 const auto b8 = [](float f) { return static_cast<uint32_t>(std::lround(std::clamp(f, 0.0f, 1.0f) * 255.0f)); };
-                texels[static_cast<size_t>(y) * size + x] = 0xFF000000u | (b8(crack) << 16) | (b8(bubble) << 8) | b8(cloud);
+                texels[static_cast<size_t>(y) * size + x] = (b8(bold) << 24) | (b8(crack) << 16) | (b8(bubble) << 8) | b8(cloud);
             }
     }
 
