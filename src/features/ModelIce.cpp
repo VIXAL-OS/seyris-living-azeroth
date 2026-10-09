@@ -238,14 +238,55 @@ namespace wxl_livingazeroth::modelice
             std::smatch mp, mn;
             if (!std::regex_search(src, mp, position) || !std::regex_search(src, mn, normal)) { why = "no view position/normal inputs (shadow-less variant)"; return false; }
             // The stock fog ending: the colour minus the fog colour (mad: a product minus it), then lerped
-            // toward it by the fog factor.
-            static const std::regex fog(R"(\n[ \t]*(mad|add) (r\d+)\.xyz, ([^\n]*), -c2[ \t]*(\n[ \t]*mad oC0\.xyz, v\d+\.x, \2, c2))");
+            // toward it by the fog factor. When the product already reads a constant, the fog colour is
+            // moved into a register first (mov rK.xyz, c2 ... -rK): the WMO variants that write alpha. The
+            // composite ones among them keep the colour in .yzw (alpha in .x): -rK.xxyz, read back as .yzww.
+            static const std::regex fog(R"(\n[ \t]*(mad|add) (r\d+)\.(xyz|yzw), ([^\n]*), -(c2|r\d+)(\.xxyz)?[ \t]*(\n[ \t]*mad oC0\.xyz, v\d+\.x, \2(\.yzww)?, c2))");
             std::smatch m;
             if (!std::regex_search(src, m, fog)) { why = "no fog ending"; return false; }
+            const bool shifted = m[3].str() == "yzw";
+            if (shifted != (m[6].matched && m[8].matched) || (!shifted && (m[6].matched || m[8].matched)))
+            { why = "no fog ending"; return false; }
+            if (m[5].str() != "c2")
+            {
+                // The line right before the subtraction must be that load.
+                const std::string load = "mov " + m[5].str() + ".xyz, c2";
+                const size_t at = static_cast<size_t>(m.position(0));
+                const size_t lineStart = at > 0 ? src.rfind('\n', at - 1) : std::string::npos;
+                const size_t text = lineStart == std::string::npos ? std::string::npos : src.find_first_not_of(" \t", lineStart + 1);
+                if (text == std::string::npos || text >= at || src.compare(text, load.size(), load) != 0)
+                { why = "no fog ending"; return false; }
+            }
             const std::string r = m[2].str();
-            const std::string base = (m[1].str() == "mad" ? "\n    mul r12.xyz, " : "\n    mov r12.xyz, ") + m[3].str();
-            const size_t subtraction = static_cast<size_t>(m.position(0)), afterSubtraction = static_cast<size_t>(m.position(4));
-            src.insert(afterSubtraction, "\n    add " + r + ".xyz, " + r + ", r31");
+            // The operands of the product (or the add's colour), read into r12.xyz: in the shifted form each
+            // operand's .yzw becomes .xyz (no swizzle -> .yzww, abcd -> bcdd; a replicated one stays).
+            std::string operands = m[4].str();
+            if (shifted)
+            {
+                static const std::regex operand(R"(^(-?)([rcv]\d+)(?:\.([xyzw]+))?$)");
+                std::string out;
+                size_t from = 0;
+                while (from <= operands.size())
+                {
+                    const size_t comma = operands.find(", ", from);
+                    const std::string token = operands.substr(from, comma == std::string::npos ? std::string::npos : comma - from);
+                    std::smatch o;
+                    if (!std::regex_match(token, o, operand)) { why = "no fog ending"; return false; }
+                    const std::string swizzle = o[3].str();
+                    std::string shiftedSwizzle;
+                    if (swizzle.empty()) shiftedSwizzle = ".yzww";
+                    else if (swizzle.size() == 1) shiftedSwizzle = "." + swizzle;
+                    else if (swizzle.size() == 4) shiftedSwizzle = "." + swizzle.substr(1) + swizzle.substr(3);
+                    else { why = "no fog ending"; return false; }
+                    out += (out.empty() ? "" : ", ") + o[1].str() + o[2].str() + shiftedSwizzle;
+                    if (comma == std::string::npos) break;
+                    from = comma + 2;
+                }
+                operands = out;
+            }
+            const std::string base = (m[1].str() == "mad" ? "\n    mul r12.xyz, " : "\n    mov r12.xyz, ") + operands;
+            const size_t subtraction = static_cast<size_t>(m.position(0)), afterSubtraction = static_cast<size_t>(m.position(7));
+            src.insert(afterSubtraction, shifted ? "\n    add " + r + ".yzw, " + r + ", r31.xxyz" : "\n    add " + r + ".xyz, " + r + ", r31");
             src.insert(subtraction, base + Block(mp[1].str(), mn[1].str()));
             src.insert(src.find('\n') + 1,
                        "    def c175, 1, 0, 0.5, 2\n"
@@ -329,6 +370,7 @@ namespace wxl_livingazeroth::modelice
 
     void SetEnabled(bool enabled) { g_enabled = enabled; }
     bool Enabled()                { return g_enabled; }
+    unsigned PatchedVariants()    { return g_patched; }
 
     const char* StatusLine()
     {

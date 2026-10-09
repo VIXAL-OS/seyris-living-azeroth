@@ -7,6 +7,7 @@
 #include "../features/ModelIce.hpp"
 #include "../features/TerrainIce.hpp"
 #include "../features/TerrainWetness.hpp"
+#include "../features/WmoIce.hpp"
 #include "../env/WorldQuery.hpp"
 
 #include <cstdio>
@@ -166,6 +167,9 @@ namespace wxl_livingazeroth::debug
             g_api->UiText(modelice::StatusLine());
             int iceModels = modelice::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice on ice models", &iceModels)) modelice::SetEnabled(iceModels != 0);
+            g_api->UiText(wmoice::StatusLine());
+            int iceBuildings = wmoice::Enabled() ? 1 : 0;
+            if (g_api->UiCheckbox("clear ice in buildings and dungeons", &iceBuildings)) wmoice::SetEnabled(iceBuildings != 0);
             int iceDebug = terrainice::Debug() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice debug: tint what counts as ice magenta", &iceDebug)) terrainice::SetDebug(iceDebug != 0);
 

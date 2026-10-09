@@ -46,5 +46,7 @@ namespace wxl_livingazeroth::modelice
 
     void SetEnabled(bool enabled);
     bool Enabled();
+    /// Pixel shader variants (M2 and WMO: both are recorded effects) that carry the ice block.
+    unsigned PatchedVariants();
     const char* StatusLine();
 }

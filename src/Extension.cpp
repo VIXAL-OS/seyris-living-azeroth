@@ -41,6 +41,7 @@
 #include "features/ModelIce.hpp"
 #include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
+#include "features/WmoIce.hpp"
 #include "lua/EnvironmentLua.hpp"
 #include "lua/LuaApi.hpp"
 #include "render/M2Effects.hpp"
@@ -189,6 +190,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::shaderpatch::Install(api);
     wxl_livingazeroth::modellights::InstallProbe(api);
     wxl_livingazeroth::debug::InstallWmoBindProbe(api);
+    wxl_livingazeroth::wmoice::Install(api);      // the WMO batch loops: ice textures switch the same block on
     // Records the M2 shader effects as the client loads them (research: dumps; later M2 patches).
     wxl_livingazeroth::m2effects::Install(api);
 
