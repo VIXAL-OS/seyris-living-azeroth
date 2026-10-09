@@ -6,6 +6,7 @@
 #include "features/GrassInstanced.hpp"
 #include "features/GrassMotion.hpp"
 #include "features/SurfaceCover.hpp"
+#include "features/ModelIce.hpp"
 #include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
 #include "render/PostAA.hpp"
@@ -103,6 +104,7 @@ namespace wxl_livingazeroth::config
         terrainwet::SetStrength(Float(s, "TerrainWetnessStrength", "How much darker soaked ground gets, 0..1: the terrain and the surface cover alike.", terrainwet::Strength()));
         terrainice::SetEnabled(Bool(s, "ClearIce", "Icy ground (GroundMaterial rows with Flags 0x1: Storm Peaks ice, Winterspring glacier, Icecrown frozen bones) looks like deep, clear ice.", terrainice::Enabled()));
         terrainice::SetStrength(Float(s, "ClearIceStrength", "How fully icy ground turns to clear ice, 0..1.", terrainice::Strength()));
+        modelice::SetEnabled(Bool(s, "ClearIceModels", "Ice models (icebergs, shoreline ice, ice cliffs, frozen waterfalls, Ulduar's ice walls) look like deep, clear ice too (needs dynamic shadows on).", modelice::Enabled()));
         terrainice::SetClarity(Float(s, "ClearIceClarity", "How much of the deep blue inside shows through the ice's own texture, 0..1.", terrainice::Clarity()));
 
         fields::SetShoreWorker(Bool(s, "ShoreWorker",

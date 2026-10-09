@@ -4,6 +4,7 @@
 #include "../env/Fields.hpp"
 #include "../env/Regional.hpp"
 #include "../env/TerrainHeight.hpp"
+#include "../features/ModelIce.hpp"
 #include "../features/TerrainIce.hpp"
 #include "../features/TerrainWetness.hpp"
 #include "../env/WorldQuery.hpp"
@@ -162,6 +163,9 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiSliderFloat("clear ice strength", &iceStrength, 0.0f, 1.0f)) terrainice::SetStrength(iceStrength);
             float clarity = terrainice::Clarity();
             if (g_api->UiSliderFloat("clear ice clarity", &clarity, 0.0f, 1.0f)) terrainice::SetClarity(clarity);
+            g_api->UiText(modelice::StatusLine());
+            int iceModels = modelice::Enabled() ? 1 : 0;
+            if (g_api->UiCheckbox("clear ice on ice models", &iceModels)) modelice::SetEnabled(iceModels != 0);
             int iceDebug = terrainice::Debug() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice debug: tint what counts as ice magenta", &iceDebug)) terrainice::SetDebug(iceDebug != 0);
 

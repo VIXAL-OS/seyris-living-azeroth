@@ -38,6 +38,7 @@
 #include "features/GrassPerf.hpp"
 #include "features/ModelLights.hpp"
 #include "features/SurfaceCover.hpp"
+#include "features/ModelIce.hpp"
 #include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
 #include "lua/EnvironmentLua.hpp"
@@ -182,7 +183,9 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::grass::Install(api);
     wxl_livingazeroth::terrainwet::Register();
     wxl_livingazeroth::terrainice::Install(api); // the chunk draw: each chunk's ice mask
+    wxl_livingazeroth::modelice::Install(api);   // the M2 batch draws: ice models switch their block on
     wxl_livingazeroth::modellights::Register();
+    wxl_livingazeroth::modelice::Register();
     wxl_livingazeroth::shaderpatch::Install(api);
     wxl_livingazeroth::modellights::InstallProbe(api);
     wxl_livingazeroth::debug::InstallWmoBindProbe(api);

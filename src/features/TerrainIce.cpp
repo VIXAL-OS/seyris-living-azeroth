@@ -47,8 +47,10 @@ namespace wxl_livingazeroth::terrainice
         bool  g_stageOn = false;
         bool  g_needSun = false;
         float g_view[16] = {};
+        float g_camera[3] = {};
         bool  g_haveView = false;
         float g_sun[3] = { 0.3f, 0.2f, 0.93f };   // world, toward the sun (until the first reading)
+        float g_sunView[3] = { 0.3f, 0.6f, -0.74f }; // the same in view space (the M2 shaders' space)
         float g_sunColour[3] = { 1.0f, 0.95f, 0.85f };
         unsigned g_chunks = 0, g_iceChunks = 0, g_lastChunks = 0, g_lastIceChunks = 0;
 
@@ -92,7 +94,14 @@ namespace wxl_livingazeroth::terrainice
             for (int r = 0; r < 3; ++r) w[r] = g_view[r * 4 + 0] * light[0] + g_view[r * 4 + 1] * light[1] + g_view[r * 4 + 2] * light[2];
             const float len = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
             if (!(len > 0.01f) || !std::isfinite(len)) return;
-            for (int k = 0; k < 3; ++k) { g_sun[k] = w[k] / len; g_sunColour[k] = std::clamp(light[8 + k], 0.0f, 2.0f); }
+            const float viewLen = std::sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
+            for (int k = 0; k < 3; ++k)
+            {
+                g_sun[k] = w[k] / len;
+                g_sunView[k] = light[k] / viewLen;
+                g_sunColour[k] = std::clamp(light[8 + k], 0.0f, 2.0f);
+            }
+            if (!g_stageOn) return;
             const float c217[8] = { g_sun[0], g_sun[1], g_sun[2], 350.0f,
                                     g_sunColour[0] * 1.3f, g_sunColour[1] * 1.3f, g_sunColour[2] * 1.3f, 0.65f };
             dev->SetPixelShaderConstantF(kFirstConstant + 1, c217, 2);
@@ -232,8 +241,8 @@ namespace wxl_livingazeroth::terrainice
     {
         v = Variant{};
         if (src.find(" r25") != std::string::npos || src.find("c215") != std::string::npos || src.find(" s14") != std::string::npos ||
-            src.find("c190") != std::string::npos)
-        { why = "r25/c190/c215/s14 in use"; return false; }
+            src.find("c190") != std::string::npos || src.find("c194") != std::string::npos)
+        { why = "r25/c190/c194/c215/s14 in use"; return false; }
         // Layer samplers s0..s(n-1) and the combined alpha map s(n); the stock shadow maps are s5..s8.
         static const std::regex dcl(R"(dcl_(2d|cube) s(\d+)\b)");
         bool declared[5] = {}, flat[5] = {};
@@ -325,17 +334,21 @@ namespace wxl_livingazeroth::terrainice
             // (cracks, bubbles, cloud), the nearer layer stronger.
             "\n    mul r16.xyz, r14, c192.x"
             "\n    mad r16.xyz, r15, c192.y, r16"
-            // The deep body, cloudier in places, and the cracks and bubbles lit up inside it.
+            // The deep body, cloudier in places; the cracks and bubbles inside it blend it toward the
+            // highlight colour (at most all the way: never brighter than that).
             "\n    mul r17.x, r16.z, c192.w"
             "\n    add r17.x, r17.x, c192.z"
             "\n    mul r17.xyz, r17.x, c219"
             "\n    mul r18.x, r16.y, c193.w"
-            "\n    add r18.x, r18.x, r16.x"
-            "\n    mad r17.xyz, r18.x, c221, r17"
-            // Lit like the surface: twice its brightness (the stock lighting is 2 x the vertex colour).
+            "\n    mad_sat r18.x, r16.x, c193.z, r18.x"
+            "\n    mov r20.xyz, c221"
+            "\n    lrp r22.xyz, r18.x, r20, r17"
+            // Lit like the surface: twice its brightness (the stock lighting is 2 x the vertex colour),
+            // at most 1.3.
             "\n    dp3 r19.x, " + r + ", c191"
             "\n    mul r19.x, r19.x, c190.w"
-            "\n    mul r17.xyz, r17, r19.x"
+            "\n    min r19.x, r19.x, c194.x"
+            "\n    mul r17.xyz, r22, r19.x"
             // The surface texture over it, by the clarity.
             "\n    lrp r18.xyz, c219.w, r17, " + r +
             // The sky's colour reflected: Schlick's Fresnel against up, F0 0.04.
@@ -368,7 +381,8 @@ namespace wxl_livingazeroth::terrainice
         return "    def c190, 1, 0, 0.5, 2\n"
                "    def c191, 0.2126, 0.7152, 0.0722, 0.15\n"
                "    def c192, 0.6, 0.4, 0.35, 0.65\n"
-               "    def c193, 0.04, 0.96, 0, 0.7\n"
+               "    def c193, 0.04, 0.96, 0.55, 0.4\n"
+               "    def c194, 1.3, 0, 0, 0\n"
                "    dcl_2d s14\n";
     }
 
@@ -450,13 +464,17 @@ namespace wxl_livingazeroth::terrainice
         }
         if (g_cache.size() > 4096) g_cache.clear();
         float c[4 * kConstantCount] = {};
-        const bool on = g_enabled && g_hooked && g_anyIce && g_withIce > 0 && terrainwet::PatchActive() && EnsureDetail(dev);
-        if (on)
+        // The view, camera and sun (read at the first chunk) every frame: the ice models use them too.
         {
             float P[16];
             g_haveView = wxl::game::gfx::SceneMatrices(g_view, P);
-            float cam[3];
-            wxl::game::camera::GetPosition(cam);
+            wxl::game::camera::GetPosition(g_camera);
+            g_needSun = g_hooked;
+        }
+        const bool on = g_enabled && g_hooked && g_anyIce && g_withIce > 0 && terrainwet::PatchActive() && EnsureDetail(dev);
+        if (on)
+        {
+            const float* cam = g_camera;
             c[0] = cam[0]; c[1] = cam[1]; c[2] = cam[2]; c[3] = g_strength;
             c[4] = g_sun[0]; c[5] = g_sun[1]; c[6] = g_sun[2]; c[7] = 350.0f;
             for (int k = 0; k < 3; ++k) c[8 + k] = g_sunColour[k] * 1.3f;
@@ -473,10 +491,29 @@ namespace wxl_livingazeroth::terrainice
             dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
             dev->SetSamplerState(kSampler, D3DSAMP_SRGBTEXTURE, FALSE);
             g_stageOn = true;
-            g_needSun = true;
         }
         dev->SetPixelShaderConstantF(kFirstConstant, c, kConstantCount);
     }
+
+    void FillModelConstants(float c[4 * kModelConstantCount])
+    {
+        std::memset(c, 0, sizeof(float) * 4 * kModelConstantCount);
+        // c180 camera (world); c181..c183 the view's rows (world-relative = dot(view vector, row r)).
+        for (int k = 0; k < 3; ++k) c[k] = g_camera[k];
+        for (int r = 0; r < 3; ++r)
+            for (int k = 0; k < 3; ++k) c[4 + r * 4 + k] = g_haveView ? g_view[r * 4 + k] : (r == k ? 1.0f : 0.0f);
+        // c184 the sun (view space, toward it), glint exponent; c185 glint colour, Fresnel strength.
+        for (int k = 0; k < 3; ++k) { c[16 + k] = g_sunView[k]; c[20 + k] = g_sunColour[k] * 1.3f; }
+        c[19] = 350.0f; c[23] = 0.65f;
+        // c186 deep body, clarity; c187 depths 1, 2 (yd), detail repeats per yd 1, 2; c188 highlight,
+        // sky reflection brightness; c189 debug tint (the ice weight comes per batch, c179).
+        c[24] = 0.04f; c[25] = 0.20f; c[26] = 0.30f; c[27] = g_clarity;
+        c[28] = 0.35f; c[29] = 1.1f; c[30] = 1.0f / 4.0f; c[31] = 1.0f / 7.0f;
+        c[32] = 0.60f; c[33] = 0.85f; c[34] = 1.0f; c[35] = 1.15f;
+        if (g_debug) { c[36] = 0.8f; c[38] = 0.8f; }
+    }
+
+    IDirect3DTexture9* DetailTexture(IDirect3DDevice9* dev) { return dev && EnsureDetail(dev) ? g_detail : nullptr; }
 
     void  SetEnabled(bool enabled)   { g_enabled = enabled; }
     bool  Enabled()                  { return g_enabled; }

@@ -59,4 +59,16 @@ namespace wxl_livingazeroth::m2effects
     }
 
     bool IsVertexWrapper(const void* wrapper) { return FindVertexEffect(wrapper) != nullptr; }
+
+    bool IsPixelWrapper(const void* wrapper)
+    {
+        if (!wrapper) return false;
+        for (const Effect& e : g_effects)
+        {
+            const auto* table = reinterpret_cast<void* const*>(e.object + kPixelTable);
+            for (int i = 0; i < kPixelEntries; ++i)
+                if (table[i] == wrapper) return true;
+        }
+        return false;
+    }
 }

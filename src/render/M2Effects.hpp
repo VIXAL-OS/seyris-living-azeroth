@@ -37,6 +37,9 @@ namespace wxl_livingazeroth::m2effects
     /// again when a device reset recreates them).
     bool IsVertexWrapper(const void* wrapper);
 
+    /// Whether a shader wrapper is in a recorded effect's pixel table (the Combiners_* sets).
+    bool IsPixelWrapper(const void* wrapper);
+
     /// The first recorded effect whose vertex table holds the wrapper, or null.
     const Effect* FindVertexEffect(const void* wrapper);
 }

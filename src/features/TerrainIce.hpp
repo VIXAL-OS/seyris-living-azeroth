@@ -53,6 +53,14 @@ namespace wxl_livingazeroth::terrainice
     /// The detail texture's texels (A8R8G8B8, size x size, tiling): r = cracks, g = bubbles, b = cloud.
     void BuildDetail(std::vector<uint32_t>& texels, int size);
 
+    /// The look as the ice models use it (features/ModelIce), worked out at this frame's terrain stage:
+    /// PS c180..c189 (camera; the view's rows; the sun in view space; glint; deep body and clarity;
+    /// depths and detail scales; highlight and sky reflection; debug tint).
+    constexpr int kModelConstantCount = 10;
+    void FillModelConstants(float constants[4 * kModelConstantCount]);
+    /// The shared detail texture (created on first use for this device), or null.
+    IDirect3DTexture9* DetailTexture(IDirect3DDevice9* device);
+
     /// From WXL_Load: the chunk-draw hook.
     void Install(const WXL_Api* api);
     /// Right before the terrain stage (the cover's terrain-stage hook, after terrainwet's).
