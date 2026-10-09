@@ -31,9 +31,14 @@ namespace wxl_livingazeroth::modelice
         const char* const kIceModels[] = {
             "dragonblight\\dragonblight_shoreline_ice", "dragonblight\\dragonblight_iceberg", "dragonblight\\dragonblight_icecliff",
             "dragonblight\\dragonblight_icerock", "dragonblight\\dragonblight_iceshard", "dragonblight\\dragonblight_icearch",
-            "frozenwaterfalls\\frozenwaterfall", "waterfalls\\northrendfrozenwaterfall", "ulduar\\ul_icewall",
+            "ulduar\\ul_icewall",
             "nexus\\nexus_spike_a_ice", "nexus\\nexus_spike_b_ice", "nexus\\nexus_spike_c_ice", "nexus\\nexus_spike_d_ice",
             "nexus\\nexus_ice_conduit",
+        };
+        // Frozen waterfalls (Winterspring's, and Northrend's: Bor's Fall in the Storm Peaks and the smaller
+        // falls), drawn in the frozen-fall style.
+        const char* const kFrozenFalls[] = {
+            "frozenwaterfalls\\frozenwaterfall", "waterfalls\\northrendfrozenwaterfall",
         };
 
         using DrawBatchFn = void(__fastcall*)(void* ctx, void* edx);
@@ -48,39 +53,42 @@ namespace wxl_livingazeroth::modelice
         unsigned g_iceDraws = 0;
         std::string g_status;
 
-        struct Entry { std::string stem; bool ice = false; };
+        struct Entry { std::string stem; Style style = Style::None; };
         std::unordered_map<const void*, Entry> g_models;
 
-        bool IceFor(const void* ctx)
+        Style StyleFor(const void* ctx)
         {
-            if (!ctx) return false;
+            if (!ctx) return Style::None;
             const auto* instance = *reinterpret_cast<const uint8_t* const*>(static_cast<const uint8_t*>(ctx) + kCtxInstance);
-            if (!instance) return false;
+            if (!instance) return Style::None;
             const auto* shared = *reinterpret_cast<const uint8_t* const*>(instance + kInstShared);
-            if (!shared) return false;
+            if (!shared) return Style::None;
             const char* stem = reinterpret_cast<const char*>(shared + kSharedStem);
             const size_t length = strnlen(stem, kStemCapacity);
             Entry& e = g_models[shared];
             if (e.stem.size() != length || std::memcmp(e.stem.data(), stem, length) != 0)
             {
                 e.stem.assign(stem, length);
-                e.ice = IsIceModel(e.stem.c_str());
+                e.style = StyleOf(e.stem.c_str());
             }
-            if (g_models.size() > 8192) { const bool ice = e.ice; g_models.clear(); return ice; }
-            return e.ice;
+            if (g_models.size() > 8192) { const Style style = e.style; g_models.clear(); return style; }
+            return e.style;
         }
 
         // Switches the block on for one batch (main thread, inside the M2 pass).
         bool Begin(void* ctx)
         {
-            if (!g_enabled || g_patched == 0 || !IceFor(ctx)) return false;
+            if (!g_enabled || g_patched == 0) return false;
+            const Style style = StyleFor(ctx);
+            if (style == Style::None) return false;
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             if (!dev) return false;
             IDirect3DTexture9* detail = terrainice::DetailTexture(dev);
             if (!detail) return false;
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
-            const float weight[4] = { terrainice::Strength(), 0.0f, 0.0f, 0.0f };
+            float weight[4];
+            StyleConstants(style, terrainice::Strength(), look, weight);
             dev->SetPixelShaderConstantF(kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetTexture(kSampler, detail);
@@ -123,6 +131,8 @@ namespace wxl_livingazeroth::modelice
         // the view's rows) for the detail texture, sampled on three planes by the normal (two depths
         // below the surface along the view: parallax); then the terrain's look (deep body by clarity,
         // Fresnel sky reflection, sun glint) and r31 = weight x (ice - base) + weight x debug tint.
+        // The batch's style (c179.yzw, zero for plain ice): the detail's world height scaled by 1 - y
+        // (streaks along a fall), the body brightened by 1 + z, and w added to the Fresnel reflection.
         // ps_3_0 reads at most one constant register per instruction; lrp's destination can't be its
         // first or third source.
         std::string Block(const std::string& vP, const std::string& vN)
@@ -155,6 +165,7 @@ namespace wxl_livingazeroth::modelice
                 "\n      mul r19.xyz, r19, r19.w"
                 "\n      mad r20.xyz, r18, c187.x, r17"
                 "\n      mul r20.xyz, r20, c187.z"
+                "\n      mad r20.z, r20.z, -c179.y, r20.z"
                 "\n      mov r22.xy, r20.yz"
                 "\n      texld r21, r22, s14"
                 "\n      mul r23, r21, r19.x"
@@ -165,6 +176,7 @@ namespace wxl_livingazeroth::modelice
                 "\n      mad r23, r21, r19.z, r23"
                 "\n      mad r20.xyz, r18, c187.y, r17"
                 "\n      mul r20.xyz, r20, c187.w"
+                "\n      mad r20.z, r20.z, -c179.y, r20.z"
                 "\n      mov r22.xy, r20.yz"
                 "\n      texld r21, r22, s14"
                 "\n      mul r24, r21, r19.x"
@@ -186,6 +198,7 @@ namespace wxl_livingazeroth::modelice
                 "\n      mul r27.y, r27.y, c175.w"
                 "\n      min r27.y, r27.y, c174.x"
                 "\n      mul r26.xyz, r28, r27.y"
+                "\n      mad r26.xyz, r26, c179.z, r26"
                 "\n      lrp r28.xyz, c186.w, r26, r12"
                 "\n      dp3 r27.w, r13, r14"
                 "\n      add_sat r27.z, c175.x, -r27_abs.w"
@@ -195,6 +208,8 @@ namespace wxl_livingazeroth::modelice
                 "\n      mul r29.x, r29.x, c178.y"
                 "\n      add r29.x, r29.x, c178.x"
                 "\n      mul r29.x, r29.x, c185.w"
+                "\n      add r29.x, r29.x, c179.w"
+                "\n      min r29.x, r29.x, c175.x"
                 "\n      mov r30.xyz, c2"
                 "\n      mul r30.xyz, r30, c188.w"
                 "\n      lrp r31.xyz, r29.x, r30, r28"
@@ -255,14 +270,38 @@ namespace wxl_livingazeroth::modelice
         }
     }
 
-    bool IsIceModel(const char* path)
+    Style StyleOf(const char* path)
     {
-        if (!path) return false;
+        if (!path) return Style::None;
         std::string p(path);
         for (char& c : p) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+        for (const char* m : kFrozenFalls)
+            if (p.find(m) != std::string::npos) return Style::FrozenFall;
         for (const char* m : kIceModels)
-            if (p.find(m) != std::string::npos) return true;
-        return false;
+            if (p.find(m) != std::string::npos) return Style::Ice;
+        return Style::None;
+    }
+
+    bool IsIceModel(const char* path) { return StyleOf(path) != Style::None; }
+
+    void StyleConstants(Style style, float weight, float* look, float c179[4])
+    {
+        c179[0] = weight; c179[1] = 0.0f; c179[2] = 0.0f; c179[3] = 0.0f;
+        if (style != Style::FrozenFall) return;
+        // Frozen falls: the detail stretched 5x along the flow at 2.5x the scale (streaks that still read
+        // from far off: Bor's Fall is 366 yd tall), layers 4x deeper, a paler glacial body brightened 1.5x
+        // over more of the model's own texture, softer cracks, and a glassier surface: stronger Fresnel with
+        // a base reflection even face on, brighter sky in it, and a broader, gentler sheen than the glint.
+        c179[1] = 0.8f; c179[2] = 0.5f; c179[3] = 0.08f;
+        look[19] = 120.0f;                                         // c184.w glint exponent
+        for (int k = 20; k < 23; ++k) look[k] *= 0.55f;            // c185.xyz glint colour
+        look[23] = 1.0f;                                           // c185.w Fresnel strength
+        look[24] = 0.14f; look[25] = 0.40f; look[26] = 0.56f;      // c186.xyz deep body
+        look[27] = std::min(look[27], 0.45f);                      // c186.w clarity
+        look[28] = 1.5f; look[29] = 4.0f;                          // c187.xy depths (yd)
+        look[30] = 1.0f / 10.0f; look[31] = 1.0f / 18.0f;          // c187.zw detail repeats per yd
+        look[32] = 0.62f; look[33] = 0.84f; look[34] = 0.97f;      // c188.xyz crack/bubble highlight
+        look[35] = 1.3f;                                           // c188.w sky reflection brightness
     }
 
     bool EditPixelForTests(std::string& src, std::string& why) { return EditPixel(src, why); }
