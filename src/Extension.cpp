@@ -132,6 +132,14 @@ namespace
         }
     }
 
+    // Main thread, before the client tears the world down for a loading screen: no background work
+    // may outlive the world it was copied from. (Extensions are never unloaded; there is no unload
+    // callback to stop threads in.)
+    void __cdecl OnWorldLeave(void* /*user*/, const void* /*args*/)
+    {
+        wxl_livingazeroth::fields::OnWorldLeave();
+    }
+
     void __cdecl OnDeviceLost(void* /*user*/, const void* /*args*/)
     {
         wxl_livingazeroth::depth::OnDeviceLost();
@@ -161,7 +169,9 @@ int __cdecl WXL_Load(const WXL_Api* api)
     api->Subscribe(static_cast<uint32_t>(ev::Event::OnDeviceLost), &OnDeviceLost, nullptr);
 
     wxl_livingazeroth::wind::Init(api);
+    wxl_livingazeroth::fields::Init(api);
     api->Subscribe(static_cast<uint32_t>(ev::Event::OnUpdate), &OnUpdate, nullptr);
+    api->Subscribe(static_cast<uint32_t>(ev::Event::OnWorldLeave), &OnWorldLeave, nullptr);
 
     // Raises the grass distance cap right before the world CVars (and Config.wtf's value) are
     // validated.
