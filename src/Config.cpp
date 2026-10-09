@@ -6,6 +6,7 @@
 #include "features/GrassInstanced.hpp"
 #include "features/GrassMotion.hpp"
 #include "features/SurfaceCover.hpp"
+#include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
 #include "render/PostAA.hpp"
 #include "wxl_seyris/SettingsApi.hpp"
@@ -100,6 +101,9 @@ namespace wxl_livingazeroth::config
 
         terrainwet::SetEnabled(Bool(s, "TerrainWetness", "The terrain itself looks darker where the ground is wet (rain, water nearby).", terrainwet::Enabled()));
         terrainwet::SetStrength(Float(s, "TerrainWetnessStrength", "How much darker soaked ground gets, 0..1: the terrain and the surface cover alike.", terrainwet::Strength()));
+        terrainice::SetEnabled(Bool(s, "ClearIce", "Icy ground (GroundMaterial rows with Flags 0x1: Storm Peaks ice, Winterspring glacier, Icecrown frozen bones) looks like deep, clear ice.", terrainice::Enabled()));
+        terrainice::SetStrength(Float(s, "ClearIceStrength", "How fully icy ground turns to clear ice, 0..1.", terrainice::Strength()));
+        terrainice::SetClarity(Float(s, "ClearIceClarity", "How much of the deep blue inside shows through the ice's own texture, 0..1.", terrainice::Clarity()));
 
         fields::SetShoreWorker(Bool(s, "ShoreWorker",
             "Work out the ground's distance to water and hot ground (the shore pass) on a background thread instead of the game thread. Same results, a frame later. 0 = the original pass on the game thread.",

@@ -274,6 +274,13 @@ namespace wxl_livingazeroth::materials
         return m && m->parent != materialId ? m->parent : 0;
     }
 
+    bool AnyWithFlags(uint32_t flags)
+    {
+        for (const auto& m : g_materials)
+            if ((m.second.flags & flags) == flags) return true;
+        return false;
+    }
+
     bool        Exists(uint32_t materialId) { return Find(materialId) != nullptr; }
     const char* Name(uint32_t materialId)   { const Material* m = Find(materialId); return m ? m->name.c_str() : ""; }
     unsigned    MaterialCount()             { return static_cast<unsigned>(g_materials.size()); }

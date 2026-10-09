@@ -293,6 +293,36 @@ namespace wxl_livingazeroth::terrain
         return true;
     }
 
+    bool ChunkLayerSurface(const void* chunkObject, uint32_t textureIndex, Surface& out)
+    {
+        out = Surface{};
+        const auto* chunk = static_cast<const uint8_t*>(chunkObject);
+        if (!chunk) return false;
+        out.area = *reinterpret_cast<const uint32_t*>(chunk + kChunkArea);
+        const auto* header = *reinterpret_cast<const uint8_t* const*>(chunk + kChunkHeader);
+        const auto* layers = *reinterpret_cast<const uint8_t* const*>(chunk + kChunkLayers);
+        if (header && layers)
+        {
+            const unsigned count = *reinterpret_cast<const uint32_t*>(header + kHeaderLayerCount);
+            for (unsigned l = 0; l < count && l < 4; ++l)
+                if (*reinterpret_cast<const uint32_t*>(layers + l * kLayerStride) == textureIndex)
+                {
+                    LayerSurface(chunk, layers, l, out);
+                    return out.texture != nullptr;
+                }
+        }
+        // Not among the MCLY layers (shouldn't happen): the name alone, from the tile's list.
+        const uintptr_t link = *reinterpret_cast<const uintptr_t*>(chunk + kChunkTileLink);
+        if (link && !(link & 1))
+            if (const auto* tile = *reinterpret_cast<const uint8_t* const*>(link + kLinkTile))
+            {
+                const uint32_t texCount = *reinterpret_cast<const uint32_t*>(tile + kTileTexCount);
+                const auto* entries = *reinterpret_cast<const char* const* const*>(tile + kTileTexEntries);
+                if (entries && textureIndex < texCount) out.texture = entries[textureIndex * 2];
+            }
+        return out.texture != nullptr;
+    }
+
     bool LayerWeightsAt(float x, float y, LayerWeights& out, bool swapAxes)
     {
         ChunkSpot at;

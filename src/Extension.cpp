@@ -38,6 +38,7 @@
 #include "features/GrassPerf.hpp"
 #include "features/ModelLights.hpp"
 #include "features/SurfaceCover.hpp"
+#include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
 #include "lua/EnvironmentLua.hpp"
 #include "lua/LuaApi.hpp"
@@ -180,6 +181,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     // Features register their shader patches first; the single create hook goes in after.
     wxl_livingazeroth::grass::Install(api);
     wxl_livingazeroth::terrainwet::Register();
+    wxl_livingazeroth::terrainice::Install(api); // the chunk draw: each chunk's ice mask
     wxl_livingazeroth::modellights::Register();
     wxl_livingazeroth::shaderpatch::Install(api);
     wxl_livingazeroth::modellights::InstallProbe(api);

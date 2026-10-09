@@ -21,10 +21,17 @@ namespace wxl_livingazeroth::materials
         float    stiffness = 0.0f;    // resistance to deformation: 0 gives way completely .. 1 rigid
         float    absorbency = 0.5f;   // how much outside moisture (rain, water nearby) reaches it: rock ~0.1 .. sand/soil ~0.9
         float    temperature = 0.0f;  // degC of the material itself (liquids: magma ~1000); only if hasTemperature
-        uint32_t flags = 0;           // reserved
+        uint32_t flags = 0;           // the material's own row only (not inherited): kFlag* below
         bool     hasTemperature = false;  // a row in the chain sets Temperature
         bool     restMoistureSet = false; // a row in the chain sets RestMoisture (else the default above)
     };
+
+    /// GroundMaterial Flags bits.
+    /// Clear ice (features/TerrainIce): the terrain shader draws it as clear, deep ice.
+    constexpr uint32_t kFlagClearIce = 0x1;
+
+    /// Whether any GroundMaterial row has all of these Flags bits (cheap; from the last load).
+    bool AnyWithFlags(uint32_t flags);
 
     /// (Re)loads both tables through wxl-seyris-tools' cdbc reader.
     void Load(const void* cdbcApi);

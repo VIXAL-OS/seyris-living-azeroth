@@ -1,5 +1,6 @@
 #include "TerrainWetness.hpp"
 
+#include "TerrainIce.hpp"
 #include "TerrainLights.hpp"
 #include "../render/MoistureTexture.hpp"
 #include "../render/ShaderPatch.hpp"
@@ -111,12 +112,18 @@ namespace wxl_livingazeroth::terrainwet
             if (src.find(" v9") != std::string::npos || src.find(" s11") != std::string::npos || src.find(" s12") != std::string::npos ||
                 src.find(" s13") != std::string::npos || src.find("c200") != std::string::npos || src.find(" i0") != std::string::npos)
             { why = "v9/s11/s12/s13/c200/i0 in use"; return false; }
+            // Clear ice (features/TerrainIce): the variant's layer blend, copied right after its sample
+            // (before the searches below, which take positions in the edited text).
+            terrainice::Variant ice;
+            std::string iceWhy;
+            const bool withIce = terrainice::Prepare(src, ice, iceWhy);
             // The stock ending: the colour minus the fog colour, then lerped toward it by the fog.
             static const std::regex fog(R"((\n[ \t]*)add (r\d+)\.xyz, \2, -c2[ \t]*\n[ \t]*mad oC0\.xyz, v\d+\.x, \2, c2)");
             std::smatch m;
             if (!std::regex_search(src, m, fog)) { why = "no fog ending"; return false; }
             const std::string r = m[2].str();
-            const std::string block =
+            // The ice weight first (r25), then the wet look (none on ice), then the ice look.
+            const std::string block = (withIce ? terrainice::WeightBlock(ice) : std::string()) +
                 "\n    add r31.xy, v9.xy, -c201.xy"
                 "\n    add r31.zw, -v9.xyxy, c201.zwzw"
                 "\n    min r31.xy, r31.xy, r31.zw"
@@ -147,13 +154,17 @@ namespace wxl_livingazeroth::terrainwet
                 "\n    add r30.w, r30.w, -r27.w"
                 "\n    mad r30.w, r31.x, r30.w, r27.w"
                 "\n    mov r30.x, r30.w"
-                "\n    mul r30.x, r30.x, c200.w"
-                "\n    mad " + r + ".xyz, " + r + ", -r30.x, " + r;
+                "\n    mul r30.x, r30.x, c200.w" +
+                (withIce ? terrainice::WetScale() : std::string()) +
+                "\n    mad " + r + ".xyz, " + r + ", -r30.x, " + r +
+                (withIce ? terrainice::LookBlock(r) : std::string());
             // Then the point lights (features/TerrainLights), on the wet colour.
             std::string lightDefs;
             const std::string lightBlock = terrainlights::PixelBlock(r, lightDefs);
             src.insert(static_cast<size_t>(m.position(0)), block + lightBlock);
-            src.insert(src.find('\n') + 1, "    def c202, 1, 0, 0.5, 0\n" + lightDefs + "    dcl_texcoord7 v9.xyz\n    dcl_2d s11\n    dcl_2d s12\n");
+            src.insert(src.find('\n') + 1, "    def c202, 1, 0, 0.5, 0\n" + lightDefs + (withIce ? terrainice::Definitions() : std::string()) +
+                                            "    dcl_texcoord7 v9.xyz\n    dcl_2d s11\n    dcl_2d s12\n");
+            terrainice::NoteVariant(withIce, iceWhy);
             return true;
         }
 
@@ -172,6 +183,8 @@ namespace wxl_livingazeroth::terrainwet
             return vs && ps && vs->failed == 0 && vs->skipped == 0 && vs->applied > 0 && ps->applied > 0;
         }
     }
+
+    bool EditPixelForTests(std::string& src, std::string& why) { return EditPixel(src, why); }
 
     void Register()
     {

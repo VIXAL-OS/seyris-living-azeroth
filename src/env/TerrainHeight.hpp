@@ -24,6 +24,11 @@ namespace wxl_livingazeroth::terrain
     struct Surface { unsigned area = 0; const char* texture = nullptr; unsigned groundEffect = 0; int terrainType = -1; };
     bool SurfaceAt(float x, float y, Surface& out);
 
+    /// The same for one layer of a loaded chunk object, found by its MCLY texture index (as a
+    /// terrain draw node's layer records carry it, core offsets/game/ADT.hpp kOffLayerSlotTexId).
+    /// False when the chunk has no such texture.
+    bool ChunkLayerSurface(const void* chunk, uint32_t textureIndex, Surface& out);
+
     /// The painted strength of every texture layer at world (x, y), from the chunk's alpha maps
     /// (decoded once per chunk and cached; bilinear between the 64x64 texels, ~0.5 yd). Layer 0
     /// gets what the others leave (as the client blends). `serial` identifies the decoded chunk

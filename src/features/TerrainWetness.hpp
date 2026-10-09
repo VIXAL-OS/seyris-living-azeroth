@@ -11,6 +11,8 @@
 
 #include <d3d9.h>
 
+#include <string>
+
 namespace wxl_livingazeroth::terrainwet
 {
     /// Registers the shader patches. From WXL_Load, before shaderpatch::Install().
@@ -34,6 +36,9 @@ namespace wxl_livingazeroth::terrainwet
     /// How much darker fully soaked ground gets (0..1; 0.45 matches the cover).
     void  SetStrength(float strength);
     float Strength();
+
+    /// The pixel edit on its own, for offline tests (every stock variant must patch and assemble).
+    bool EditPixelForTests(std::string& src, std::string& why);
 
     /// For the panel: one line per patch (applied / skipped / failed), and whether the pair is usable.
     const char* StatusLine();

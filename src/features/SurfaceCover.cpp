@@ -11,6 +11,7 @@
 #include "../render/MoistureTexture.hpp"
 #include "ModelLights.hpp"
 #include "TerrainLights.hpp"
+#include "TerrainIce.hpp"
 #include "TerrainWetness.hpp"
 #include "GrassPerf.hpp"
 #include "GroundMaterialTable.hpp"
@@ -1915,6 +1916,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 prof::Scope scope(prof::kOursLightUpload);
                 terrainwet::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
                 terrainlights::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
+                terrainice::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
             }
             g_origTerrainStage();
             if (g_settings.enabled && g_settings.drawPoint == 0)
