@@ -152,6 +152,14 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         {
             prof::Scope scope(prof::kOursPost);
             if (g_settings.mode == Mode::Off) { g_inactive = "switched off"; return; }
+            // The Graphics Test launcher (the one that imports WarcraftXR.dll) runs Modern Render, whose own
+            // anti-aliasing is set in its F9 panel: both on would smooth the image twice.
+            static const bool modernRender = GetModuleHandleA("WarcraftXR.dll") != nullptr;
+            if (modernRender)
+            {
+                g_inactive = "Graphics Test launcher: Modern Render's anti-aliasing (F9) is used there";
+                return;
+            }
             const auto* a = static_cast<const ev::WorldRenderEndArgs*>(args);
             auto* dev = static_cast<IDirect3DDevice9*>(a && a->device ? a->device : gx::RawDevice());
             if (!dev) return;
