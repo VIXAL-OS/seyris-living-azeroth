@@ -145,7 +145,7 @@ namespace wxl_livingazeroth::wmoice
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
             float weight[4], more[4];
-            modelice::StyleConstants(modelice::Style::Building, terrainice::Strength(), look, weight, more);
+            modelice::StyleConstants(modelice::Style::Light, terrainice::Strength(), look, weight, more);
             dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);

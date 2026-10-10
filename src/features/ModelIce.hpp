@@ -15,8 +15,9 @@
 //
 // Frozen waterfalls get their own style: brighter, glassier ice whose detail is streaked along the
 // flow, at a scale that still reads from a distance (Bor's Fall in the Storm Peaks is 366 yd tall).
-// Buildings (features/WmoIce) get a lighter one: their ice textures are already bright, saturated ice,
-// so the texture's own colour stays the body and only the cracks, the sheen and the glint go on top.
+// The ice models and buildings (features/WmoIce) get a lighter one: their textures are already bright,
+// saturated ice, so the texture's own colour stays the body and only the cracks, the sheen and the glint
+// go on top.
 #pragma once
 
 #include "wxl/PluginApi.h"
@@ -33,8 +34,9 @@ namespace wxl_livingazeroth::modelice
     /// The pixel edit on its own (offline tests).
     bool EditPixelForTests(std::string& src, std::string& why);
 
-    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Building = 3 };
-    /// Which look a model path (stem or file name, any case or slashes) gets: none, ice, or frozen fall.
+    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3 };
+    /// Which look a model path (stem or file name, any case or slashes) gets: none, light (the ice models),
+    /// or frozen fall.
     Style StyleOf(const char* path);
     /// Whether a model path is one of the ice models (any style).
     bool IsIceModel(const char* path);

@@ -6,7 +6,10 @@ GroundMaterialSelector.cdbc files, keeping every row already there.
   outside moisture, rigid, -10 degC. No SurfaceCover row: nothing lies on it (texture rows win over
   the global TerrainType=Snow row, so the snow cover stays off these textures).
   GroundMaterialSelector 30..38: the icy ground textures found by the map scan (waterfall-scan
-  ice_summary.py), global scope.
+  ice_summary.py), global scope. 39..41: the clear lake and sheet ice its name filter missed ("ice" inside a
+  word: ZD_LakeIceB, the frozen lakes of Wintergrasp and Zul'Drak; DragonblightIceBlue; IG_GreenIceA). Left
+  out on purpose: snow on ice (ZD_LakeIceC, the Dragonblight pack and melty ice) and frosted or dirty ice
+  (Winterspring's, IG_GrayIceB, IG_DirtyIceD).
 
 Usage:  python add_clear_ice_rows.py [dir]     (default: ../data; run it on <client>/DBFilesClient too)
 Rows whose ID is already present are left alone, so running it twice changes nothing.
@@ -28,6 +31,9 @@ ICE_TEXTURES = [
     r"Tileset\Expansion02\IceCrown\IG_FrozenBonesC.blp",
     r"Tileset\Expansion02\IceCrown\IG_FrozenBonesD.blp",
     r"Tileset\Expansion02\Dragonblight\DB_FrozenBonesB.blp",
+    r"Tileset\Expansion02\ZulDrak\ZD_LakeIceB.blp",
+    r"Tileset\Expansion02\Dragonblight\DragonblightIceBlue.blp",
+    r"Tileset\Expansion02\IceCrown\IG_GreenIceA.blp",
 ]
 
 

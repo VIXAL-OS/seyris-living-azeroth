@@ -330,7 +330,7 @@ namespace wxl_livingazeroth::modelice
         for (const char* m : kFrozenFalls)
             if (p.find(m) != std::string::npos) return Style::FrozenFall;
         for (const char* m : kIceModels)
-            if (p.find(m) != std::string::npos) return Style::Ice;
+            if (p.find(m) != std::string::npos) return Style::Light;
         return Style::None;
     }
 
@@ -340,10 +340,10 @@ namespace wxl_livingazeroth::modelice
     {
         c179[0] = weight; c179[1] = 0.0f; c179[2] = 0.0f; c179[3] = 0.0f;
         c190[0] = 0.0f; c190[1] = 0.0f; c190[2] = 0.0f; c190[3] = 0.0f;
-        if (style == Style::Building)
+        if (style == Style::Light)
         {
-            // Buildings: the texture's own colour is the body (Icecrown's and the Nexus's ice is already
-            // bright, saturated ice, which the deep body only dulled), with a little of the cloudy depth
+            // Ice models and buildings: the texture's own colour is the body (icebergs, shoreline floes and
+            // Icecrown's and the Nexus's ice are already bright, saturated ice, which the deep body only dulled), with a little of the cloudy depth
             // left on it and a touch of brightness to make up for it. Whiter, stronger cracks and bubbles,
             // so they read against a bright surface, and a softer Fresnel sheen; the glint as it is.
             c190[0] = 1.0f; c190[1] = 0.3f; c190[2] = 0.6f;
