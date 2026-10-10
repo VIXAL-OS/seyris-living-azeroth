@@ -1,5 +1,6 @@
 // Nearby actors: every unit (players, NPCs, creatures) close to the player, nearest first, with a
-// size taken from the server-sent bounding radius. Refreshed once per frame on the main thread.
+// size taken from the server-sent bounding radius, leaving out the invisible script helpers (invisible
+// stalker / invisible man models). Refreshed once per frame on the main thread.
 // Consumers: grass parting now; later fog swirl, snow/sand footprints, water ripples.
 #pragma once
 

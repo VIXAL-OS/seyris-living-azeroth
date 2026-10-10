@@ -36,6 +36,7 @@ namespace wxl_livingazeroth::actors
         // Row columns (3.3.5 DBC order; strings are resolved pointers, other columns raw):
         constexpr size_t kDisplayModelId    = 0x04; // CreatureDisplayInfo.ModelID (core-confirmed)
         constexpr size_t kDisplayModelScale = 0x10; // CreatureDisplayInfo.CreatureModelScale [believed]
+        constexpr size_t kModelName         = 0x08; // CreatureModelData.ModelName (resolved string; +0x18 footprint below fits)
         constexpr size_t kModelScale        = 0x10; // CreatureModelData.ModelScale [believed]
         constexpr size_t kModelCollisionW   = 0x38; // CreatureModelData.CollisionWidth [believed]
 
@@ -115,6 +116,42 @@ namespace wxl_livingazeroth::actors
             g_widthCache[displayId] = width;
             return width;
         }
+
+        // Script helpers nobody sees: the invisible stalkers and the invisible man (CreatureModelData
+        // Creature\InvisibleStalker\*.mdx, Creature\InvisibleMan\*.mdx, 146 displays). Most of their model
+        // rows still carry a footprint texture, so the Argent Tournament's helpers carved snow trenches with
+        // nothing standing in them (the user, 2026-10-10). They don't part grass or make ripples either.
+        std::unordered_map<uint32_t, bool> g_invisibleCache; // display id -> invisible model
+
+        bool ReadName(uintptr_t address, char (&out)[128])
+        {
+            __try
+            {
+                const char* s = reinterpret_cast<const char*>(address);
+                size_t n = 0;
+                for (; n + 1 < sizeof(out) && s[n]; ++n) out[n] = s[n];
+                out[n] = 0;
+                return n > 0;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        bool InvisibleDisplay(uint32_t displayId)
+        {
+            if (!displayId) return false;
+            if (auto it = g_invisibleCache.find(displayId); it != g_invisibleCache.end()) return it->second;
+            bool invisible = false;
+            uint32_t display = Row(kDisplayInfoStorage, displayId), modelId = 0, name = 0;
+            char path[128] = {};
+            if (display && ReadU32(display + kDisplayModelId, modelId))
+                if (uint32_t model = Row(kModelDataStorage, modelId); model && ReadU32(model + kModelName, name) && name && ReadName(name, path))
+                {
+                    for (char& c : path) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+                    invisible = std::strstr(path, "creature\\invisiblestalker\\") || std::strstr(path, "creature\\invisibleman\\");
+                }
+            g_invisibleCache[displayId] = invisible;
+            return invisible;
+        }
     }
 
     void Refresh(const float center[3], float range)
@@ -143,6 +180,7 @@ namespace wxl_livingazeroth::actors
                 ReadU32(descriptors + kFieldDisplayId, a.displayId);
                 ReadU32(descriptors + kFieldNativeDisplay, a.nativeDisplayId);
             }
+            if (InvisibleDisplay(a.displayId)) return true;
             // Guard against garbage if the field layout were ever off.
             if (!(a.boundingRadius > 0.01f && a.boundingRadius < 20.0f)) a.boundingRadius = 0.5f;
 
