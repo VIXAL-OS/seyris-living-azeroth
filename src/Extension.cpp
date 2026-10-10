@@ -50,6 +50,7 @@
 #include "render/ShaderPatch.hpp"
 #include "wxl_seyris/CdbcApi.hpp"
 #include "RainSignal.hpp"
+#include <chrono>
 #include <cmath>
 
 namespace
@@ -99,6 +100,22 @@ namespace
         wxl_livingazeroth::grassdistance::OnFirstFrame();
     }
 
+    // Every 30 s in the world, one log line for diagnosing a report afterwards (the log is all a session leaves
+    // behind): where the player is, what the client says they stand on, and what the ice features touched.
+    void LogStatusWhenDue()
+    {
+        static auto next = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next) return;
+        next = now + std::chrono::seconds(30);
+        const auto& s = wxl_livingazeroth::world::Current();
+        if (!s.inWorld) return;
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s",
+                   s.mapId, s.playerPos[0], s.playerPos[1], s.playerPos[2], s.playerTerrainType, s.outdoors ? "outdoors" : "indoors",
+                   wxl_livingazeroth::terrainice::StatusLine(), wxl_livingazeroth::modelice::StatusLine(),
+                   wxl_livingazeroth::wmoice::StatusLine());
+    }
+
     // Between frames: the safe moment to swap the depth surface the next world pass will bind.
     void __cdecl OnFrame(void* /*user*/, const void* /*args*/)
     {
@@ -107,6 +124,7 @@ namespace
         wxl_livingazeroth::grassinst::OnFrameEnd();
         wxl_livingazeroth::depth::Update();
         wxl_livingazeroth::modellights::EndFrame();
+        LogStatusWhenDue();
     }
 
     // Once per frame, main thread: refresh the world snapshot, then everything that reads it.
