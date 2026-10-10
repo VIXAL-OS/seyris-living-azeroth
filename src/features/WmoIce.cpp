@@ -51,6 +51,12 @@ namespace wxl_livingazeroth::wmoice
             "kaskala_icecliff_01", "kaskala_icecliff_01dirty", "nd_utgarde_iceshard_01", "ul_uldr_ice_02",
             "frozenbridge01", "icicles0106", "dragonblight_iceberg_01", "dragonblight_shoreline_ice_01",
         };
+        // Of those, Dragonblight's (the Crystal Vice, Wyrmrest's cliffs, the icebergs; the dirty cliff is the
+        // Storm Peaks' copy of it) take the glacier look, and the shoreline floe texture the floe one.
+        const char* const kGlacierTextures[] = {
+            "kaskala_icecliff_01", "kaskala_icecliff_01dirty", "dragonblight_iceberg_01",
+        };
+        constexpr const char* kFloeTexture = "dragonblight_shoreline_ice_01";
 
         using RenderLeafFn = void(__fastcall*)(void* root, void* edx, void* group, int flag);
         using CullBatchFn = char(__cdecl*)(void* record);
@@ -61,6 +67,7 @@ namespace wxl_livingazeroth::wmoice
         bool g_enabled = true;
         int  g_depth = 0;                 // inside a batch loop
         bool g_on = false;                // the block is switched on for the current batch
+        modelice::Style g_onStyle = modelice::Style::None;  // with this style's constants
         unsigned g_iceBatches = 0, g_roots = 0, g_iceRoots = 0;
         std::string g_status;
 
@@ -68,7 +75,7 @@ namespace wxl_livingazeroth::wmoice
         {
             const void* motx = nullptr;
             const void* materials = nullptr;
-            std::vector<uint8_t> ice;     // per material: 1 = ice
+            std::vector<uint8_t> ice;     // per material: its modelice::Style (0 = not ice)
             bool any = false;
         };
         std::unordered_map<const void*, RootIce> g_cache;
@@ -130,14 +137,16 @@ namespace wxl_livingazeroth::wmoice
                 r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.any = false;
                 char name[kMaxName];
                 for (uint32_t i = 0; i < v.count; ++i)
-                    if (ReadName(v, i, name) && IsIceTexture(name)) { r.ice[i] = 1; r.any = true; }
+                    if (ReadName(v, i, name))
+                        if (const modelice::Style style = StyleOfTexture(name); style != modelice::Style::None)
+                        { r.ice[i] = static_cast<uint8_t>(style); r.any = true; }
                 ++g_roots;
                 g_iceRoots += r.any ? 1 : 0;
             }
             return &r;
         }
 
-        void SwitchOn()
+        void SwitchOn(modelice::Style style)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             IDirect3DTexture9* detail = dev ? terrainice::DetailTexture(dev) : nullptr;
@@ -145,7 +154,7 @@ namespace wxl_livingazeroth::wmoice
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
             float weight[4], more[4];
-            modelice::StyleConstants(modelice::Style::Light, terrainice::Strength(), look, weight, more);
+            modelice::StyleConstants(style, terrainice::Strength(), look, weight, more);
             dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);
@@ -159,6 +168,7 @@ namespace wxl_livingazeroth::wmoice
             const BOOL on = TRUE;
             dev->SetPixelShaderConstantB(modelice::kSwitch, &on, 1);
             g_on = true;
+            g_onStyle = style;
         }
 
         void SwitchOff()
@@ -176,15 +186,16 @@ namespace wxl_livingazeroth::wmoice
         {
             const char culled = g_origCull(record);
             if (!g_depth || culled) return culled;
-            bool ice = false;
+            modelice::Style style = modelice::Style::None;
             if (const RootIce* r = g_rootIce)
             {
                 uint8_t index = 0;
-                ice = ReadMaterialIndex(record, index) && index < r->ice.size() && r->ice[index];
+                if (ReadMaterialIndex(record, index) && index < r->ice.size())
+                    style = static_cast<modelice::Style>(r->ice[index]);
             }
-            if (ice)
+            if (style != modelice::Style::None)
             {
-                if (!g_on) SwitchOn();
+                if (!g_on || g_onStyle != style) SwitchOn(style);
                 g_iceBatches += g_on ? 1 : 0;
             }
             else SwitchOff();
@@ -207,17 +218,25 @@ namespace wxl_livingazeroth::wmoice
         }
     }
 
-    bool IsIceTexture(const char* path)
+    bool IsIceTexture(const char* path) { return StyleOfTexture(path) != modelice::Style::None; }
+
+    modelice::Style StyleOfTexture(const char* path)
     {
-        if (!path) return false;
+        if (!path) return modelice::Style::None;
         std::string p(path);
         for (char& c : p) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
         const size_t slash = p.rfind('\\');
         std::string base = slash == std::string::npos ? p : p.substr(slash + 1);
         if (base.size() > 4 && base.compare(base.size() - 4, 4, ".blp") == 0) base.resize(base.size() - 4);
         for (const char* t : kIceTextures)
-            if (base == t) return true;
-        return false;
+            if (base == t)
+            {
+                if (base == kFloeTexture) return modelice::Style::Floe;
+                for (const char* g : kGlacierTextures)
+                    if (base == g) return modelice::Style::Glacier;
+                return modelice::Style::Light;
+            }
+        return modelice::Style::None;
     }
 
     void Install(const WXL_Api* api)

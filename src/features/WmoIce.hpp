@@ -8,6 +8,8 @@
 // effect and draw, and the block goes on when that batch's material's first texture is an ice texture.
 #pragma once
 
+#include "ModelIce.hpp"
+
 #include "wxl/PluginApi.h"
 
 namespace wxl_livingazeroth::wmoice
@@ -17,6 +19,9 @@ namespace wxl_livingazeroth::wmoice
 
     /// Whether a texture path (any case or slashes) is one of the WMO ice textures.
     bool IsIceTexture(const char* path);
+    /// Its look: glacier for Dragonblight's ice cliffs and icebergs, floe for the shoreline floe texture,
+    /// light for the rest of the list, none when it isn't ice.
+    modelice::Style StyleOfTexture(const char* path);
 
     void SetEnabled(bool enabled);
     bool Enabled();

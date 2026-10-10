@@ -332,7 +332,8 @@ namespace wxl_livingazeroth::modelice
         if (p.find("dragonblight\\dragonblight_shoreline_ice") != std::string::npos)
             return Style::Floe;
         for (const char* m : kIceModels)
-            if (p.find(m) != std::string::npos) return Style::Light;
+            if (p.find(m) != std::string::npos)
+                return std::strncmp(m, "dragonblight\\", 13) == 0 ? Style::Glacier : Style::Light;
         return Style::None;
     }
 
@@ -366,6 +367,24 @@ namespace wxl_livingazeroth::modelice
             look[23] = 0.2f;                                           // c185.w Fresnel strength
             look[27] = 1.0f;                                           // c186.w clarity
             look[32] = 1.0f; look[33] = 1.0f; look[34] = 1.0f;         // c188.xyz crack/bubble highlight
+            return;
+        }
+        if (style == Style::Glacier)
+        {
+            // Dragonblight's ice (the ice rocks, shards, cliffs and icebergs, and the Crystal Vice): 30-60 yd
+            // crystals, where the detail repeating every 4-7 yd read as a small busy lattice on the surface and
+            // the ice as milky (the user: "should have wider tiling and more transparency"). The detail 3x
+            // wider and its layers 3x deeper, so it swims inside the ice as the view moves; the texture's own
+            // colour as the body with lighter clouds and softer cracks (more of the deep body, or the light style's
+            // clouds, made it murky); a glassier, brighter sky reflection at grazing angles.
+            c190[0] = 1.0f; c190[1] = 0.2f; c190[2] = -0.4f;
+            c179[2] = 0.08f;
+            look[23] = 0.55f;                                           // c185.w Fresnel strength
+            look[27] = 1.0f;                                           // c186.w clarity
+            look[28] = 1.0f; look[29] = 3.2f;                          // c187.xy depths (yd)
+            look[30] = 1.0f / 12.0f; look[31] = 1.0f / 22.0f;          // c187.zw detail repeats per yd
+            look[32] = 0.9f; look[33] = 0.97f; look[34] = 1.0f;        // c188.xyz crack/bubble highlight
+            look[35] = 1.3f;                                           // c188.w sky reflection brightness
             return;
         }
         if (style != Style::FrozenFall) return;
