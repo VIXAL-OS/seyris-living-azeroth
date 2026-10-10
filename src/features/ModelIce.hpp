@@ -34,9 +34,9 @@ namespace wxl_livingazeroth::modelice
     /// The pixel edit on its own (offline tests).
     bool EditPixelForTests(std::string& src, std::string& why);
 
-    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3 };
+    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3, Floe = 4 };
     /// Which look a model path (stem or file name, any case or slashes) gets: none, light (the ice models),
-    /// or frozen fall.
+    /// floe (the flat shoreline floes), or frozen fall.
     Style StyleOf(const char* path);
     /// Whether a model path is one of the ice models (any style).
     bool IsIceModel(const char* path);

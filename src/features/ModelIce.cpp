@@ -329,6 +329,8 @@ namespace wxl_livingazeroth::modelice
         for (char& c : p) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
         for (const char* m : kFrozenFalls)
             if (p.find(m) != std::string::npos) return Style::FrozenFall;
+        if (p.find("dragonblight\\dragonblight_shoreline_ice") != std::string::npos)
+            return Style::Floe;
         for (const char* m : kIceModels)
             if (p.find(m) != std::string::npos) return Style::Light;
         return Style::None;
@@ -351,6 +353,19 @@ namespace wxl_livingazeroth::modelice
             look[23] = 0.45f;                                          // c185.w Fresnel strength
             look[27] = 1.0f;                                           // c186.w clarity
             look[32] = 0.85f; look[33] = 0.95f; look[34] = 1.0f;       // c188.xyz crack/bubble highlight
+            return;
+        }
+        if (style == Style::Floe)
+        {
+            // The flat shoreline floes (Kaskala, the Dragonblight and Borean coasts): near-white from above, where
+            // the light style's pale crack highlight is darker than the floe (a grey lattice) and its cloudy depth
+            // and fog-coloured sheen read as dirty blotches (the user, at Kaskala: "still ugly"). The floe's own
+            // colour without the clouds, a quarter of the cracks, a faint sheen, and the glint.
+            c190[0] = 1.0f; c190[1] = 0.0f; c190[2] = -0.75f;
+            c179[2] = 0.05f;
+            look[23] = 0.2f;                                           // c185.w Fresnel strength
+            look[27] = 1.0f;                                           // c186.w clarity
+            look[32] = 1.0f; look[33] = 1.0f; look[34] = 1.0f;         // c188.xyz crack/bubble highlight
             return;
         }
         if (style != Style::FrozenFall) return;
