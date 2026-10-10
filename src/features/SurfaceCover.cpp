@@ -331,9 +331,12 @@ namespace wxl_livingazeroth::cover
         // (view space), c25 ambient, c26 diffuse, PS c2 fog colour.
         float g_seenFog[4] = {}, g_seenLight[16] = {}, g_seenFogColor[4] = {}; // light: c24..c27 (c27 = specular colour, exponent)
         // The terrain's dynamic shadows as found at our draw point: which shadow maps are still bound
-        // on its samplers s5..s8, and whether they were used (all four bound and switched on).
+        // on its samplers s5..s8, and how the cover reads them: 0 not at all, 1 the one map of shadow
+        // quality 3 (its Terrain2 shaders: s5 alone, a box around the player that fades at its edge),
+        // 2 the three cascades and the far map of the higher qualities (Terrain3: s5..s8).
         bool  g_shadowBound[4] = {};
         bool  g_shadowUsed = false;
+        int   g_shadowMode = 0;
         bool  g_seenScene = false;
 
         // stats
@@ -561,7 +564,7 @@ float4 specOn1 : register(c9);
 float4 specular : register(c10);
 float4 wetMap : register(c11);  // 1 / grid extent (yd), uv offset (x, y), on
 float4 wetBox : register(c12);  // the grid's valid box, camera-relative (min x, min y, max x, max y)
-float4 misc : register(c13);     // x = 1: the terrain's dynamic shadows apply; y = (unused), z = 1 / the near grid's edge fade (yd),
+float4 misc : register(c13);     // x = the terrain's dynamic shadows: 0 none, 1 its one map, 2 its cascades; y = (unused), z = 1 / the near grid's edge fade (yd),
                                  // w = how much darker soaked ground gets (the wet terrain's strength, so both match)
 float4 edgeFade : register(c14); // player centre relative to camera (xy), fully covered radius, zero coverage radius (yd)
 float4 pcf[8] : register(c20);   // the terrain's PCF offsets (its PS c3..c10)
@@ -621,6 +624,20 @@ float Shadow(float3 vp)
     return edge * (s * 0.2 - 1) + 1;
 }
 
+// Shadow quality 3: the terrain's Terrain2 shaders (dumped 2026-10-10) read one map, the first cascade's
+// (VS c37..c39, on s5), with 5 PCF taps, and fade it out over the box's outer edge. The cover had no
+// shadows at all there (the user: "the snow mod doesn't get shadows in that box").
+float ShadowSingle(float3 vp)
+{
+    float4 p = float4(vp, 1);
+    float3 a = float3(dot(p, shadowM[0]), dot(p, shadowM[1]), dot(p, shadowM[2]));
+    float2 uv = a.xy * 0.5 + 0.5;
+    float s = Tap(shadow0, uv, a.z);
+    [unroll] for (int k = 0; k < 8; k += 2) s += Tap(shadow0, uv + pcf[k].xy, a.z);
+    float fade = saturate(max(abs(a.x), abs(a.y)) * -3.4482758 + 3.41379309);
+    return fade * (s * 0.2 - 1) + 1;
+}
+
 // Coverage, rather than only height, must fade or thin snow still ends as an
 // opaque square. Every clipmap level uses the same circle to avoid LOD seams.
 float CoverVisibility(float2 rel)
@@ -673,7 +690,9 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     float3 h = normalize(l + normalize(-vpos));
     float sp = pow(saturate(dot(nn, h)), max(specular.w, 1) * (1 + 3 * wet)) * saturate(mask * (1 + 2 * wet));
     // Dynamic shadows like the terrain's: down to 70% in full shadow, no shine there.
-    float shade = misc.x > 0.5 ? Shadow(vpos) : 1;
+    float shade = 1;
+    [branch] if (misc.x > 1.5) shade = Shadow(vpos);
+    else if (misc.x > 0.5) shade = ShadowSingle(vpos);
     // Point lights (torches, from the VS): not shadowed by the sun's shadow maps. Added to the sun's
     // light like the client's own (the same amount whichever way the ground faces the sun), then
     // compressed smoothly above a knee instead of clamped (a hard clamp left a flat white plateau with
@@ -1598,6 +1617,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 g_inactive = "empty surface-cover grids (sampling continues)";
                 g_seenScene = false;
                 g_shadowUsed = false;
+                g_shadowMode = 0;
                 for (bool& b : g_shadowBound) b = false;
                 return;
             }
@@ -1623,17 +1643,21 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             constexpr D3DSAMPLERSTATETYPE kShadowStates[7] = { D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER,
                                                                D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_BORDERCOLOR, D3DSAMP_SRGBTEXTURE };
             g_shadowUsed = false;
+            g_shadowMode = 0;
             if (sceneLit)
             {
-                bool all = true;
                 for (int k = 0; k < 4; ++k)
                 {
                     dev->GetTexture(5 + k, &shadowMaps[k]);
                     g_shadowBound[k] = shadowMaps[k] != nullptr;
-                    all &= g_shadowBound[k];
                     for (int st = 0; st < 7; ++st) dev->GetSamplerState(5 + k, kShadowStates[st], &shadowStates[k][st]);
                 }
-                g_shadowUsed = all && g_settings.shadows;
+                // All four: the cascades. The first alone: shadow quality 3's one map (the client never binds
+                // s6..s8 there). Anything else is not a layout we know, so no shadows rather than wrong ones.
+                const bool cascades = g_shadowBound[0] && g_shadowBound[1] && g_shadowBound[2] && g_shadowBound[3];
+                const bool single = g_shadowBound[0] && !g_shadowBound[1] && !g_shadowBound[2] && !g_shadowBound[3];
+                g_shadowMode = !g_settings.shadows ? 0 : cascades ? 2 : single ? 1 : 0;
+                g_shadowUsed = g_shadowMode != 0;
                 if (g_shadowUsed)
                 {
                     dev->GetVertexShaderConstantF(37, shadowMatrices, 12);
@@ -1777,13 +1801,13 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
 
             // The terrain's shadow maps on our free samplers s12..s15, exactly as it sampled them.
             {
-                const float c13[4] = { g_shadowUsed ? 1.0f : 0.0f, moisturetex::FarExcess(), 1.0f / moisturetex::kEdgeFadeYards, terrainwet::Strength() };
+                const float c13[4] = { static_cast<float>(g_shadowMode), moisturetex::FarExcess(), 1.0f / moisturetex::kEdgeFadeYards, terrainwet::Strength() };
                 dev->SetPixelShaderConstantF(13, c13, 1);
                 if (g_shadowUsed)
                 {
                     dev->SetPixelShaderConstantF(20, pcfOffsets, 8);
                     dev->SetPixelShaderConstantF(30, shadowMatrices, 12);
-                    for (int k = 0; k < 4; ++k)
+                    for (int k = 0; k < (g_shadowMode == 2 ? 4 : 1); ++k)
                     {
                         dev->SetTexture(12 + k, shadowMaps[k]);
                         for (int st = 0; st < 7; ++st) dev->SetSamplerState(12 + k, kShadowStates[st], shadowStates[k][st]);
@@ -2108,7 +2132,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                               g_seenFog[0], g_seenFog[1], g_seenFog[2], g_seenFog[3], g_seenFogColor[0], g_seenFogColor[1], g_seenFogColor[2]); add();
                 std::snprintf(line, sizeof(line), "terrain shadow maps at our draw: s5 %s, s6 %s, s7 %s, s8 %s -> cover shadows %s",
                               g_shadowBound[0] ? "bound" : "-", g_shadowBound[1] ? "bound" : "-", g_shadowBound[2] ? "bound" : "-", g_shadowBound[3] ? "bound" : "-",
-                              g_shadowUsed ? "on" : (g_settings.shadows ? "off (not all bound: shadow quality off, or the client unbinds them)" : "off (switched off)")); add();
+                              g_shadowMode == 2 ? "on (cascades)" : g_shadowMode == 1 ? "on (one map: shadow quality 3)"
+                              : (g_settings.shadows ? "off (no layout we know: shadow quality off, or the client unbinds them)" : "off (switched off)")); add();
             }
 
             static char status[64] = "";
