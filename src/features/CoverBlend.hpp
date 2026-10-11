@@ -1,8 +1,10 @@
-// Two rules of how the surface cover mixes its look at a spot (features/SurfaceCover.cpp, Combine
-// and Sample), kept apart so they can be checked offline (tests/cover). Snow comes out exactly as
-// before; they matter for covers that aren't white, like ash, where the plain cover colour (snow
-// white) would show as pale fringes and blotches.
+// Rules of how the surface cover mixes its look at a spot (features/SurfaceCover.cpp, Combine,
+// Sample and UploadLook), kept apart so they can be checked offline (tests/cover). Snow comes out
+// exactly as before; they matter for covers that aren't white, like ash, where the plain cover
+// colour (snow white) would show as pale fringes and blotches.
 #pragma once
+
+#include <cstdint>
 
 namespace wxl_livingazeroth::cover::blend
 {
@@ -49,5 +51,26 @@ namespace wxl_livingazeroth::cover::blend
         for (int i = 0; i < count; ++i) all += share[i];
         const float top = shareA + shareC;
         if (top > 0.0f) { shareA *= all / top; shareC *= all / top; }
+    }
+
+    /// The cover texture weights (8 slots, 0..255) uploaded for a cell with no cover look of its own
+    /// (bare ground, no cover row and no fallen snow): those of its neighbour with the most texture,
+    /// or none. `neighbours` holds each neighbour's weights, null for one that has no look either.
+    /// The weights are filtered across cells, so from a cell of ash to bare rock beside it the ash's
+    /// share fell toward nothing while its thinning cover still showed, and the plain cover colour
+    /// (snow white) took the rest: a pale band along ash edges ("near some sharp edges it does look
+    /// too white", the user, 2026-10-11). Borrowed, the cover keeps its own colour to its edge. A
+    /// cell with a look keeps its own weights: plain snow has no texture, its white is meant.
+    inline void BorrowedWeights(const uint8_t* const* neighbours, int count, uint8_t out[8])
+    {
+        int best = -1, bestSum = 0;
+        for (int n = 0; n < count; ++n)
+        {
+            if (!neighbours[n]) continue;
+            int sum = 0;
+            for (int s = 0; s < 8; ++s) sum += neighbours[n][s];
+            if (sum > bestSum) { bestSum = sum; best = n; }
+        }
+        for (int s = 0; s < 8; ++s) out[s] = best >= 0 ? neighbours[best][s] : 0;
     }
 }

@@ -157,6 +157,9 @@ namespace wxl_livingazeroth::cover
             // byte). Turned into per-slot weights at upload, with whatever IDs hold the slots then.
             std::vector<uint32_t> texIds = std::vector<uint32_t>(kTex * kTex, 0);
             std::vector<uint16_t> texShares = std::vector<uint16_t>(kTex * kTex, 0);
+            // 1 where the cell has no cover look of its own: it uploads a neighbour's texture weights
+            // (blend::BorrowedWeights).
+            std::vector<uint8_t>  lookless = std::vector<uint8_t>(kTex * kTex, 1);
             std::vector<uint32_t> texWeights[2] = { std::vector<uint32_t>(kTex * kTex, 0), std::vector<uint32_t>(kTex * kTex, 0) };
             // A = wetness, RGB = the terrain's vertex colour where rows use it (0x80 = neutral).
             std::vector<uint32_t> props = std::vector<uint32_t>(kTex * kTex, 0x00808080u);
@@ -1085,10 +1088,17 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             const uint16_t shares = static_cast<uint16_t>((a >= 0 ? ToByte(shareA) : 0) | (c >= 0 ? ToByte(shareC) << 8 : 0));
             const uint32_t props = (static_cast<uint32_t>(ToByte(b.wetness)) << 24) | (static_cast<uint32_t>(ToByte(b.vertexColor[0])) << 16) |
                                    (static_cast<uint32_t>(ToByte(b.vertexColor[1])) << 8) | ToByte(b.vertexColor[2]);
-            if (tint != L.tint[s] || ids != L.texIds[s] || shares != L.texShares[s] || props != L.props[s])
+            const uint8_t lookless = b.hasLook ? 0 : 1;
+            if (tint != L.tint[s] || ids != L.texIds[s] || shares != L.texShares[s] || props != L.props[s] ||
+                lookless != L.lookless[s])
             {
                 L.tint[s] = tint; L.texIds[s] = ids; L.texShares[s] = shares; L.props[s] = props;
-                L.lookDirty.Mark(s / kTex);
+                L.lookless[s] = lookless;
+                // The rows beside it too: a lookless neighbour there borrows this cell's weights.
+                const int row = s / kTex;
+                L.lookDirty.Mark(Slot(row - 1));
+                L.lookDirty.Mark(row);
+                L.lookDirty.Mark(Slot(row + 1));
             }
             if (isLevel0)
             {
@@ -1468,15 +1478,37 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             if (L.slotsUploaded != g_slotGeneration) L.lookDirty.All();
             if (L.lookDirty.Empty()) return true;
             const int first = L.lookDirty.first, end = L.lookDirty.end;
-            // The cells' cover texture IDs -> weights of whichever slots hold those IDs now.
-            for (int sl = first * kTex; sl < end * kTex; ++sl)
+            // The cells' cover texture IDs -> weights of whichever slots hold those IDs now. A cell
+            // with no look of its own takes its neighbour's (blend::BorrowedWeights).
+            const auto weightsOf = [&](int sl, uint8_t w[8])
             {
-                uint8_t w[8] = {};
                 for (int k = 0; k < 2; ++k)
                 {
                     const int id = static_cast<int>((L.texIds[sl] >> (16 * k)) & 0xFFFF);
                     const int slot = id > 0 && id < static_cast<int>(g_slotOfId.size()) ? g_slotOfId[id] : -1;
                     if (slot >= 0) w[slot] = static_cast<uint8_t>((L.texShares[sl] >> (8 * k)) & 0xFF);
+                }
+            };
+            for (int sl = first * kTex; sl < end * kTex; ++sl)
+            {
+                uint8_t w[8] = {};
+                if (!L.lookless[sl])
+                    weightsOf(sl, w);
+                else
+                {
+                    const int row = sl / kTex, col = sl % kTex;
+                    uint8_t around[8][8] = {};
+                    const uint8_t* neighbours[8] = {};
+                    int n = 0;
+                    for (int dj = -1; dj <= 1; ++dj)
+                        for (int di = -1; di <= 1; ++di)
+                        {
+                            if (!di && !dj) continue;
+                            const int at = Slot(row + dj) * kTex + Slot(col + di);
+                            if (!L.lookless[at]) { weightsOf(at, around[n]); neighbours[n] = around[n]; }
+                            ++n;
+                        }
+                    blend::BorrowedWeights(neighbours, n, w);
                 }
                 for (int q = 0; q < 2; ++q)
                     L.texWeights[q][sl] = (static_cast<uint32_t>(w[q * 4 + 3]) << 24) | (static_cast<uint32_t>(w[q * 4]) << 16) |

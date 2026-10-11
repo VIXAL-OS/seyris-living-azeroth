@@ -391,6 +391,26 @@ int main(int argc, char** argv)
             blend::StrongestTwo(nullptr, 0, a, c, sa, sc);
             CHECK(a == -1 && c == -1 && sa == 0.0f && sc == 0.0f);
         });
+        Test("look rule: bare ground beside a cover uploads the cover's texture weights, so filtering keeps its colour to its edge", []
+        {
+            const uint8_t ash[8] = { 255, 0, 0, 0, 0, 0, 0, 0 }, mixed[8] = { 0, 140, 115, 0, 0, 0, 0, 0 };
+            const uint8_t faint[8] = { 0, 0, 0, 60, 0, 0, 0, 0 }, plainSnow[8] = {};
+            uint8_t out[8];
+            const uint8_t* oneSide[3] = { nullptr, ash, nullptr };
+            blend::BorrowedWeights(oneSide, 3, out);
+            CHECK(out[0] == 255 && out[1] == 0);
+            // Between that cell and the ash beside it, the filtered share stays whole (it fell to half).
+            CHECK((ash[0] + out[0]) / 2 == 255);
+            const uint8_t* two[3] = { faint, mixed, nullptr };
+            blend::BorrowedWeights(two, 3, out);
+            CHECK(out[1] == 140 && out[2] == 115 && out[3] == 0);   // the one with the most texture
+            const uint8_t* none[2] = { nullptr, nullptr };
+            blend::BorrowedWeights(none, 2, out);
+            for (int s = 0; s < 8; ++s) CHECK(out[s] == 0);         // nothing beside it: as before
+            const uint8_t* snowOnly[1] = { plainSnow };
+            blend::BorrowedWeights(snowOnly, 1, out);
+            for (int s = 0; s < 8; ++s) CHECK(out[s] == 0);         // plain snow beside it: white, as before
+        });
         Test("the tables reload: a second load gives the same answers", [&]
         {
             const ct::Values first = At(kSearingAsh);
