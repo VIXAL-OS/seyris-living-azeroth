@@ -280,6 +280,9 @@ namespace wxl_livingazeroth::cover
         std::vector<int>   g_slotOfId;                                            // ID -> slot, -1 = none
         uint32_t           g_slotGeneration = 1;
         int                g_slotFrame = 0;
+        // Frames until the slots are recounted when a cell's look names a texture no slot holds (the usual recount
+        // is every 60 frames, and until then that cover drew without its texture).
+        constexpr int      kSlotHurryFrames = 2;
         unsigned           g_texturesInView = 0;
         std::unordered_map<int, IDirect3DTexture9*> g_textureCache;
         std::unordered_map<int, std::string>       g_textureStatus;
@@ -725,7 +728,12 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     float3 textured = t0.rgb * w.r + t1.rgb * w.g + t2.rgb * w.b + t3.rgb * w.a + t4.rgb * v.r + t5.rgb * v.g + t6.rgb * v.b + t7.rgb * v.a;
     float mask = dot(float4(t0.a, t1.a, t2.a, t3.a) * w, specOn0) + dot(float4(t4.a, t5.a, t6.a, t7.a) * v, specOn1);
     float share = saturate(dot(w, 1) + dot(v, 1));
-    float3 base = albedo.rgb * (1 - share) + textured * albedo.w;
+    // Where no cover texture is drawn (its slot not filled yet: a place just loaded in, or flown into), a cover
+    // with a tint (ash, sand: its texture's average colour x 1.68) fills with that colour back at its average, not
+    // the plain snow white ("ash still has white when loading in especially", the user, 2026-10-11). Snow's rows
+    // have no tint: white, as before.
+    float3 fill = tint.a > 0.01 ? tint.rgb * 0.6 : albedo.rgb;
+    float3 base = fill * (1 - share) + textured * albedo.w;
     float3 colour = lerp(base, tint.rgb, saturate(tint.a));
     // Vertex colour (the terrain multiplies by 2 x it) and wetness: darker, and a stronger, tighter shine.
     float4 pr = tex2D(props, wuv);
@@ -1487,6 +1495,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     const int id = static_cast<int>((L.texIds[sl] >> (16 * k)) & 0xFFFF);
                     const int slot = id > 0 && id < static_cast<int>(g_slotOfId.size()) ? g_slotOfId[id] : -1;
                     if (slot >= 0) w[slot] = static_cast<uint8_t>((L.texShares[sl] >> (8 * k)) & 0xFF);
+                    else if (id > 0 && g_slotFrame > kSlotHurryFrames) g_slotFrame = kSlotHurryFrames;
                 }
             };
             for (int sl = first * kTex; sl < end * kTex; ++sl)
