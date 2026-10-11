@@ -195,6 +195,15 @@ ZOffset 0, Wetness 0, no flags. No material, no row along its chain, or Depth 0 
 longer side (a human's 0.33 yd print → 0.4 yd). Models with FootprintTextureID −1 (bats, birds and
 other fliers that "walk" in the air) leave no trench.
 
+**The client's own footprints** (FootprintTextures, `showfootprints`) stay visible on top of every
+cover. The client draws them after the whole scene, as copies of the terrain triangles under the foot,
+depth-tested with only a tiny depth bias, so a cover even a few centimetres thick used to hide them
+outside a freshly opened trench. During the client's own footprint draw each print lying on covered
+terrain is now raised to the cover's surface at its centre (the trench floor it lies in), then put back.
+The client still draws it with its own texture, fade and blending. The panel's "The client's footprints
+on top of the cover" switches it off; its status line says whether the client checks passed
+(features/CoverPrints).
+
 Rim and RelaxSeconds apply per spot, like every other value (blended between materials). The panel's multipliers (Depth, Drift noise, Edge breakup, Rim, Relax time) scale the
 table for testing or taste; at 1 the table applies exactly.
 

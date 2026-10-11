@@ -34,4 +34,13 @@ namespace wxl_livingazeroth::cover
     /// Last drawn frame: the most point lights any patch had, and how many patches had more than
     /// lights::kMaxLights (the nearest to the camera kept).
     void PatchLightStats(unsigned& most, unsigned& full);
+
+    /// Whether the client's footprints go on top of the cover now (features/CoverPrints): the setting is
+    /// on and the near level was drawn in this scene's terrain stage, before the prints.
+    bool PrintsOnCover();
+
+    /// How far the cover drawn in this scene rises above the terrain at world (x, y), where the terrain
+    /// is at terrainZ (yd): its top there as the near level draws it (trenches included), 0 where none
+    /// is drawn (no cover, thinner than drawn, outside the near level, or PrintsOnCover() is false).
+    float DrawnCoverAbove(float x, float y, float terrainZ);
 }

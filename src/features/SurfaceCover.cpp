@@ -14,6 +14,7 @@
 #include "TerrainIce.hpp"
 #include "TerrainWetness.hpp"
 #include "CoverBlend.hpp"
+#include "CoverPrints.hpp"
 #include "GrassPerf.hpp"
 #include "GroundMaterialTable.hpp"
 #include "SurfaceCoverTable.hpp"
@@ -74,6 +75,7 @@ namespace wxl_livingazeroth::cover
         constexpr float kOuterFadeStart = 0.80f, kOuterFadeEnd = 0.97f; // outermost level: cover fades out (share of its half)
         constexpr float kEdgeRadiusShare = 0.85f, kEdgeFullShare = 0.65f;
         constexpr float kHole = -100000.0f;        // base height of a hole / unloaded spot
+        constexpr float kMinDrawnDepth = 0.004f;   // thinner cover isn't drawn (no z-fighting with the terrain)
 
         // "Everywhere" (test): no painted cover, but fallen snow may lie anywhere (with the plain look);
         // the panel's deposit button puts some down.
@@ -97,6 +99,7 @@ namespace wxl_livingazeroth::cover
             int   alphaSwap = 0;            // debug: read the alpha maps with rows and columns swapped
             int   wireframe = 0;
             int   drawPoint = 0;            // 0 right after the terrain (inside the world pass), 1 end of the scene
+            int   printsOnCover = 1;        // the client's footprints drawn on top of the cover (features/CoverPrints)
         };
 
         const WXL_Api* g_api = nullptr;
@@ -395,6 +398,12 @@ namespace wxl_livingazeroth::cover
         constexpr uintptr_t kTerrainStage = 0x00798DA0;
         using TerrainStageFn = void(__cdecl*)();
         TerrainStageFn g_origTerrainStage = nullptr;
+
+        // The client draws its footprints after the scene (features/CoverPrints), so they're lifted by
+        // the near level as this scene's terrain stage drew it. Level 0 drawn as the outermost level
+        // also fades out toward its edge and stops at the edge circle (centre, radius).
+        struct PrintLift { bool valid = false; bool outermost = false; float cx = 0.0f, cy = 0.0f, radius = 0.0f; };
+        PrintLift g_printLift;
 
         // GPU state (all managed, so a device reset keeps it; a new device drops it).
         IDirect3DDevice9*            g_device = nullptr;
@@ -1520,9 +1529,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 {
                     const int c = sl % kTex, r = sl / kTex;
                     float* out = reinterpret_cast<float*>(static_cast<uint8_t*>(lr.pBits) + (r - r0) * lr.Pitch) + (c - c0);
-                    const float cover = g_static0[sl];
-                    const float deformed = cover * (1.0f + g_rimCell[sl] * g_settings.rimMul * g_rim[sl]) * (1.0f - g_press[sl] * (1.0f - L.stiff[sl] / 255.0f));
-                    *out = cover + (deformed - cover) * g_deformK[sl];
+                    *out = blend::DeformedDepth(g_static0[sl], g_rimCell[sl] * g_settings.rimMul, g_rim[sl], g_press[sl], L.stiff[sl] / 255.0f, g_deformK[sl]);
                     // Fail open even for an unexpected non-finite result. A partial
                     // update may make drawing necessary, but never proves emptiness.
                     if (*out != 0.0f) L.coverMayDraw = true;
@@ -1601,8 +1608,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                             : (cheb >= kDeformZeroCells ? 0.0f : float(kDeformZeroCells - cheb) / float(kDeformZeroCells - kDeformFullCells));
                     if (dj >= kGridVerts || di >= kGridVerts) k = 0.0f;
                     g_deformK[s] = k;
-                    const float deformed = cover * (1.0f + g_rimCell[s] * g_settings.rimMul * g_rim[s]) * (1.0f - g_press[s] * (1.0f - L.stiff[s] / 255.0f));
-                    out[col] = cover + (deformed - cover) * k;
+                    out[col] = blend::DeformedDepth(cover, g_rimCell[s] * g_settings.rimMul, g_rim[s], g_press[s], L.stiff[s] / 255.0f, k);
                 }
             }
             if (FAILED(L.coverTex->UnlockRect(0))) return false;
@@ -1750,6 +1756,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             const float radius = std::max(0.0f, std::min(kHalfCells * outer.cell * kEdgeRadiusShare, available - 2 * outer.cell));
             const float edge[4] = {cx - eye[0], cy - eye[1], radius * kEdgeFullShare, radius};
             dev->SetPixelShaderConstantF(14, edge, 1);
+            g_printLift = PrintLift{ inPass && g_levels[0].ShouldDraw(), lastDrawn == 0, cx, cy, radius };
             const float c8[4] = { 80.0f, 400.0f, g_settings.farLift, 0.0f };
             dev->SetVertexShaderConstantF(8, c8, 1);
 
@@ -1760,7 +1767,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             float ps0[28] = {
                 0.35f, 0.45f, 0.82f, 0.0f,       // c0 light direction
                 a, a * 1.02f, a * 1.07f, a,      // c1 snow colour (a touch blue); w = brightness on cover textures
-                0.004f, 0.0f, 0.0f, 0.0f,        // c2 smallest depth drawn (no z-fighting with the terrain)
+                kMinDrawnDepth, 0.0f, 0.0f, 0.0f, // c2 smallest depth drawn (no z-fighting with the terrain)
                 0.0f, 0.0f, 0.0f, 0.0f,          // c3 inner box (set per level)
                 0.45f, 0.45f, 0.45f, 0.0f,       // c4 ambient
                 0.55f, 0.55f, 0.55f, 0.0f,       // c5 diffuse
@@ -1980,6 +1987,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 terrainice::BeforeTerrainStage(static_cast<IDirect3DDevice9*>(gx::RawDevice()));
             }
             g_origTerrainStage();
+            g_printLift.valid = false; // until this scene's cover is drawn
             if (g_settings.enabled && g_settings.drawPoint == 0)
                 Draw(static_cast<IDirect3DDevice9*>(gx::RawDevice()), nullptr, true);
         }
@@ -2026,6 +2034,10 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             g_api->UiSliderFloat("Rim (x table)", &g_settings.rimMul, 0.0f, 3.0f);
             g_api->UiSliderFloat("Relax time (x table)", &g_settings.relaxMul, 0.1f, 10.0f);
             g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
+            g_api->UiCheckbox("The client's footprints on top of the cover", &g_settings.printsOnCover);
+            std::snprintf(line, sizeof(line), "  footprints: %s; last draw %u, %u of them on the cover", coverprints::Status(),
+                          coverprints::LastLive(), coverprints::LastOnCover());
+            g_api->UiText(line);
             g_api->UiSliderFloat("Trench width (x unit size)", &g_settings.stampScale, 0.3f, 3.0f);
             g_api->UiSliderFloat("Far lift (yd, 80 -> 400 yd away)", &g_settings.farLift, 0.0f, 3.0f);
             g_api->UiCheckbox("Light and fog like the terrain", &g_settings.sceneLight);
@@ -2218,10 +2230,53 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             api->Log(WXL_LOG_WARN, kTag, "surface cover: terrain stage hook failed; drawing at the end of the scene instead.");
             g_settings.drawPoint = 1;
         }
+        coverprints::Install(api); // the client's footprints on top of the cover
         api->UiAddPanel(kPanelTitle, &Panel, nullptr);
     }
 
     void PatchLightStats(unsigned& most, unsigned& full) { most = g_patchLightsMost; full = g_patchLightsFull; }
+
+    bool PrintsOnCover()
+    {
+        return g_settings.enabled && g_settings.printsOnCover && g_settings.drawPoint == 0 && g_printLift.valid;
+    }
+
+    float DrawnCoverAbove(float x, float y, float terrainZ)
+    {
+        if (!PrintsOnCover()) return 0.0f;
+        const Level& L = g_levels[0];
+        const PrintLift& d = g_printLift;
+        if (!L.haveGrid) return 0.0f;
+        if (d.outermost && (x - d.cx) * (x - d.cx) + (y - d.cy) * (y - d.cy) > d.radius * d.radius) return 0.0f;
+        const float u = x / L.cell, v = y / L.cell;
+        const float fu = std::floor(u), fv = std::floor(v);
+        const int i = static_cast<int>(fu), j = static_cast<int>(fv);
+        if (i < L.gridI || j < L.gridJ || i >= L.gridI + kGridCells || j >= L.gridJ + kGridCells) return 0.0f;
+        const float fx = u - fu, fy = v - fv;
+        const int corner[4][2] = { { i, j }, { i + 1, j }, { i, j + 1 }, { i + 1, j + 1 } };
+        const float w[4] = { (1.0f - fx) * (1.0f - fy), fx * (1.0f - fy), (1.0f - fx) * fy, fx * fy };
+        float top = 0.0f, depth = 0.0f;
+        for (int k = 0; k < 4; ++k)
+        {
+            const int s = SlotOf(corner[k][0], corner[k][1]);
+            const float base = L.base[s];
+            if (base <= kHole * 0.5f) return 0.0f;
+            // What the vertex shader draws: base + the uploaded depth (x its edge fade when outermost).
+            float c = blend::DeformedDepth(g_static0[s], g_rimCell[s] * g_settings.rimMul, g_rim[s], g_press[s], L.stiff[s] / 255.0f, g_deformK[s]);
+            if (d.outermost)
+            {
+                const int ci = std::abs(corner[k][0] - (L.gridI + kHalfCells)), cj = std::abs(corner[k][1] - (L.gridJ + kHalfCells));
+                const float start = kHalfCells * kOuterFadeStart, end = kHalfCells * kOuterFadeEnd;
+                const float f = (end - static_cast<float>(ci > cj ? ci : cj)) / (end - start);
+                c *= f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+            }
+            top += w[k] * (base + c);
+            depth += w[k] * c;
+        }
+        if (!(depth >= kMinDrawnDepth)) return 0.0f;
+        const float above = top - terrainZ;
+        return above > 0.0f ? above : 0.0f;
+    }
 
     void Update(float dt, const world::Snapshot& snap)
     {

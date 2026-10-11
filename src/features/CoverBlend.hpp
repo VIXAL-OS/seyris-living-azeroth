@@ -19,6 +19,17 @@ namespace wxl_livingazeroth::cover::blend
         return share;
     }
 
+    /// Level 0's cover depth with its trench, as uploaded to the GPU and drawn: the undeformed depth,
+    /// raised by the rim (rimShare = the rows' Rim x the panel's multiplier, rim = the slot's 0..1),
+    /// pressed down by feet (press 0..1) except for the cover's stiffness (0..1), all of that by k
+    /// (trenches fade out toward the level's edge). The client's footprints are lifted by the same
+    /// number (features/CoverPrints), so they lie on what is drawn.
+    inline float DeformedDepth(float cover, float rimShare, float rim, float press, float stiffness, float k)
+    {
+        const float deformed = cover * (1.0f + rimShare * rim) * (1.0f - press * (1.0f - stiffness));
+        return cover + (deformed - cover) * k;
+    }
+
     /// The two strongest of `count` cover textures by share (indices, -1 = none, the stronger
     /// first) and the shares they draw with. The cover draws two textures per spot; with more than
     /// two, those two take the others' share in proportion, so it doesn't fall to the plain cover
