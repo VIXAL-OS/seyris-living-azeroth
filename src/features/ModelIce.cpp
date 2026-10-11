@@ -53,33 +53,49 @@ namespace wxl_livingazeroth::modelice
         unsigned g_iceDraws = 0;
         std::string g_status;
 
-        struct Entry { std::string stem; Style style = Style::None; };
+        // The waterfall "hats" (the sheet a river pours over a fall's edge in) aren't drawn while g_hideHats is on:
+        // our water draws that river's run to the edge, smooth and fast, with a bright line where it goes over (the
+        // water module's lips). The hat is 60-100 yd of streaky cascade texture laid over the river, and its jagged
+        // streaks hid that (the user at Glacial Falls, 2026-10-11: "the top of the hat still has jagged edges rather
+        // than laminar flow in our water"). The fall models below still draw the water going over.
+        bool g_hideHats = true;
+        unsigned g_hatsHidden = 0;
+
+        struct Kind { Style style = Style::None; bool hat = false; };
+        struct Entry { std::string stem; Kind kind; };
         std::unordered_map<const void*, Entry> g_models;
 
-        Style StyleFor(const void* ctx)
+        Kind KindFor(const void* ctx)
         {
-            if (!ctx) return Style::None;
+            if (!ctx) return {};
             const auto* instance = *reinterpret_cast<const uint8_t* const*>(static_cast<const uint8_t*>(ctx) + kCtxInstance);
-            if (!instance) return Style::None;
+            if (!instance) return {};
             const auto* shared = *reinterpret_cast<const uint8_t* const*>(instance + kInstShared);
-            if (!shared) return Style::None;
+            if (!shared) return {};
             const char* stem = reinterpret_cast<const char*>(shared + kSharedStem);
             const size_t length = strnlen(stem, kStemCapacity);
             Entry& e = g_models[shared];
             if (e.stem.size() != length || std::memcmp(e.stem.data(), stem, length) != 0)
             {
                 e.stem.assign(stem, length);
-                e.style = StyleOf(e.stem.c_str());
+                e.kind = { StyleOf(e.stem.c_str()), IsWaterfallHat(e.stem.c_str()) };
             }
-            if (g_models.size() > 8192) { const Style style = e.style; g_models.clear(); return style; }
-            return e.style;
+            if (g_models.size() > 8192) { const Kind kind = e.kind; g_models.clear(); return kind; }
+            return e.kind;
+        }
+
+        bool HiddenHat(void* ctx)
+        {
+            if (!g_hideHats || !KindFor(ctx).hat) return false;
+            ++g_hatsHidden;
+            return true;
         }
 
         // Switches the block on for one batch (main thread, inside the M2 pass).
         bool Begin(void* ctx)
         {
             if (!g_enabled || g_patched == 0) return false;
-            const Style style = StyleFor(ctx);
+            const Style style = KindFor(ctx).style;
             if (style == Style::None) return false;
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             if (!dev) return false;
@@ -116,6 +132,7 @@ namespace wxl_livingazeroth::modelice
 
         void __fastcall hkBatch(void* ctx, void* edx)
         {
+            if (HiddenHat(ctx)) return;
             const bool ice = Begin(ctx);
             g_origBatch(ctx, edx);
             if (ice) End();
@@ -123,6 +140,7 @@ namespace wxl_livingazeroth::modelice
 
         void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
         {
+            if (HiddenHat(ctx)) return;
             const bool ice = Begin(ctx);
             g_origDoodad(ctx, edx, elements, indices);
             if (ice) End();
@@ -353,6 +371,16 @@ namespace wxl_livingazeroth::modelice
 
     bool IsIceModel(const char* path) { return StyleOf(path) != Style::None; }
 
+    bool IsWaterfallHat(const char* path)
+    {
+        if (!path) return false;
+        std::string p(path);
+        for (char& c : p) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+        const size_t slash = p.rfind('\\');
+        const std::string name = slash == std::string::npos ? p : p.substr(slash + 1);
+        return name.find("waterfall") != std::string::npos && name.find("_hat") != std::string::npos;
+    }
+
     void StyleConstants(Style style, float weight, float* look, float c179[4], float c190[4])
     {
         c179[0] = weight; c179[1] = 0.0f; c179[2] = 0.0f; c179[3] = 0.0f;
@@ -451,6 +479,8 @@ namespace wxl_livingazeroth::modelice
 
     void SetEnabled(bool enabled) { g_enabled = enabled; }
     bool Enabled()                { return g_enabled; }
+    void SetHideHats(bool hide)   { g_hideHats = hide; }
+    bool HideHats()               { return g_hideHats; }
     unsigned PatchedVariants()    { return g_patched; }
 
     const char* StatusLine()
@@ -460,6 +490,9 @@ namespace wxl_livingazeroth::modelice
                       g_enabled ? "on" : "off", g_patched, g_skipped, g_skipReasons.empty() ? "" : " (", g_skipReasons.c_str(), g_skipReasons.empty() ? "" : ")",
                       g_iceDraws);
         if (!g_hookedBatch || !g_hookedDoodad) std::strncat(line, "; batch draw hook missing", sizeof(line) - std::strlen(line) - 1);
+        char hats[96];
+        std::snprintf(hats, sizeof(hats), "; waterfall hats %s (%u batches skipped)", g_hideHats ? "hidden" : "drawn", g_hatsHidden);
+        std::strncat(line, hats, sizeof(line) - std::strlen(line) - 1);
         g_status = line;
         return g_status.c_str();
     }

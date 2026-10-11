@@ -41,6 +41,11 @@ namespace wxl_livingazeroth::modelice
     Style StyleOf(const char* path);
     /// Whether a model path is one of the ice models (any style).
     bool IsIceModel(const char* path);
+    /// Whether a model path is a waterfall "hat" (the sheet on the river above a fall: "waterfall" and "_hat" in
+    /// the file name). The batch draws skip them while SetHideHats(true): the water module draws that run.
+    bool IsWaterfallHat(const char* path);
+    void SetHideHats(bool hide);
+    bool HideHats();
     /// One batch's constants for a style: the shared look (terrainice::FillModelConstants, c180..c189)
     /// adjusted in place, c179 = (weight, vertical stretch, extra brightness, extra reflection) and
     /// c190 = (the texture's own colour as the body, how much of the cloudy depth stays on it, extra

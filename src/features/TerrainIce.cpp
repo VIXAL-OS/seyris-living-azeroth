@@ -83,9 +83,40 @@ namespace wxl_livingazeroth::terrainice
             return e.ice;
         }
 
+        // The glint's colour: the sun's own (the current light record's sun band, 0x00D38BD4 + 0x24, packed
+        // BGRA; the water module's sun glint reads the same), not the terrain's diffuse light. Dragonblight's
+        // diffuse light is teal at dawn, so the glint on its ice was teal with the sun coming up (the user,
+        // 2026-10-11: "should the dragonblight sun glint be more yellow-toned? ... the sun is rising"). At night the
+        // light is the moon's and the diffuse colour stays (the water module's fog does the same: the day fraction
+        // 0x00D38B04 outside the sun's day, 0x00A41CA4..0x00A41CA0). Left as the diffuse colour too when the client
+        // is not the 12340 one (its light record copy, mov ecx 0x00D38BD4 at 0x007F3574) or the band reads black.
+        void SunBandColour(float colour[3])
+        {
+            static const unsigned char kCopy[] = { 0xB9, 0xD4, 0x8B, 0xD3, 0x00 };
+            static int verified = -1;
+            __try
+            {
+                if (verified < 0)
+                    verified = std::memcmp(reinterpret_cast<const void*>(0x007F3574), kCopy, sizeof(kCopy)) == 0 ? 1 : 0;
+                if (!verified) return;
+                const float day = *reinterpret_cast<const volatile float*>(0x00D38B04);
+                const float dayStart = *reinterpret_cast<const volatile float*>(0x00A41CA4);
+                const float dayEnd = *reinterpret_cast<const volatile float*>(0x00A41CA0);
+                if (!(day >= dayStart && day <= dayEnd)) return;
+                const uint32_t packed = *reinterpret_cast<const volatile uint32_t*>(0x00D38BF8);
+                const float band[3] = { ((packed >> 16) & 255) / 255.0f, ((packed >> 8) & 255) / 255.0f, (packed & 255) / 255.0f };
+                if (band[0] + band[1] + band[2] < 0.02f) return;
+                for (int k = 0; k < 3; ++k) colour[k] = band[k];
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+        }
+
         // The terrain's sun: VS c24 (view space, toward the sun) and c26 (diffuse colour), as the
         // client set them for the chunk just drawn (features/SurfaceCover reads the same), turned into
-        // world space with the scene view's rotation rows.
+        // world space with the scene view's rotation rows. The glint takes the sun band's colour instead
+        // (SunBandColour).
         void ReadSun(IDirect3DDevice9* dev)
         {
             float light[12] = {};
@@ -101,6 +132,7 @@ namespace wxl_livingazeroth::terrainice
                 g_sunView[k] = light[k] / viewLen;
                 g_sunColour[k] = std::clamp(light[8 + k], 0.0f, 2.0f);
             }
+            SunBandColour(g_sunColour);
             if (!g_stageOn) return;
             const float c217[8] = { g_sun[0], g_sun[1], g_sun[2], 350.0f,
                                     g_sunColour[0] * 1.3f, g_sunColour[1] * 1.3f, g_sunColour[2] * 1.3f, 0.65f };
