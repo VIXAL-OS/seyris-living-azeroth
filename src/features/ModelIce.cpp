@@ -137,6 +137,9 @@ namespace wxl_livingazeroth::modelice
         // More of it (c190, zero for plain ice): x moves the body from the deep ice colour, scaled by the
         // texture's brightness, to the texture's own colour (with y of the cloudy depth left on it), and
         // the cracks and bubbles are strengthened by 1 + z.
+        // With distance (r22.w = saturate(distance x c190.w + c189.w): 1 up close, 0 far) the parallax and the
+        // cracks fade out: seen nearly edge-on far away, the layers' view-dependent offset changed faster than
+        // the pixels and drew moire bands across the glacier faces (the user, 2026-10-11).
         // ps_3_0 reads at most one constant register per instruction; lrp's destination can't be its
         // first or third source.
         std::string Block(const std::string& vP, const std::string& vN)
@@ -146,6 +149,11 @@ namespace wxl_livingazeroth::modelice
                 "\n    if b7"
                 "\n      nrm r13.xyz, " + vN +
                 "\n      mov r14.xyz, -" + vP +
+                "\n      dp3 r22.w, r14, r14"
+                "\n      rsq r22.w, r22.w"
+                "\n      rcp r22.w, r22.w"
+                "\n      mul r22.w, r22.w, c190.w"
+                "\n      add_sat r22.w, r22.w, c189.w"
                 "\n      nrm r16.xyz, r14"
                 "\n      mov r14.xyz, r16"
                 "\n      dp3 r15.x, r13, c181"
@@ -162,6 +170,7 @@ namespace wxl_livingazeroth::modelice
                 "\n      max r18.w, r18_abs.w, c176.w"
                 "\n      rcp r18.w, r18.w"
                 "\n      mul r18.xyz, r16, -r18.w"
+                "\n      mul r18.xyz, r18, r22.w"
                 "\n      mul r19.xyz, r15, r15"
                 "\n      mul r19.xyz, r19, r19"
                 "\n      dp3 r19.w, r19, c175.x"
@@ -201,6 +210,7 @@ namespace wxl_livingazeroth::modelice
                 "\n      mul r27.x, r25.y, c178.w"
                 "\n      mad_sat r27.x, r25.x, c178.z, r27.x"
                 "\n      mad_sat r27.x, r27.x, c190.z, r27.x"
+                "\n      mul r27.x, r27.x, r22.w"
                 "\n      mov r29.xyz, c188"
                 "\n      lrp r28.xyz, r27.x, r29, r26"
                 "\n      dp3 r27.y, r12, c176"
@@ -329,8 +339,12 @@ namespace wxl_livingazeroth::modelice
         for (char& c : p) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
         for (const char* m : kFrozenFalls)
             if (p.find(m) != std::string::npos) return Style::FrozenFall;
+        // The floating chunks all over Northrend's lakes and coasts (Wintergrasp's lake, Borean's shore: these
+        // models, placed at about 2x) keep the clear light style; the floe style is for Kaskala's big ground ice,
+        // the shoreline texture on its WMOs (WmoIce). The models had taken the floe style too and turned into
+        // opaque slabs (the user, 2026-10-11: "these wintergrasp ice chunks don't look as transparent").
         if (p.find("dragonblight\\dragonblight_shoreline_ice") != std::string::npos)
-            return Style::Floe;
+            return Style::Light;
         for (const char* m : kIceModels)
             if (p.find(m) != std::string::npos)
                 return std::strncmp(m, "dragonblight\\", 13) == 0 ? Style::Glacier : Style::Light;
@@ -342,7 +356,11 @@ namespace wxl_livingazeroth::modelice
     void StyleConstants(Style style, float weight, float* look, float c179[4], float c190[4])
     {
         c179[0] = weight; c179[1] = 0.0f; c179[2] = 0.0f; c179[3] = 0.0f;
-        c190[0] = 0.0f; c190[1] = 0.0f; c190[2] = 0.0f; c190[3] = 0.0f;
+        c190[0] = 0.0f; c190[1] = 0.0f; c190[2] = 0.0f;
+        // The detail's parallax and cracks fade from kDetailFadeStart to kDetailFadeEnd yards (r22.w in Block).
+        constexpr float kDetailFadeStart = 60.0f, kDetailFadeEnd = 180.0f;
+        c190[3] = -1.0f / (kDetailFadeEnd - kDetailFadeStart);
+        look[39] = kDetailFadeEnd / (kDetailFadeEnd - kDetailFadeStart); // c189.w
         if (style == Style::Light)
         {
             // Ice models and buildings: the texture's own colour is the body (icebergs, shoreline floes and
@@ -385,6 +403,10 @@ namespace wxl_livingazeroth::modelice
             look[30] = 1.0f / 12.0f; look[31] = 1.0f / 22.0f;          // c187.zw detail repeats per yd
             look[32] = 0.9f; look[33] = 0.97f; look[34] = 1.0f;        // c188.xyz crack/bubble highlight
             look[35] = 1.3f;                                           // c188.w sky reflection brightness
+            // A broader, brighter sun glint: at the default 350 a big flat face caught the sun only when
+            // exactly aligned with it (the user: "maybe needs more sun glint in daylight").
+            look[19] = 120.0f;                                         // c184.w glint exponent
+            for (int k = 20; k < 23; ++k) look[k] *= 2.0f;            // c185.xyz glint colour
             return;
         }
         if (style != Style::FrozenFall) return;
