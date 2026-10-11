@@ -13,6 +13,7 @@
 #include "TerrainLights.hpp"
 #include "TerrainIce.hpp"
 #include "TerrainWetness.hpp"
+#include "CoverBlend.hpp"
 #include "GrassPerf.hpp"
 #include "GroundMaterialTable.hpp"
 #include "SurfaceCoverTable.hpp"
@@ -938,10 +939,11 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 else otherPainted += pw;
             }
             if (total <= 0.0f) return b;
-            // Fallen snow's look on the bare parts, fully only where nothing is painted.
+            // Fallen snow's look on the bare parts, fully only where nothing is painted (not beside
+            // other covers: their look keeps to their edge).
             float bareTotal = 0.0f;
             for (int k = 0; k < count; ++k) bareTotal += bare[k];
-            const float lookShare = 1.0f - (b.covered * 4.0f > 1.0f ? 1.0f : b.covered * 4.0f);
+            const float lookShare = blend::BareSnowLookShare(b.covered, snowPainted, otherPainted);
             if (lookShare > 0.0f)
                 for (int k = 0; k < count; ++k) AddLook(parts[k].rows->look, bare[k] * lookShare, lookW, sum);
             // Where fallen snow may lie: bare ground and snow covers, not on or beside other covers,
@@ -1067,14 +1069,11 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 L.snowShare[s] = snowShare; L.paintedSnow[s] = paintedSnow;
                 L.coverDirty = true;
             }
-            int a = -1, c = -1; // the two strongest
-            for (int i = 0; i < b.texCount; ++i)
-            {
-                if (a < 0 || b.texShare[i] > b.texShare[a]) { c = a; a = i; }
-                else if (c < 0 || b.texShare[i] > b.texShare[c]) c = i;
-            }
+            int a, c; // the two strongest (with the others' share, if there are more)
+            float shareA, shareC;
+            blend::StrongestTwo(b.texShare, b.texCount, a, c, shareA, shareC);
             const uint32_t ids = (a >= 0 ? static_cast<uint32_t>(b.texId[a]) & 0xFFFF : 0) | (c >= 0 ? (static_cast<uint32_t>(b.texId[c]) & 0xFFFF) << 16 : 0);
-            const uint16_t shares = static_cast<uint16_t>((a >= 0 ? ToByte(b.texShare[a]) : 0) | (c >= 0 ? ToByte(b.texShare[c]) << 8 : 0));
+            const uint16_t shares = static_cast<uint16_t>((a >= 0 ? ToByte(shareA) : 0) | (c >= 0 ? ToByte(shareC) << 8 : 0));
             const uint32_t props = (static_cast<uint32_t>(ToByte(b.wetness)) << 24) | (static_cast<uint32_t>(ToByte(b.vertexColor[0])) << 16) |
                                    (static_cast<uint32_t>(ToByte(b.vertexColor[1])) << 8) | ToByte(b.vertexColor[2]);
             if (tint != L.tint[s] || ids != L.texIds[s] || shares != L.texShares[s] || props != L.props[s])

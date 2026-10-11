@@ -171,7 +171,7 @@ in over time. Grass and small doodads are buried under it.
 | RelaxSeconds | how long a trench takes to fill back in |
 | TintColor | colour as 0xRRGGBB, used with TintStrength |
 | TintStrength | 0 = the plain cover colour .. 1 = TintColor. TintColor comes from the same row |
-| CoverTexture | a BLP drawn on the cover, tiled like the terrain's layers (one repeat per terrain cell), e.g. the same texture as the ground it covers. **Empty = from the parent material's row, `-` = none.** Any number of paths per table; up to 8 different ones are drawn at once in view (the ones most present around you; the panel lists them and says when more are around). TintColor/TintStrength still apply on top |
+| CoverTexture | a BLP drawn on the cover, tiled like the terrain's layers (one repeat per terrain cell), e.g. the same texture as the ground it covers. **Empty = from the parent material's row, `-` = none.** Any number of paths per table; up to 8 different ones are drawn at once in view (the ones most present around you; the panel lists them and says when more are around), and two per spot: where more meet, the two strongest take the others' share. TintColor/TintStrength still apply on top |
 | Opacity | **reserved, not used yet** (see-through covers: slush, goo) |
 | Flatten | **reserved, not used yet** (liquid-like covers that fill hollows) |
 | ZOffset | yards the cover's base sits above (+) or **below (−)** the terrain. Below the terrain only what rises above it shows. Muddy footprint outlines: Depth 0.015, ZOffset −0.02 (the top stays 0.005 yd under the grass), Rim 4 (rims rise 0.055 yd above it), DriftNoise 0. Signed: **−1000 inherits** (exactly −1 does too, as older files wrote it) |
@@ -201,6 +201,21 @@ table for testing or taste; at 1 the table applies exactly.
 Shipped baseline: snow 0.35 yd everywhere it's painted (bare above ~40°), sand listed but off
 (Depth 0, with a sandy tint ready).
 
+**Ash and sand** (`tools/add_ash_sand_cover_rows.py`, applied to `data/`): thin layers that take trails
+like snow. Two parent materials, **Ash** (50) and **Sand** (51), carry the shared cover row; each
+texture's own material (Parent Ash or Sand) adds its CoverTexture (the ground's own texture), a tint
+and, where it differs, the depth. Ash and Sand set no material properties, so moisture and heat read
+those textures as before.
+- Ash: Searing Gorge and Burning Steppes (BurningSteppsAsh01, AshCracks, Charcoal01) and the Bone
+  Wastes (BoneWastesDirtBase, DirtCracked02, DirtHoles). 0.06–0.10 yd, bare above 35°, fills in over
+  20 s.
+- Sand: Tanaris (TanarisSandBase01, SandStones) and Silithus (SilithisSand01, Sandhighlight,
+  SandDetail). 0.06–0.08 yd, bare above 30°, fills in over 10 s (the wind smooths it).
+- Both: not under water; tinted to their texture's own colour ×1.68 at 0.2, which comes out about 8%
+  lighter than the ground (loose material on top, so trails show the darker ground); the base 0.02
+  (sand 0.015) yd below the terrain, so a fresh trench shows the ground itself, and the client's own
+  footprints on it, for the first fifth of its fill-in time.
+
 **Snow: fallen and painted** (runtime; the cover panel's "here (snow)" lines and the climate
 panel's zone list show it). A cover is **snow** when its CoverMaterial is the fallback snow material
 (what GroundMaterialSelector gives for **TerrainType 3** at the place, or globally) or a child of it.
@@ -216,7 +231,8 @@ panel's zone list show it). A cover is **snow** when its CoverMaterial is the fa
   look. Elsewhere it takes the look of the layer's own row **if that row's CoverMaterial is snow, even
   with Depth 0** ("no snow until it snows, then it looks like this", per area or texture), else of
   the fallback snow's row, else built-in values (plain white, slope limits 45°/15°). It never lies
-  on or right beside **other** covers (sand, mud).
+  on or right beside **other** covers (sand, ash, mud), and their look keeps to their ragged edge
+  (fallen snow's look doesn't pale it).
 - **Painted snow** keeps its Depth as a baseline. Warm weather melts it down, slowly (degree-days),
   toward a cap: all of it at 0 °C or below, MeltKeptShare at 15 °C, nothing at MeltGoneTemperature.
   It opens in small holes and patches first. Heat sources (hot ground, hot liquids) melt it down to
