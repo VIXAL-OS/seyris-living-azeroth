@@ -331,13 +331,38 @@ namespace wxl_livingazeroth::cover
         // (view space), c25 ambient, c26 diffuse, PS c2 fog colour.
         float g_seenFog[4] = {}, g_seenLight[16] = {}, g_seenFogColor[4] = {}; // light: c24..c27 (c27 = specular colour, exponent)
         // The terrain's dynamic shadows as found at our draw point: which shadow maps are still bound
-        // on its samplers s5..s8, and how the cover reads them: 0 not at all, 1 the one map of shadow
-        // quality 3 (its Terrain2 shaders: s5 alone, a box around the player that fades at its edge),
-        // 2 the three cascades and the far map of the higher qualities (Terrain3: s5..s8).
+        // on its samplers s5..s8, and how the cover reads them, as the client's terrain shadow mode does
+        // (extShadowQuality 0..6 -> 0, 1, 1, 2, 2, 3, 3): 0 not at all, 1 s5 alone (a box around the player
+        // that fades at its edge), 2 the darker of that box and the cascades (s5..s8), 3 the cascades with
+        // the nearest one alone inside its box.
         bool  g_shadowBound[4] = {};
+        int   g_clientShadowMode = -1; // the client's own terrain shadow mode (-1: not read)
         bool  g_shadowUsed = false;
         int   g_shadowMode = 0;
         bool  g_seenScene = false;
+
+        // The client's terrain shadow mode, as its own 0x00873FF0 computes it: 0 when shadows are off (0x00B1D51C),
+        // else extShadowQuality (0x00D43154) through the table at 0x00B1D554. Read every frame: Adaptive FPS changes
+        // the quality live. -1 when the function is not the 12340 client's or the read fails.
+        int ClientTerrainShadowMode()
+        {
+            static const unsigned char kCode[] = { 0xA1, 0x1C, 0xD5, 0xB1, 0x00, 0xF7, 0xD8, 0x1B, 0xC0, 0xF7, 0xD0, 0x23, 0x05,
+                                                   0x54, 0x31, 0xD4, 0x00, 0x8B, 0x04, 0x85, 0x54, 0xD5, 0xB1, 0x00, 0xC3 };
+            static int verified = -1;
+            __try
+            {
+                if (verified < 0)
+                    verified = std::memcmp(reinterpret_cast<const void*>(0x00873FF0), kCode, sizeof(kCode)) == 0 ? 1 : 0;
+                if (!verified) return -1;
+                if (*reinterpret_cast<const volatile int*>(0x00B1D51C)) return 0;
+                const int quality = *reinterpret_cast<const volatile int*>(0x00D43154);
+                return quality >= 0 && quality <= 6 ? reinterpret_cast<const volatile int*>(0x00B1D554)[quality] : -1;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return -1;
+            }
+        }
 
         // stats
         double   g_simMs = 0, g_uploadMs = 0, g_drawMs = 0;
@@ -564,7 +589,8 @@ float4 specOn1 : register(c9);
 float4 specular : register(c10);
 float4 wetMap : register(c11);  // 1 / grid extent (yd), uv offset (x, y), on
 float4 wetBox : register(c12);  // the grid's valid box, camera-relative (min x, min y, max x, max y)
-float4 misc : register(c13);     // x = the terrain's dynamic shadows: 0 none, 1 its one map, 2 its cascades; y = (unused), z = 1 / the near grid's edge fade (yd),
+float4 misc : register(c13);     // x = the terrain's dynamic shadows: 0 none, 1 its one map, 2 its near box and its cascades,
+                                 // 3 its cascades; y = (unused), z = 1 / the near grid's edge fade (yd),
                                  // w = how much darker soaked ground gets (the wet terrain's strength, so both match)
 float4 edgeFade : register(c14); // player centre relative to camera (xy), fully covered radius, zero coverage radius (yd)
 float4 pcf[8] : register(c20);   // the terrain's PCF offsets (its PS c3..c10)
@@ -588,21 +614,13 @@ sampler2D shadow3 : register(s15);
 
 float Tap(sampler2D s, float2 uv, float z) { return tex2Dlod(s, float4(uv, z, 0)).x; }
 
-// 1 = lit, 0 = in shadow. The same cascades, tests and PCF taps as the terrain's Terrain3 shader
-// (dumped 2026-10-02): 9 taps in the nearest cascade, 5 in the next two, then the far map fading out.
-float Shadow(float3 vp)
+// 1 = lit, 0 = in shadow. The second and third cascades, then the far map fading out: 5 taps each.
+float ShadowOuter(float3 vp)
 {
     float4 p = float4(vp, 1);
-    float4 a = float4(dot(p, shadowM[0]), dot(p, shadowM[1]), dot(p, shadowM[2]), dot(p, shadowM[9]));
+    float4 a = float4(0, 0, 0, dot(p, shadowM[9]));
     float4 b = float4(dot(p, shadowM[3]), dot(p, shadowM[4]), dot(p, shadowM[5]), dot(p, shadowM[10]));
     float4 c = float4(dot(p, shadowM[6]), dot(p, shadowM[7]), dot(p, shadowM[8]), dot(p, shadowM[11]));
-    [branch] if (saturate(max(abs(a.x), abs(a.y)) * -3.4482758 + 3.41379309) > 0)
-    {
-        float2 uv = a.xy * 0.5 + 0.5;
-        float s = Tap(shadow0, uv, a.z);
-        [unroll] for (int k = 0; k < 8; ++k) s += Tap(shadow0, uv + pcf[k].xy, a.z);
-        return s / 9;
-    }
     [branch] if (max(abs(b.x), abs(b.y)) < 1)
     {
         float2 uv = b.xy * 0.5 + 0.5;
@@ -624,9 +642,26 @@ float Shadow(float3 vp)
     return edge * (s * 0.2 - 1) + 1;
 }
 
-// Shadow quality 3: the terrain's Terrain2 shaders (dumped 2026-10-10) read one map, the first cascade's
-// (VS c37..c39, on s5), with 5 PCF taps, and fade it out over the box's outer edge. The cover had no
-// shadows at all there (the user: "the snow mod doesn't get shadows in that box").
+// Shadow quality 5-6 (the client's terrain shadow mode 3, Terrain3_pcf_18, dumped 2026-10-02): inside the nearest
+// cascade 9 taps of it and nothing else; outside it, the other cascades.
+float ShadowCascades(float3 vp)
+{
+    float4 p = float4(vp, 1);
+    float3 a = float3(dot(p, shadowM[0]), dot(p, shadowM[1]), dot(p, shadowM[2]));
+    [branch] if (saturate(max(abs(a.x), abs(a.y)) * -3.4482758 + 3.41379309) > 0)
+    {
+        float2 uv = a.xy * 0.5 + 0.5;
+        float s = Tap(shadow0, uv, a.z);
+        [unroll] for (int k = 0; k < 8; ++k) s += Tap(shadow0, uv + pcf[k].xy, a.z);
+        return s / 9;
+    }
+    return ShadowOuter(vp);
+}
+
+// The near box: the first map (VS c37..c39, on s5), 5 PCF taps, faded out over the box's outer edge. Alone it is
+// shadow quality 1-2 (the client's terrain shadow mode 1). Quality 3-4 (mode 2, Terrain3_pcf_10) takes the darker
+// of it and the other cascades everywhere; the cover used the 5-6 shader there, which inside the near box reads s5
+// alone, so nothing near the player shadowed the snow (the user, 2026-10-10: "still snow shadow box problems").
 float ShadowSingle(float3 vp)
 {
     float4 p = float4(vp, 1);
@@ -691,7 +726,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     float sp = pow(saturate(dot(nn, h)), max(specular.w, 1) * (1 + 3 * wet)) * saturate(mask * (1 + 2 * wet));
     // Dynamic shadows like the terrain's: down to 70% in full shadow, no shine there.
     float shade = 1;
-    [branch] if (misc.x > 1.5) shade = Shadow(vpos);
+    [branch] if (misc.x > 2.5) shade = ShadowCascades(vpos);
+    else if (misc.x > 1.5) shade = min(ShadowSingle(vpos), ShadowOuter(vpos));
     else if (misc.x > 0.5) shade = ShadowSingle(vpos);
     // Point lights (torches, from the VS): not shadowed by the sun's shadow maps. Added to the sun's
     // light like the client's own (the same amount whichever way the ground faces the sun), then
@@ -1644,6 +1680,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                                                                D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_BORDERCOLOR, D3DSAMP_SRGBTEXTURE };
             g_shadowUsed = false;
             g_shadowMode = 0;
+            g_clientShadowMode = ClientTerrainShadowMode();
             if (sceneLit)
             {
                 for (int k = 0; k < 4; ++k)
@@ -1652,11 +1689,12 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     g_shadowBound[k] = shadowMaps[k] != nullptr;
                     for (int st = 0; st < 7; ++st) dev->GetSamplerState(5 + k, kShadowStates[st], &shadowStates[k][st]);
                 }
-                // All four: the cascades. The first alone: shadow quality 3's one map (the client never binds
-                // s6..s8 there). Anything else is not a layout we know, so no shadows rather than wrong ones.
+                // All four bound: the cascades, read the way the client's mode says (2: with the near box,
+                // 3: the near cascade alone inside its box; 3 when the mode could not be read, as before). The
+                // first alone: the one map. Anything else is not a layout we know: no shadows, not wrong ones.
                 const bool cascades = g_shadowBound[0] && g_shadowBound[1] && g_shadowBound[2] && g_shadowBound[3];
                 const bool single = g_shadowBound[0] && !g_shadowBound[1] && !g_shadowBound[2] && !g_shadowBound[3];
-                g_shadowMode = !g_settings.shadows ? 0 : cascades ? 2 : single ? 1 : 0;
+                g_shadowMode = !g_settings.shadows ? 0 : cascades ? (g_clientShadowMode == 2 ? 2 : 3) : single ? 1 : 0;
                 g_shadowUsed = g_shadowMode != 0;
                 if (g_shadowUsed)
                 {
@@ -1807,7 +1845,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 {
                     dev->SetPixelShaderConstantF(20, pcfOffsets, 8);
                     dev->SetPixelShaderConstantF(30, shadowMatrices, 12);
-                    for (int k = 0; k < (g_shadowMode == 2 ? 4 : 1); ++k)
+                    for (int k = 0; k < (g_shadowMode >= 2 ? 4 : 1); ++k)
                     {
                         dev->SetTexture(12 + k, shadowMaps[k]);
                         for (int st = 0; st < 7; ++st) dev->SetSamplerState(12 + k, kShadowStates[st], shadowStates[k][st]);
@@ -2132,7 +2170,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                               g_seenFog[0], g_seenFog[1], g_seenFog[2], g_seenFog[3], g_seenFogColor[0], g_seenFogColor[1], g_seenFogColor[2]); add();
                 std::snprintf(line, sizeof(line), "terrain shadow maps at our draw: s5 %s, s6 %s, s7 %s, s8 %s -> cover shadows %s",
                               g_shadowBound[0] ? "bound" : "-", g_shadowBound[1] ? "bound" : "-", g_shadowBound[2] ? "bound" : "-", g_shadowBound[3] ? "bound" : "-",
-                              g_shadowMode == 2 ? "on (cascades)" : g_shadowMode == 1 ? "on (one map: shadow quality 3)"
+                              g_shadowMode == 3 ? "on (cascades: quality 5-6)" : g_shadowMode == 2 ? "on (near box + cascades: quality 3-4)"
+                              : g_shadowMode == 1 ? "on (one map: quality 1-2)"
                               : (g_settings.shadows ? "off (no layout we know: shadow quality off, or the client unbinds them)" : "off (switched off)")); add();
             }
 
