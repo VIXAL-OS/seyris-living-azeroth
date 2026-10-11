@@ -53,15 +53,40 @@ namespace wxl_livingazeroth::modelice
         unsigned g_iceDraws = 0;
         std::string g_status;
 
-        // The waterfall "hats" (the sheet a river pours over a fall's edge in) aren't drawn while g_hideHats is on:
-        // our water draws that river's run to the edge, smooth and fast, with a bright line where it goes over (the
-        // water module's lips). The hat is 60-100 yd of streaky cascade texture laid over the river, and its jagged
-        // streaks hid that (the user at Glacial Falls, 2026-10-11: "the top of the hat still has jagged edges rather
-        // than laminar flow in our water"). The fall models below still draw the water going over.
-        bool g_hideHats = true;
-        unsigned g_hatsHidden = 0;
+        // The waterfall "hats" (the sheet a river pours over a fall's edge in): 60-100 yd of streaky cascade texture
+        // laid over the river, whose upstream end showed as a jagged edge on our water (the user at Glacial Falls,
+        // 2026-10-11: "the top of the hat still has jagged edges rather than laminar flow in our water"). Hidden
+        // altogether, the hat took the flow with it ("waterfall hat is also completely gone, no laminar flow
+        // either"), so it stays, and its upstream end fades in over kHatFades' run instead: the vertex alpha times
+        // saturate((x - start) / run) in model space (VS b15, c250; the edit is EditVertexHatFade, applied by the
+        // model lights' vertex rule). g_hideHats is left as a test switch.
+        bool g_hideHats = false;
+        bool g_fadeHats = true;
+        unsigned g_hatsHidden = 0, g_hatsFaded = 0, g_fadeVariants = 0;
+        constexpr int kHatFadeConstant = 250;  // VS c250 = (1 / run, -start / run, 0, 0)
+        constexpr int kHatFadeSwitch = 15;     // VS b15
 
-        struct Kind { Style style = Style::None; bool hat = false; };
+        // Where each hat's water sheets start upstream (model x; the latest start among its batches, so no sheet's
+        // own end shows) and the run (model yards) to full; from waterfall-scan's m2_water.py on the four hats the
+        // world places (their sheets run along +x to the edge at 0.5 .. 9.2).
+        struct HatFade { const char* name; float start; float run; };
+        const HatFade kHatFades[] = {
+            { "waterfalls_set1_high_hat", -59.6f, 20.0f },
+            { "waterfalls_set2_high_hat", -59.6f, 20.0f },
+            { "waterfalls_set1_med_hat",  -48.2f, 20.0f },
+            { "waterfalls_set1_low_hat",  -13.1f, 6.0f },
+        };
+
+        const HatFade* HatFadeOf(const char* path)
+        {
+            std::string p(path ? path : "");
+            for (char& c : p) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+            for (const HatFade& h : kHatFades)
+                if (p.find(h.name) != std::string::npos) return &h;
+            return nullptr;
+        }
+
+        struct Kind { Style style = Style::None; bool hat = false; const HatFade* fade = nullptr; };
         struct Entry { std::string stem; Kind kind; };
         std::unordered_map<const void*, Entry> g_models;
 
@@ -78,24 +103,39 @@ namespace wxl_livingazeroth::modelice
             if (e.stem.size() != length || std::memcmp(e.stem.data(), stem, length) != 0)
             {
                 e.stem.assign(stem, length);
-                e.kind = { StyleOf(e.stem.c_str()), IsWaterfallHat(e.stem.c_str()) };
+                e.kind = { StyleOf(e.stem.c_str()), IsWaterfallHat(e.stem.c_str()), HatFadeOf(e.stem.c_str()) };
             }
             if (g_models.size() > 8192) { const Kind kind = e.kind; g_models.clear(); return kind; }
             return e.kind;
         }
 
-        bool HiddenHat(void* ctx)
+        // A hat's fade on for its batch: false when it isn't a hat, the fade is off, or no vertex shader took it.
+        bool BeginHatFade(const Kind& kind)
         {
-            if (!g_hideHats || !KindFor(ctx).hat) return false;
-            ++g_hatsHidden;
+            if (!g_fadeHats || !kind.fade || g_fadeVariants == 0) return false;
+            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+            if (!dev) return false;
+            const float fade[4] = { 1.0f / kind.fade->run, -kind.fade->start / kind.fade->run, 0.0f, 0.0f };
+            dev->SetVertexShaderConstantF(kHatFadeConstant, fade, 1);
+            const BOOL on = TRUE;
+            dev->SetVertexShaderConstantB(kHatFadeSwitch, &on, 1);
+            ++g_hatsFaded;
             return true;
         }
 
+        void EndHatFade()
+        {
+            if (auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice()))
+            {
+                const BOOL off = FALSE;
+                dev->SetVertexShaderConstantB(kHatFadeSwitch, &off, 1);
+            }
+        }
+
         // Switches the block on for one batch (main thread, inside the M2 pass).
-        bool Begin(void* ctx)
+        bool Begin(Style style)
         {
             if (!g_enabled || g_patched == 0) return false;
-            const Style style = KindFor(ctx).style;
             if (style == Style::None) return false;
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             if (!dev) return false;
@@ -132,18 +172,24 @@ namespace wxl_livingazeroth::modelice
 
         void __fastcall hkBatch(void* ctx, void* edx)
         {
-            if (HiddenHat(ctx)) return;
-            const bool ice = Begin(ctx);
+            const Kind kind = KindFor(ctx);
+            if (kind.hat && g_hideHats) { ++g_hatsHidden; return; }
+            const bool faded = BeginHatFade(kind);
+            const bool ice = Begin(kind.style);
             g_origBatch(ctx, edx);
             if (ice) End();
+            if (faded) EndHatFade();
         }
 
         void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
         {
-            if (HiddenHat(ctx)) return;
-            const bool ice = Begin(ctx);
+            const Kind kind = KindFor(ctx);
+            if (kind.hat && g_hideHats) { ++g_hatsHidden; return; }
+            const bool faded = BeginHatFade(kind);
+            const bool ice = Begin(kind.style);
             g_origDoodad(ctx, edx, elements, indices);
             if (ice) End();
+            if (faded) EndHatFade();
         }
 
         // The ice block, view space: N, V; world-space normal, view direction and position (camera +
@@ -371,6 +417,27 @@ namespace wxl_livingazeroth::modelice
 
     bool IsIceModel(const char* path) { return StyleOf(path) != Style::None; }
 
+    bool EditVertexHatFade(std::string& src, const std::string& stock)
+    {
+        static const std::regex clash(R"(\b(r28|b15|c250)\b)");
+        if (src.find("vs_3_0") == std::string::npos || std::regex_search(stock, clash)) return false;
+        // The colour write: lit, `mad_sat oK, <material>, rL, c29` (rL.w is 1); unlit, `add_sat oK, rM, c29` (rM the
+        // material, c28). Its alpha is what the fade scales; exactly one, and v0 the model-space position.
+        static const std::regex colour(R"(\n[ \t]*(?:mad_sat o\d+, [rv]\d+, (r\d+), c29|add_sat o\d+, (r\d+), c29)[ \t]*\n)");
+        std::smatch m;
+        if (!std::regex_search(src, m, colour) || src.find("dcl_position v0") == std::string::npos) return false;
+        const std::string rest = m.suffix().str();
+        if (std::regex_search(rest, colour)) return false;
+        const std::string reg = m[1].matched ? m[1].str() : m[2].str();
+        src.insert(static_cast<size_t>(m.position(0)),
+                   "\n    if b15"
+                   "\n    mad_sat r28.w, v0.x, c250.x, c250.y"
+                   "\n    mul " + reg + ".w, " + reg + ".w, r28.w"
+                   "\n    endif");
+        ++g_fadeVariants;
+        return true;
+    }
+
     bool IsWaterfallHat(const char* path)
     {
         if (!path) return false;
@@ -481,6 +548,8 @@ namespace wxl_livingazeroth::modelice
     bool Enabled()                { return g_enabled; }
     void SetHideHats(bool hide)   { g_hideHats = hide; }
     bool HideHats()               { return g_hideHats; }
+    void SetFadeHats(bool fade)   { g_fadeHats = fade; }
+    bool FadeHats()               { return g_fadeHats; }
     unsigned PatchedVariants()    { return g_patched; }
 
     const char* StatusLine()
@@ -490,8 +559,9 @@ namespace wxl_livingazeroth::modelice
                       g_enabled ? "on" : "off", g_patched, g_skipped, g_skipReasons.empty() ? "" : " (", g_skipReasons.c_str(), g_skipReasons.empty() ? "" : ")",
                       g_iceDraws);
         if (!g_hookedBatch || !g_hookedDoodad) std::strncat(line, "; batch draw hook missing", sizeof(line) - std::strlen(line) - 1);
-        char hats[96];
-        std::snprintf(hats, sizeof(hats), "; waterfall hats %s (%u batches skipped)", g_hideHats ? "hidden" : "drawn", g_hatsHidden);
+        char hats[160];
+        std::snprintf(hats, sizeof(hats), "; waterfall hats %s (%u batches skipped, %u faded at their upstream end; %u vertex variants with the fade)",
+                      g_hideHats ? "hidden" : g_fadeHats ? "faded in" : "drawn", g_hatsHidden, g_hatsFaded, g_fadeVariants);
         std::strncat(line, hats, sizeof(line) - std::strlen(line) - 1);
         g_status = line;
         return g_status.c_str();

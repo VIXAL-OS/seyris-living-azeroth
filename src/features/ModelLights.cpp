@@ -1,4 +1,5 @@
 #include "ModelLights.hpp"
+#include "ModelIce.hpp"
 
 #include "../env/Lights.hpp"
 #include "../render/M2Effects.hpp"
@@ -899,7 +900,16 @@ namespace wxl_livingazeroth::modellights
             g_family = e ? e->vertexName : std::string();
             return e != nullptr;
         };
-        rule.edit = &EditVertex;
+        // Then the waterfall hats' fade (features/ModelIce) on the M2 families, lit or not: ShaderPatch applies one
+        // table rule per shader, and this one owns the M2 vertex shaders.
+        rule.edit = [](std::string& src, std::string& why)
+        {
+            const std::string stock = src;
+            const bool lit = EditVertex(src, why);
+            if (!lit) src = stock;
+            const bool hats = g_family.compare(0, 6, "MapObj") != 0 && modelice::EditVertexHatFade(src, stock);
+            return lit || hats;
+        };
         shaderpatch::Register(std::move(rule));
     }
 

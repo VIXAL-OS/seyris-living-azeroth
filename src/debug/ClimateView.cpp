@@ -167,8 +167,10 @@ namespace wxl_livingazeroth::debug
             g_api->UiText(modelice::StatusLine());
             int iceModels = modelice::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice on ice models", &iceModels)) modelice::SetEnabled(iceModels != 0);
+            int fadeHats = modelice::FadeHats() ? 1 : 0;
+            if (g_api->UiCheckbox("fade the waterfall hats in from their upstream end", &fadeHats)) modelice::SetFadeHats(fadeHats != 0);
             int hideHats = modelice::HideHats() ? 1 : 0;
-            if (g_api->UiCheckbox("hide the waterfall hats (the modern water draws the lip)", &hideHats)) modelice::SetHideHats(hideHats != 0);
+            if (g_api->UiCheckbox("hide the waterfall hats (test)", &hideHats)) modelice::SetHideHats(hideHats != 0);
             g_api->UiText(wmoice::StatusLine());
             int iceBuildings = wmoice::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice in buildings and dungeons", &iceBuildings)) wmoice::SetEnabled(iceBuildings != 0);

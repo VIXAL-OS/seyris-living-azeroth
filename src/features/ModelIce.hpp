@@ -42,10 +42,17 @@ namespace wxl_livingazeroth::modelice
     /// Whether a model path is one of the ice models (any style).
     bool IsIceModel(const char* path);
     /// Whether a model path is a waterfall "hat" (the sheet on the river above a fall: "waterfall" and "_hat" in
-    /// the file name). The batch draws skip them while SetHideHats(true): the water module draws that run.
+    /// the file name). The batch draws skip them while SetHideHats(true) (a test switch); otherwise, with
+    /// SetFadeHats(true), the hats' upstream ends fade in over the river instead of ending in a jagged edge.
     bool IsWaterfallHat(const char* path);
     void SetHideHats(bool hide);
     bool HideHats();
+    void SetFadeHats(bool fade);
+    bool FadeHats();
+    /// The hats' fade in an M2 vertex shader (behind VS b15, c250, using r28.w), right before its colour write;
+    /// `stock` is the client's own text (the clash check). True when it went in. The model lights' vertex rule
+    /// applies it (ShaderPatch applies one table rule per shader).
+    bool EditVertexHatFade(std::string& src, const std::string& stock);
     /// One batch's constants for a style: the shared look (terrainice::FillModelConstants, c180..c189)
     /// adjusted in place, c179 = (weight, vertical stretch, extra brightness, extra reflection) and
     /// c190 = (the texture's own colour as the body, how much of the cloudy depth stays on it, extra

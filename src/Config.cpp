@@ -107,7 +107,8 @@ namespace wxl_livingazeroth::config
         terrainice::SetStrength(Float(s, "ClearIceStrength", "How fully icy ground turns to clear ice, 0..1.", terrainice::Strength()));
         wmoice::SetEnabled(Bool(s, "ClearIceBuildings", "Ice built into buildings and dungeons (the Nexus, Icecrown, ice caves, Azjol-Nerub) looks like deep, clear ice too (needs dynamic shadows on).", wmoice::Enabled()));
         modelice::SetEnabled(Bool(s, "ClearIceModels", "Ice models (icebergs, shoreline ice, ice cliffs, frozen waterfalls, Ulduar's ice walls) look like deep, clear ice too (needs dynamic shadows on).", modelice::Enabled()));
-        modelice::SetHideHats(Bool(s, "HideWaterfallHats", "Don't draw the waterfall hats (the streaky sheet over a river where it pours over a fall's edge): the modern water draws that run, smooth and fast, with a bright line at the edge.", modelice::HideHats()));
+        modelice::SetFadeHats(Bool(s, "FadeWaterfallHats", "The waterfall hats (the streaky sheet over a river where it pours over a fall's edge) fade in from their upstream end instead of starting in a jagged edge on the water.", modelice::FadeHats()));
+        modelice::SetHideHats(Bool(s, "HideWaterfallHats", "Don't draw the waterfall hats at all (a test switch: the modern water's own run to the edge is subtle).", modelice::HideHats()));
         terrainice::SetClarity(Float(s, "ClearIceClarity", "How much of the deep blue inside shows through the ice's own texture, 0..1.", terrainice::Clarity()));
 
         fields::SetShoreWorker(Bool(s, "ShoreWorker",

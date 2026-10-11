@@ -274,8 +274,9 @@ namespace wxl_livingazeroth::terrainice
     {
         v = Variant{};
         if (src.find(" r25") != std::string::npos || src.find("c215") != std::string::npos || src.find(" s14") != std::string::npos ||
-            src.find("c190") != std::string::npos || src.find("c194") != std::string::npos)
-        { why = "r25/c190/c194/c215/s14 in use"; return false; }
+            src.find("c190") != std::string::npos || src.find("c194") != std::string::npos || src.find("c195") != std::string::npos ||
+            src.find("c196") != std::string::npos)
+        { why = "r25/c190/c194..c196/c215/s14 in use"; return false; }
         // Layer samplers s0..s(n-1) and the combined alpha map s(n); the stock shadow maps are s5..s8.
         static const std::regex dcl(R"(dcl_(2d|cube) s(\d+)\b)");
         bool declared[5] = {}, flat[5] = {};
@@ -351,12 +352,31 @@ namespace wxl_livingazeroth::terrainice
     {
         // ps_3_0 reads at most one constant register per instruction.
         return
+            // How flat the surface is (r26.w: 1 on the ground, 0 on a cliff), from the face the world position
+            // spans across the pixel (the terrain has no normal input here): cos^2 of its slope, from the cross
+            // product of the position's screen derivatives, (z^2 + e) / (|n|^2 + e) so a degenerate pixel counts as
+            // flat. The detail below is projected from above with a parallax step for flat ground: on a steep face
+            // the projection smears it into dense streaks and the step runs away (V.z near 0), which drew moire
+            // bands on Dragonblight's icy cliffs (the user, 2026-10-11: "it's actually on the vertical blue parts";
+            // the ice model toggles didn't change it). On faces steeper than about 63 degrees the detail is
+            // neutral and the step none; under about 41 degrees nothing changes. Only r26..r28: r29 and r31 hold
+            // the wet block's values for the point lights after this block.
+            "\n    dsx r26.xyz, v9"
+            "\n    dsy r27.xyz, v9"
+            "\n    crs r28.xyz, r26, r27"
+            "\n    dp3 r26.x, r28, r28"
+            "\n    add r26.x, r26.x, c195.z"
+            "\n    rcp r26.x, r26.x"
+            "\n    mad r26.y, r28.z, r28.z, c195.z"
+            "\n    mul r26.y, r26.y, r26.x"
+            "\n    mad_sat r26.w, r26.y, c195.x, c195.y"
             // V = normalize(camera - position); the parallax step along the ground per yard of depth.
             "\n    add r10.xyz, c216, -v9"
             "\n    nrm r11.xyz, r10"
             "\n    max r12.x, r11.z, c191.w"
             "\n    rcp r12.x, r12.x"
             "\n    mul r12.xy, r11, r12.x"
+            "\n    mul r12.xy, r12, r26.w"
             // Two layers of the detail texture, c220.x and c220.y yards down, at two scales.
             "\n    mad r13.xy, r12, -c220.x, v9"
             "\n    mul r13.xy, r13, c220.z"
@@ -368,6 +388,9 @@ namespace wxl_livingazeroth::terrainice
             // bold cracks (w); the ice models the sketchy ones (x).
             "\n    mul r16, r14, c192.x"
             "\n    mad r16, r15, c192.y, r16"
+            // Toward a neutral detail (no cracks or bubbles, middling cloud) on steep faces.
+            "\n    lrp r28, r26.w, r16, c196"
+            "\n    mov r16, r28"
             // The deep body, cloudier in places; the cracks and bubbles inside it blend it toward the
             // highlight colour (at most all the way: never brighter than that).
             "\n    mul r17.x, r16.z, c192.w"
@@ -417,6 +440,9 @@ namespace wxl_livingazeroth::terrainice
                "    def c192, 0.6, 0.4, 0.35, 0.65\n"
                "    def c193, 0.04, 0.96, 0.55, 0.4\n"
                "    def c194, 1.3, 0, 0, 0\n"
+               // cos^2 of the slope 0.2 (63 degrees) -> 0, 0.56 (41 degrees) -> 1; the epsilon.
+               "    def c195, 2.777778, -0.5555556, 1e-12, 0\n"
+               "    def c196, 0, 0, 0.5, 0\n"
                "    dcl_2d s14\n";
     }
 
