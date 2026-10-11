@@ -179,6 +179,11 @@ namespace
     const Spot kCavernsRock  { "Caverns of Time floor (rock base)", 2300, 1, "tileset\\tanaris\\tanarisrockbase01.blp", 0, 7 };
     const Spot kTanarisBurn  { "Tanaris burnt rock base", 440,  1,   "tileset\\tanaris\\tanarisrockbaseburn.blp", 0, -1 };
     const Spot kTanarisRock  { "Tanaris rock base",       440,  1,   "tileset\\tanaris\\tanarisrockbase01.blp", 0, -1 };
+    // Beaches painted with Darkshore's sand: Azuremyst Isle's west coast (area 3524), and Darkshore's (148).
+    const Spot kAzuremystSand  { "Azuremyst beach sand",       3524, 530, "tileset\\darkshore\\darkshoresand3.blp", 0, 7 };
+    const Spot kAzuremystRocks { "Azuremyst beach sand rocks", 3524, 530, "tileset\\darkshore\\darkshoresandrocks.blp", 0, 7 };
+    const Spot kDarkshoreSand  { "Darkshore beach sand",       148,  1,   "tileset\\darkshore\\darkshoresand3.blp", 0, 7 };
+    const Spot kDarkshoreWaves { "Darkshore wet sand",         148,  1,   "tileset\\darkshore\\darkshoresandwaves.blp", 0, 7 };
     const Spot kSilithusHi   { "Silithus sand",           1377, 1,   "tileset\\silithis\\silithissandhighlight.blp", 7439, 7 };
     const Spot kSilithus01   { "Silithus sand 01",        1377, 1,   "tileset\\silithis\\silithissand01.blp", 7436, 7 };
     const Spot kSilithusDet  { "Silithus detail sand",    1377, 1,   "tileset\\silithis\\silithissanddetail.blp", 7441, 7 };
@@ -263,7 +268,7 @@ int main(int argc, char** argv)
     const std::string now = argv[1], before = argc > 2 ? argv[2] : "";
     const Spot* const kUnchanged[] = { &kDunMorogh, &kNorthSnow, &kWinterspring, &kWestfall, &kElwynnDirt, &kStormIce, &kElwynnGrass,
                                        &kSteppesRock, &kSteppesLava, &kSilithusRock, &kTanarisCrack, &kBlasted, &kHellfire, &kBoneRock, &kBoneTiles,
-                                       &kTanarisBurn, &kTanarisRock };
+                                       &kTanarisBurn, &kTanarisRock, &kDarkshoreWaves };
     try
     {
         std::vector<Seen> old;
@@ -279,6 +284,7 @@ int main(int argc, char** argv)
         for (const Spot* s : { &kSearingAsh, &kSteppesAsh, &kSteppesCrack, &kSteppesChar, &kSteppesRock, &kBoneBase, &kBoneCracked, &kBoneHoles,
                                &kBoneRock, &kTanarisSand, &kTanarisStone, &kSilithusHi, &kSilithus01, &kSilithusDet, &kSilithusRock,
                                &kCavernsBurn, &kCavernsRock, &kTanarisBurn, &kTanarisRock,
+                               &kAzuremystSand, &kAzuremystRocks, &kDarkshoreSand, &kDarkshoreWaves,
                                &kBlasted, &kHellfire, &kElwynnGrass, &kDunMorogh, &kNorthSnow })
             PrintSpot(*s);
 
@@ -340,6 +346,17 @@ int main(int argc, char** argv)
             }
             CHECK(At(kTanarisBurn).depth == 0.0f && At(kTanarisRock).depth == 0.0f);
             CHECK(At(kTanarisBurn).material == 0 && At(kTanarisRock).material == 0);
+        });
+        Test("beaches of Darkshore's sand (Darkshore, Azuremyst Isle): sand, its own texture; the wet strip at the water bare", []
+        {
+            const ct::Values sand = At(kAzuremystSand), rocks = At(kAzuremystRocks), home = At(kDarkshoreSand);
+            CHECK(sand.material == 59 && Near(sand.depth, 0.08f) && EndsWith(CoverPath(sand), "DarkshoreSand3.blp"));
+            CHECK(rocks.material == 60 && Near(rocks.depth, 0.06f) && EndsWith(CoverPath(rocks), "DarkshoreSandRocks.blp"));
+            CHECK(home.material == 59 && Near(home.depth, 0.08f));
+            for (const ct::Values& v : { sand, rocks, home })
+                CHECK(mat::Parent(v.material) == 51 && Near(v.relaxSeconds, 10.0f) && (v.flags & ct::kFlagPreventUnderwater) &&
+                      Near(v.tintStrength, 0.2f) && !ct::IsSnow(v.coverMaterial, 148, 1));
+            CHECK(sand.tintColor == 0x909090u && At(kDarkshoreWaves).depth == 0.0f);
         });
         Test("no cover: Elwynn grass, Burning Steppes rock and lava, the Blasted Lands, Hellfire", []
         {

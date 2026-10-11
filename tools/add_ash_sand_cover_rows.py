@@ -13,6 +13,9 @@ Where (global texture rows; the terrain textures as a map scan of the zones foun
         SilithisSandDetail. These rows were already on (0.05..0.1 yd); now one sand behaviour. Not
         Tanaris' cracked ground, rock and dirt-path textures, Silithus' rock highlight row (its own
         0.01 yd dusting stays) or Westfall's sand rows.
+  Sand  beaches painted with Darkshore's sand: DarkshoreSand3 and DarkshoreSandRocks (Darkshore's coast, and
+        Azuremyst Isle's beaches use them too: "sand not working on azuremyst isle tho", the user). Not its
+        wet strip at the water's edge (DarkshoreSandWaves): the cover's paler tint would read as dry sand there.
   Sand  in the Caverns of Time only (area 2300; rows scoped to it): TanarisRockBaseBurn and
         TanarisRockBase01, which paint its floor over the sand (the client's sand footprints walk
         on them there). Elsewhere in Tanaris they are its rock and stay bare.
@@ -35,8 +38,8 @@ BurningSteppsAsh01 material keeps its warmth (35 degC) and rest moisture.
         already near white: there it only pales a little. The averages were measured from the
         client's textures (3.3.5a, the _s variants have the same colours).
 
-IDs: materials, selectors and cover rows 50 (Ash) and 51 (Sand), 52..56 (the new ash textures) and 57, 58
-(the Caverns of Time's);
+IDs: materials, selectors and cover rows 50 (Ash) and 51 (Sand), 52..56 (the new ash textures), 57, 58
+(the Caverns of Time's) and 59, 60 (Darkshore's sand);
 the existing rows changed in place: materials 2, 3, 7, 8, 9 (Parent Sand) and 15 (Parent Ash), cover
 rows 2, 3, 7, 8, 9 and 14.
 
@@ -69,6 +72,8 @@ TEXTURES = [
     (r"Tileset\Silithis\SilithisSand01.blp",                        0x685635, 7,  None, 7,  I,    SAND),
     (r"Tileset\Silithis\SilithisSandhighlight.blp",                 0xA6946B, 8,  None, 8,  I,    SAND),
     (r"Tileset\Silithis\SilithisSandDetail.blp",                    0x4E3E27, 9,  None, 9,  0.06, SAND),
+    (r"Tileset\Darkshore\DarkshoreSand3.blp",                       0x565656, 59, 59,   59, I,    SAND),
+    (r"Tileset\Darkshore\DarkshoreSandRocks.blp",                   0x767D7B, 60, 60,   60, 0.06, SAND),
 ]
 
 # The same, for one area only (selector ScopeType 2 = Area, ScopeID = the AreaTable ID): "it would also be dope if
