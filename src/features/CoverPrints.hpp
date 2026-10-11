@@ -44,6 +44,13 @@ namespace wxl_livingazeroth::coverprints
     unsigned LastLive();
     unsigned LastOnCover();
 
+    struct NewPrint;
+    /// The prints the client put down since the last call, found at its print draws (at most 64 kept between
+    /// calls; features/SurfaceCover rings the sand around them). Appended to `out`.
+    void TakeNewPrints(std::vector<NewPrint>& out);
+    /// Prints found so far this session.
+    unsigned PrintsFound();
+
     static_assert(sizeof(void*) == 4, "the client's print pool holds 32-bit pointers");
 
     constexpr uintptr_t kClientImageBase = 0x00400000;
@@ -176,6 +183,41 @@ namespace wxl_livingazeroth::coverprints
                 std::memcpy(z, &after, 4);
             }
             ++run.onCover;
+        }
+    }
+
+    /// A print the client has just put down: its pool entry and the position stored at the entry's start.
+    struct NewPrint
+    {
+        uint32_t entry;
+        float    x, y, z;
+    };
+    /// What the last walk saw in a pool entry.
+    struct PrintSeen
+    {
+        float x = 0.0f, y = 0.0f;
+        bool  live = false;
+    };
+    /// Calls onNew(NewPrint) for every print put down since the last walk: an entry that is live now and was not,
+    /// or that holds a print at another place (the client reuses an entry for a later print). `seen` is sized to
+    /// kPoolEntries here; the first walk only notes what is there, since those prints are already old.
+    template <class OnNew>
+    void FindNewPrints(const uint8_t* pool, std::vector<PrintSeen>& seen, OnNew onNew)
+    {
+        const bool first = seen.size() != kPoolEntries;
+        if (first) seen.assign(kPoolEntries, PrintSeen{});
+        for (uint32_t e = 0; e < kPoolEntries; ++e)
+        {
+            const uint8_t* entry = pool + e * kEntrySize;
+            const uint32_t count = ReadU32(entry + kEntryVertexCount);
+            PrintSeen& s = seen[e];
+            if (!count || count > kMaxVertices || !ReadU32(entry + kEntryVertices)) { s.live = false; continue; }
+            const float x = ReadFloat(entry + kEntryPosition), y = ReadFloat(entry + kEntryPosition + 4);
+            const float z = ReadFloat(entry + kEntryPosition + 8);
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) { s.live = false; continue; }
+            const bool fresh = !s.live || std::fabs(x - s.x) > 0.01f || std::fabs(y - s.y) > 0.01f;
+            s.x = x; s.y = y; s.live = true;
+            if (fresh && !first) onNew(NewPrint{ e, x, y, z });
         }
     }
 

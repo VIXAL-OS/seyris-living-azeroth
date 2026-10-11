@@ -29,6 +29,9 @@ BurningSteppsAsh01 material keeps its warmth (35 degC) and rest moisture.
         23), fills back in over 20 s (snow: 30), soft (feet press to the ground).
   Sand  0.08 yd (stony and detail sand 0.06), bare above 30 degrees (from 20), fills back in over 10 s:
         the wind smooths it.
+  Sand  no trenches: feet leave still rings of sand around each of the client's prints instead (flag 0x10;
+        "Simon is of the opinion that sand shouldn't have trenches but should rather have unmoving 'ripples'
+        centered on each footprint", the user, 2026-10-11).
   Both  not under water (flag 0x1); the base sits 0.02 yd (sand 0.015) below the terrain, so for the
         first fifth of the fill-in time a fresh trench shows the ground itself (and the client's
         own footprints on it) before the refill rises over it.
@@ -56,6 +59,7 @@ import cdbc_io as io
 ASH, SAND = 50, 51
 I, T = -1.0, -1000.0  # "take it from the parent" (floats), "not set" (signed columns)
 PREVENT_UNDERWATER = 0x1
+RIPPLE_PRINTS = 0x10  # feet carve no trench; still rings around each print instead (sand)
 TINT_GAIN, TINT_STRENGTH = 1.68, 0.2
 
 # Texture, its average colour (0xRRGGBB, measured), material ID, selector ID (None: the row exists),
@@ -86,6 +90,11 @@ SCOPED = [
 ]
 
 
+def own_flags(parent):
+    # A row with its own Depth decides Flags too (the rest take the parent's).
+    return PREVENT_UNDERWATER | (RIPPLE_PRINTS if parent == SAND else 0)
+
+
 def tint_of(average):
     return sum(min(255, round(((average >> shift) & 0xFF) * TINT_GAIN)) << shift for shift in (16, 8, 0))
 
@@ -107,7 +116,7 @@ PARENT_COVERS = [
     cover(ASH, ASH, depth=0.10, max_slope=35.0, slope_fade=12.0, drift=0.25, breakup=0.6, rim=0.4, relax=20.0,
           tint_strength=0.0, z_offset=-0.02, wetness=0.0, flags=PREVENT_UNDERWATER),
     cover(SAND, SAND, depth=0.08, max_slope=30.0, slope_fade=10.0, drift=0.35, breakup=0.5, rim=0.5, relax=10.0,
-          tint_strength=0.0, z_offset=-0.015, wetness=0.0, flags=PREVENT_UNDERWATER),
+          tint_strength=0.0, z_offset=-0.015, wetness=0.0, flags=PREVENT_UNDERWATER | RIPPLE_PRINTS),
 ]
 
 
@@ -165,7 +174,7 @@ def main() -> None:
         # Depth (and with it Flags) where it differs from the parent; everything else from the parent.
         changed += upsert(covers, cover(cover_id, material_id, depth=depth, tint_color=tint_of(average),
                                         tint_strength=TINT_STRENGTH, cover_texture=texture,
-                                        flags=PREVENT_UNDERWATER if depth != I else 0), io.SURFACE_COVER)
+                                        flags=own_flags(parent) if depth != I else 0), io.SURFACE_COVER)
 
     paths["GroundMaterial"].write_bytes(io.build(io.GROUND_MATERIAL, materials))
     paths["GroundMaterialSelector"].write_bytes(io.build(io.GROUND_MATERIAL_SELECTOR, selectors))

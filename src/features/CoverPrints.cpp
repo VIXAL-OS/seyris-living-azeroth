@@ -23,6 +23,28 @@ namespace wxl_livingazeroth::coverprints
         unsigned    g_lastLive = 0, g_lastOnCover = 0;
         char        g_status[192] = "not installed";
 
+        // New prints for the sand's rings (features/SurfaceCover), found at every print draw.
+        constexpr size_t       kMaxNew = 64;
+        std::vector<PrintSeen> g_seen;
+        std::vector<NewPrint>  g_new;
+        unsigned               g_found = 0;
+        bool                   g_findBroken = false; // a fault while reading the pool: no rings for the session
+
+        void FindUnsafe()
+        {
+            FindNewPrints(reinterpret_cast<const uint8_t*>(kPool), g_seen, [](const NewPrint& p)
+            {
+                ++g_found;
+                if (g_new.size() >= kMaxNew) g_new.erase(g_new.begin()); // nobody took them: keep the latest
+                g_new.push_back(p);
+            });
+        }
+        bool Find()
+        {
+            __try { FindUnsafe(); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
         bool ImageIs12340Unsafe()
         {
             const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleA(nullptr));
@@ -74,6 +96,11 @@ namespace wxl_livingazeroth::coverprints
         // The client's print draw: lifted onto the cover around it, put back right after.
         void __cdecl hkPrintDraw()
         {
+            if (!g_findBroken && !Find())
+            {
+                g_findBroken = true;
+                if (g_api) g_api->Log(WXL_LOG_WARN, kTag, "cover prints: a fault while reading the client's footprints; no rings around them in sand from now on.");
+            }
             if (g_broken || !cover::PrintsOnCover())
             {
                 g_lastLive = g_lastOnCover = 0;
@@ -129,4 +156,11 @@ namespace wxl_livingazeroth::coverprints
     const char* Status() { return g_status; }
     unsigned    LastLive() { return g_lastLive; }
     unsigned    LastOnCover() { return g_lastOnCover; }
+    unsigned    PrintsFound() { return g_found; }
+
+    void TakeNewPrints(std::vector<NewPrint>& out)
+    {
+        out.insert(out.end(), g_new.begin(), g_new.end());
+        g_new.clear();
+    }
 }

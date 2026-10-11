@@ -17,6 +17,7 @@ namespace wxl_livingazeroth::covertable
         kFlagPreventOnLand     = 0x2, // cover only below a liquid surface (river/sea floors)
         kFlagUseVertexColor    = 0x4, // tint by the terrain's MCCV vertex colours
         kFlagIgnoreSpecular    = 0x8, // don't load/use the CoverTexture's _s specular map
+        kFlagRipplePrints      = 0x10, // feet carve no trench; still rings around each print instead (sand)
     };
 
     struct Values

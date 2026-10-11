@@ -15,6 +15,7 @@
 #include "TerrainWetness.hpp"
 #include "CoverBlend.hpp"
 #include "CoverPrints.hpp"
+#include "CoverRipples.hpp"
 #include "GrassPerf.hpp"
 #include "GroundMaterialTable.hpp"
 #include "SurfaceCoverTable.hpp"
@@ -100,6 +101,8 @@ namespace wxl_livingazeroth::cover
             int   wireframe = 0;
             int   drawPoint = 0;            // 0 right after the terrain (inside the world pass), 1 end of the scene
             int   printsOnCover = 1;        // the client's footprints drawn on top of the cover (features/CoverPrints)
+            int   ripples = 1;              // covers with kFlagRipplePrints (sand): rings around prints, no trenches
+            float rippleSlope = 0.5f;       // the rings' steepest slope (shading)
         };
 
         const WXL_Api* g_api = nullptr;
@@ -223,6 +226,13 @@ namespace wxl_livingazeroth::cover
         // when the player steps onto other ground.
         std::vector<float> g_rimCell(kTex * kTex, 0.3f);
         std::vector<float> g_relaxCell(kTex * kTex, 30.0f);
+        // ...and how much of it is sand (rows with kFlagRipplePrints): there feet carve no trench, and the prints
+        // the client puts down get still rings around them (CoverRipples.hpp).
+        std::vector<float> g_rippleCell(kTex * kTex, 0.0f);
+        ripples::Set                       g_ripples;
+        float                              g_rippleClock = 0.0f;
+        unsigned                           g_ripplesMade = 0;
+        std::vector<coverprints::NewPrint> g_newPrints;
 
         // What the table sees where the player is (for the panel, so rows can be authored on the spot).
         terrain::Surface   g_hereSurface;
@@ -609,8 +619,13 @@ float4 misc : register(c13);     // x = the terrain's dynamic shadows: 0 none, 1
                                  // 3 its cascades; y = (unused), z = 1 / the near grid's edge fade (yd),
                                  // w = how much darker soaked ground gets (the wet terrain's strength, so both match)
 float4 edgeFade : register(c14); // player centre relative to camera (xy), fully covered radius, zero coverage radius (yd)
+float4 rippleInfo : register(c15);  // rings around prints in sand: x = how many, y = their slope, z = brightness change
+float4 rippleAxisX : register(c16); // the world's x and y axes in the space the normal is lit in
+float4 rippleAxisY : register(c17);
+float4 rippleBox : register(c18);   // where any ring reaches, camera-relative (min x, min y, max x, max y)
 float4 pcf[8] : register(c20);   // the terrain's PCF offsets (its PS c3..c10)
 float4 shadowM[12] : register(c30); // the terrain's shadow matrices (its VS c37..c48), from view space
+float4 ripples[32] : register(c42); // per print: centre (camera-relative xy), radius (yd), strength (0..1)
 sampler2D cover0 : register(s0);
 sampler2D cover1 : register(s1);
 sampler2D cover2 : register(s2);
@@ -708,14 +723,49 @@ float CoverThreshold(float2 pixel)
                       2*b2.x + 3*b2.y - 4*b2.x*b2.y);
     return (dot(b, float3(16, 4, 1)) + 0.5) / 64;
 }
+// Still rings of sand around the client's footprints (features/CoverRipples.hpp): from the print's edge out,
+// 0.75 of its radius apart, three of them, the first (at the print's edge) strongest. Shading only: the normal tilts by up to
+// rippleInfo.y, and the height comes back for a little brightness. Where a pixel spans more than a quarter of the
+// ring spacing (far off) they fade out instead of shimmering. px = the pixel's size in yd.
+float RippleRings(float2 rel, float px, inout float3 nn)
+{
+    float2 grad = 0;
+    float height = 0;
+    // Unrolled: a pixel shader can't index constants by a loop counter (fxc picks each ring out of all 32 with
+    // selects, ~32 instructions a ring). Each ring is skipped from its own branch.
+    [unroll] for (int k = 0; k < 32; ++k)
+    [branch] if (k < rippleInfo.x)
+    {
+        float4 rp = ripples[k];
+        float2 dv = rel - rp.xy;
+        float r = length(dv);
+        float spacing = 0.75 * rp.z;
+        float t = (r - 0.6 * rp.z) / (3.0 * spacing);
+        [branch] if (t > 0 && t < 1)
+        {
+            float env = smoothstep(0, 0.2, t) * (1 - t) * rp.w * saturate(spacing / (4 * px) - 0.5);
+            float ph = 6.28318531 * (r - rp.z) / spacing;
+            grad += (-sin(ph) * env / max(r, 0.001)) * dv;
+            height += cos(ph) * env;
+        }
+    }
+    nn = normalize(nn - rippleInfo.y * (grad.x * rippleAxisX.xyz + grad.y * rippleAxisY.xyz));
+    return height;
+}
 float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, float fog : TEXCOORD3, float4 tint : TEXCOORD4, float2 wuv : TEXCOORD5, float3 vpos : TEXCOORD6, float far : TEXCOORD7, float3 lamps : TEXCOORD8, float2 pixel : VPOS) : COLOR
 {
     clip(CoverVisibility(rel) - CoverThreshold(pixel));
     clip(d.x - opts.x);
-    clip(0.5 - d.y);
+    // Not on a triangle reaching a hole (or unloaded ground): its vertex there sits 100,000 yd down, and drawn up
+    // to its middle it hung from the hole's edge like a curtain (across the Caverns of Time's tunnel, where the
+    // hillside over its mouth is cut away; the user, 2026-10-11). The cover now stops a cell short of a hole.
+    clip(-d.y);
     float2 a = step(inner.xy, rel) * step(rel, inner.zw);
     clip(0.5 - a.x * a.y);
     float3 nn = normalize(n), l = normalize(light.xyz);
+    float ripplePx = length(fwidth(rel));
+    float rippleShade = 0;
+    [branch] if (rippleInfo.x > 0.5 && all(rel >= rippleBox.xy) && all(rel <= rippleBox.zw)) rippleShade = RippleRings(rel, ripplePx, nn);
     float ndl = saturate(dot(nn, l));
     float3 lit = min(ambient.rgb + diffuse.rgb * ndl, 1);
     // Cover textures, tiled in world space like the terrain's layers, mixed by their share here
@@ -735,6 +785,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     float3 fill = tint.a > 0.01 ? tint.rgb * 0.6 : albedo.rgb;
     float3 base = fill * (1 - share) + textured * albedo.w;
     float3 colour = lerp(base, tint.rgb, saturate(tint.a));
+    colour *= 1 + rippleInfo.z * rippleShade; // ring crests a little lighter, troughs darker
     // Vertex colour (the terrain multiplies by 2 x it) and wetness: darker, and a stronger, tighter shine.
     float4 pr = tex2D(props, wuv);
     // The row's own wet look, plus how much wetter than its rest the ground is now (rain, water nearby).
@@ -810,12 +861,13 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             float vertexColor[3] = { 0.5f, 0.5f, 0.5f }; // MCCV mixed in by the rows' "use MCCV" share; 0.5 = neutral
             int   texId[8] = {}; float texShare[8] = {}; int texCount = 0; // cover textures present, by ID
             float snowShare = 0.0f, paintedSnow = 0.0f;
+            float ripple = 0.0f;   // share of the look from rows with kFlagRipplePrints (sand)
             bool  hasLook = false; // some row (painted or fallen snow's look) set the properties above
         };
 
         // Sums per blended property, in this order (cover textures go through AddTexture).
         enum Sum { kSumDepth, kSumMaxSlope, kSumSlopeFade, kSumDrift, kSumBreakup, kSumTintR, kSumTintG, kSumTintB,
-                   kSumTintStrength, kSumZOffset, kSumWetness, kSumMccv, kSumStiffness, kSumRim, kSumRelax, kSumCount };
+                   kSumTintStrength, kSumZOffset, kSumWetness, kSumMccv, kSumStiffness, kSumRim, kSumRelax, kSumRipple, kSumCount };
 
         // What the rows' flags need to know about the spot being sampled: how deep it lies under a
         // liquid surface and the terrain's vertex colour there. Both are looked up only when a row
@@ -903,6 +955,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             sum[kSumRim] += wk * cv.rim;
             sum[kSumRelax] += wk * cv.relaxSeconds;
             if (cv.flags & covertable::kFlagUseVertexColor) sum[kSumMccv] += wk;
+            if (cv.flags & covertable::kFlagRipplePrints) sum[kSumRipple] += wk;
             if (cv.coverTexture > 0) AddTexture(cv.coverTexture, wk);
         }
 
@@ -922,6 +975,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             b.stiffness = sum[kSumStiffness] * inv;
             b.rim = sum[kSumRim] * inv;
             b.relax = sum[kSumRelax] * inv;
+            b.ripple = sum[kSumRipple] * inv;
             const float mccv = sum[kSumMccv] * inv;
             if (mccv > 0.0f)
             {
@@ -1112,6 +1166,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             {
                 if (b.rim != g_rimCell[s]) { g_rimCell[s] = b.rim; L.coverDirty = true; }
                 g_relaxCell[s] = b.relax;
+                g_rippleCell[s] = b.ripple;
                 if (fresh) { g_press[s] = 0.0f; g_rim[s] = 0.0f; }
             }
         }
@@ -1225,18 +1280,57 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     const float d = std::sqrt(dx * dx + dy * dy);
                     if (d >= outer) continue;
                     const int s = SlotOf(i, j);
+                    // Sand keeps no trench: its prints get rings instead (AddRipple).
+                    const float keep = g_settings.ripples ? 1.0f - g_rippleCell[s] : 1.0f;
                     if (d < radius)
                     {
-                        const float t = d < radius * 0.7f ? 1.0f : (radius - d) / (radius * 0.3f);
+                        const float t = (d < radius * 0.7f ? 1.0f : (radius - d) / (radius * 0.3f)) * keep;
                         if (t > g_press[s]) { g_press[s] = t; MarkActive(s); }
                     }
-                    const float r = 1.0f - std::fabs(d - rimPeak) / rimHalf;
+                    const float r = (1.0f - std::fabs(d - rimPeak) / rimHalf) * keep;
                     if (r > g_rim[s]) { g_rim[s] = r; MarkActive(s); }
                 }
         }
 
+        // Rings around a print the client just put down, where it lies in sand on level 0's grid: sized by the
+        // print of the nearest unit that makes prints (it was put down under one of its feet), lasting the cover's
+        // relax time there. Not on WMO floors: that unit stands on the terrain.
+        void AddRipple(const coverprints::NewPrint& p)
+        {
+            const Level& L = g_levels[0];
+            if (!L.haveGrid) return;
+            const int i = static_cast<int>(std::lround(p.x / L.cell)), j = static_cast<int>(std::lround(p.y / L.cell));
+            if (i < L.gridI || i >= L.gridI + kGridVerts || j < L.gridJ || j >= L.gridJ + kGridVerts) return;
+            const int s = SlotOf(i, j);
+            if (g_rippleCell[s] < 0.5f || g_static0[s] < kMinDrawnDepth) return;
+            const actors::Actor* unit = nullptr;
+            float best = 4.0f;
+            for (const actors::Actor& a : actors::Nearby())
+            {
+                if (!a.hasFootprint) continue;
+                const float d = std::hypot(a.pos[0] - p.x, a.pos[1] - p.y);
+                if (d < best) { best = d; unit = &a; }
+            }
+            float ground;
+            if (!unit || !terrain::HeightAt(unit->pos[0], unit->pos[1], ground) || std::fabs(unit->pos[2] - ground) > 0.35f) return;
+            ripples::Ripple r;
+            r.x = p.x; r.y = p.y;
+            r.radius = ripples::RadiusFor(std::max(unit->footprintLength, unit->footprintWidth));
+            r.born = g_rippleClock;
+            r.life = std::max(2.0f, g_relaxCell[s] * g_settings.relaxMul);
+            g_ripples.Add(r);
+            ++g_ripplesMade;
+        }
+
         void Simulate(float dt)
         {
+            g_rippleClock += dt;
+            g_ripples.Expire(g_rippleClock);
+            g_newPrints.clear();
+            coverprints::TakeNewPrints(g_newPrints);
+            if (g_settings.ripples)
+                for (const coverprints::NewPrint& p : g_newPrints) AddRipple(p);
+
             // Changes the last frame didn't upload (the cover wasn't drawn) would be lost: redo level 0
             // in full instead.
             if (g_changedPending) g_levels[0].coverDirty = true;
@@ -1863,6 +1957,33 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             const float inv = 1.0f / kCoverTextureTile;
             const float c7[4] = { inv, eye[0] * inv - std::floor(eye[0] * inv), eye[1] * inv - std::floor(eye[1] * inv), 0.0f };
             dev->SetPixelShaderConstantF(7, c7, 1);
+
+            // The rings around prints in sand (CoverRipples.hpp): c15 = how many, their slope and brightness change;
+            // c16, c17 = the world's x and y axes in the space the cover is lit in (rows c9, c10 of the VS); c42.. =
+            // per print its centre (camera-relative), radius and strength now.
+            {
+                const std::vector<ripples::Ripple>& list = g_ripples.List();
+                const int n = g_settings.ripples ? static_cast<int>(std::min(list.size(), static_cast<size_t>(ripples::kMax))) : 0;
+                float regs[ripples::kMax * 4];
+                float box[4] = { 1.0e9f, 1.0e9f, -1.0e9f, -1.0e9f }; // c18: where any ring reaches (the PS skips the rest)
+                for (int k = 0; k < n; ++k)
+                {
+                    const ripples::Ripple& r = list[k];
+                    regs[k * 4 + 0] = r.x - eye[0];
+                    regs[k * 4 + 1] = r.y - eye[1];
+                    regs[k * 4 + 2] = r.radius;
+                    regs[k * 4 + 3] = ripples::Strength(g_rippleClock - r.born, r.life);
+                    const float reach = ripples::kReach * r.radius;
+                    box[0] = std::min(box[0], regs[k * 4 + 0] - reach); box[1] = std::min(box[1], regs[k * 4 + 1] - reach);
+                    box[2] = std::max(box[2], regs[k * 4 + 0] + reach); box[3] = std::max(box[3], regs[k * 4 + 1] + reach);
+                }
+                dev->SetPixelShaderConstantF(18, box, 1);
+                const float c15[4] = { static_cast<float>(n), g_settings.rippleSlope, 0.1f, 0.0f };
+                const float axes[8] = { vs9[0], vs9[1], vs9[2], 0.0f, vs9[4], vs9[5], vs9[6], 0.0f };
+                dev->SetPixelShaderConstantF(15, c15, 1);
+                dev->SetPixelShaderConstantF(16, axes, 2);
+                if (n) dev->SetPixelShaderConstantF(42, regs, n);
+            }
             for (int t = 0; t < covertable::kMaxCoverTextures; ++t)
             {
                 dev->SetTexture(t, g_coverTextures[t]);
@@ -2075,6 +2196,11 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             g_api->UiSliderFloat("Rim (x table)", &g_settings.rimMul, 0.0f, 3.0f);
             g_api->UiSliderFloat("Relax time (x table)", &g_settings.relaxMul, 0.1f, 10.0f);
             g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
+            g_api->UiCheckbox("Sand: still rings around footprints instead of trenches", &g_settings.ripples);
+            g_api->UiSliderFloat("Ring slope", &g_settings.rippleSlope, 0.0f, 1.5f);
+            std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made from %u prints found", static_cast<unsigned>(g_ripples.List().size()),
+                          g_ripplesMade, coverprints::PrintsFound());
+            g_api->UiText(line);
             g_api->UiCheckbox("The client's footprints on top of the cover", &g_settings.printsOnCover);
             std::snprintf(line, sizeof(line), "  footprints: %s; last draw %u, %u of them on the cover", coverprints::Status(),
                           coverprints::LastLive(), coverprints::LastOnCover());

@@ -5,6 +5,7 @@
 // Usage:  cover_prints_tests <Wow.exe> [<another copy of the 12340 client, e.g. the launcher's exe>]
 #include "features/CoverBlend.hpp"
 #include "features/CoverPrints.hpp"
+#include "features/CoverRipples.hpp"
 
 #include <windows.h>
 
@@ -18,6 +19,7 @@
 
 namespace cp = wxl_livingazeroth::coverprints;
 namespace blend = wxl_livingazeroth::cover::blend;
+namespace rp = wxl_livingazeroth::cover::ripples;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__)); } while (false)
 
@@ -243,6 +245,66 @@ int main(int argc, char** argv)
             CHECK(blend::DeformedDepth(0.1f, 0.4f, 0.0f, 1.0f, 0.0f, 1.0f) == 0.0f);   // fully pressed, soft: to the ground
             CHECK(blend::DeformedDepth(0.1f, 0.4f, 0.0f, 0.0f, 0.0f, 1.0f) == 0.1f);   // untouched
             std::printf("  %u combinations\n", n);
+        });
+
+        Test("new prints: the first walk only notes what is there; then each print put down counts once, dead ones never", []
+        {
+            std::vector<uint8_t> pool(cp::kPoolEntries * cp::kEntrySize, 0);
+            FakePrint a = MakePrint(3, 100.0f, 200.0f, 6), b = MakePrint(70, 110.0f, 205.0f, 3);
+            Put(pool, a, 6);
+            std::vector<cp::PrintSeen> seen;
+            std::vector<cp::NewPrint> found;
+            const auto walk = [&] { found.clear(); cp::FindNewPrints(pool.data(), seen, [&](const cp::NewPrint& p) { found.push_back(p); }); };
+            walk();
+            CHECK(found.empty() && seen.size() == cp::kPoolEntries && seen[3].live);  // there before anyone looked
+            walk();
+            CHECK(found.empty());                                                       // still the same print
+            Put(pool, b, 3);
+            walk();
+            CHECK(found.size() == 1 && found[0].entry == 70 && found[0].x == 110.0f && found[0].y == 205.0f &&
+                  std::fabs(found[0].z - Terrain(110.0f, 205.0f)) < 1e-6f);
+            FakePrint a2 = MakePrint(3, 100.5f, 200.0f, 6);                             // entry 3 reused for the next step
+            Put(pool, a2, 6);
+            walk();
+            CHECK(found.size() == 1 && found[0].entry == 3 && found[0].x == 100.5f);
+            const uint32_t zero = 0;                                                    // b runs out...
+            std::memcpy(pool.data() + 70 * cp::kEntrySize + cp::kEntryVertexCount, &zero, 4);
+            walk();
+            CHECK(found.empty() && !seen[70].live);
+            Put(pool, b, 3);                                                            // ...and a print comes back there
+            walk();
+            CHECK(found.size() == 1 && found[0].entry == 70);
+            const uint32_t huge = cp::kMaxVertices + 1;                                 // impossible counts are not prints
+            std::memcpy(pool.data() + 9 * cp::kEntrySize + cp::kEntryVertexCount, &huge, 4);
+            walk();
+            CHECK(found.empty() && !seen[9].live);
+        });
+
+        Test("sand's rings: sized by the print, full strength then easing out over the cover's relax time, the youngest 32 kept", []
+        {
+            CHECK(std::fabs(rp::RadiusFor(0.33f) - 0.198f) < 1e-6f && rp::RadiusFor(0.0f) == rp::RadiusFor(0.33f)); // unknown: a human's
+            CHECK(rp::RadiusFor(0.01f) == 0.08f && rp::RadiusFor(10.0f) == 1.2f);
+            CHECK(rp::Strength(0.0f, 10.0f) == 1.0f && rp::Strength(4.0f, 10.0f) == 1.0f);
+            CHECK(std::fabs(rp::Strength(7.0f, 10.0f) - 0.5f) < 1e-5f);
+            CHECK(rp::Strength(10.0f, 10.0f) == 0.0f && rp::Strength(12.0f, 10.0f) == 0.0f && rp::Strength(1.0f, 0.0f) == 0.0f);
+            float last = 1.0f;
+            for (float age = 4.0f; age <= 10.0f; age += 0.25f) { const float s = rp::Strength(age, 10.0f); CHECK(s <= last); last = s; }
+            rp::Set set;
+            for (int k = 0; k < rp::kMax + 5; ++k)
+            {
+                rp::Ripple r;
+                r.x = static_cast<float>(k);
+                r.born = static_cast<float>(k);
+                r.life = 100.0f;
+                set.Add(r);
+            }
+            CHECK(set.List().size() == static_cast<size_t>(rp::kMax));
+            for (const rp::Ripple& r : set.List()) CHECK(r.born >= 5.0f);  // the five oldest made room
+            set.Expire(104.5f);                                              // 5..36 live until 105..136
+            CHECK(set.List().size() == static_cast<size_t>(rp::kMax));
+            set.Expire(110.0f);                                              // born 5..10 gone
+            CHECK(set.List().size() == static_cast<size_t>(rp::kMax - 6));
+            for (const rp::Ripple& r : set.List()) CHECK(r.born > 10.0f);
         });
 
         std::printf("%u test groups passed\n", g_passed);

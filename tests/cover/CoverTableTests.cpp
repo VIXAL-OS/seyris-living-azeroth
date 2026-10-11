@@ -332,6 +332,13 @@ int main(int argc, char** argv)
                 CHECK(Near(v.tintStrength, 0.2f) && Near(v.zOffset, -0.015f) && v.stiffness == 0.0f && !ct::IsSnow(v.coverMaterial, 440, 1));
             }
             CHECK(At(kTanarisCrack).depth == 0.0f);
+            // No trenches in sand: rings around the prints instead (flag 0x10), on every sand row, the Caverns of
+            // Time's and the beaches' too; ash and snow keep their trenches.
+            for (const Spot* s : { &kTanarisSand, &kTanarisStone, &kSilithusHi, &kSilithus01, &kSilithusDet, &kCavernsBurn,
+                                   &kCavernsRock, &kAzuremystSand, &kAzuremystRocks, &kDarkshoreSand })
+                CHECK((At(*s).flags & ct::kFlagRipplePrints) && (At(*s).flags & ct::kFlagPreventUnderwater));
+            for (const Spot* s : { &kSearingAsh, &kDunMorogh })
+                CHECK(At(*s).depth > 0.0f && !(At(*s).flags & ct::kFlagRipplePrints));
             CHECK(sand.relaxSeconds < At(kSearingAsh).relaxSeconds && At(kSearingAsh).relaxSeconds < At(kDunMorogh).relaxSeconds);
         });
         Test("the Caverns of Time: sand on its floor's rock-base textures, each its own texture; the same textures bare in the rest of Tanaris", []
