@@ -13,6 +13,9 @@ Where (global texture rows; the terrain textures as a map scan of the zones foun
         SilithisSandDetail. These rows were already on (0.05..0.1 yd); now one sand behaviour. Not
         Tanaris' cracked ground, rock and dirt-path textures, Silithus' rock highlight row (its own
         0.01 yd dusting stays) or Westfall's sand rows.
+  Sand  in the Caverns of Time only (area 2300; rows scoped to it): TanarisRockBaseBurn and
+        TanarisRockBase01, which paint its floor over the sand (the client's sand footprints walk
+        on them there). Elsewhere in Tanaris they are its rock and stay bare.
 
 How: two parent materials carry the shared cover row, and each texture's material (Parent = Ash or
 Sand) adds its own CoverTexture (the terrain's own texture, so the cover looks like the ground it
@@ -32,7 +35,8 @@ BurningSteppsAsh01 material keeps its warmth (35 degC) and rest moisture.
         already near white: there it only pales a little. The averages were measured from the
         client's textures (3.3.5a, the _s variants have the same colours).
 
-IDs: materials, selectors and cover rows 50 (Ash) and 51 (Sand) and 52..56 (the new ash textures);
+IDs: materials, selectors and cover rows 50 (Ash) and 51 (Sand), 52..56 (the new ash textures) and 57, 58
+(the Caverns of Time's);
 the existing rows changed in place: materials 2, 3, 7, 8, 9 (Parent Sand) and 15 (Parent Ash), cover
 rows 2, 3, 7, 8, 9 and 14.
 
@@ -65,6 +69,15 @@ TEXTURES = [
     (r"Tileset\Silithis\SilithisSand01.blp",                        0x685635, 7,  None, 7,  I,    SAND),
     (r"Tileset\Silithis\SilithisSandhighlight.blp",                 0xA6946B, 8,  None, 8,  I,    SAND),
     (r"Tileset\Silithis\SilithisSandDetail.blp",                    0x4E3E27, 9,  None, 9,  0.06, SAND),
+]
+
+# The same, for one area only (selector ScopeType 2 = Area, ScopeID = the AreaTable ID): "it would also be dope if
+# we could have sand effects in the caverns of time" (the user, 2026-10-11). Its floor (area 2300) is painted with
+# Tanaris' rock-base textures over the sand.
+AREA_SCOPE, CAVERNS_OF_TIME = 2, 2300
+SCOPED = [
+    (r"Tileset\Tanaris\TanarisRockBaseBurn.blp",                    0x573A14, 57, 57,   57, I,    SAND, AREA_SCOPE, CAVERNS_OF_TIME),
+    (r"Tileset\Tanaris\TanarisRockBase01.blp",                      0xD2851F, 58, 58,   58, I,    SAND, AREA_SCOPE, CAVERNS_OF_TIME),
 ]
 
 
@@ -130,7 +143,8 @@ def main() -> None:
     changed += upsert(materials, material(SAND, "Sand"), io.GROUND_MATERIAL)
     for row in PARENT_COVERS:
         changed += upsert(covers, row, io.SURFACE_COVER)
-    for texture, average, material_id, selector_id, cover_id, depth, parent in TEXTURES:
+    for texture, average, material_id, selector_id, cover_id, depth, parent, scope, scope_id in (
+            [t + (0, 0) for t in TEXTURES] + SCOPED):
         name = texture.rsplit("\\", 1)[-1][:-4]
         old = next((m for m in materials if m[0] == material_id), None)
         if old:
@@ -140,7 +154,7 @@ def main() -> None:
             changed += upsert(materials, material(material_id, name, parent), io.GROUND_MATERIAL)
         if selector_id is not None:
             # ID, ScopeType, ScopeID, TexturePath, GroundEffectID, TerrainType, LiquidType, MaterialID, Flags
-            changed += upsert(selectors, (selector_id, 0, 0, texture, 0, -1, 0, material_id, 0), io.GROUND_MATERIAL_SELECTOR)
+            changed += upsert(selectors, (selector_id, scope, scope_id, texture, 0, -1, 0, material_id, 0), io.GROUND_MATERIAL_SELECTOR)
         elif not any(s[7] == material_id and s[3].lower() == texture.lower() for s in selectors):
             raise SystemExit(f"{paths['GroundMaterialSelector']}: no selector row puts material {material_id} on {texture}")
         # Depth (and with it Flags) where it differs from the parent; everything else from the parent.

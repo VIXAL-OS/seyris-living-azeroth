@@ -174,6 +174,11 @@ namespace
     const Spot kTanarisSand  { "Tanaris sand",            440,  1,   "tileset\\tanaris\\tanarissandbase01.blp", 4538, 7 };
     const Spot kTanarisStone { "Tanaris stony sand",      440,  1,   "tileset\\tanaris\\tanarissandstones.blp", 4539, 7 };
     const Spot kTanarisCrack { "Tanaris cracked ground",  440,  1,   "tileset\\tanaris\\tanariscrackedground.blp", 4540, -1 };
+    // The Caverns of Time (area 2300, in Tanaris): its floor's rock-base textures, and the same textures outside it.
+    const Spot kCavernsBurn  { "Caverns of Time floor (burnt rock base)", 2300, 1, "tileset\\tanaris\\tanarisrockbaseburn.blp", 0, 7 };
+    const Spot kCavernsRock  { "Caverns of Time floor (rock base)", 2300, 1, "tileset\\tanaris\\tanarisrockbase01.blp", 0, 7 };
+    const Spot kTanarisBurn  { "Tanaris burnt rock base", 440,  1,   "tileset\\tanaris\\tanarisrockbaseburn.blp", 0, -1 };
+    const Spot kTanarisRock  { "Tanaris rock base",       440,  1,   "tileset\\tanaris\\tanarisrockbase01.blp", 0, -1 };
     const Spot kSilithusHi   { "Silithus sand",           1377, 1,   "tileset\\silithis\\silithissandhighlight.blp", 7439, 7 };
     const Spot kSilithus01   { "Silithus sand 01",        1377, 1,   "tileset\\silithis\\silithissand01.blp", 7436, 7 };
     const Spot kSilithusDet  { "Silithus detail sand",    1377, 1,   "tileset\\silithis\\silithissanddetail.blp", 7441, 7 };
@@ -257,7 +262,8 @@ int main(int argc, char** argv)
     if (argc < 2) { std::printf("usage: cover_table_tests <data dir> [<data dir before the change>]\n"); return 2; }
     const std::string now = argv[1], before = argc > 2 ? argv[2] : "";
     const Spot* const kUnchanged[] = { &kDunMorogh, &kNorthSnow, &kWinterspring, &kWestfall, &kElwynnDirt, &kStormIce, &kElwynnGrass,
-                                       &kSteppesRock, &kSteppesLava, &kSilithusRock, &kTanarisCrack, &kBlasted, &kHellfire, &kBoneRock, &kBoneTiles };
+                                       &kSteppesRock, &kSteppesLava, &kSilithusRock, &kTanarisCrack, &kBlasted, &kHellfire, &kBoneRock, &kBoneTiles,
+                                       &kTanarisBurn, &kTanarisRock };
     try
     {
         std::vector<Seen> old;
@@ -272,6 +278,7 @@ int main(int argc, char** argv)
         std::printf("Resolved:\n");
         for (const Spot* s : { &kSearingAsh, &kSteppesAsh, &kSteppesCrack, &kSteppesChar, &kSteppesRock, &kBoneBase, &kBoneCracked, &kBoneHoles,
                                &kBoneRock, &kTanarisSand, &kTanarisStone, &kSilithusHi, &kSilithus01, &kSilithusDet, &kSilithusRock,
+                               &kCavernsBurn, &kCavernsRock, &kTanarisBurn, &kTanarisRock,
                                &kBlasted, &kHellfire, &kElwynnGrass, &kDunMorogh, &kNorthSnow })
             PrintSpot(*s);
 
@@ -320,6 +327,19 @@ int main(int argc, char** argv)
             }
             CHECK(At(kTanarisCrack).depth == 0.0f);
             CHECK(sand.relaxSeconds < At(kSearingAsh).relaxSeconds && At(kSearingAsh).relaxSeconds < At(kDunMorogh).relaxSeconds);
+        });
+        Test("the Caverns of Time: sand on its floor's rock-base textures, each its own texture; the same textures bare in the rest of Tanaris", []
+        {
+            const ct::Values burn = At(kCavernsBurn), rock = At(kCavernsRock);
+            CHECK(burn.material == 57 && EndsWith(CoverPath(burn), "TanarisRockBaseBurn.blp") && burn.tintColor == 0x926122u);
+            CHECK(rock.material == 58 && EndsWith(CoverPath(rock), "TanarisRockBase01.blp"));
+            for (const ct::Values& v : { burn, rock })
+            {
+                CHECK(mat::Parent(v.material) == 51 && Near(v.depth, 0.08f) && Near(v.relaxSeconds, 10.0f) && Near(v.maxSlope, 30.0f));
+                CHECK((v.flags & ct::kFlagPreventUnderwater) && Near(v.tintStrength, 0.2f) && !ct::IsSnow(v.coverMaterial, 2300, 1));
+            }
+            CHECK(At(kTanarisBurn).depth == 0.0f && At(kTanarisRock).depth == 0.0f);
+            CHECK(At(kTanarisBurn).material == 0 && At(kTanarisRock).material == 0);
         });
         Test("no cover: Elwynn grass, Burning Steppes rock and lava, the Blasted Lands, Hellfire", []
         {
