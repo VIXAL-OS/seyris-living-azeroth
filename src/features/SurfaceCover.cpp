@@ -250,6 +250,7 @@ namespace wxl_livingazeroth::cover
         std::unordered_map<unsigned long long, UnitPrints> g_unitPrints;
         float                              g_rippleClock = 0.0f;
         unsigned                           g_ripplesMade = 0;
+        unsigned                           g_ripplesShaped = 0;   // of them, following their print's own outline
         std::vector<coverprints::NewPrint> g_newPrints;
 
         // What the table sees where the player is (for the panel, so rows can be authored on the spot).
@@ -651,7 +652,7 @@ float4 rippleBox : register(c18);   // where any ring reaches, camera-relative (
 float4 dissolve : register(c19);    // the camera's world xy mod kDissolvePeriod, 1 / the dissolve's patch size (yd)
 float4 pcf[8] : register(c20);   // the terrain's PCF offsets (its PS c3..c10)
 float4 shadowM[12] : register(c30); // the terrain's shadow matrices (its VS c37..c48), from view space
-float4 ripples[96] : register(c42); // per print: (centre camera-relative, direction), (1 / semi-axes, strength, reach)
+float4 ripples[144] : register(c42); // per print, three registers: its outline's shape (CoverRipples.hpp PackRim)
 sampler2D cover0 : register(s0);
 sampler2D cover1 : register(s1);
 sampler2D cover2 : register(s2);
@@ -762,44 +763,81 @@ float CoverThreshold(float2 rel)
     // Never 0 or 1: past the ring every pixel goes, inside it every pixel stays.
     return saturate((n - 0.5) * 1.8 + 0.5) * 0.98 + 0.01;
 }
-// A still rim of sand around each of the client's footprints (features/CoverRipples.hpp): an oval through the print's
-// outline (semi-axes along and across its stride) scaled by kRimAt, kRimWidth of it wide ("would it be possible for
-// them to match the outlines of the footprints themselves?", the user). Two registers a print: (centre x, y relative to
-// the camera, the direction it points), (1 / its semi-axis along, 1 / across, strength, reach). Shading only: the
-// normal tilts by up to rippleInfo.y down the rim's slope, and the rim's height comes back as a little brightness. Where
-// a pixel spans more than a quarter of the rim's width it fades out instead of shimmering. px = the pixel's size in
-// yd. Unrolled (a pixel shader can't index constants by a counter); a print is passed over in a few instructions
-// where its rim can't reach.
-static const float kRimAt = 1.12;
-static const float kRimWidth = 0.55;
-float RippleRings(float2 rel, float px, inout float3 nn)
+)";
+        // The rims around prints in sand, kept apart so RimShaderSelfTest can draw them on their own.
+        const char* kRippleHlsl = R"(
+// A still rim of sand around each of the client's footprints (features/CoverRipples.hpp), following the print's own
+// outline: the boot, bare foot, hoof, claw or paw the client drew there, pointed and mirrored the way it drew it ("would
+// it be possible to make the rings into sand outlines around the prints themselves?", the user, 2026-10-12). The
+// outline's distance from its centre is 1 + sum a_k cos k t + b_k sin k t (k = 1..8, in units of its mean distance r0,
+// t the direction on the ground); the rim's centre line lies kRimOffset r0 outside it, kRimBand r0 wide. Three
+// registers a print: (centre relative to the camera, 1 / r0, its reach in 1/1024 yd + 0.99 x its strength), then the
+// coefficients two to a float (a_k + 1024 b_k, each 10 bits for -1..1); a print not in use has all zeros. Shading
+// only: the height comes back as a little brightness, and `grad` (world x, y) tilts the normal down the rim's slopes.
+// Where a pixel spans more than a quarter of the rim's width it fades out instead of shimmering. px = the pixel's size
+// in yd.
+// A pixel shader can't index constants by a counter, so the loop over the prints is unrolled; working out an outline
+// in every pass came to some 5,400 instruction slots, past what the GPU takes. So the loop only picks the (at most)
+// two prints whose rims can reach this pixel -- a few instructions each --, and only those two are worked out.
+static const float kRimOffset = 0.2;
+static const float kRimBand = 0.45;
+float2 CMul(float2 p, float2 q) { return float2(p.x * q.x - p.y * q.y, p.x * q.y + p.y * q.x); }
+float RimOne(float2 rel, float px, float4 a, float4 p1, float4 p2, inout float2 grad)
 {
-    float2 grad = 0;
+    float2 n = (rel - a.xy) * a.z;
+    float q = max(length(n), 1e-3);
+    float2 z1 = n / q;
+    float2 z2 = CMul(z1, z1), z3 = CMul(z2, z1), z4 = CMul(z2, z2);
+    float2 z5 = CMul(z4, z1), z6 = CMul(z4, z2), z7 = CMul(z4, z3), z8 = CMul(z4, z4);
+    float4 hi1 = floor(p1 * (1.0 / 1024)), hi2 = floor(p2 * (1.0 / 1024));
+    float4 ca1 = (p1 - hi1 * 1024) * (1.0 / 511.5) - 1, sb1 = hi1 * (1.0 / 511.5) - 1;
+    float4 ca2 = (p2 - hi2 * 1024) * (1.0 / 511.5) - 1, sb2 = hi2 * (1.0 / 511.5) - 1;
+    float4 c1 = float4(z1.x, z2.x, z3.x, z4.x), s1 = float4(z1.y, z2.y, z3.y, z4.y);
+    float4 c2 = float4(z5.x, z6.x, z7.x, z8.x), s2 = float4(z5.y, z6.y, z7.y, z8.y);
+    float r = 1 + dot(ca1, c1) + dot(sb1, s1) + dot(ca2, c2) + dot(sb2, s2);
+    float dr = dot(sb1 * c1 - ca1 * s1, float4(1, 2, 3, 4)) + dot(sb2 * c2 - ca2 * s2, float4(5, 6, 7, 8));
+    float ph = 6.28318531 * (q - r - kRimOffset) / kRimBand;
     float height = 0;
-    [unroll] for (int k = 0; k < 48; ++k)
+    [branch] if (abs(ph) < 3.14159265)
     {
-        float4 a = ripples[2 * k], b = ripples[2 * k + 1];
-        float2 dv = rel - a.xy;
-        [branch] if (k < rippleInfo.x && max(abs(dv.x), abs(dv.y)) < b.w)
-        {
-            float2 across = float2(-a.w, a.z);
-            float2 n = float2(dot(dv, a.zw), dot(dv, across)) * b.xy;
-            float q = max(length(n), 1e-3);
-            float ph = 6.28318531 * (q - kRimAt) / kRimWidth;
-            [branch] if (abs(ph) < 3.14159265)
-            {
-                float2 dq = n * b.xy / q;
-                float2 g = a.zw * dq.x + across * dq.y;
-                float gl = max(length(g), 1e-4);
-                float env = b.z * saturate(kRimWidth / gl / (4 * px) - 0.5);
-                grad += (-sin(ph) * env / gl) * g;
-                height += (0.5 + 0.5 * cos(ph)) * env;
-            }
-        }
+        // The band's slope: (cos t, sin t) - dr / q (-sin t, cos t), per r0; on the ground x 1 / r0.
+        float2 g = (z1 + (dr / q) * float2(z1.y, -z1.x)) * a.z;
+        float gl = max(length(g), 1e-4);
+        float env = frac(a.w) * (1.0 / 0.99) * saturate(kRimBand / gl / (4 * px) - 0.5);
+        grad += (-sin(ph) * env / gl) * g;
+        height = (0.5 + 0.5 * cos(ph)) * env;
     }
-    nn = normalize(nn - rippleInfo.y * (grad.x * rippleAxisX.xyz + grad.y * rippleAxisY.xyz));
     return height;
 }
+float RippleRings(float2 rel, float px, out float2 grad)
+{
+    grad = 0;
+    float height = 0;
+    // In a branch of its own (px is never negative): without one the compiler hoists the 48 reach tests ahead of the
+    // picking and runs out of temporary registers.
+    [branch] if (px >= 0)
+    {
+        float4 a0 = 0, b0 = 0, c0 = 0, a1 = 0, b1 = 0, c1 = 0;
+        float taken0 = 0, taken1 = 0;
+        [unroll] for (int k = 0; k < 48; ++k)
+        {
+            float4 a = ripples[3 * k];
+            float2 dv = abs(rel - a.xy);
+            // Within its reach (a.w's whole part, 1/1024 yd; never for a print not in use): the first two found.
+            float inside = max(dv.x, dv.y) * 1024 + 1 < a.w ? 1 : 0;
+            float second = inside * taken0, first = inside - second;
+            a1 = second > 0 ? a : a1; b1 = second > 0 ? ripples[3 * k + 1] : b1; c1 = second > 0 ? ripples[3 * k + 2] : c1;
+            a0 = first > 0 ? a : a0; b0 = first > 0 ? ripples[3 * k + 1] : b0; c0 = first > 0 ? ripples[3 * k + 2] : c0;
+            taken1 = max(taken1, second);
+            taken0 = max(taken0, inside);
+        }
+        [branch] if (taken0 > 0) height += RimOne(rel, px, a0, b0, c0, grad);
+        [branch] if (taken1 > 0) height += RimOne(rel, px, a1, b1, c1, grad);
+    }
+    return height;
+}
+)";
+        const char* kPsMainHlsl = R"(
 float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, float fog : TEXCOORD3, float4 tint : TEXCOORD4, float2 wuv : TEXCOORD5, float3 vpos : TEXCOORD6, float far : TEXCOORD7, float3 lamps : TEXCOORD8, float2 pixel : VPOS) : COLOR
 {
     clip(CoverVisibility(rel) - CoverThreshold(rel));
@@ -813,7 +851,12 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     float3 nn = normalize(n), l = normalize(light.xyz);
     float ripplePx = length(fwidth(rel));
     float rippleShade = 0;
-    [branch] if (rippleInfo.x > 0.5 && all(rel >= rippleBox.xy) && all(rel <= rippleBox.zw)) rippleShade = RippleRings(rel, ripplePx, nn);
+    [branch] if (rippleInfo.x > 0.5 && all(rel >= rippleBox.xy) && all(rel <= rippleBox.zw))
+    {
+        float2 rippleGrad;
+        rippleShade = RippleRings(rel, ripplePx, rippleGrad);
+        nn = normalize(nn - rippleInfo.y * (rippleGrad.x * rippleAxisX.xyz + rippleGrad.y * rippleAxisY.xyz));
+    }
     float ndl = saturate(dot(nn, l));
     float3 lit = min(ambient.rgb + diffuse.rgb * ndl, 1);
     // Cover textures, tiled in world space like the terrain's layers, mixed by their share here
@@ -1446,9 +1489,15 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             if (i < L.gridI || i >= L.gridI + kGridVerts || j < L.gridJ || j >= L.gridJ + kGridVerts) return;
             const int s = SlotOf(i, j);
             if (g_rippleCell[s] < 0.5f || g_static0[s] < kMinDrawnDepth) return;
+            // In sand: the rim follows the print's own outline where the client's placement of its texture could be
+            // read (an r0 of a hand's breadth to two yards); else the oval.
+            const bool shaped = p.mapped && ripples::ShapeFromPrint(static_cast<int>(p.texture), p.map, p.x, p.y, r.shape) &&
+                                r.shape.r0 > 0.01f && r.shape.r0 < 2.0f;
+            if (!shaped && !ripples::ShapeFromOval(p.x, p.y, r.axis, r.along, r.across, r.shape)) return;
             r.life = ripples::LifeFor(g_relaxCell[s] * g_settings.relaxMul);
             g_ripples.Add(r);
             ++g_ripplesMade;
+            if (shaped) ++g_ripplesShaped;
         }
 
         void Simulate(float dt)
@@ -1608,7 +1657,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     return fail("props textures failed");
 
             g_vs = static_cast<IDirect3DVertexShader9*>(Compile(dev, kVsHlsl, "vs_3_0", false));
-            g_ps = static_cast<IDirect3DPixelShader9*>(Compile(dev, kPsHlsl, "ps_3_0", true));
+            g_ps = static_cast<IDirect3DPixelShader9*>(Compile(dev, (std::string(kPsHlsl) + kRippleHlsl + kPsMainHlsl).c_str(), "ps_3_0", true));
             if (!g_vs || !g_ps) return fail("shader compile failed (see the log)");
             return true;
         }
@@ -2126,20 +2175,18 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
 
             // The rings around prints in sand (CoverRipples.hpp): c15 = how many, their slope and brightness change;
             // c16, c17 = the world's x and y axes in the space the cover is lit in (rows c9, c10 of the VS); c42.. =
-            // per print its centre (camera-relative), radius and strength now.
+            // per print its outline's shape about the camera and its strength now (PackRim, three registers).
             {
                 const std::vector<ripples::Ripple>& list = g_ripples.List();
                 const int n = g_settings.ripples ? static_cast<int>(std::min(list.size(), static_cast<size_t>(ripples::kMax))) : 0;
-                float regs[ripples::kMax * 8];
+                float regs[ripples::kMax * 4 * ripples::kRegistersPerRim] = {};   // all of them: a print not in use is zeros
                 float box[4] = { 1.0e9f, 1.0e9f, -1.0e9f, -1.0e9f }; // c18: where any rim reaches (the PS skips the rest)
                 for (int k = 0; k < n; ++k)
                 {
                     const ripples::Ripple& r = list[k];
-                    float* o = regs + k * 8;
-                    const float reach = ripples::kReach * std::max(r.along, r.across);
-                    o[0] = r.x - eye[0]; o[1] = r.y - eye[1]; o[2] = r.axis[0]; o[3] = r.axis[1];
-                    o[4] = 1.0f / r.along; o[5] = 1.0f / r.across;
-                    o[6] = ripples::Strength(g_rippleClock - r.born, r.life); o[7] = reach;
+                    float* o = regs + k * 4 * ripples::kRegistersPerRim;
+                    ripples::PackRim(r.shape, eye[0], eye[1], ripples::Strength(g_rippleClock - r.born, r.life), o);
+                    const float reach = r.shape.reach;
                     box[0] = std::min(box[0], o[0] - reach); box[1] = std::min(box[1], o[1] - reach);
                     box[2] = std::max(box[2], o[0] + reach); box[3] = std::max(box[3], o[1] + reach);
                 }
@@ -2148,7 +2195,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 const float axes[8] = { vs9[0], vs9[1], vs9[2], 0.0f, vs9[4], vs9[5], vs9[6], 0.0f };
                 dev->SetPixelShaderConstantF(15, c15, 1);
                 dev->SetPixelShaderConstantF(16, axes, 2);
-                if (n) dev->SetPixelShaderConstantF(42, regs, 2 * n);
+                dev->SetPixelShaderConstantF(42, regs, ripples::kRegistersPerRim * ripples::kMax);
             }
             for (int t = 0; t < covertable::kMaxCoverTextures; ++t)
             {
@@ -2364,8 +2411,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
             g_api->UiCheckbox("Sand: a still ring around each footprint instead of trenches", &g_settings.ripples);
             g_api->UiSliderFloat("Ring slope", &g_settings.rippleSlope, 0.0f, 1.5f);
-            std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made from %u prints found; on building floors %u live, %u made",
-                          static_cast<unsigned>(g_ripples.List().size()), g_ripplesMade, coverprints::PrintsFound(),
+            std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made (%u following the print's outline) from %u prints found; on building floors %u live, %u made",
+                          static_cast<unsigned>(g_ripples.List().size()), g_ripplesMade, g_ripplesShaped, coverprints::PrintsFound(),
                           static_cast<unsigned>(g_wmoRipples.List().size()), g_wmoRipplesMade);
             g_api->UiText(line);
             g_api->UiCheckbox("The client's footprints on top of the cover", &g_settings.printsOnCover);
@@ -2706,6 +2753,156 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             }
         }
         return std::string();
+    }
+
+    std::string RimShaderSelfTest(void* device)
+    {
+        auto* dev = static_cast<IDirect3DDevice9*>(device);
+        if (!dev) return "no device";
+        // Three prints about a camera off the origin: a boot turned 30 degrees, a paw turned the other way and mirrored
+        // (the other foot), and an oval for a print whose placement couldn't be read; the boot's and the oval's rims
+        // overlap. Strengths 1, 0.6 and 0.8.
+        const float eye[2] = { 1000.25f, 2000.5f };
+        const auto mapping = [](float turn, float acrossYd, float alongYd, bool mirrored, float map[6])
+        {
+            const float c = std::cos(turn), sn = std::sin(turn), m = mirrored ? -1.0f : 1.0f;
+            map[0] = m * -sn / acrossYd; map[1] = m * c / acrossYd; map[2] = 0.5f;   // u across the print
+            map[3] = -c / alongYd;       map[4] = -sn / alongYd;    map[5] = 0.5f;   // v from the toes back
+        };
+        ripples::Shape shapes[3];
+        float map[6];
+        mapping(0.52f, 0.15f, 0.33f, false, map);
+        bool ok = ripples::ShapeFromPrint(1, map, eye[0] - 0.25f, eye[1] - 0.2f, shapes[0]);
+        mapping(-1.1f, 0.3f, 0.3f, true, map);
+        ok = ripples::ShapeFromPrint(7, map, eye[0] + 0.3f, eye[1] - 0.15f, shapes[1]) && ok;
+        const float axis[2] = { 0.8f, 0.6f };
+        ok = ripples::ShapeFromOval(eye[0] - 0.05f, eye[1] + 0.2f, axis, 0.165f, 0.075f, shapes[2]) && ok;
+        if (!ok) return "shapes failed";
+        const float strength[3] = { 1.0f, 0.6f, 0.8f };
+        float regs[ripples::kMax * 4 * ripples::kRegistersPerRim] = {};
+        for (int k = 0; k < 3; ++k) ripples::PackRim(shapes[k], eye[0], eye[1], strength[k], regs + k * 4 * ripples::kRegistersPerRim);
+
+        int wholeSlots = -1;
+        constexpr int kSide = 120;
+        constexpr float kFrom = -0.65f, kTo = 0.65f, kPx = 1e-4f;   // rel covered; a pixel fine enough not to fade
+        IDirect3DSurface9* target = nullptr;
+        IDirect3DSurface9* readback = nullptr;
+        IDirect3DPixelShader9* ps = nullptr;
+        IDirect3DSurface9* oldTarget = nullptr;
+        IDirect3DStateBlock9* savedState = nullptr;
+        const auto cleanup = [&]()
+        {
+            if (target) target->Release();
+            if (readback) readback->Release();
+            if (ps) ps->Release();
+            if (oldTarget) { dev->SetRenderTarget(0, oldTarget); oldTarget->Release(); }
+            if (savedState) { savedState->Apply(); savedState->Release(); }
+        };
+        if (FAILED(dev->CreateRenderTarget(kSide, kSide, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
+            FAILED(dev->CreateOffscreenPlainSurface(kSide, kSide, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
+        { cleanup(); return "render target creation failed"; }
+        {
+            HMODULE m = GetModuleHandleA("d3dcompiler_47.dll");
+            if (!m) m = LoadLibraryA("d3dcompiler_47.dll");
+            const auto compile = m ? reinterpret_cast<pD3DCompile>(GetProcAddress(m, "D3DCompile")) : nullptr;
+            const std::string src = std::string("float4 ripples[144] : register(c42);\nfloat4 testMap : register(c0);\n") +
+                                    kRippleHlsl + "float4 main(float2 rel : TEXCOORD0) : COLOR { float2 g; float h = RippleRings(rel, testMap.w, g); return float4(h, g, 1); }";
+            ID3DBlob* code = nullptr;
+            ID3DBlob* err = nullptr;
+            const HRESULT hr = compile ? compile(src.c_str(), src.size(), nullptr, nullptr, nullptr, "main", "ps_3_0", 0, 0, &code, &err) : E_FAIL;
+            std::string why = err ? static_cast<const char*>(err->GetBufferPointer()) : std::string();
+            if (err) err->Release();
+            if (FAILED(hr) || !code || FAILED(dev->CreatePixelShader(static_cast<const DWORD*>(code->GetBufferPointer()), &ps)))
+            { if (code) code->Release(); cleanup(); return "rim shader failed: " + why; }
+            code->Release();
+            // The cover's whole pixel shader, as the game compiles it (only there otherwise): it must still compile.
+            const std::string whole = std::string(kPsHlsl) + kRippleHlsl + kPsMainHlsl;
+            code = nullptr;
+            err = nullptr;
+            const HRESULT wholeHr = compile(whole.c_str(), whole.size(), nullptr, nullptr, nullptr, "main", "ps_3_0", 0, 0, &code, &err);
+            why = err ? static_cast<const char*>(err->GetBufferPointer()) : std::string();
+            if (err) err->Release();
+            IDirect3DPixelShader9* wholePs = nullptr;
+            if (FAILED(wholeHr) || !code || FAILED(dev->CreatePixelShader(static_cast<const DWORD*>(code->GetBufferPointer()), &wholePs)))
+            { if (code) code->Release(); cleanup(); return "the cover's pixel shader failed: " + why; }
+            wholePs->Release();
+            using Disassemble = HRESULT(WINAPI*)(const void*, SIZE_T, UINT, const char*, ID3DBlob**);
+            const auto disassemble = reinterpret_cast<Disassemble>(GetProcAddress(m, "D3DDisassemble"));
+            ID3DBlob* text = nullptr;
+            if (disassemble && SUCCEEDED(disassemble(code->GetBufferPointer(), code->GetBufferSize(), 0, nullptr, &text)) && text)
+            {
+                const std::string t(static_cast<const char*>(text->GetBufferPointer()), text->GetBufferSize());
+                const size_t at = t.find("instruction slots used");
+                const size_t from = at == std::string::npos ? std::string::npos : t.rfind("approximately ", at);
+                if (from != std::string::npos) wholeSlots = std::atoi(t.c_str() + from + 14);
+                text->Release();
+            }
+            code->Release();
+        }
+        dev->GetRenderTarget(0, &oldTarget);
+        dev->CreateStateBlock(D3DSBT_ALL, &savedState);
+        struct V { float x, y, z, w, u, v; };
+        const float e = static_cast<float>(kSide) - 0.5f;
+        const V quad[4] = { { -0.5f, -0.5f, 0, 1, kFrom, kFrom }, { e, -0.5f, 0, 1, kTo, kFrom }, { -0.5f, e, 0, 1, kFrom, kTo }, { e, e, 0, 1, kTo, kTo } };
+        if (FAILED(dev->SetRenderTarget(0, target))) { cleanup(); return "set render target failed"; }
+        D3DVIEWPORT9 vp{ 0, 0, kSide, kSide, 0.0f, 1.0f };
+        dev->SetViewport(&vp);
+        dev->SetRenderState(D3DRS_ZENABLE, FALSE); dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+        dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE); dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+        dev->SetVertexShader(nullptr); dev->SetPixelShader(ps);
+        dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        const float c0[4] = { 0.0f, 0.0f, 0.0f, kPx };
+        dev->SetPixelShaderConstantF(0, c0, 1);
+        dev->SetPixelShaderConstantF(42, regs, ripples::kRegistersPerRim * ripples::kMax);
+        if (FAILED(dev->BeginScene())) { cleanup(); return "begin scene failed"; }
+        dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(V));
+        dev->EndScene();
+        D3DLOCKED_RECT lr{};
+        if (FAILED(dev->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY)))
+        { cleanup(); return "read back failed"; }
+        std::vector<float> gpu(static_cast<size_t>(kSide) * kSide * 4);
+        for (int row = 0; row < kSide; ++row)
+            std::memcpy(&gpu[static_cast<size_t>(row) * kSide * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, kSide * 16);
+        readback->UnlockRect();
+        cleanup();
+
+        // The same from CoverRipples' RimShade, with the shapes as the shader got them.
+        ripples::Shape seen[3];
+        float seenStrength[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            const float* o = regs + k * 4 * ripples::kRegistersPerRim;
+            seen[k] = ripples::AsPacked(shapes[k]);
+            seen[k].cx = o[0]; seen[k].cy = o[1]; seen[k].r0 = 1.0f / o[2];
+            seenStrength[k] = (o[3] - std::floor(o[3])) / 0.99f;
+        }
+        float worstH = 0.0f, worstG = 0.0f, mostG = 0.0f, peak = 0.0f;
+        int lit = 0, outside = 0;
+        for (int j = 0; j < kSide; ++j)
+            for (int i = 0; i < kSide; ++i)
+            {
+                const float x = kFrom + (i + 0.5f) / kSide * (kTo - kFrom), y = kFrom + (j + 0.5f) / kSide * (kTo - kFrom);
+                float h = 0.0f, g[2] = { 0.0f, 0.0f };
+                for (int k = 0; k < 3; ++k)
+                {
+                    const float band = ripples::RimShade(seen[k], seenStrength[k], x, y, kPx, h, g);
+                    // Past the reach the shader never looks: the rim must be over by then.
+                    if (std::max(std::fabs(x - seen[k].cx), std::fabs(y - seen[k].cy)) >= shapes[k].reach && band < ripples::kRimOffset + 0.5f * ripples::kRimBand)
+                        ++outside;
+                }
+                const float* p = &gpu[(static_cast<size_t>(j) * kSide + i) * 4];
+                worstH = std::max(worstH, std::fabs(p[0] - h));
+                worstG = std::max(worstG, std::hypot(p[1] - g[0], p[2] - g[1]));
+                mostG = std::max(mostG, std::hypot(g[0], g[1]));
+                peak = std::max(peak, p[0]);
+                lit += p[0] > 0.05f ? 1 : 0;
+            }
+        char line[320];
+        std::snprintf(line, sizeof(line), "rims: GPU against CoverRipples over %d x %d pixels: height off by up to %.4f (peak %.3f, %d pixels lit), slope by %.4f of %.3f; %d inside a rim past its reach; the cover's pixel shader compiles at %d instruction slots",
+                      kSide, kSide, worstH, peak, lit, worstG, mostG, outside, wholeSlots);
+        if (worstH > 0.02f || worstG > 0.02f * mostG || peak < 0.9f || lit < 300 || outside || wholeSlots <= 0 || wholeSlots > 3500)
+            return std::string("FAIL ") + line;
+        return line;
     }
 
     unsigned WmoRings(float* out, unsigned max)

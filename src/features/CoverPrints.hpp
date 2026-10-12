@@ -20,8 +20,12 @@
 // drawn above the terrain are left alone.
 //
 // Print pool (0x79FCC0 and 0x79FA70): 0x240 entries of 0x34 bytes at 0xCF4960 (the active player's in
-// the first 0x40): +0x00 the print's position (x, y, z), +0x20 its vertex count, +0x24 its vertices,
-// 0x1C bytes each, position first. A print that runs out keeps its vertex memory: 0x79F980 only lowers
+// the first 0x40): +0x00 the print's position (x, y, z), +0x10 its footprint texture (FootprintTextures.dbc's
+// ID: the print draw groups the prints by it, into a table the client fills by that ID at 0x7A03C0), +0x20
+// its vertex count, +0x24 its vertices, 0x1C bytes each: position, then the texture's coordinates (+0x0C,
+// texture coordinate 0 of the drawn vertex: the texture projected from above, turned the way the unit faces,
+// stretched to the print's length and width and mirrored for the other foot, at 0x79F760 and 0x7E2D60), then a
+// second pair (+0x14, the projection's height). A print that runs out keeps its vertex memory: 0x79F980 only lowers
 // the count. Every address and layout this relies on is checked byte for byte against the 12340 client
 // before the hook goes in (kGuards; tests/cover checks them against Wow.exe itself).
 #pragma once
@@ -63,8 +67,10 @@ namespace wxl_livingazeroth::coverprints
     constexpr uint32_t  kEntryPosition = 0x00;
     constexpr uint32_t  kEntryVertexCount = 0x20;
     constexpr uint32_t  kEntryVertices = 0x24;
+    constexpr uint32_t  kEntryTexture = 0x10;
     constexpr uint32_t  kVertexSize = 0x1C;
     constexpr uint32_t  kVertexZ = 0x08;
+    constexpr uint32_t  kVertexUV = 0x0C;
     constexpr uint32_t  kMaxVertices = 3 * 512; // sanity: a print is a few terrain triangles
 
     // A print counts as lying on the terrain when its first vertices are within this of the terrain's
@@ -101,6 +107,19 @@ namespace wxl_livingazeroth::coverprints
           0x89, 0x4B, 0x04, 0x8B, 0x57, 0x08}},
         {"print vertex array: lowering the count keeps the memory", 0x0079F98A, 7,
          {0x3B, 0x77, 0x04, 0x76, 0x70, 0x3B, 0x37}},
+        {"print add: the footprint texture stored at the entry's +0x10", 0x0079FB75, 24,
+         {0x8B, 0x57, 0x08, 0x8B, 0x0D, 0xAC, 0x76, 0xCD, 0x00, 0x89, 0x4B, 0x18, 0x8D, 0x8D, 0x38, 0xFF, 0xFF, 0xFF,
+          0x89, 0x53, 0x08, 0x89, 0x43, 0x10}},
+        {"print add: a vertex's second half from +0x14", 0x0079FC1B, 3, {0x8D, 0x7B, 0x14}},
+        {"print add: the texture's coordinates at the vertex's +0x0C", 0x0079FC58, 24,
+         {0xE8, 0x93, 0x51, 0xD2, 0xFF, 0x8B, 0x08, 0x89, 0x4F, 0xF8, 0x8B, 0x50, 0x04, 0x8D, 0x85, 0xF8, 0xFE, 0xFF,
+          0xFF, 0x50, 0x8D, 0x4D, 0xB8, 0x56}},
+        {"print draw: grouped by the entry's texture", 0x0079FD78, 17,
+         {0x8B, 0x46, 0x10, 0x8D, 0x14, 0x40, 0xA1, 0x68, 0xBE, 0xCF, 0x00, 0x8D, 0x4D, 0xFC, 0x8D, 0x1C, 0xD0}},
+        {"print draw: texture coordinate 0 from the vertex's +0x0C", 0x007A0033, 12,
+         {0x8B, 0x59, 0xF8, 0x89, 0x5E, 0x1C, 0x8B, 0x59, 0xFC, 0x89, 0x5E, 0x20}},
+        {"print textures: the table filled by FootprintTextures' ID", 0x007A0431, 15,
+         {0x8B, 0x07, 0x8B, 0x15, 0x68, 0xBE, 0xCF, 0x00, 0x8D, 0x0C, 0x40, 0x83, 0x3C, 0xCA, 0x00}},
         {"world render: the scene, then the prints", 0x004F909F, 10,
          {0xE8, 0x4C, 0x5F, 0x28, 0x00, 0xE8, 0xC7, 0x5F, 0x28, 0x00}},
         {"world render: the prints' thunk", 0x0077F070, 5,
@@ -186,12 +205,70 @@ namespace wxl_livingazeroth::coverprints
         }
     }
 
-    /// A print the client has just put down: its pool entry and the position stored at the entry's start.
+    /// A print the client has just put down: its pool entry, the position stored at the entry's start, its footprint
+    /// texture (FootprintTextures.dbc ID), and, when its vertices give it (`mapped`), the texture's coordinates over
+    /// the ground about that position (FitPrintMapping).
     struct NewPrint
     {
         uint32_t entry;
         float    x, y, z;
+        uint32_t texture = 0;
+        bool     mapped = false;
+        float    map[6] = {};
     };
+
+    /// How far a vertex's texture coordinates may stray from the fitted mapping (the client's projection is exact up to
+    /// float rounding).
+    constexpr float kMapFitError = 0.02f;
+
+    /// The print's texture coordinates over the ground, from its vertices: least squares u = map[0] dx + map[1] dy +
+    /// map[2], v = map[3] dx + map[4] dy + map[5] with (dx, dy) = (x - px, y - py). False when the vertices don't pin it
+    /// down (fewer than three, or in a line) or don't follow one such mapping (by more than kMapFitError).
+    inline bool FitPrintMapping(const uint8_t* vertices, uint32_t count, float px, float py, float map[6])
+    {
+        if (!vertices || count < 3 || count > kMaxVertices) return false;
+        double m[3][3] = {}, ru[3] = {}, rv[3] = {};
+        for (uint32_t k = 0; k < count; ++k)
+        {
+            const uint8_t* p = vertices + k * kVertexSize;
+            const double b[3] = { static_cast<double>(ReadFloat(p)) - px, static_cast<double>(ReadFloat(p + 4)) - py, 1.0 };
+            const double u = ReadFloat(p + kVertexUV), v = ReadFloat(p + kVertexUV + 4);
+            if (!std::isfinite(b[0]) || !std::isfinite(b[1]) || !std::isfinite(u) || !std::isfinite(v)) return false;
+            for (int i = 0; i < 3; ++i)
+            {
+                for (int j = 0; j < 3; ++j) m[i][j] += b[i] * b[j];
+                ru[i] += b[i] * u;
+                rv[i] += b[i] * v;
+            }
+        }
+        // Cramer's rule on the normal equations.
+        const auto det = [](const double a[3][3])
+        {
+            return a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+                   a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+        };
+        const double d = det(m);
+        if (!(std::fabs(d) > 1e-6 * m[0][0] * m[1][1] * m[2][2]) || !(m[0][0] > 0.0) || !(m[1][1] > 0.0)) return false;
+        double sol[6];
+        for (int c = 0; c < 3; ++c)
+        {
+            double mu[3][3], mv[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) { mu[i][j] = j == c ? ru[i] : m[i][j]; mv[i][j] = j == c ? rv[i] : m[i][j]; }
+            sol[c] = det(mu) / d;
+            sol[3 + c] = det(mv) / d;
+        }
+        for (uint32_t k = 0; k < count; ++k)
+        {
+            const uint8_t* p = vertices + k * kVertexSize;
+            const double dx = static_cast<double>(ReadFloat(p)) - px, dy = static_cast<double>(ReadFloat(p + 4)) - py;
+            if (std::fabs(sol[0] * dx + sol[1] * dy + sol[2] - ReadFloat(p + kVertexUV)) > kMapFitError ||
+                std::fabs(sol[3] * dx + sol[4] * dy + sol[5] - ReadFloat(p + kVertexUV + 4)) > kMapFitError)
+                return false;
+        }
+        for (int i = 0; i < 6; ++i) map[i] = static_cast<float>(sol[i]);
+        return true;
+    }
     /// What the last walk saw in a pool entry.
     struct PrintSeen
     {
@@ -217,7 +294,14 @@ namespace wxl_livingazeroth::coverprints
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) { s.live = false; continue; }
             const bool fresh = !s.live || std::fabs(x - s.x) > 0.01f || std::fabs(y - s.y) > 0.01f;
             s.x = x; s.y = y; s.live = true;
-            if (fresh && !first) onNew(NewPrint{ e, x, y, z });
+            if (fresh && !first)
+            {
+                NewPrint p{ e, x, y, z };
+                p.texture = ReadU32(entry + kEntryTexture);
+                p.mapped = FitPrintMapping(reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(ReadU32(entry + kEntryVertices))),
+                                           count, x, y, p.map);
+                onNew(p);
+            }
         }
     }
 

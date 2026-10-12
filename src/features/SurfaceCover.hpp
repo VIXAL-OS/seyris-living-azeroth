@@ -48,6 +48,10 @@ namespace wxl_livingazeroth::cover
     /// on a device of their own): a level of random data, then scattered cells, a row strip and a column strip
     /// (across the wrap) changed. Empty when what the GPU holds agrees bit for bit; else what differed.
     std::string PartialUploadSelfTest(void* device);
+    /// The rims around prints in sand drawn by the GPU (the cover's own RippleRings, on a device of their own, tests)
+    /// against CoverRipples' RimShade: a boot, a mirrored paw and an oval, two of them overlapping. A line saying how
+    /// close they came, starting with "FAIL " when they don't agree or a rim reaches past where the shader looks.
+    std::string RimShaderSelfTest(void* device);
 
     /// How far the cover drawn in this scene rises above the terrain at world (x, y), where the terrain
     /// is at terrainZ (yd): its top there as the near level draws it (trenches included), 0 where none
