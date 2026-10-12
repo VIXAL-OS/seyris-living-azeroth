@@ -25,11 +25,26 @@ namespace wxl_livingazeroth::climate
         float    seasonAmplitude = 12.0f; // degC between midsummer and midwinter
         float    seasonOffset = 0.0f;     // months the seasons are shifted (6 = flipped)
         float    humidity = 0.5f;         // 0 dry air .. 1 saturated (slows drying; later fog, dust)
+        float    fogginess = 0.0f;        // 0 .. 1: how foggy the place is by nature (area fog, more mist)
         uint32_t flags = 0;               // reserved
     };
 
-    /// The resolved row for a place (area chain + map), cached per (area, map).
+    /// The resolved row for a place (area chain + map), cached per (area, map). A hard step at every
+    /// area border: for "the climate here", use At().
     const Row& For(uint32_t areaId, int mapId);
+
+    /// The climate at a world position, blended across area borders: each terrain chunk (33 yd)
+    /// takes its area's row, averaged with its 8 neighbours, interpolated between chunk centres, so
+    /// crossing a border changes temperature, humidity and fogginess over ~100 yd instead of at
+    /// once. Within ~800 yd of the player (the blend map follows); beyond it, or before its chunks
+    /// are known, the area's own row. Flags are the chunk's own.
+    Row At(float x, float y);
+    /// The areas At() mixes at a world position and their weights (summing to 1): the same four chunk
+    /// centres and 3x3 means, by area. For blending other per-area values (the fog's kind settings)
+    /// the same way. Returns how many were written (0: nothing known around).
+    int AreaWeightsAt(float x, float y, uint32_t* areas, float* weights, int max);
+    /// At() where the player is.
+    Row Here();
 
     /// The clock the climate runs on: game date and time from the client (the server's), the time of
     /// day from the day-night system (what the sky shows).
@@ -52,6 +67,12 @@ namespace wxl_livingazeroth::climate
         float total = 0.0f;
     };
     Breakdown Temperature(const Row& row);
+    /// The same at another time of day (0..1, wraps): today's season and weather, e.g. an hour ago
+    /// (the ground fog's "is it cooling?").
+    Breakdown TemperatureAtTime(const Row& row, float dayFraction);
+    /// degC of standing water: the day's mean plus the season, without the weather's chill (water
+    /// lags the air, so cool evenings over lakes make fog).
+    float WaterTemperature(const Row& row);
     float     TemperatureAt(uint32_t areaId, int mapId);
 
     /// The sun: the direction toward it (world space, z up) and how much it shines (0 at night .. 1

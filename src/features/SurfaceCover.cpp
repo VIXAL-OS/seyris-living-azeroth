@@ -1,4 +1,5 @@
 #include "SurfaceCover.hpp"
+#include "../debug/Pages.hpp"
 
 #include "../debug/Profiler.hpp"
 #include "../env/Actors.hpp"
@@ -199,6 +200,8 @@ namespace wxl_livingazeroth::cover
             int   gridI = 0, gridJ = 0;     // world cell index (of this level) of the grid's first vertex
             int   refreshRow = 0;
             bool  baseDirty = true, coverDirty = true;
+            int   coverCells = 0;           // cells with cover of their own (depth or painted snow), kept as they're sampled
+            int   snowCells = 0;            // cells where fallen snow could settle (snow share)
             unsigned holes = 0;
             double   fillMs = 0, firstFillMs = 0;
             IDirect3DTexture9* baseTex = nullptr;
@@ -1284,6 +1287,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 breakup != L.breakup[s] || drift != L.drift[s] || edge != L.edgeNoise[s] || stiff != L.stiff[s] ||
                 snowShare != L.snowShare[s] || paintedSnow != L.paintedSnow[s])
             {
+                L.coverCells += ((b.depth > 0.0f || paintedSnow) ? 1 : 0) - ((L.depth[s] > 0.0f || L.paintedSnow[s]) ? 1 : 0);
+                L.snowCells += (snowShare ? 1 : 0) - (L.snowShare[s] ? 1 : 0);
                 L.material[s] = material; L.depth[s] = b.depth; L.slope[s] = slopeF; L.driftAmp[s] = driftAmp;
                 L.breakup[s] = breakup; L.drift[s] = drift; L.edgeNoise[s] = edge; L.stiff[s] = stiff;
                 L.snowShare[s] = snowShare; L.paintedSnow[s] = paintedSnow;
@@ -1832,6 +1837,16 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
 
         bool UploadLevel(Level& L, bool isLevel0)
         {
+            // No cell with cover of its own, and no fallen snow to settle where it could: nothing to fold
+            // or upload. The dirty flags stay, so the textures catch up the moment cover appears (snow
+            // starting re-folds through the snow path). (A recentre marks everything dirty: walking
+            // re-folded and re-uploaded whole empty levels, ~3 ms CPU + ~4 ms GPU.)
+            if (L.coverCells <= 0 && (L.snowCells <= 0 || !fields::SnowActive()))
+            {
+                L.coverMayDraw = false;
+                if (isLevel0) { g_changed.clear(); g_changedPending = false; } // no trenches without cover
+                return true;
+            }
             D3DLOCKED_RECT lr{};
             // The base: in full after a fill (or a device reset), else only the cells sampled to a new value.
             if (L.baseDirty)
@@ -1992,12 +2007,19 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             if (!graphics || !wxl::game::gfx::SceneMatrices(V, P)) { g_inactive = "no scene matrices"; return; }
             std::memcpy(P, static_cast<const uint8_t*>(graphics) + kDeviceRenderProjection, sizeof(P));
 
-            EnsureCoverTextures(dev);
             double t0 = grassperf::Now();
-            g_snowLookups = 0;
-            for (int k = 0; k < levels; ++k)
-                if (g_levels[k].haveGrid && !UploadLevel(g_levels[k], k == 0)) { g_inactive = "texture upload failed"; return; }
+            {
+                prof::Scope uploads(prof::kOursCoverUpload);
+                EnsureCoverTextures(dev);
+                g_snowLookups = 0;
+                for (int k = 0; k < levels; ++k)
+                    if (g_levels[k].haveGrid && !UploadLevel(g_levels[k], k == 0)) { g_inactive = "texture upload failed"; return; }
+            }
             g_uploadMs = grassperf::Now() - t0;
+            // No cover anywhere around (a zone without any, e.g. Duskwood): nothing to draw.
+            bool anyCover = false;
+            for (int k = 0; k < levels; ++k) anyCover = anyCover || g_levels[k].ShouldDraw();
+            if (!anyCover) { g_inactive = "no cover around (nothing to draw)"; return; }
             t0 = grassperf::Now();
 
             // Keep sampling/uploading empty grids so terrain streaming, snow, and
@@ -2624,7 +2646,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             g_settings.drawPoint = 1;
         }
         coverprints::Install(api); // the client's footprints on top of the cover
-        api->UiAddPanel(kPanelTitle, &Panel, nullptr);
+        pages::AddPanel(kPanelTitle, &Panel);
     }
 
     void PatchLightStats(unsigned& most, unsigned& full) { most = g_patchLightsMost; full = g_patchLightsFull; }
@@ -2694,6 +2716,9 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             L->lookless[s] = rnd() % 10 == 0 ? 1 : 0;
         };
         for (int s = 0; s < kTex * kTex; ++s) fill(s);
+        // The cells were written directly, not sampled: count the ones with cover, or UploadLevel skips the level as empty.
+        for (int s = 0; s < kTex * kTex; ++s) L->coverCells += (L->depth[s] > 0.0f || L->paintedSnow[s]) ? 1 : 0;
+        if (L->coverCells <= 0) { cleanup(); return "random fill left no cover"; }
         L->baseDirty = L->coverDirty = true;
         L->lookDirty.All();
         if (!UploadLevel(*L, false)) { cleanup(); return "full upload failed"; }
@@ -2985,6 +3010,13 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         return above > 0.0f ? above : 0.0f;
     }
 
+    bool SeenSceneFog(float vsFog[4], float psFogColor[4])
+    {
+        std::memcpy(vsFog, g_seenFog, sizeof(g_seenFog));
+        std::memcpy(psFogColor, g_seenFogColor, sizeof(g_seenFogColor));
+        return g_seenScene;
+    }
+
     void Update(float dt, const world::Snapshot& snap)
     {
         // Leaving the world (logout, loading screens without a player) unloads every tile: drop
@@ -3082,7 +3114,9 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         }
 
         // New snow values (fallen snow, painted snow melting): one level re-folds its depth per frame.
-        // While there's no snow anywhere and the last fold had none either, there's nothing to redo.
+        // While there's no snow anywhere and the last fold had none either, there's nothing to redo;
+        // nor in a level without a single cell snow can change (its fold would come out the same:
+        // it re-folded every frame in zones without cover, ~2.8 ms CPU + GPU for nothing).
         {
             const uint32_t version = fields::SnowVersion();
             const bool active = fields::SnowActive();
@@ -3091,6 +3125,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 const int k = (g_snowCursor + n) % levels;
                 Level& L = g_levels[k];
                 if (!L.haveGrid || L.snowVersion == version) continue;
+                if (L.snowCells <= 0 && L.coverCells <= 0) { L.snowVersion = version; continue; } // nothing snow can change here
                 L.snowVersion = version;
                 if (active || L.snowFolded) L.coverDirty = true;
                 L.snowFolded = active;

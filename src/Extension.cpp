@@ -22,6 +22,15 @@
 #include "debug/SurfaceView.hpp"
 #include "debug/WindView.hpp"
 #include "debug/WmoBindProbe.hpp"
+#include "debug/FogProbe.hpp"
+#include "debug/Overview.hpp"
+#include "debug/Pages.hpp"
+#include "env/ClientWeather.hpp"
+#include "env/Fog.hpp"
+#include "env/FogSettings.hpp"
+#include "features/FogWake.hpp"
+#include "features/GroundFog.hpp"
+#include "debug/FogView.hpp"
 #include "env/Actors.hpp"
 #include "env/Climate.hpp"
 #include "env/Fields.hpp"
@@ -29,6 +38,7 @@
 #include "env/Regional.hpp"
 #include "env/Wind.hpp"
 #include "env/WorldQuery.hpp"
+#include "features/DoodadFade.hpp"
 #include "features/DoodadLightTable.hpp"
 #include "features/GrassDensity.hpp"
 #include "features/GrassDistanceCap.hpp"
@@ -83,6 +93,9 @@ namespace
         if (done) return;
         done = true;
 
+        // The panels: as pages of wxl-seyris-tools' control panel, or plain overlay panels without it.
+        wxl_livingazeroth::pages::Publish(g_api);
+
         const auto* cdbc = static_cast<const WXL_SeyrisCdbcApi*>(
             g_api->GetInterface(WXL_SEYRIS_CDBC_INTERFACE_NAME, WXL_SEYRIS_CDBC_INTERFACE_VERSION));
         wxl_livingazeroth::debug::SetWindCdbc(cdbc);
@@ -91,6 +104,7 @@ namespace
         wxl_livingazeroth::grassdensity::Load(cdbc);
         wxl_livingazeroth::cover::LoadTable(cdbc);
         wxl_livingazeroth::climate::Load(cdbc);
+        wxl_livingazeroth::fogsettings::Load(cdbc);
         wxl_livingazeroth::debug::SetClimateCdbc(cdbc);
         wxl_livingazeroth::lighttable::Load(cdbc);
         wxl_livingazeroth::debug::SetLightsCdbc(cdbc);
@@ -133,6 +147,8 @@ namespace
         const auto* a = static_cast<const ev::UpdateArgs*>(args);
         const float dt = a ? a->dt : 0.0f;
         namespace prof = wxl_livingazeroth::prof;
+        wxl_livingazeroth::clientweather::Apply();
+        wxl_livingazeroth::doodadfade::Update();
         const auto& snap = wxl_livingazeroth::world::Refresh();
         {
             prof::Scope scope(prof::kOursEnv);
@@ -142,6 +158,11 @@ namespace
             if (snap.inWorld)
                 wxl_livingazeroth::actors::Refresh(snap.playerPos, wxl_livingazeroth::grass::kActorRange);
             wxl_livingazeroth::fields::Update(dt, snap);
+        }
+        {
+            prof::Scope scope(prof::kOursFogField);
+            wxl_livingazeroth::fog::Update(dt, snap);
+            wxl_livingazeroth::fogwake::Update(dt, snap);
         }
         {
             prof::Scope scope(prof::kOursLights);
@@ -166,6 +187,7 @@ namespace
         wxl_livingazeroth::depth::OnDeviceLost();
         wxl_livingazeroth::grassinst::OnDeviceLost();
         wxl_livingazeroth::postaa::OnDeviceLost();
+        wxl_livingazeroth::groundfog::OnDeviceLost();
         wxl_livingazeroth::prof::OnDeviceLost();
     }
 }
@@ -180,6 +202,9 @@ int __cdecl WXL_Load(const WXL_Api* api)
     if (!api) return 0;
     g_api = api;
     if (api->PublishInterface) api->PublishInterface(kWxlRainSignalName, kWxlRainSignalVersion, &g_rainSignal);
+
+    // The overview first among the pages (pages are listed in registration order).
+    wxl_livingazeroth::debug::RegisterOverview(api);
 
     // The frame profiler first: its hooks go first in every chain, and its UI scope opens at the
     // world -> UI boundary before the anti-aliasing (subscribed below) runs there.
@@ -209,6 +234,9 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::modellights::InstallProbe(api);
     wxl_livingazeroth::debug::InstallWmoBindProbe(api);
     wxl_livingazeroth::wmoice::Install(api);      // the WMO batch loops: ice textures switch the same block on
+    wxl_livingazeroth::debug::InstallFogProbe(api);
+    // Ground fog: drawn at the weather render's entry (after the water, before rain and see-through models).
+    wxl_livingazeroth::groundfog::Install(api);
     // Records the M2 shader effects as the client loads them (research: dumps; later M2 patches).
     wxl_livingazeroth::m2effects::Install(api);
 
@@ -226,6 +254,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::debug::RegisterWindPanel(api);
     wxl_livingazeroth::debug::RegisterSurfacePanel(api);
     wxl_livingazeroth::debug::RegisterClimatePanel(api);
+    wxl_livingazeroth::debug::RegisterFogPanel(api);
     wxl_livingazeroth::debug::RegisterLightsPanel(api);
     wxl_livingazeroth::debug::RegisterLightEditor(api);
 

@@ -1,4 +1,5 @@
 #include "Profiler.hpp"
+#include "Pages.hpp"
 
 #include "engine/events/Event.hpp"
 #include "game/Gx.hpp"
@@ -24,13 +25,17 @@ namespace wxl_livingazeroth::prof
 
         constexpr const char* kPanelTitle = "wxl-seyris-living-azeroth: frame profiler";
         const char* const kNames[kCount] = {
-            "other (game logic, unlisted)", "world: rest (sky, misc.)", "terrain", "grass (detail doodads)",
+            "other (game logic, unlisted)", "world: rest (sky, misc.)", "terrain", "grass: client rest",
             "M2 models", "M2 animation (main thread)", "particles", "ribbons", "WMOs", "liquids",
             "shadow maps", "weather", "UI + overlay",
             "Lua (addons + Blizzard UI)", "game: units & objects update", "game: world tick (after render)",
             "mods: per-frame update (OnUpdate)", "present (incl. waiting for GPU)",
             "ours: climate / wind / fields", "ours: lights (scan, grid, baking)", "ours: light textures",
             "ours: surface cover update", "ours: surface cover draw", "ours: anti-aliasing",
+            "ours: fog field", "ours: fog draw",
+            "ours: fog uploads", "ours: fog lights", "ours: surface cover uploads",
+            "grass: client re-bake", "ours: grass wind grid", "ours: grass chunk constants",
+            "ours: grass layer prepare", "ours: grass layer bind", "ours: grass layer draws",
         };
 
         const WXL_Api* g_api = nullptr;
@@ -42,8 +47,6 @@ namespace wxl_livingazeroth::prof
 
         // Categories that issue no GPU work of their own and are entered very often: they move the CPU
         // clock but not the GPU timeline, which keeps the timestamp count per frame small.
-        bool CpuOnly(int category) { return category == kLua; }
-
         // --- category stack and accounting ----------------------------------------------------------
         constexpr int kMaxDepth = 256;
         int     g_stack[kMaxDepth];
@@ -60,7 +63,7 @@ namespace wxl_livingazeroth::prof
 
         int Current() { return g_depth > 0 ? g_stack[g_depth - 1] : kOther; }
 
-        // The innermost category that owns GPU time.
+        // The category GPU time goes to: the innermost one that isn't CPU only.
         int GpuCurrent()
         {
             for (int i = g_depth - 1; i >= 0; --i)
@@ -173,12 +176,14 @@ namespace wxl_livingazeroth::prof
             ++f.used;
         }
 
-        // Charges the time since the last transition to the current category.
-        void Charge()
+        // Charges the time since the last transition to the current category, then stamps the GPU
+        // (not when only a CPU-only category opens or closes: the GPU category doesn't change).
+        void Transition(bool stamp = true)
         {
             const int64_t now = Now();
             g_frame.cpu[Current()] += now - g_last;
             g_last = now;
+            if (stamp) Stamp(GpuCurrent());
         }
 
         // --- main thread by module (sampled) -----------------------------------------------------
@@ -444,7 +449,7 @@ namespace wxl_livingazeroth::prof
 
             if (g_frameOn)
             {
-                Charge();
+                Transition();
                 Stamp(GpuCurrent());
                 if (g_gpuFrameOn)
                 {
@@ -538,10 +543,15 @@ namespace wxl_livingazeroth::prof
     {
         if (!g_frameOn || !OnMainThread()) return;
         if (g_depth >= kMaxDepth) return;
-        const int gpuBefore = GpuCurrent();
-        Charge();
+        Transition(!CpuOnly(category));
         g_stack[g_depth++] = category;
-        if (GpuCurrent() != gpuBefore) Stamp(gpuBefore);
+    }
+
+    void CountDraws(unsigned draws, uint64_t triangles)
+    {
+        if (!g_frameOn || !OnMainThread()) return;
+        g_frame.draws[Current()] += draws;
+        g_frame.tris[Current()] += triangles;
     }
 
     void Leave(int category)
@@ -552,11 +562,9 @@ namespace wxl_livingazeroth::prof
         for (int i = g_depth - 1; i >= 0; --i)
             if (g_stack[i] == category)
             {
-                const int gpuBefore = GpuCurrent();
-                Charge();
+                Transition(!CpuOnly(category));
                 for (int k = i; k + 1 < g_depth; ++k) g_stack[k] = g_stack[k + 1];
                 --g_depth;
-                if (GpuCurrent() != gpuBefore) Stamp(gpuBefore);
                 return;
             }
     }
@@ -722,6 +730,12 @@ namespace wxl_livingazeroth::prof
             }
             std::snprintf(line, sizeof(line), "%-34s %6.0f %7.1f\n", "total", draws, tris / 1000.0);
             out += line;
+            // The grass rows together (their GPU time is all in "grass: client rest").
+            double grassCpu = s.cpuMs[kDetail], grassDraws = s.draws[kDetail], grassTris = s.tris[kDetail];
+            for (int c = kDetailBake; c <= kOursGrassDraw; ++c) { grassCpu += s.cpuMs[c]; grassDraws += s.draws[c]; grassTris += s.tris[c]; }
+            std::snprintf(line, sizeof(line), "%-34s %6.0f %7.1f %8.2f %8.2f\n", "grass, all rows", grassDraws, grassTris / 1000.0,
+                          grassCpu, s.gpuMs[kDetail]);
+            out += line;
 
             if (!s.modules.empty())
             {
@@ -807,14 +821,17 @@ namespace wxl_livingazeroth::prof
                 api->Log(WXL_LOG_WARN, "wxl-seyris-living-azeroth", msg);
             }
         }
-        // Behind core's own detour on the draw (live from start-up, so it can't be preceded): counting
-        // doesn't need to be first.
-        if (!api->HookAttachByName("Gx.DeviceDraw", reinterpret_cast<void*>(&hkDeviceDraw), reinterpret_cast<void**>(&g_origDraw), 1000))
+        // In front on the draw too. Core installs its normal-phase features (m2native-indices among
+        // them, at the default priority) after the extensions' chains are live, and a live chain
+        // refuses a new head: a link of ours behind the default would make core's feature fail. In
+        // front, core's link goes in behind ours. Behind only if the chain is already live here.
+        if (!api->HookAttachByName("Gx.DeviceDraw", reinterpret_cast<void*>(&hkDeviceDraw), reinterpret_cast<void**>(&g_origDraw), -1000) &&
+            !api->HookAttachByName("Gx.DeviceDraw", reinterpret_cast<void*>(&hkDeviceDraw), reinterpret_cast<void**>(&g_origDraw), 1000))
             g_origDraw = nullptr;
         api->Subscribe(static_cast<uint32_t>(ev::Event::OnFrame), &OnFrame, nullptr);
         api->Subscribe(static_cast<uint32_t>(ev::Event::OnWorldRenderEnd), &OnWorldRenderEnd, nullptr);
         api->Subscribe(static_cast<uint32_t>(ev::Event::OnEndScene), &OnEndScene, nullptr);
-        api->UiAddPanel(kPanelTitle, &Panel, nullptr);
+        pages::AddPanel(kPanelTitle, &Panel);
     }
 
     void OnDeviceLost() { ReleaseGpu(); }

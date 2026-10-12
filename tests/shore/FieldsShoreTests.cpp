@@ -123,6 +123,7 @@ namespace wxl_livingazeroth::shelter
 namespace wxl_livingazeroth::climate
 {
     const Row& For(uint32_t, int) { static Row r; return r; }
+    Row At(float, float) { return Row{}; }
     Breakdown Temperature(const Row&) { Breakdown b; b.total = 15.0f; return b; }
     float TemperatureAt(uint32_t, int) { return 15.0f; }
     float SunWarming(const float*, float) { return 0.0f; }
