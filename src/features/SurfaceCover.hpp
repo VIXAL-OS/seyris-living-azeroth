@@ -9,6 +9,8 @@
 // seams with the terrain and the cost. See orchestration docs/r&d/immersion/deformable-surfaces.md.
 #pragma once
 
+#include <string>
+
 #include "wxl/PluginApi.h"
 
 #include "../env/WorldQuery.hpp"
@@ -42,6 +44,10 @@ namespace wxl_livingazeroth::cover
     /// newest first, 8 floats each for its constants: (x, y, the direction it points), (1 / its outline's semi-axis
     /// along, 1 / across, strength, 0). Returns how many.
     unsigned WmoRings(float* out, unsigned max);
+    /// The uploads of only the changed cells against a full upload of the same data, read back from the GPU (tests,
+    /// on a device of their own): a level of random data, then scattered cells, a row strip and a column strip
+    /// (across the wrap) changed. Empty when what the GPU holds agrees bit for bit; else what differed.
+    std::string PartialUploadSelfTest(void* device);
 
     /// How far the cover drawn in this scene rises above the terrain at world (x, y), where the terrain
     /// is at terrainZ (yd): its top there as the near level draws it (trenches included), 0 where none
