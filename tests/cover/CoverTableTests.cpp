@@ -195,6 +195,17 @@ namespace
     const Spot kNorthSnow    { "Dragonblight snow (by TerrainType)", 65, 571, "tileset\\expansion02\\dragonblight\\dragonblightfreshlumpysnow.blp", 0, 3 };
     const Spot kWinterspring { "Winterspring snow",       618,  1,   "tileset\\winterspring grove\\winterspringsnowsolid.blp", 0, 3 };
     const Spot kWestfall     { "Westfall sand",           40,   0,   "tileset\\westwood\\westfallsandbase.blp", 0, 7 };
+    const Spot kWestfallWet  { "Westfall wet sand",       40,   0,   "tileset\\westwood\\westfallsandbasewet.blp", 0, 7 };
+    // The coasts the full map survey found (waterfall-scan/beach_survey.py, 2026-10-11).
+    const Spot kStvCoast     { "Stranglethorn coast sand", 33,  0,   "tileset\\westwood\\westfallsandbase.blp", 0, 7 };
+    const Spot kDarkshorePlain { "Darkshore plain sand",  148,  1,   "tileset\\darkshore\\darkshoresand.blp", 0, 7 };
+    const Spot kBoreanA      { "Borean Tundra sand A",    3537, 571, "tileset\\expansion02\\boreantundra\\bt_sanda.blp", 0, 7 };
+    const Spot kBoreanC      { "Borean Tundra sand C",    3537, 571, "tileset\\expansion02\\boreantundra\\bt_sandc.blp", 0, 7 };
+    const Spot kBoreanE      { "Borean Tundra pebbly sand", 3537, 571, "tileset\\expansion02\\boreantundra\\bt_sande.blp", 0, 7 };
+    const Spot kSholazarSand { "Sholazar river sand",     3711, 571, "tileset\\expansion02\\sholazarbasin\\sb_sandb.blp", 0, 7 };
+    const Spot kZoramStrand  { "Zoram Strand sand",       331,  1,   "tileset\\ashenvale\\ashenvalesand.blp", 0, 7 };
+    const Spot kUngoroSand   { "Un'Goro lake sand",       490,  1,   "tileset\\feralas\\feralassand.blp", 0, 7 };
+    const Spot kFjordShore   { "Howling Fjord pebble shore", 495, 571, "tileset\\expansion02\\howlingfjord\\hfjords_shorec.blp", 0, 7 };
     const Spot kElwynnDirt   { "Elwynn dirt (footprint outlines)", 12, 0, "tileset\\elwynn\\elwynndirtbase2.blp", 0, 0 };
     const Spot kStormIce     { "Storm Peaks clear ice",   67,   571, "tileset\\expansion02\\stormpeaks\\sp_icea.blp", 0, -1 };
 
@@ -266,7 +277,7 @@ int main(int argc, char** argv)
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     if (argc < 2) { std::printf("usage: cover_table_tests <data dir> [<data dir before the change>]\n"); return 2; }
     const std::string now = argv[1], before = argc > 2 ? argv[2] : "";
-    const Spot* const kUnchanged[] = { &kDunMorogh, &kNorthSnow, &kWinterspring, &kWestfall, &kElwynnDirt, &kStormIce, &kElwynnGrass,
+    const Spot* const kUnchanged[] = { &kDunMorogh, &kNorthSnow, &kWinterspring, &kWestfallWet, &kFjordShore, &kElwynnDirt, &kStormIce, &kElwynnGrass,
                                        &kSteppesRock, &kSteppesLava, &kSilithusRock, &kTanarisCrack, &kBlasted, &kHellfire, &kBoneRock, &kBoneTiles,
                                        &kTanarisBurn, &kTanarisRock, &kDarkshoreWaves };
     try
@@ -364,6 +375,27 @@ int main(int argc, char** argv)
                 CHECK(mat::Parent(v.material) == 51 && Near(v.relaxSeconds, 10.0f) && (v.flags & ct::kFlagPreventUnderwater) &&
                       Near(v.tintStrength, 0.2f) && !ct::IsSnow(v.coverMaterial, 148, 1));
             CHECK(sand.tintColor == 0x909090u && At(kDarkshoreWaves).depth == 0.0f);
+        });
+        Test("the coasts the map survey found: sand on their sand textures (rings, the ground's vertex colour); wet sand and pebble shores as they were", []
+        {
+            struct Want { const Spot* spot; uint32_t material; float depth; const char* texture; };
+            const Want wants[] = { { &kWestfall, 6, 0.08f, "WestfallSandBase.blp" }, { &kStvCoast, 6, 0.08f, "WestfallSandBase.blp" },
+                                   { &kDarkshorePlain, 61, 0.08f, "DarkshoreSand.blp" }, { &kBoreanA, 62, 0.08f, "BT_SandA.blp" },
+                                   { &kBoreanC, 63, 0.08f, "BT_SandC.blp" }, { &kBoreanE, 64, 0.06f, "BT_SandE.blp" },
+                                   { &kSholazarSand, 65, 0.08f, "SB_SandB.blp" }, { &kZoramStrand, 66, 0.08f, "AshenvaleSand.blp" },
+                                   { &kUngoroSand, 67, 0.06f, "FeralasSand.blp" } };
+            for (const Want& w : wants)
+            {
+                const ct::Values v = At(*w.spot);
+                if (!(v.material == w.material && Near(v.depth, w.depth) && EndsWith(CoverPath(v), w.texture) && mat::Parent(v.material) == 51 &&
+                      Near(v.relaxSeconds, 10.0f) && Near(v.tintStrength, 0.2f) && (v.flags & ct::kFlagRipplePrints) &&
+                      (v.flags & ct::kFlagUseVertexColor) && (v.flags & ct::kFlagPreventUnderwater)))
+                    throw std::runtime_error(std::string("not sand as wanted: ") + w.spot->what);
+            }
+            CHECK(At(kWestfall).tintColor == 0xFFFFA0u && At(kSholazarSand).tintColor == 0xFFFFF5u);
+            CHECK(At(kWestfallWet).material == 11 && Near(At(kWestfallWet).depth, 0.05f) && !(At(kWestfallWet).flags & ct::kFlagRipplePrints));
+            CHECK(At(kFjordShore).depth == 0.0f);
+            CHECK(std::string(mat::Name(6)) == "WestfallSandBase"); // the existing material, reparented, keeps its name
         });
         Test("no cover: Elwynn grass, Burning Steppes rock and lava, the Blasted Lands, Hellfire", []
         {

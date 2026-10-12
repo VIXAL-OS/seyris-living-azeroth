@@ -42,9 +42,10 @@ BurningSteppsAsh01 material keeps its warmth (35 degC) and rest moisture.
         client's textures (3.3.5a, the _s variants have the same colours).
 
 IDs: materials, selectors and cover rows 50 (Ash) and 51 (Sand), 52..56 (the new ash textures), 57, 58
-(the Caverns of Time's) and 59, 60 (Darkshore's sand);
-the existing rows changed in place: materials 2, 3, 7, 8, 9 (Parent Sand) and 15 (Parent Ash), cover
-rows 2, 3, 7, 8, 9 and 14.
+(the Caverns of Time's), 59, 60 (Darkshore's sand) and 61..67 (the coasts the map survey found);
+the existing rows changed in place: materials 2, 3, 6, 7, 8, 9 (Parent Sand) and 15 (Parent Ash), cover
+rows 2, 3, 6, 7, 8, 9 and 14. Westfall's own sand row (6: 0.05 yd, trenches, no tint) becomes a sand row like
+the rest; its wet strip (11, WestfallSandBaseWet) keeps its own row: wet sand holds sharp prints.
 
 Usage:  python add_ash_sand_cover_rows.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
 Sets the rows to exactly these values, so running it twice changes nothing. Then press "Reload table"
@@ -59,6 +60,7 @@ import cdbc_io as io
 ASH, SAND = 50, 51
 I, T = -1.0, -1000.0  # "take it from the parent" (floats), "not set" (signed columns)
 PREVENT_UNDERWATER = 0x1
+USE_VERTEX_COLOR = 0x4  # tinted by the terrain's MCCV like the ground (Northrend's grey sands get their colour from it)
 RIPPLE_PRINTS = 0x10  # feet carve no trench; still rings around each print instead (sand)
 TINT_GAIN, TINT_STRENGTH = 1.68, 0.2
 
@@ -78,6 +80,16 @@ TEXTURES = [
     (r"Tileset\Silithis\SilithisSandDetail.blp",                    0x4E3E27, 9,  None, 9,  0.06, SAND),
     (r"Tileset\Darkshore\DarkshoreSand3.blp",                       0x565656, 59, 59,   59, I,    SAND),
     (r"Tileset\Darkshore\DarkshoreSandRocks.blp",                   0x767D7B, 60, 60,   60, 0.06, SAND),
+    # The coasts the full map survey found (waterfall-scan/beach_survey.py, 2026-10-11: "also look for other beaches,
+    # there should be lots of coasts everywhere"), the textures that are sand by look:
+    (r"Tileset\Westwood\WestfallSandBase.blp",                      0xB0995F, 6,  None, 6,  I,    SAND),  # Westfall, Stranglethorn's coasts, Dustwallow's Dreadmurk Shore
+    (r"Tileset\Darkshore\DarkshoreSand.blp",                        0x636363, 61, 61,   61, I,    SAND),  # Darkshore, Azshara, Ashenvale's and Tanaris' coasts
+    (r"Tileset\Expansion02\BoreanTundra\BT_SandA.blp",              0x6C675C, 62, 62,   62, I,    SAND),  # Borean Tundra, Strand of the Ancients, Isle of Conquest
+    (r"Tileset\Expansion02\BoreanTundra\BT_SandC.blp",              0x4C4B46, 63, 63,   63, I,    SAND),
+    (r"Tileset\Expansion02\BoreanTundra\BT_SandE.blp",              0x52514C, 64, 64,   64, 0.06, SAND),  # with pebbles
+    (r"Tileset\Expansion02\SholazarBasin\SB_SandB.blp",             0xB4A892, 65, 65,   65, I,    SAND),  # Sholazar's river and lake sand
+    (r"Tileset\Ashenvale\AshenvaleSand.blp",                        0x5B6243, 66, 66,   66, I,    SAND),  # the Zoram Strand
+    (r"Tileset\Feralas\FeralasSand.blp",                            0x9B7A49, 67, 67,   67, 0.06, SAND),  # Un'Goro's and Feralas' lake shores, pebbly
 ]
 
 # The same, for one area only (selector ScopeType 2 = Area, ScopeID = the AreaTable ID): "it would also be dope if
@@ -92,7 +104,7 @@ SCOPED = [
 
 def own_flags(parent):
     # A row with its own Depth decides Flags too (the rest take the parent's).
-    return PREVENT_UNDERWATER | (RIPPLE_PRINTS if parent == SAND else 0)
+    return PREVENT_UNDERWATER | (RIPPLE_PRINTS | USE_VERTEX_COLOR if parent == SAND else 0)
 
 
 def tint_of(average):
@@ -116,7 +128,7 @@ PARENT_COVERS = [
     cover(ASH, ASH, depth=0.10, max_slope=35.0, slope_fade=12.0, drift=0.25, breakup=0.6, rim=0.4, relax=20.0,
           tint_strength=0.0, z_offset=-0.02, wetness=0.0, flags=PREVENT_UNDERWATER),
     cover(SAND, SAND, depth=0.08, max_slope=30.0, slope_fade=10.0, drift=0.35, breakup=0.5, rim=0.5, relax=10.0,
-          tint_strength=0.0, z_offset=-0.015, wetness=0.0, flags=PREVENT_UNDERWATER | RIPPLE_PRINTS),
+          tint_strength=0.0, z_offset=-0.015, wetness=0.0, flags=PREVENT_UNDERWATER | RIPPLE_PRINTS | USE_VERTEX_COLOR),
 ]
 
 
