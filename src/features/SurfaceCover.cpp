@@ -230,6 +230,11 @@ namespace wxl_livingazeroth::cover
         // the client puts down get still rings around them (CoverRipples.hpp).
         std::vector<float> g_rippleCell(kTex * kTex, 0.0f);
         ripples::Set                       g_ripples;
+        ripples::Set                       g_wmoRipples(32); // prints on building floors (features/WmoIce draws them)
+        unsigned                           g_wmoRipplesMade = 0;
+        // Each unit's last two prints, newest first (x, y pairs): which way its next one points.
+        struct UnitPrints { float xy[4] = {}; int count = 0; };
+        std::unordered_map<unsigned long long, UnitPrints> g_unitPrints;
         float                              g_rippleClock = 0.0f;
         unsigned                           g_ripplesMade = 0;
         std::vector<coverprints::NewPrint> g_newPrints;
@@ -625,7 +630,7 @@ float4 rippleAxisY : register(c17);
 float4 rippleBox : register(c18);   // where any ring reaches, camera-relative (min x, min y, max x, max y)
 float4 pcf[8] : register(c20);   // the terrain's PCF offsets (its PS c3..c10)
 float4 shadowM[12] : register(c30); // the terrain's shadow matrices (its VS c37..c48), from view space
-float4 ripples[32] : register(c42); // per print: centre (camera-relative xy), radius (yd), strength (0..1)
+float4 ripples[96] : register(c42); // per print: (centre camera-relative, direction), (1 / semi-axes, strength, reach)
 sampler2D cover0 : register(s0);
 sampler2D cover1 : register(s1);
 sampler2D cover2 : register(s2);
@@ -723,30 +728,39 @@ float CoverThreshold(float2 pixel)
                       2*b2.x + 3*b2.y - 4*b2.x*b2.y);
     return (dot(b, float3(16, 4, 1)) + 0.5) / 64;
 }
-// A still ring of sand around each of the client's footprints (features/CoverRipples.hpp): one smooth rim just
-// outside the print (centred at 1.05 x its radius, 0.8 x its radius wide; "we probably only need 1 ring", the user).
-// Shading only: the normal tilts by up to rippleInfo.y, and the rim's height comes back as a little brightness. Where a
-// pixel spans more than a quarter of the rim's width (far off) it fades out instead of shimmering. px = the pixel's
-// size in yd.
+// A still rim of sand around each of the client's footprints (features/CoverRipples.hpp): an oval through the print's
+// outline (semi-axes along and across its stride) scaled by kRimAt, kRimWidth of it wide ("would it be possible for
+// them to match the outlines of the footprints themselves?", the user). Two registers a print: (centre x, y relative to
+// the camera, the direction it points), (1 / its semi-axis along, 1 / across, strength, reach). Shading only: the
+// normal tilts by up to rippleInfo.y down the rim's slope, and the rim's height comes back as a little brightness. Where
+// a pixel spans more than a quarter of the rim's width it fades out instead of shimmering. px = the pixel's size in
+// yd. Unrolled (a pixel shader can't index constants by a counter); a print is passed over in a few instructions
+// where its rim can't reach.
+static const float kRimAt = 1.12;
+static const float kRimWidth = 0.55;
 float RippleRings(float2 rel, float px, inout float3 nn)
 {
     float2 grad = 0;
     float height = 0;
-    // Unrolled: a pixel shader can't index constants by a loop counter (fxc picks each ring out of all 32 with
-    // selects, ~32 instructions a ring). Each ring is skipped from its own branch.
-    [unroll] for (int k = 0; k < 32; ++k)
-    [branch] if (k < rippleInfo.x)
+    [unroll] for (int k = 0; k < 48; ++k)
     {
-        float4 rp = ripples[k];
-        float2 dv = rel - rp.xy;
-        float r = length(dv);
-        float width = 0.8 * rp.z;
-        float ph = 6.28318531 * (r - 1.05 * rp.z) / width;
-        [branch] if (abs(ph) < 3.14159265)
+        float4 a = ripples[2 * k], b = ripples[2 * k + 1];
+        float2 dv = rel - a.xy;
+        [branch] if (k < rippleInfo.x && max(abs(dv.x), abs(dv.y)) < b.w)
         {
-            float env = rp.w * saturate(width / (4 * px) - 0.5);
-            grad += (-sin(ph) * env / max(r, 0.001)) * dv;
-            height += (0.5 + 0.5 * cos(ph)) * env;
+            float2 across = float2(-a.w, a.z);
+            float2 n = float2(dot(dv, a.zw), dot(dv, across)) * b.xy;
+            float q = max(length(n), 1e-3);
+            float ph = 6.28318531 * (q - kRimAt) / kRimWidth;
+            [branch] if (abs(ph) < 3.14159265)
+            {
+                float2 dq = n * b.xy / q;
+                float2 g = a.zw * dq.x + across * dq.y;
+                float gl = max(length(g), 1e-4);
+                float env = b.z * saturate(kRimWidth / gl / (4 * px) - 0.5);
+                grad += (-sin(ph) * env / gl) * g;
+                height += (0.5 + 0.5 * cos(ph)) * env;
+            }
         }
     }
     nn = normalize(nn - rippleInfo.y * (grad.x * rippleAxisX.xyz + grad.y * rippleAxisY.xyz));
@@ -1297,12 +1311,6 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         // relax time there. Not on WMO floors: that unit stands on the terrain.
         void AddRipple(const coverprints::NewPrint& p)
         {
-            const Level& L = g_levels[0];
-            if (!L.haveGrid) return;
-            const int i = static_cast<int>(std::lround(p.x / L.cell)), j = static_cast<int>(std::lround(p.y / L.cell));
-            if (i < L.gridI || i >= L.gridI + kGridVerts || j < L.gridJ || j >= L.gridJ + kGridVerts) return;
-            const int s = SlotOf(i, j);
-            if (g_rippleCell[s] < 0.5f || g_static0[s] < kMinDrawnDepth) return;
             const actors::Actor* unit = nullptr;
             float best = 4.0f;
             for (const actors::Actor& a : actors::Nearby())
@@ -1311,13 +1319,35 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                 const float d = std::hypot(a.pos[0] - p.x, a.pos[1] - p.y);
                 if (d < best) { best = d; unit = &a; }
             }
-            float ground;
-            if (!unit || !terrain::HeightAt(unit->pos[0], unit->pos[1], ground) || std::fabs(unit->pos[2] - ground) > 0.35f) return;
+            if (!unit) return;
+            // Which way it points: along the unit's stride (CoverRipples.hpp).
+            if (g_unitPrints.size() > 512) g_unitPrints.clear();
+            UnitPrints& history = g_unitPrints[unit->guid];
             ripples::Ripple r;
+            const bool directed = ripples::StrideDirection(history.xy, history.count, p.x, p.y, r.axis);
+            history.xy[2] = history.xy[0]; history.xy[3] = history.xy[1];
+            history.xy[0] = p.x; history.xy[1] = p.y;
+            history.count = std::min(history.count + 1, 2);
+            ripples::Outline(unit->footprintLength, unit->footprintWidth, directed, r.along, r.across);
             r.x = p.x; r.y = p.y;
-            r.radius = ripples::RadiusFor(std::max(unit->footprintLength, unit->footprintWidth));
             r.born = g_rippleClock;
-            r.life = std::max(2.0f, g_relaxCell[s] * g_settings.relaxMul);
+            float ground;
+            if (!terrain::HeightAt(unit->pos[0], unit->pos[1], ground) || std::fabs(unit->pos[2] - ground) > 0.35f)
+            {
+                // On a building's floor (the Caverns of Time are one): features/WmoIce draws these on its sand-textured
+                // batches only. Sand's own fill-in time.
+                r.life = ripples::LifeFor(10.0f * g_settings.relaxMul);
+                g_wmoRipples.Add(r);
+                ++g_wmoRipplesMade;
+                return;
+            }
+            const Level& L = g_levels[0];
+            if (!L.haveGrid) return;
+            const int i = static_cast<int>(std::lround(p.x / L.cell)), j = static_cast<int>(std::lround(p.y / L.cell));
+            if (i < L.gridI || i >= L.gridI + kGridVerts || j < L.gridJ || j >= L.gridJ + kGridVerts) return;
+            const int s = SlotOf(i, j);
+            if (g_rippleCell[s] < 0.5f || g_static0[s] < kMinDrawnDepth) return;
+            r.life = ripples::LifeFor(g_relaxCell[s] * g_settings.relaxMul);
             g_ripples.Add(r);
             ++g_ripplesMade;
         }
@@ -1326,6 +1356,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         {
             g_rippleClock += dt;
             g_ripples.Expire(g_rippleClock);
+            g_wmoRipples.Expire(g_rippleClock);
             g_newPrints.clear();
             coverprints::TakeNewPrints(g_newPrints);
             if (g_settings.ripples)
@@ -1955,25 +1986,25 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             {
                 const std::vector<ripples::Ripple>& list = g_ripples.List();
                 const int n = g_settings.ripples ? static_cast<int>(std::min(list.size(), static_cast<size_t>(ripples::kMax))) : 0;
-                float regs[ripples::kMax * 4];
-                float box[4] = { 1.0e9f, 1.0e9f, -1.0e9f, -1.0e9f }; // c18: where any ring reaches (the PS skips the rest)
+                float regs[ripples::kMax * 8];
+                float box[4] = { 1.0e9f, 1.0e9f, -1.0e9f, -1.0e9f }; // c18: where any rim reaches (the PS skips the rest)
                 for (int k = 0; k < n; ++k)
                 {
                     const ripples::Ripple& r = list[k];
-                    regs[k * 4 + 0] = r.x - eye[0];
-                    regs[k * 4 + 1] = r.y - eye[1];
-                    regs[k * 4 + 2] = r.radius;
-                    regs[k * 4 + 3] = ripples::Strength(g_rippleClock - r.born, r.life);
-                    const float reach = ripples::kReach * r.radius;
-                    box[0] = std::min(box[0], regs[k * 4 + 0] - reach); box[1] = std::min(box[1], regs[k * 4 + 1] - reach);
-                    box[2] = std::max(box[2], regs[k * 4 + 0] + reach); box[3] = std::max(box[3], regs[k * 4 + 1] + reach);
+                    float* o = regs + k * 8;
+                    const float reach = ripples::kReach * std::max(r.along, r.across);
+                    o[0] = r.x - eye[0]; o[1] = r.y - eye[1]; o[2] = r.axis[0]; o[3] = r.axis[1];
+                    o[4] = 1.0f / r.along; o[5] = 1.0f / r.across;
+                    o[6] = ripples::Strength(g_rippleClock - r.born, r.life); o[7] = reach;
+                    box[0] = std::min(box[0], o[0] - reach); box[1] = std::min(box[1], o[1] - reach);
+                    box[2] = std::max(box[2], o[0] + reach); box[3] = std::max(box[3], o[1] + reach);
                 }
                 dev->SetPixelShaderConstantF(18, box, 1);
                 const float c15[4] = { static_cast<float>(n), g_settings.rippleSlope, 0.1f, 0.0f };
                 const float axes[8] = { vs9[0], vs9[1], vs9[2], 0.0f, vs9[4], vs9[5], vs9[6], 0.0f };
                 dev->SetPixelShaderConstantF(15, c15, 1);
                 dev->SetPixelShaderConstantF(16, axes, 2);
-                if (n) dev->SetPixelShaderConstantF(42, regs, n);
+                if (n) dev->SetPixelShaderConstantF(42, regs, 2 * n);
             }
             for (int t = 0; t < covertable::kMaxCoverTextures; ++t)
             {
@@ -2189,8 +2220,9 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
             g_api->UiCheckbox("Sand: a still ring around each footprint instead of trenches", &g_settings.ripples);
             g_api->UiSliderFloat("Ring slope", &g_settings.rippleSlope, 0.0f, 1.5f);
-            std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made from %u prints found", static_cast<unsigned>(g_ripples.List().size()),
-                          g_ripplesMade, coverprints::PrintsFound());
+            std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made from %u prints found; on building floors %u live, %u made",
+                          static_cast<unsigned>(g_ripples.List().size()), g_ripplesMade, coverprints::PrintsFound(),
+                          static_cast<unsigned>(g_wmoRipples.List().size()), g_wmoRipplesMade);
             g_api->UiText(line);
             g_api->UiCheckbox("The client's footprints on top of the cover", &g_settings.printsOnCover);
             std::snprintf(line, sizeof(line), "  footprints: %s; last draw %u, %u of them on the cover", coverprints::Status(),
@@ -2393,6 +2425,27 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     }
 
     void PatchLightStats(unsigned& most, unsigned& full) { most = g_patchLightsMost; full = g_patchLightsFull; }
+
+    unsigned WmoRings(float* out, unsigned max)
+    {
+        if (!g_settings.enabled || !g_settings.ripples) return 0;
+        // The newest first: the list keeps its order of arrival except where a newer one took an oldest's place.
+        std::vector<const ripples::Ripple*> live;
+        for (const ripples::Ripple& r : g_wmoRipples.List()) live.push_back(&r);
+        std::sort(live.begin(), live.end(), [](const ripples::Ripple* a, const ripples::Ripple* b) { return a->born > b->born; });
+        unsigned n = 0;
+        for (const ripples::Ripple* r : live)
+        {
+            if (n >= max) break;
+            const float strength = ripples::Strength(g_rippleClock - r->born, r->life);
+            if (strength <= 0.0f) continue;
+            float* o = out + n * 8;
+            o[0] = r->x; o[1] = r->y; o[2] = r->axis[0]; o[3] = r->axis[1];
+            o[4] = 1.0f / r->along; o[5] = 1.0f / r->across; o[6] = strength; o[7] = 0.0f;
+            ++n;
+        }
+        return n;
+    }
 
     bool PrintsOnCover()
     {

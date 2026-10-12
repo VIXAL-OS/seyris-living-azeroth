@@ -1,5 +1,7 @@
 #include "M2Effects.hpp"
 
+#include <cstring>
+
 namespace wxl_livingazeroth::m2effects
 {
     namespace
@@ -59,6 +61,19 @@ namespace wxl_livingazeroth::m2effects
     }
 
     bool IsVertexWrapper(const void* wrapper) { return FindVertexEffect(wrapper) != nullptr; }
+
+    bool IsWmoPixelWrapper(const void* wrapper)
+    {
+        if (!wrapper) return false;
+        for (const Effect& e : g_effects)
+        {
+            if (e.pixelName.size() < 6 || _strnicmp(e.pixelName.c_str(), "MapObj", 6) != 0) continue;
+            const auto* table = reinterpret_cast<void* const*>(e.object + kPixelTable);
+            for (int i = 0; i < kPixelEntries; ++i)
+                if (table[i] == wrapper) return true;
+        }
+        return false;
+    }
 
     bool IsPixelWrapper(const void* wrapper)
     {

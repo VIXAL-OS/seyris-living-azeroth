@@ -38,6 +38,10 @@ namespace wxl_livingazeroth::cover
     /// Whether the client's footprints go on top of the cover now (features/CoverPrints): the setting is
     /// on and the near level was drawn in this scene's terrain stage, before the prints.
     bool PrintsOnCover();
+    /// Rims around prints on building floors (features/WmoIce draws them on sand-textured batches): up to `max`, the
+    /// newest first, 8 floats each for its constants: (x, y, the direction it points), (1 / its outline's semi-axis
+    /// along, 1 / across, strength, 0). Returns how many.
+    unsigned WmoRings(float* out, unsigned max);
 
     /// How far the cover drawn in this scene rises above the terrain at world (x, y), where the terrain
     /// is at terrainZ (yd): its top there as the near level draws it (trenches included), 0 where none

@@ -192,6 +192,62 @@ namespace wxl_livingazeroth::modelice
             if (faded) EndHatFade();
         }
 
+        // The rims block (b8): the world position from the view's rows (as the ice block); per rim the offset along and
+        // across the print's direction in units of its outline (n), the oval's radius q = |n|, the rim's phase (q - 1.12) x
+        // 2 pi / 0.55 clamped to -pi..pi (where its raised cosine and its slope are zero), and the slope's direction
+        // (grad q, normalized); the slopes summed (-sin x strength) and the heights (0.5 + 0.5 cos x strength). Then
+        // r31 += the colour x (slope . sun x the slope gain + height x the height gain). Unrolled: a pixel shader can't
+        // index constants by a counter. r20..r28 (the ice block's temporaries, free after it).
+        std::string RingBlock(const std::string& vP)
+        {
+            std::string s =
+                "\n    if b8"
+                "\n      dp3 r20.x, " + vP + ", c181"
+                "\n      dp3 r20.y, " + vP + ", c182"
+                "\n      add r20.xy, r20, c180"
+                "\n      mov r24.xyz, c175.y"
+                "\n      mov r25.zw, c173.xxxy";
+            for (int k = 0; k < kWmoRings; ++k)
+            {
+                const std::string p = "c" + std::to_string(kRingConstant + 2 * k), q = "c" + std::to_string(kRingConstant + 2 * k + 1);
+                s += "\n      add r21.xy, r20, -" + p +
+                     "\n      mov r22, " + p + ".zwxw" +
+                     "\n      mov r22.zw, " + p + ".xxwz" +
+                     "\n      mul r22.z, r22.z, -c175.x"
+                     "\n      dp2add r23.x, r21, r22, c175.y"
+                     "\n      dp2add r23.y, r21, r22.zwzw, c175.y"
+                     "\n      mul r23.xy, r23, " + q +
+                     "\n      dp2add r23.z, r23, r23, c175.y"
+                     "\n      max r23.z, r23.z, c174.z"
+                     "\n      rsq r23.w, r23.z"
+                     "\n      mul r23.z, r23.z, r23.w"
+                     "\n      mad r24.w, r23.z, r25.z, r25.w"
+                     "\n      max r24.w, r24.w, -c174.y"
+                     "\n      min r24.w, r24.w, c174.y"
+                     "\n      sincos r26.xy, r24.w"
+                     "\n      mul r27.xy, r23, " + q +
+                     "\n      mul r27.xy, r27, r23.w"
+                     "\n      mul r28.xy, r22, r27.x"
+                     "\n      mad r28.xy, r22.zwzw, r27.y, r28"
+                     "\n      dp2add r28.z, r28, r28, c175.y"
+                     "\n      max r28.z, r28.z, c174.z"
+                     "\n      rsq r28.z, r28.z"
+                     "\n      mul r28.xy, r28, r28.z"
+                     "\n      mul r26.y, r26.y, " + q + ".z"
+                     "\n      mad r24.xy, r28, -r26.y, r24"
+                     "\n      add r26.x, r26.x, c175.x"
+                     "\n      mul r26.x, r26.x, c175.z"
+                     "\n      mad r24.z, r26.x, " + q + ".z, r24.z";
+            }
+            s += "\n      mov r26.xy, c191"
+                 "\n      dp2add r25.x, r24, r26, c175.y"
+                 "\n      mul r25.x, r25.x, c191.z"
+                 "\n      mad r25.x, r24.z, c191.w, r25.x"
+                 "\n      mad r31.xyz, r12, r25.x, r31"
+                 "\n    endif";
+            return s;
+        }
+
         // The ice block, view space: N, V; world-space normal, view direction and position (camera +
         // the view's rows) for the detail texture, sampled on three planes by the normal (two depths
         // below the surface along the view: parallax); then the terrain's look (deep body by clarity,
@@ -206,7 +262,7 @@ namespace wxl_livingazeroth::modelice
         // the pixels and drew moire bands across the glacier faces (the user, 2026-10-11).
         // ps_3_0 reads at most one constant register per instruction; lrp's destination can't be its
         // first or third source.
-        std::string Block(const std::string& vP, const std::string& vN)
+        std::string Block(const std::string& vP, const std::string& vN, bool rims)
         {
             return
                 "\n    mov r31.xyz, c175.y"
@@ -309,13 +365,13 @@ namespace wxl_livingazeroth::modelice
                 "\n      mul r31.xyz, r31, c179.x"
                 "\n      mov r30.xyz, c189"
                 "\n      mad r31.xyz, r30, c179.x, r31"
-                "\n    endif";
+                "\n    endif" + (rims ? RingBlock(vP) : std::string());
         }
 
-        bool EditPixel(std::string& src, std::string& why)
+        bool EditPixel(std::string& src, std::string& why, bool rims)
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
-            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c17[4-9]|c18[0-9]|c190)\b)");
+            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c17[3-9]|c18[0-9]|c19[0-9]|c2[01][0-9])\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
             // The variant's view-space position and normal: what its shadow fade reads (dp3 with c3) and
             // what its sun-facing term reads (dp3 with c4). Shadow-less variants have neither.
@@ -372,20 +428,38 @@ namespace wxl_livingazeroth::modelice
             const std::string base = (m[1].str() == "mad" ? "\n    mul r12.xyz, " : "\n    mov r12.xyz, ") + operands;
             const size_t subtraction = static_cast<size_t>(m.position(0)), afterSubtraction = static_cast<size_t>(m.position(7));
             src.insert(afterSubtraction, shifted ? "\n    add " + r + ".yzw, " + r + ", r31.xxyz" : "\n    add " + r + ".xyz, " + r + ", r31");
-            src.insert(subtraction, base + Block(mp[1].str(), mn[1].str()));
+            src.insert(subtraction, base + Block(mp[1].str(), mn[1].str(), rims));
             src.insert(src.find('\n') + 1,
                        "    def c175, 1, 0, 0.5, 2\n"
                        "    def c176, 0.2126, 0.7152, 0.0722, 0.2\n"
                        "    def c177, 0.6, 0.4, 0.35, 0.65\n"
                        "    def c178, 0.04, 0.96, 0.55, 0.4\n"
-                       "    def c174, 1.3, 0, 0, 0\n"
+                       "    def c174, 1.3, 3.14159265, 0.000001, 0\n"
+                       "    def c173, 11.42397, -12.79485, 0, 0\n"
                        "    dcl_2d s14\n");
             return true;
         }
 
-        bool EditPixelCounted(std::string& src, std::string& why)
+        // Whether the device takes the buildings' variants with the rims (kRingsMinSlots), asked once.
+        bool RingsFit()
         {
-            const bool ok = EditPixel(src, why);
+            static int fit = -1;
+            if (fit < 0)
+            {
+                D3DCAPS9 caps = {};
+                auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+                fit = dev && SUCCEEDED(dev->GetDeviceCaps(&caps)) && caps.MaxPixelShader30InstructionSlots >= kRingsMinSlots ? 1 : 0;
+            }
+            return fit == 1;
+        }
+
+        bool EditPixelCountedWith(std::string& src, std::string& why, bool rims);
+        bool EditPixelCounted(std::string& src, std::string& why) { return EditPixelCountedWith(src, why, false); }
+        bool EditPixelWmoCounted(std::string& src, std::string& why) { return EditPixelCountedWith(src, why, RingsFit()); }
+
+        bool EditPixelCountedWith(std::string& src, std::string& why, bool rims)
+        {
+            const bool ok = EditPixel(src, why, rims);
             if (ok) ++g_patched;
             else
             {
@@ -521,16 +595,24 @@ namespace wxl_livingazeroth::modelice
         look[35] = 1.3f;                                           // c188.w sky reflection brightness
     }
 
-    bool EditPixelForTests(std::string& src, std::string& why) { return EditPixel(src, why); }
+    bool EditPixelForTests(std::string& src, std::string& why) { return EditPixel(src, why, false); }
+    bool EditPixelWmoForTests(std::string& src, std::string& why) { return EditPixel(src, why, true); }
 
     void Register()
     {
         shaderpatch::TableRule rule;
         rule.name = "model ice (M2 pixel)";
         rule.pixel = true;
-        rule.contains = [](const void* wrapper) { return m2effects::IsPixelWrapper(wrapper); };
+        rule.contains = [](const void* wrapper) { return m2effects::IsPixelWrapper(wrapper) && !m2effects::IsWmoPixelWrapper(wrapper); };
         rule.edit = &EditPixelCounted;
         shaderpatch::Register(std::move(rule));
+        // The buildings' (MapObj*) variants: the ice, and the footprint rims on their sand floors (features/WmoIce).
+        shaderpatch::TableRule wmo;
+        wmo.name = "model ice and footprint rims (WMO pixel)";
+        wmo.pixel = true;
+        wmo.contains = [](const void* wrapper) { return m2effects::IsWmoPixelWrapper(wrapper); };
+        wmo.edit = &EditPixelWmoCounted;
+        shaderpatch::Register(std::move(wmo));
     }
 
     void Install(const WXL_Api* api)

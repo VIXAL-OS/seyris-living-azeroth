@@ -13,6 +13,13 @@
 // (the look), c190 (more of the style), s14. Stock M2 pixel shaders use r0..r11, c0..c14, s0..s7 and no
 // b/i registers.
 //
+// Behind b8, after the ice: still rims around footprints on the sand floors of buildings (features/WmoIce switches it
+// on for sand-textured batches; the rims come from features/SurfaceCover's prints, CoverRipples.hpp's shape). The
+// Caverns of Time are a building: "caverns of time sand still does not work for footprints sadly" (the user,
+// 2026-10-11). Up to kWmoRings rims in c192.. (two registers each: x, y and the direction the print points; 1 / its
+// outline's semi-axes, strength), c173 (defined: the rim's phase from the oval's radius), and c191 = the sun's world
+// direction (x, y), the brightness gains of the rim's slope toward it and of its height.
+//
 // Frozen waterfalls get their own style: brighter, glassier ice whose detail is streaked along the
 // flow, at a scale that still reads from a distance (Bor's Fall in the Storm Peaks is 366 yd tall).
 // The ice models and buildings (features/WmoIce) get a lighter one: their textures are already bright,
@@ -31,8 +38,12 @@ namespace wxl_livingazeroth::modelice
     /// The batch-draw hooks. From WXL_Load.
     void Install(const WXL_Api* api);
 
-    /// The pixel edit on its own (offline tests).
+    /// The pixel edit on its own (offline tests): the models' (the ice), the buildings' (the ice and the footprint rims).
     bool EditPixelForTests(std::string& src, std::string& why);
+    bool EditPixelWmoForTests(std::string& src, std::string& why);
+    /// The buildings' variants carry the rims only on a device with this many pixel shader slots (they come to ~830;
+    /// ps_3_0 promises 512): without them the client would get no shader at all.
+    constexpr unsigned kRingsMinSlots = 1024;
 
     enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3, Floe = 4, Glacier = 5 };
     /// Which look a model path (stem or file name, any case or slashes) gets: none, light (the ice models),
@@ -63,6 +74,10 @@ namespace wxl_livingazeroth::modelice
     constexpr int kLookConstant = 180;
     constexpr int kStyleConstant = 190;
     constexpr int kSwitch = 7;   // PS bool register b7
+    constexpr int kRingSwitch = 8;     // PS bool register b8: the footprint rims
+    constexpr int kRingControl = 191;  // sun x, y (world), slope gain, height gain
+    constexpr int kRingConstant = 192; // per rim: (x, y, direction), (1 / semi-axes along and across, strength, 0)
+    constexpr int kWmoRings = 12;
 
     void SetEnabled(bool enabled);
     bool Enabled();

@@ -280,15 +280,30 @@ int main(int argc, char** argv)
             CHECK(found.empty() && !seen[9].live);
         });
 
-        Test("sand's rings: sized by the print, full strength then easing out over the cover's relax time, the youngest 32 kept", []
+        Test("sand's rims: the print's outline pointed along the stride, lasting 2.5 x the relax time, the youngest 48 kept", []
         {
-            CHECK(std::fabs(rp::RadiusFor(0.33f) - 0.198f) < 1e-6f && rp::RadiusFor(0.0f) == rp::RadiusFor(0.33f)); // unknown: a human's
-            CHECK(rp::RadiusFor(0.01f) == 0.08f && rp::RadiusFor(10.0f) == 1.2f);
-            CHECK(rp::Strength(0.0f, 10.0f) == 1.0f && rp::Strength(4.0f, 10.0f) == 1.0f);
-            CHECK(std::fabs(rp::Strength(7.0f, 10.0f) - 0.5f) < 1e-5f);
-            CHECK(rp::Strength(10.0f, 10.0f) == 0.0f && rp::Strength(12.0f, 10.0f) == 0.0f && rp::Strength(1.0f, 0.0f) == 0.0f);
+            float along = 0, across = 0;
+            rp::Outline(0.33f, 0.15f, true, along, across);
+            CHECK(std::fabs(along - 0.165f) < 1e-6f && std::fabs(across - 0.075f) < 1e-6f);
+            rp::Outline(0.33f, 0.15f, false, along, across);                       // no direction yet: a circle
+            CHECK(along == across && std::fabs(along - 0.165f) < 1e-6f);
+            rp::Outline(0.0f, 0.0f, true, along, across);                          // unknown: a human's
+            CHECK(std::fabs(along - 0.165f) < 1e-6f && across < along);
+            rp::Outline(10.0f, 10.0f, true, along, across);
+            CHECK(along == 1.2f && across == 1.2f);
+            // Newest first: the other foot 0.5 yd back and to the side, the same foot a stride (1 yd) straight back.
+            const float history[4] = { 9.6f, 0.2f, 9.0f, 0.0f };
+            float axis[2] = {};
+            CHECK(rp::StrideDirection(history, 2, 10.0f, 0.0f, axis) && std::fabs(axis[0] - 1.0f) < 1e-6f && std::fabs(axis[1]) < 1e-6f);
+            CHECK(rp::StrideDirection(history, 1, 10.0f, 0.0f, axis) && axis[0] > 0.8f && axis[1] < -0.3f);   // only the other foot's
+            const float away[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            CHECK(!rp::StrideDirection(away, 2, 10.0f, 0.0f, axis) && !rp::StrideDirection(away, 0, 10.0f, 0.0f, axis));
+            CHECK(rp::LifeFor(10.0f) == 25.0f && rp::LifeFor(20.0f) == 50.0f && rp::LifeFor(2.0f) == 20.0f);
+            CHECK(rp::Strength(0.0f, 20.0f) == 1.0f && rp::Strength(10.0f, 20.0f) == 1.0f);
+            CHECK(std::fabs(rp::Strength(15.0f, 20.0f) - 0.5f) < 1e-5f);
+            CHECK(rp::Strength(20.0f, 20.0f) == 0.0f && rp::Strength(25.0f, 20.0f) == 0.0f && rp::Strength(1.0f, 0.0f) == 0.0f);
             float last = 1.0f;
-            for (float age = 4.0f; age <= 10.0f; age += 0.25f) { const float s = rp::Strength(age, 10.0f); CHECK(s <= last); last = s; }
+            for (float age = 10.0f; age <= 20.0f; age += 0.25f) { const float s = rp::Strength(age, 20.0f); CHECK(s <= last); last = s; }
             rp::Set set;
             for (int k = 0; k < rp::kMax + 5; ++k)
             {

@@ -1,6 +1,7 @@
 #include "WmoIce.hpp"
 
 #include "ModelIce.hpp"
+#include "SurfaceCover.hpp"
 #include "TerrainIce.hpp"
 
 #include "game/Gx.hpp"
@@ -9,6 +10,7 @@
 #include <d3d9.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -76,7 +78,8 @@ namespace wxl_livingazeroth::wmoice
             const void* motx = nullptr;
             const void* materials = nullptr;
             std::vector<uint8_t> ice;     // per material: its modelice::Style (0 = not ice)
-            bool any = false;
+            std::vector<uint8_t> sand;    // per material: its texture is sand (the footprint rims)
+            bool any = false, anySand = false;
         };
         std::unordered_map<const void*, RootIce> g_cache;
         const RootIce* g_rootIce = nullptr;  // the current group's root, when it has ice materials
@@ -134,12 +137,16 @@ namespace wxl_livingazeroth::wmoice
             RootIce& r = g_cache[root];
             if (r.motx != v.motx || r.materials != v.materials || r.ice.size() != v.count)
             {
-                r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.any = false;
+                r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.sand.assign(v.count, 0);
+                r.any = r.anySand = false;
                 char name[kMaxName];
                 for (uint32_t i = 0; i < v.count; ++i)
                     if (ReadName(v, i, name))
+                    {
                         if (const modelice::Style style = StyleOfTexture(name); style != modelice::Style::None)
                         { r.ice[i] = static_cast<uint8_t>(style); r.any = true; }
+                        if (IsSandTexture(name)) { r.sand[i] = 1; r.anySand = true; }
+                    }
                 ++g_roots;
                 g_iceRoots += r.any ? 1 : 0;
             }
@@ -182,17 +189,65 @@ namespace wxl_livingazeroth::wmoice
             }
         }
 
+        // The footprint rims (ModelIce's b8 block) for a sand-textured batch: the view (c180..c189, as for the ice), the
+        // sun's world direction and the gains (c191), and the live rims on building floors (c192..). The slope gain
+        // darkens a rim's side away from the sun and lightens the side toward it; the height gain lightens its crest.
+        constexpr float kRingSlopeGain = -0.35f;
+        constexpr float kRingHeightGain = 0.08f;
+        bool g_ringsOn = false;
+        unsigned g_ringBatches = 0;
+
+        void RingsOff()
+        {
+            if (!g_ringsOn) return;
+            g_ringsOn = false;
+            if (auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice()))
+            {
+                const BOOL off = FALSE;
+                dev->SetPixelShaderConstantB(modelice::kRingSwitch, &off, 1);
+            }
+        }
+
+        void RingsOn()
+        {
+            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+            if (!dev) return;
+            float rings[8 * modelice::kWmoRings] = {};
+            if (!cover::WmoRings(rings, modelice::kWmoRings)) { RingsOff(); return; }
+            float look[4 * terrainice::kModelConstantCount];
+            terrainice::FillModelConstants(look);
+            // c184 is the sun's direction in view space; the rows c181..c183 turn it to world.
+            const float* l = look + 16;
+            float sun[2] = { l[0] * look[4] + l[1] * look[5] + l[2] * look[6], l[0] * look[8] + l[1] * look[9] + l[2] * look[10] };
+            const float n = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1]);
+            if (n > 1.0f) { sun[0] /= n; sun[1] /= n; }
+            const float control[4] = { sun[0], sun[1], kRingSlopeGain, kRingHeightGain };
+            dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
+            dev->SetPixelShaderConstantF(modelice::kRingControl, control, 1);
+            dev->SetPixelShaderConstantF(modelice::kRingConstant, rings, 2 * modelice::kWmoRings);
+            const BOOL on = TRUE;
+            dev->SetPixelShaderConstantB(modelice::kRingSwitch, &on, 1);
+            g_ringsOn = true;
+            ++g_ringBatches;
+        }
+
         char __cdecl hkCull(void* record)
         {
             const char culled = g_origCull(record);
             if (!g_depth || culled) return culled;
             modelice::Style style = modelice::Style::None;
+            bool sand = false;
             if (const RootIce* r = g_rootIce)
             {
                 uint8_t index = 0;
                 if (ReadMaterialIndex(record, index) && index < r->ice.size())
+                {
                     style = static_cast<modelice::Style>(r->ice[index]);
+                    sand = r->sand[index] != 0;
+                }
             }
+            if (sand) RingsOn();
+            else RingsOff();
             if (style != modelice::Style::None)
             {
                 if (!g_on || g_onStyle != style) SwitchOn(style);
@@ -209,16 +264,30 @@ namespace wxl_livingazeroth::wmoice
             const RootIce* saved = g_rootIce;
             g_rootIce = nullptr;
             if (g_enabled && modelice::Enabled() && modelice::PatchedVariants() > 0)
-                if (const RootIce* r = IceOf(RootOf(group)); r && r->any) g_rootIce = r;
+                if (const RootIce* r = IceOf(RootOf(group)); r && (r->any || r->anySand)) g_rootIce = r;
             ++g_depth;
             (*Orig)(root, edx, group, flag);
             SwitchOff();
+            RingsOff();
             --g_depth;
             g_rootIce = saved;
         }
     }
 
     bool IsIceTexture(const char* path) { return StyleOfTexture(path) != modelice::Style::None; }
+
+    bool IsSandTexture(const char* path)
+    {
+        if (!path) return false;
+        std::string p(path);
+        for (char& c : p) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+        const size_t slash = p.rfind('\\');
+        const std::string base = slash == std::string::npos ? p : p.substr(slash + 1);
+        if (base.find("sand") == std::string::npos) return false;
+        for (const char* no : { "stone", "rock", "wall", "brick", "trim", "pillar", "statue", "wet" })
+            if (base.find(no) != std::string::npos) return false;
+        return true;
+    }
 
     modelice::Style StyleOfTexture(const char* path)
     {
@@ -260,8 +329,8 @@ namespace wxl_livingazeroth::wmoice
     const char* StatusLine()
     {
         char line[256];
-        std::snprintf(line, sizeof(line), "ice in buildings: %s; buildings seen %u, with ice %u; ice batches drawn so far %u%s",
-                      g_enabled ? "on" : "off", g_roots, g_iceRoots, g_iceBatches,
+        std::snprintf(line, sizeof(line), "ice in buildings: %s; buildings seen %u, with ice %u; ice batches drawn so far %u; footprint rims on sand floors %u%s",
+                      g_enabled ? "on" : "off", g_roots, g_iceRoots, g_iceBatches, g_ringBatches,
                       g_hookedInt && g_hookedExt && g_hookedCull ? "" : "; a hook is missing");
         g_status = line;
         return g_status.c_str();

@@ -19,6 +19,9 @@ namespace wxl_livingazeroth::wmoice
 
     /// Whether a texture path (any case or slashes) is one of the WMO ice textures.
     bool IsIceTexture(const char* path);
+    /// Whether a texture is a sand floor (its file name says sand, not stone, rock, wall, brick, trim, pillar, statue
+    /// or wet): its batches get the footprint rims (ModelIce's b8 block).
+    bool IsSandTexture(const char* path);
     /// Its look: glacier for Dragonblight's ice cliffs and icebergs, floe for the shoreline floe texture,
     /// light for the rest of the list, none when it isn't ice.
     modelice::Style StyleOfTexture(const char* path);
