@@ -723,10 +723,11 @@ float CoverThreshold(float2 pixel)
                       2*b2.x + 3*b2.y - 4*b2.x*b2.y);
     return (dot(b, float3(16, 4, 1)) + 0.5) / 64;
 }
-// Still rings of sand around the client's footprints (features/CoverRipples.hpp): from the print's edge out,
-// 0.75 of its radius apart, three of them, the first (at the print's edge) strongest. Shading only: the normal tilts by up to
-// rippleInfo.y, and the height comes back for a little brightness. Where a pixel spans more than a quarter of the
-// ring spacing (far off) they fade out instead of shimmering. px = the pixel's size in yd.
+// A still ring of sand around each of the client's footprints (features/CoverRipples.hpp): one smooth rim just
+// outside the print (centred at 1.05 x its radius, 0.8 x its radius wide; "we probably only need 1 ring", the user).
+// Shading only: the normal tilts by up to rippleInfo.y, and the rim's height comes back as a little brightness. Where a
+// pixel spans more than a quarter of the rim's width (far off) it fades out instead of shimmering. px = the pixel's
+// size in yd.
 float RippleRings(float2 rel, float px, inout float3 nn)
 {
     float2 grad = 0;
@@ -739,14 +740,13 @@ float RippleRings(float2 rel, float px, inout float3 nn)
         float4 rp = ripples[k];
         float2 dv = rel - rp.xy;
         float r = length(dv);
-        float spacing = 0.75 * rp.z;
-        float t = (r - 0.6 * rp.z) / (3.0 * spacing);
-        [branch] if (t > 0 && t < 1)
+        float width = 0.8 * rp.z;
+        float ph = 6.28318531 * (r - 1.05 * rp.z) / width;
+        [branch] if (abs(ph) < 3.14159265)
         {
-            float env = smoothstep(0, 0.2, t) * (1 - t) * rp.w * saturate(spacing / (4 * px) - 0.5);
-            float ph = 6.28318531 * (r - rp.z) / spacing;
+            float env = rp.w * saturate(width / (4 * px) - 0.5);
             grad += (-sin(ph) * env / max(r, 0.001)) * dv;
-            height += cos(ph) * env;
+            height += (0.5 + 0.5 * cos(ph)) * env;
         }
     }
     nn = normalize(nn - rippleInfo.y * (grad.x * rippleAxisX.xyz + grad.y * rippleAxisY.xyz));
@@ -785,7 +785,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     float3 fill = tint.a > 0.01 ? tint.rgb * 0.6 : albedo.rgb;
     float3 base = fill * (1 - share) + textured * albedo.w;
     float3 colour = lerp(base, tint.rgb, saturate(tint.a));
-    colour *= 1 + rippleInfo.z * rippleShade; // ring crests a little lighter, troughs darker
+    colour *= 1 + rippleInfo.z * rippleShade; // the rim a little lighter
     // Vertex colour (the terrain multiplies by 2 x it) and wetness: darker, and a stronger, tighter shine.
     float4 pr = tex2D(props, wuv);
     // The row's own wet look, plus how much wetter than its rest the ground is now (rain, water nearby).
@@ -2196,7 +2196,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             g_api->UiSliderFloat("Rim (x table)", &g_settings.rimMul, 0.0f, 3.0f);
             g_api->UiSliderFloat("Relax time (x table)", &g_settings.relaxMul, 0.1f, 10.0f);
             g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
-            g_api->UiCheckbox("Sand: still rings around footprints instead of trenches", &g_settings.ripples);
+            g_api->UiCheckbox("Sand: a still ring around each footprint instead of trenches", &g_settings.ripples);
             g_api->UiSliderFloat("Ring slope", &g_settings.rippleSlope, 0.0f, 1.5f);
             std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made from %u prints found", static_cast<unsigned>(g_ripples.List().size()),
                           g_ripplesMade, coverprints::PrintsFound());
