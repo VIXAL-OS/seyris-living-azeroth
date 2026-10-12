@@ -149,7 +149,7 @@ namespace wxl_livingazeroth::wmoice
                     {
                         if (const modelice::Style style = StyleOfTexture(name); style != modelice::Style::None)
                         { r.ice[i] = static_cast<uint8_t>(style); r.any = true; }
-                        if (IsSandTexture(name)) { r.sand[i] = 1; r.anySand = true; }
+                        if (IsSandTexture(name) || IsSnowFloorTexture(name)) { r.sand[i] = 1; r.anySand = true; }
                     }
                 ++g_roots;
                 g_iceRoots += r.any ? 1 : 0;
@@ -216,7 +216,7 @@ namespace wxl_livingazeroth::wmoice
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             if (!dev) return;
-            float rings[8 * modelice::kWmoRings] = {};
+            float rings[4 * cover::kWmoRingRegisters * modelice::kWmoRings] = {};   // a rim not in use stays zeros
             if (!cover::WmoRings(rings, modelice::kWmoRings)) { RingsOff(); return; }
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
@@ -228,7 +228,7 @@ namespace wxl_livingazeroth::wmoice
             const float control[4] = { sun[0], sun[1], kRingSlopeGain, kRingHeightGain };
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kRingControl, control, 1);
-            dev->SetPixelShaderConstantF(modelice::kRingConstant, rings, 2 * modelice::kWmoRings);
+            dev->SetPixelShaderConstantF(modelice::kRingConstant, rings, cover::kWmoRingRegisters * modelice::kWmoRings);
             const BOOL on = TRUE;
             dev->SetPixelShaderConstantB(modelice::kRingSwitch, &on, 1);
             g_ringsOn = true;
@@ -291,6 +291,18 @@ namespace wxl_livingazeroth::wmoice
         for (const char* no : { "stone", "rock", "wall", "brick", "trim", "pillar", "statue", "wet" })
             if (base.find(no) != std::string::npos) return false;
         return true;
+    }
+
+    bool IsSnowFloorTexture(const char* path)
+    {
+        if (!path) return false;
+        std::string p(path);
+        for (char& c : p) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+        const size_t slash = p.rfind('\\');
+        const std::string base = slash == std::string::npos ? p : p.substr(slash + 1);
+        for (const char* floor : { "jlo_mcaves_ground.blp", "jlo_mcaves_ground2.1.blp", "mcaves_ground2_desat.blp" })
+            if (base == floor) return true;
+        return false;
     }
 
     modelice::Style StyleOfTexture(const char* path)

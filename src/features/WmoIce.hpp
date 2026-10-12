@@ -22,6 +22,9 @@ namespace wxl_livingazeroth::wmoice
     /// Whether a texture is a sand floor (its file name says sand, not stone, rock, wall, brick, trim, pillar, statue
     /// or wet): its batches get the footprint rims (ModelIce's b8 block).
     bool IsSandTexture(const char* path);
+    /// Whether a texture is one of the snowy caves' snow floors (Ice Heart Cavern, Winterspring's cave and Northrend's
+    /// other ice caves: jlo_mcaves_ground, jlo_mcaves_ground2.1, mcaves_ground2_desat): its batches get the rims too.
+    bool IsSnowFloorTexture(const char* path);
     /// Its look: glacier for Dragonblight's ice cliffs and icebergs, floe for the shoreline floe texture,
     /// light for the rest of the list, none when it isn't ice.
     modelice::Style StyleOfTexture(const char* path);

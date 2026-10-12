@@ -1473,11 +1473,22 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             ripples::Outline(unit->footprintLength, unit->footprintWidth, directed, r.along, r.across);
             r.x = p.x; r.y = p.y;
             r.born = g_rippleClock;
+            // The rim follows the print's own outline where the client's placement of its texture could be read (an
+            // r0 of a hand's breadth to two yards); else the oval.
+            const auto shape = [&]()
+            {
+                const bool own = p.mapped && ripples::ShapeFromPrint(static_cast<int>(p.texture), p.map, p.x, p.y, r.shape) &&
+                                 r.shape.r0 > 0.01f && r.shape.r0 < 2.0f;
+                if (!own && !ripples::ShapeFromOval(p.x, p.y, r.axis, r.along, r.across, r.shape)) r.shape.r0 = 0.0f;
+                return own;
+            };
             float ground;
             if (!terrain::HeightAt(unit->pos[0], unit->pos[1], ground) || std::fabs(unit->pos[2] - ground) > 0.35f)
             {
-                // On a building's floor (the Caverns of Time are one): features/WmoIce draws these on its sand-textured
-                // batches only. Sand's own fill-in time.
+                // On a building's floor (the Caverns of Time, the snowy caves): features/WmoIce draws these on its sand
+                // and snow floors only. Sand's own fill-in time.
+                if (shape()) ++g_ripplesShaped;
+                if (!(r.shape.r0 > 0.0f)) return;
                 r.life = ripples::LifeFor(10.0f * g_settings.relaxMul);
                 g_wmoRipples.Add(r);
                 ++g_wmoRipplesMade;
@@ -1489,11 +1500,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             if (i < L.gridI || i >= L.gridI + kGridVerts || j < L.gridJ || j >= L.gridJ + kGridVerts) return;
             const int s = SlotOf(i, j);
             if (g_rippleCell[s] < 0.5f || g_static0[s] < kMinDrawnDepth) return;
-            // In sand: the rim follows the print's own outline where the client's placement of its texture could be
-            // read (an r0 of a hand's breadth to two yards); else the oval.
-            const bool shaped = p.mapped && ripples::ShapeFromPrint(static_cast<int>(p.texture), p.map, p.x, p.y, r.shape) &&
-                                r.shape.r0 > 0.01f && r.shape.r0 < 2.0f;
-            if (!shaped && !ripples::ShapeFromOval(p.x, p.y, r.axis, r.along, r.across, r.shape)) return;
+            const bool shaped = shape();
+            if (!(r.shape.r0 > 0.0f)) return;
             r.life = ripples::LifeFor(g_relaxCell[s] * g_settings.relaxMul);
             g_ripples.Add(r);
             ++g_ripplesMade;
@@ -2917,10 +2925,8 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         {
             if (n >= max) break;
             const float strength = ripples::Strength(g_rippleClock - r->born, r->life);
-            if (strength <= 0.0f) continue;
-            float* o = out + n * 8;
-            o[0] = r->x; o[1] = r->y; o[2] = r->axis[0]; o[3] = r->axis[1];
-            o[4] = 1.0f / r->along; o[5] = 1.0f / r->across; o[6] = strength; o[7] = 0.0f;
+            if (strength <= 0.0f || !(r->shape.r0 > 0.0f)) continue;
+            ripples::PackRim(r->shape, 0.0f, 0.0f, strength, out + n * 4 * kWmoRingRegisters);
             ++n;
         }
         return n;

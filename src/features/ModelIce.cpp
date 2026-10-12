@@ -1,5 +1,7 @@
 #include "ModelIce.hpp"
 
+#include "CoverRipples.hpp"
+
 #include "TerrainIce.hpp"
 #include "../render/M2Effects.hpp"
 #include "../render/ShaderPatch.hpp"
@@ -9,6 +11,7 @@
 #include <d3d9.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <regex>
@@ -192,12 +195,95 @@ namespace wxl_livingazeroth::modelice
             if (faded) EndHatFade();
         }
 
-        // The rims block (b8): the world position from the view's rows (as the ice block); per rim the offset along and
-        // across the print's direction in units of its outline (n), the oval's radius q = |n|, the rim's phase (q - 1.12) x
-        // 2 pi / 0.55 clamped to -pi..pi (where its raised cosine and its slope are zero), and the slope's direction
-        // (grad q, normalized); the slopes summed (-sin x strength) and the heights (0.5 + 0.5 cos x strength). Then
-        // r31 += the colour x (slope . sun x the slope gain + height x the height gain). Unrolled: a pixel shader can't
-        // index constants by a counter. r20..r28 (the ice block's temporaries, free after it).
+        // The rims block (b8), each rim following its print's own outline (CoverRipples.hpp, as SurfaceCover's RippleRings):
+        // the world position from the view's rows (as the ice block). A pixel shader can't index constants by a counter
+        // and working out every rim's outline would not fit, so a first pass over the rims only picks the (at most) two
+        // whose reach covers the pixel -- the first into r13..r15, the second into r16..r18 (r19.xy: taken) -- and only
+        // those are worked out (RingOne). The heights add up in r20.z, the slopes in r19.zw; then r31 += the colour x
+        // (slope . sun x the slope gain + height x the height gain). r13..r30 are free here: the ice block's values are
+        // all in r31 by now, and r12 (the colour) is only read.
+        std::string RingOne(const std::string& a, const std::string& p1, const std::string& p2)
+        {
+            return
+                // n = (the pixel - the outline's centre) / r0; q = |n|, r21.w = 1 / q; z1 = (cos t, sin t)
+                "\n        add r21.xy, r20, -" + a +
+                "\n        mul r21.xy, r21, " + a + ".z"
+                "\n        dp2add r21.z, r21, r21, c175.y"
+                "\n        max r21.z, r21.z, c174.z"
+                "\n        rsq r21.w, r21.z"
+                "\n        mul r21.z, r21.z, r21.w"
+                "\n        mul r22.xy, r21, r21.w"
+                // cos k t (r23: k = 1..4, r25: 5..8) and sin k t (r24, r26), by complex products
+                "\n        mov r23.x, r22.x"
+                "\n        mov r24.x, r22.y"
+                "\n        mul r23.y, r22.x, r22.x"
+                "\n        mad r23.y, r22.y, -r22.y, r23.y"
+                "\n        mul r24.y, r22.x, r22.y"
+                "\n        add r24.y, r24.y, r24.y"
+                "\n        mul r23.zw, r23.xxxy, r23.y"
+                "\n        mad r23.zw, r24.xxxy, -r24.y, r23"
+                "\n        mul r24.zw, r24.xxxy, r23.y"
+                "\n        mad r24.zw, r23.xxxy, r24.y, r24"
+                "\n        mul r25, r23, r23.w"
+                "\n        mad r25, r24, -r24.w, r25"
+                "\n        mul r26, r24, r23.w"
+                "\n        mad r26, r23, r24.w, r26"
+                // the coefficients, two to a float (lo + 1024 hi, each (v + 1) x 511.5): a_k in r27 / r29, b_k in r28 / r30
+                "\n        mul r28, " + p1 + ", c222.y"
+                "\n        frc r27, r28"
+                "\n        add r28, r28, -r27"
+                "\n        mad r27, r28, -c222.x, " + p1 +
+                "\n        mad r27, r27, c222.z, c222.w"
+                "\n        mad r28, r28, c222.z, c222.w"
+                "\n        mul r30, " + p2 + ", c222.y"
+                "\n        frc r29, r30"
+                "\n        add r30, r30, -r29"
+                "\n        mad r29, r30, -c222.x, " + p2 +
+                "\n        mad r29, r29, c222.z, c222.w"
+                "\n        mad r30, r30, c222.z, c222.w"
+                // the outline's distance there, r = 1 + sum a_k cos k t + b_k sin k t (r22.z), and its slope dr/dt (r22.w)
+                "\n        dp4 r22.z, r27, r23"
+                "\n        dp4 r22.w, r28, r24"
+                "\n        add r22.z, r22.z, r22.w"
+                "\n        dp4 r22.w, r29, r25"
+                "\n        add r22.z, r22.z, r22.w"
+                "\n        dp4 r22.w, r30, r26"
+                "\n        add r22.z, r22.z, r22.w"
+                "\n        add r22.z, r22.z, c175.x"
+                "\n        mul r28, r28, r23"
+                "\n        mad r28, r27, -r24, r28"
+                "\n        mul r30, r30, r25"
+                "\n        mad r30, r29, -r26, r30"
+                "\n        dp4 r22.w, r28, c223"
+                "\n        dp4 r27.x, r30, c223"
+                "\n        dp4 r27.y, r30, c175.x"
+                "\n        mad r27.x, r27.y, c173.w, r27.x"
+                "\n        add r22.w, r22.w, r27.x"
+                // the band's phase, clamped to -pi..pi (where its raised cosine and its slope are nothing)
+                "\n        add r27.x, r21.z, -r22.z"
+                "\n        mad r27.x, r27.x, c173.x, c173.y"
+                "\n        max r27.x, r27.x, -c174.y"
+                "\n        min r27.x, r27.x, c174.y"
+                "\n        sincos r29.xy, r27.x"
+                // the band's slope on the ground, (cos t + dr/q sin t, sin t - dr/q cos t) / r0, made a unit
+                "\n        mul r27.y, r22.w, r21.w"
+                "\n        mad r28.x, r27.y, r22.y, r22.x"
+                "\n        mad r28.y, r27.y, -r22.x, r22.y"
+                "\n        mul r28.xy, r28, " + a + ".z"
+                "\n        dp2add r28.z, r28, r28, c175.y"
+                "\n        max r28.z, r28.z, c174.z"
+                "\n        rsq r28.z, r28.z"
+                "\n        mul r28.xy, r28, r28.z"
+                // strength (a.w's fraction / 0.99); slope -= sin x strength along it, height += (1 + cos) / 2 x strength
+                "\n        frc r27.z, " + a + ".w"
+                "\n        mul r27.z, r27.z, c173.z"
+                "\n        mul r27.w, r29.y, r27.z"
+                "\n        mad r19.zw, r28.xxxy, -r27.w, r19"
+                "\n        add r29.x, r29.x, c175.x"
+                "\n        mul r29.x, r29.x, c175.z"
+                "\n        mad r20.z, r29.x, r27.z, r20.z";
+        }
+
         std::string RingBlock(const std::string& vP)
         {
             std::string s =
@@ -205,47 +291,58 @@ namespace wxl_livingazeroth::modelice
                 "\n      dp3 r20.x, " + vP + ", c181"
                 "\n      dp3 r20.y, " + vP + ", c182"
                 "\n      add r20.xy, r20, c180"
-                "\n      mov r24.xyz, c175.y"
-                "\n      mov r25.zw, c173.xxxy";
+                "\n      mov r20.z, c175.y"
+                "\n      mov r19, c175.y"
+                "\n      mov r13, c175.y"
+                "\n      mov r14, c175.y"
+                "\n      mov r15, c175.y"
+                "\n      mov r16, c175.y"
+                "\n      mov r17, c175.y"
+                "\n      mov r18, c175.y";
             for (int k = 0; k < kWmoRings; ++k)
             {
-                const std::string p = "c" + std::to_string(kRingConstant + 2 * k), q = "c" + std::to_string(kRingConstant + 2 * k + 1);
-                s += "\n      add r21.xy, r20, -" + p +
-                     "\n      mov r22, " + p + ".zwxw" +
-                     "\n      mov r22.zw, " + p + ".xxwz" +
-                     "\n      mul r22.z, r22.z, -c175.x"
-                     "\n      dp2add r23.x, r21, r22, c175.y"
-                     "\n      dp2add r23.y, r21, r22.zwzw, c175.y"
-                     "\n      mul r23.xy, r23, " + q +
-                     "\n      dp2add r23.z, r23, r23, c175.y"
-                     "\n      max r23.z, r23.z, c174.z"
-                     "\n      rsq r23.w, r23.z"
-                     "\n      mul r23.z, r23.z, r23.w"
-                     "\n      mad r24.w, r23.z, r25.z, r25.w"
-                     "\n      max r24.w, r24.w, -c174.y"
-                     "\n      min r24.w, r24.w, c174.y"
-                     "\n      sincos r26.xy, r24.w"
-                     "\n      mul r27.xy, r23, " + q +
-                     "\n      mul r27.xy, r27, r23.w"
-                     "\n      mul r28.xy, r22, r27.x"
-                     "\n      mad r28.xy, r22.zwzw, r27.y, r28"
-                     "\n      dp2add r28.z, r28, r28, c175.y"
-                     "\n      max r28.z, r28.z, c174.z"
-                     "\n      rsq r28.z, r28.z"
-                     "\n      mul r28.xy, r28, r28.z"
-                     "\n      mul r26.y, r26.y, " + q + ".z"
-                     "\n      mad r24.xy, r28, -r26.y, r24"
-                     "\n      add r26.x, r26.x, c175.x"
-                     "\n      mul r26.x, r26.x, c175.z"
-                     "\n      mad r24.z, r26.x, " + q + ".z, r24.z";
+                const std::string a = "c" + std::to_string(kRingConstant + 3 * k), p1 = "c" + std::to_string(kRingConstant + 3 * k + 1),
+                                  p2 = "c" + std::to_string(kRingConstant + 3 * k + 2);
+                // Within its reach (a.w's whole part, 1/1024 yd; never for a rim not in use): r21.y; the second found
+                // (r21.z) or the first (r21.w).
+                s += "\n      add r21.xy, r20, -" + a +
+                     "\n      max r21.x, r21_abs.x, r21_abs.y"
+                     "\n      mad r21.x, r21.x, c222.x, -c222.w"
+                     "\n      add r21.x, r21.x, -" + a + ".w"
+                     "\n      cmp r21.y, r21.x, c175.y, c175.x"
+                     "\n      mul r21.z, r21.y, r19.x"
+                     "\n      add r21.w, r21.y, -r21.z"
+                     "\n      cmp r16, -r21.z, r16, " + a +
+                     "\n      cmp r17, -r21.z, r17, " + p1 +
+                     "\n      cmp r18, -r21.z, r18, " + p2 +
+                     "\n      cmp r13, -r21.w, r13, " + a +
+                     "\n      cmp r14, -r21.w, r14, " + p1 +
+                     "\n      cmp r15, -r21.w, r15, " + p2 +
+                     "\n      max r19.y, r19.y, r21.z"
+                     "\n      max r19.x, r19.x, r21.y";
             }
-            s += "\n      mov r26.xy, c191"
-                 "\n      dp2add r25.x, r24, r26, c175.y"
+            s += "\n      if_gt r19.x, c175.y" + RingOne("r13", "r14", "r15") +
+                 "\n      endif"
+                 "\n      if_gt r19.y, c175.y" + RingOne("r16", "r17", "r18") +
+                 "\n      endif"
+                 "\n      mov r26.xy, c191"
+                 "\n      dp2add r25.x, r19.zwzw, r26, c175.y"
                  "\n      mul r25.x, r25.x, c191.z"
-                 "\n      mad r25.x, r24.z, c191.w, r25.x"
+                 "\n      mad r25.x, r20.z, c191.w, r25.x"
                  "\n      mad r31.xyz, r12, r25.x, r31"
                  "\n    endif";
             return s;
+        }
+
+        // The defined constants the rims block reads besides c174, c175: c173 = (2 pi / kRimBand, -kRimOffset x that,
+        // 1 / 0.99, 4), c222 = (1024, 1 / 1024, 1 / 511.5, -1), c223 = (1, 2, 3, 4).
+        std::string RingDefs()
+        {
+            char line[256];
+            const double phase = 6.283185307179586 / cover::ripples::kRimBand;
+            std::snprintf(line, sizeof(line), "    def c173, %.7g, %.7g, %.7g, 4\n    def c222, 1024, 0.0009765625, %.9g, -1\n    def c223, 1, 2, 3, 4\n",
+                          phase, -cover::ripples::kRimOffset * phase, 1.0 / 0.99, 1.0 / 511.5);
+            return line;
         }
 
         // The ice block, view space: N, V; world-space normal, view direction and position (camera +
@@ -371,7 +468,7 @@ namespace wxl_livingazeroth::modelice
         bool EditPixel(std::string& src, std::string& why, bool rims)
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
-            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c17[3-9]|c18[0-9]|c19[0-9]|c2[01][0-9])\b)");
+            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c17[3-9]|c18[0-9]|c19[0-9]|c2[0-2][0-9])\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
             // The variant's view-space position and normal: what its shadow fade reads (dp3 with c3) and
             // what its sun-facing term reads (dp3 with c4). Shadow-less variants have neither.
@@ -434,8 +531,7 @@ namespace wxl_livingazeroth::modelice
                        "    def c176, 0.2126, 0.7152, 0.0722, 0.2\n"
                        "    def c177, 0.6, 0.4, 0.35, 0.65\n"
                        "    def c178, 0.04, 0.96, 0.55, 0.4\n"
-                       "    def c174, 1.3, 3.14159265, 0.000001, 0\n"
-                       "    def c173, 11.42397, -12.79485, 0, 0\n"
+                       "    def c174, 1.3, 3.14159265, 0.000001, 0\n" + RingDefs() +
                        "    dcl_2d s14\n");
             return true;
         }
@@ -605,6 +701,127 @@ namespace wxl_livingazeroth::modelice
 
     bool EditPixelForTests(std::string& src, std::string& why) { return EditPixel(src, why, false); }
     bool EditPixelWmoForTests(std::string& src, std::string& why) { return EditPixel(src, why, true); }
+
+    std::string RingBlockSelfTest(void* device)
+    {
+        namespace rp = cover::ripples;
+        auto* dev = static_cast<IDirect3DDevice9*>(device);
+        if (!dev) return "no device";
+        // A boot turned 30 degrees, a paw turned the other way and mirrored, and an oval (overlapping the boot's), near
+        // the world's origin (the pixels' positions come in as texture coordinates); strengths 1, 0.6, 0.8.
+        const float at[2] = { 3.25f, -2.5f };
+        const auto mapping = [](float turn, float acrossYd, float alongYd, bool mirrored, float map[6])
+        {
+            const float c = std::cos(turn), sn = std::sin(turn), m = mirrored ? -1.0f : 1.0f;
+            map[0] = m * -sn / acrossYd; map[1] = m * c / acrossYd; map[2] = 0.5f;
+            map[3] = -c / alongYd;       map[4] = -sn / alongYd;    map[5] = 0.5f;
+        };
+        rp::Shape shapes[3];
+        float map[6];
+        mapping(0.52f, 0.15f, 0.33f, false, map);
+        bool ok = rp::ShapeFromPrint(1, map, at[0] - 0.25f, at[1] - 0.2f, shapes[0]);
+        mapping(-1.1f, 0.3f, 0.3f, true, map);
+        ok = rp::ShapeFromPrint(7, map, at[0] + 0.3f, at[1] - 0.15f, shapes[1]) && ok;
+        const float axis[2] = { 0.8f, 0.6f };
+        ok = rp::ShapeFromOval(at[0] - 0.05f, at[1] + 0.2f, axis, 0.165f, 0.075f, shapes[2]) && ok;
+        if (!ok) return "shapes failed";
+        const float strength[3] = { 1.0f, 0.6f, 0.8f };
+        float rings[4 * rp::kRegistersPerRim * kWmoRings] = {};
+        for (int k = 0; k < 3; ++k) rp::PackRim(shapes[k], 0.0f, 0.0f, strength[k], rings + k * 4 * rp::kRegistersPerRim);
+
+        const std::string text = "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c174, 1.3, 3.14159265, 0.000001, 0\n" + RingDefs() +
+                                 "    defb b8, true\n    dcl_texcoord0 v0.xyz\n    mov r12.xyz, c175.x\n    mov r31.xyz, c175.y" + RingBlock("v0") +
+                                 "\n    mov oC0.xyz, r31\n    mov oC0.w, c175.x\n";
+        std::vector<uint8_t> code;
+        std::string why;
+        if (!shaderpatch::Assemble(text, "rims self-test", code, why)) return "FAIL the rims block doesn't assemble: " + why;
+        constexpr int kSide = 120;
+        constexpr float kFrom = -0.65f, kTo = 0.65f;
+        IDirect3DPixelShader9* ps = nullptr;
+        IDirect3DSurface9* target = nullptr;
+        IDirect3DSurface9* readback = nullptr;
+        IDirect3DSurface9* oldTarget = nullptr;
+        IDirect3DStateBlock9* saved = nullptr;
+        const auto cleanup = [&]()
+        {
+            if (ps) ps->Release();
+            if (target) target->Release();
+            if (readback) readback->Release();
+            if (oldTarget) { dev->SetRenderTarget(0, oldTarget); oldTarget->Release(); }
+            if (saved) { saved->Apply(); saved->Release(); }
+        };
+        if (FAILED(dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps)) ||
+            FAILED(dev->CreateRenderTarget(kSide, kSide, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
+            FAILED(dev->CreateOffscreenPlainSurface(kSide, kSide, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
+        { cleanup(); return "FAIL creating the rims shader or its target"; }
+        dev->GetRenderTarget(0, &oldTarget);
+        dev->CreateStateBlock(D3DSBT_ALL, &saved);
+        struct V { float x, y, z, w, u, v, s; };
+        const float e = static_cast<float>(kSide) - 0.5f;
+        const V quad[4] = { { -0.5f, -0.5f, 0, 1, at[0] + kFrom, at[1] + kFrom, 0 }, { e, -0.5f, 0, 1, at[0] + kTo, at[1] + kFrom, 0 },
+                            { -0.5f, e, 0, 1, at[0] + kFrom, at[1] + kTo, 0 },  { e, e, 0, 1, at[0] + kTo, at[1] + kTo, 0 } };
+        const float view[12] = { 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0 };   // c180: no offset; c181, c182: x and y as they are
+        // Three draws: the height (c191 = height gain 1), then the slope's x and y (the "sun" along each, slope gain 1).
+        const float controls[3][4] = { { 0, 0, 0, 1 }, { 1, 0, 1, 0 }, { 0, 1, 1, 0 } };
+        std::vector<float> out[3];
+        for (int pass = 0; pass < 3; ++pass)
+        {
+            dev->SetRenderTarget(0, target);
+            D3DVIEWPORT9 vp{ 0, 0, kSide, kSide, 0.0f, 1.0f };
+            dev->SetViewport(&vp);
+            dev->SetRenderState(D3DRS_ZENABLE, FALSE); dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+            dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE); dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+            dev->SetVertexShader(nullptr); dev->SetPixelShader(ps);
+            dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1 | D3DFVF_TEXCOORDSIZE3(0));
+            dev->SetPixelShaderConstantF(kLookConstant, view, 3);
+            dev->SetPixelShaderConstantF(kRingControl, controls[pass], 1);
+            dev->SetPixelShaderConstantF(kRingConstant, rings, rp::kRegistersPerRim * kWmoRings);
+            if (FAILED(dev->BeginScene())) { cleanup(); return "FAIL begin scene"; }
+            dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(V));
+            dev->EndScene();
+            D3DLOCKED_RECT lr{};
+            if (FAILED(dev->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY)))
+            { cleanup(); return "FAIL read back"; }
+            out[pass].resize(static_cast<size_t>(kSide) * kSide);
+            for (int row = 0; row < kSide; ++row)
+                for (int col = 0; col < kSide; ++col)
+                    out[pass][static_cast<size_t>(row) * kSide + col] =
+                        reinterpret_cast<const float*>(static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch)[col * 4];
+            readback->UnlockRect();
+        }
+        cleanup();
+        // CoverRipples' own working, with the shapes as the shader got them (no fade for a coarse pixel: the buildings'
+        // block has none).
+        rp::Shape seen[3];
+        float seenStrength[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            const float* o = rings + k * 4 * rp::kRegistersPerRim;
+            seen[k] = rp::AsPacked(shapes[k]);
+            seen[k].cx = o[0]; seen[k].cy = o[1]; seen[k].r0 = 1.0f / o[2];
+            seenStrength[k] = (o[3] - std::floor(o[3])) / 0.99f;
+        }
+        float worstH = 0.0f, worstG = 0.0f, mostG = 0.0f, peak = 0.0f;
+        int lit = 0;
+        for (int j = 0; j < kSide; ++j)
+            for (int i = 0; i < kSide; ++i)
+            {
+                const float x = at[0] + kFrom + (i + 0.5f) / kSide * (kTo - kFrom), y = at[1] + kFrom + (j + 0.5f) / kSide * (kTo - kFrom);
+                float h = 0.0f, g[2] = { 0.0f, 0.0f };
+                for (int k = 0; k < 3; ++k) rp::RimShade(seen[k], seenStrength[k], x, y, 1e-6f, h, g);
+                const size_t p = static_cast<size_t>(j) * kSide + i;
+                worstH = std::max(worstH, std::fabs(out[0][p] - h));
+                worstG = std::max(worstG, std::hypot(out[1][p] - g[0], out[2][p] - g[1]));
+                mostG = std::max(mostG, std::hypot(g[0], g[1]));
+                peak = std::max(peak, out[0][p]);
+                lit += out[0][p] > 0.05f ? 1 : 0;
+            }
+        char line[256];
+        std::snprintf(line, sizeof(line), "buildings' rims: GPU against CoverRipples over %d x %d pixels: height off by up to %.4f (peak %.3f, %d pixels lit), slope by %.4f of %.3f",
+                      kSide, kSide, worstH, peak, lit, worstG, mostG);
+        if (worstH > 0.02f || worstG > 0.02f * mostG || peak < 0.9f || lit < 300) return std::string("FAIL ") + line;
+        return line;
+    }
 
     void Register()
     {

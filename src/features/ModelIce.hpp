@@ -13,12 +13,14 @@
 // (the look), c190 (more of the style), s14. Stock M2 pixel shaders use r0..r11, c0..c14, s0..s7 and no
 // b/i registers.
 //
-// Behind b8, after the ice: still rims around footprints on the sand floors of buildings (features/WmoIce switches it
-// on for sand-textured batches; the rims come from features/SurfaceCover's prints, CoverRipples.hpp's shape). The
-// Caverns of Time are a building: "caverns of time sand still does not work for footprints sadly" (the user,
-// 2026-10-11). Up to kWmoRings rims in c192.. (two registers each: x, y and the direction the print points; 1 / its
-// outline's semi-axes, strength), c173 (defined: the rim's phase from the oval's radius), and c191 = the sun's world
-// direction (x, y), the brightness gains of the rim's slope toward it and of its height.
+// Behind b8, after the ice: still rims around footprints on the sand and snow floors of buildings (features/WmoIce
+// switches it on for those batches; the rims come from features/SurfaceCover's prints). The Caverns of Time are a
+// building: "caverns of time sand still does not work for footprints sadly" (the user, 2026-10-11); the snowy caves
+// (Ice Heart Cavern) are too. Each rim follows its print's own outline, as on the terrain's cover (CoverRipples.hpp's
+// Shape; "yes can you do this?", the user, 2026-10-12). Up to kWmoRings rims in c192.. (three registers each, PackRim's
+// with world coordinates; a rim not in use is zeros), c173, c222, c223 (defined: the band's phase, the coefficients'
+// unpacking, the harmonics' orders), and c191 = the sun's world direction (x, y), the brightness gains of the rim's
+// slope toward it and of its height.
 //
 // Frozen waterfalls get their own style: brighter, glassier ice whose detail is streaked along the
 // flow, at a scale that still reads from a distance (Bor's Fall in the Storm Peaks is 366 yd tall).
@@ -76,8 +78,13 @@ namespace wxl_livingazeroth::modelice
     constexpr int kSwitch = 7;   // PS bool register b7
     constexpr int kRingSwitch = 8;     // PS bool register b8: the footprint rims
     constexpr int kRingControl = 191;  // sun x, y (world), slope gain, height gain
-    constexpr int kRingConstant = 192; // per rim: (x, y, direction), (1 / semi-axes along and across, strength, 0)
-    constexpr int kWmoRings = 12;
+    constexpr int kRingConstant = 192; // per rim, three registers: CoverRipples.hpp's PackRim, about the world's origin
+    constexpr int kWmoRings = 10;      // c192..c221
+
+    /// The rims block drawn by the GPU (a shader of just the block, on a device of its own, tests) against CoverRipples'
+    /// RimShade for a boot, a mirrored paw and an oval, two of them overlapping: height and slope. A line saying how
+    /// close they came, starting with "FAIL " when they don't agree.
+    std::string RingBlockSelfTest(void* device);
 
     void SetEnabled(bool enabled);
     bool Enabled();

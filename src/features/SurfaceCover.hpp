@@ -40,9 +40,10 @@ namespace wxl_livingazeroth::cover
     /// Whether the client's footprints go on top of the cover now (features/CoverPrints): the setting is
     /// on and the near level was drawn in this scene's terrain stage, before the prints.
     bool PrintsOnCover();
-    /// Rims around prints on building floors (features/WmoIce draws them on sand-textured batches): up to `max`, the
-    /// newest first, 8 floats each for its constants: (x, y, the direction it points), (1 / its outline's semi-axis
-    /// along, 1 / across, strength, 0). Returns how many.
+    /// Rims around prints on building floors (features/WmoIce draws them on sand and snow floors): up to `max`, the
+    /// newest first, kWmoRingRegisters registers each (CoverRipples.hpp's PackRim, in world coordinates). Returns how
+    /// many.
+    constexpr int kWmoRingRegisters = 3;
     unsigned WmoRings(float* out, unsigned max);
     /// The uploads of only the changed cells against a full upload of the same data, read back from the GPU (tests,
     /// on a device of their own): a level of random data, then scattered cells, a row strip and a column strip
