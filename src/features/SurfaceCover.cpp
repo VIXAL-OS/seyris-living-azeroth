@@ -1549,20 +1549,9 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                         if (id > 0 && id <= ids && ((L.texShares[sl] >> (8 * k)) & 0xFF)) ++count[id];
                     }
             }
-            std::vector<int> wanted;
-            for (int id = 1; id <= ids; ++id) if (count[id]) wanted.push_back(id);
-            std::sort(wanted.begin(), wanted.end(), [&](int x, int y) { return count[x] > count[y]; });
-            g_texturesInView = static_cast<unsigned>(wanted.size());
-            if (wanted.size() > static_cast<size_t>(covertable::kMaxCoverTextures)) wanted.resize(covertable::kMaxCoverTextures);
-
-            bool changed = false;
-            for (int& t : g_slotId) // residents not wanted any more free their slot
-                if (t && std::find(wanted.begin(), wanted.end(), t) == wanted.end()) { t = 0; changed = true; }
-            for (int id : wanted)
-            {
-                if (std::find(std::begin(g_slotId), std::end(g_slotId), id) != std::end(g_slotId)) continue;
-                for (int& t : g_slotId) if (!t) { t = id; changed = true; break; }
-            }
+            g_texturesInView = 0;
+            for (int id = 1; id <= ids; ++id) g_texturesInView += count[id] ? 1 : 0;
+            const bool changed = blend::ChooseSlots(count, g_slotId, covertable::kMaxCoverTextures);
             if (!changed && g_slotOfId.size() == static_cast<size_t>(ids) + 1) return;
 
             g_slotOfId.assign(static_cast<size_t>(ids) + 1, -1);
@@ -1589,7 +1578,9 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     const int id = static_cast<int>((L.texIds[sl] >> (16 * k)) & 0xFFFF);
                     const int slot = id > 0 && id < static_cast<int>(g_slotOfId.size()) ? g_slotOfId[id] : -1;
                     if (slot >= 0) w[slot] = static_cast<uint8_t>((L.texShares[sl] >> (8 * k)) & 0xFF);
-                    else if (id > 0 && g_slotFrame > kSlotHurryFrames) g_slotFrame = kSlotHurryFrames;
+                    else if (id > 0 && g_slotFrame > kSlotHurryFrames &&
+                             blend::HurryRecount(g_texturesInView, covertable::kMaxCoverTextures))
+                        g_slotFrame = kSlotHurryFrames;
                 }
             };
             for (int sl = first * kTex; sl < end * kTex; ++sl)

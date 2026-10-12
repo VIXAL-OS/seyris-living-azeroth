@@ -472,6 +472,33 @@ int main(int argc, char** argv)
             }
             CHECK(Near(blend::BareSnowLookShare(0.2f, 0.1f, 0.1f), 0.2f * 0.5f));
         });
+        Test("slots: residents stay while the counts near the cut wobble; a new texture takes a free slot; no hurry without room", []
+        {
+            const int kSlots = 8;
+            int slots[kSlots] = {};
+            std::vector<unsigned> count(13, 0);
+            for (int id = 1; id <= 10; ++id) count[id] = 100 - id;   // ten textures in view, eight slots
+            CHECK(blend::ChooseSlots(count, slots, kSlots));
+            for (int id = 1; id <= 8; ++id) CHECK(std::find(slots, slots + kSlots, id) != slots + kSlots);
+            // The 9th and 10th creep past the 8th (but not by half again): nothing moves.
+            count[9] = count[8] + 10; count[10] = count[8] + 20;
+            int before[kSlots]; std::copy(slots, slots + kSlots, before);
+            for (int round = 0; round < 20; ++round)
+            {
+                count[8] += (round % 2) ? 15 : -15;
+                CHECK(!blend::ChooseSlots(count, slots, kSlots));
+            }
+            CHECK(std::equal(slots, slots + kSlots, before));
+            // One clearly more present (over 1.5 x) takes the weakest resident's slot.
+            count[10] = count[8] * 2 + 50;
+            CHECK(blend::ChooseSlots(count, slots, kSlots));
+            CHECK(std::find(slots, slots + kSlots, 10) != slots + kSlots && std::find(slots, slots + kSlots, 8) == slots + kSlots);
+            // A texture gone from view frees its slot; a well-present newcomer takes it.
+            count[2] = 0; count[11] = 300;
+            CHECK(blend::ChooseSlots(count, slots, kSlots));
+            CHECK(std::find(slots, slots + kSlots, 2) == slots + kSlots && std::find(slots, slots + kSlots, 11) != slots + kSlots);
+            CHECK(blend::HurryRecount(8, kSlots) && blend::HurryRecount(3, kSlots) && !blend::HurryRecount(9, kSlots));
+        });
         Test("look rule: two cover textures keep their shares exactly; more give the others' share to the strongest two", []
         {
             const float cases[][5] = { { 0.7f, 0, 0, 0, 0 }, { 0.3f, 0.6f, 0, 0, 0 }, { 0.5f, 0.5f, 0, 0, 0 }, { 0.5f, 0.3f, 0.2f, 0, 0 },

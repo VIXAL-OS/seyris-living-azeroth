@@ -4,10 +4,44 @@
 // colour (snow white) would show as pale fringes and blotches.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <vector>
 
 namespace wxl_livingazeroth::cover::blend
 {
+    /// Which cover textures hold the `slots` texture slots (slotId, 0 = free): the most present by `count` (sampled
+    /// cells per texture ID; [0] unused), a resident counting kResidentBonus x, so textures near the cut don't trade
+    /// places at every recount -- each trade re-uploads every level's texture weights. True when a slot changed.
+    /// With more textures in view than slots (Northrend: snow, ice and the coast sands), the hurried recount traded
+    /// them every 2 frames: the cover's draw went from 0.1 to 6 ms a frame ("huge framerate dip", the user,
+    /// 2026-10-11).
+    constexpr float kResidentBonus = 1.5f;
+    inline bool ChooseSlots(const std::vector<unsigned>& count, int* slotId, int slots)
+    {
+        const int ids = static_cast<int>(count.size()) - 1;
+        auto resident = [&](int id) { return std::find(slotId, slotId + slots, id) != slotId + slots; };
+        std::vector<int> wanted;
+        for (int id = 1; id <= ids; ++id) if (count[id]) wanted.push_back(id);
+        auto score = [&](int id) { return static_cast<float>(count[id]) * (resident(id) ? kResidentBonus : 1.0f); };
+        std::stable_sort(wanted.begin(), wanted.end(), [&](int a, int b) { return score(a) > score(b); });
+        if (static_cast<int>(wanted.size()) > slots) wanted.resize(static_cast<size_t>(slots));
+        bool changed = false;
+        for (int i = 0; i < slots; ++i) // residents not wanted any more free their slot
+            if (slotId[i] && std::find(wanted.begin(), wanted.end(), slotId[i]) == wanted.end()) { slotId[i] = 0; changed = true; }
+        for (int id : wanted)
+        {
+            if (resident(id)) continue;
+            for (int i = 0; i < slots; ++i) if (!slotId[i]) { slotId[i] = id; changed = true; break; }
+        }
+        return changed;
+    }
+
+    /// Whether a look naming a texture no slot holds should bring the next recount forward (a place just loaded in):
+    /// only while there is room for it. With more textures in view than slots the least present ones go without,
+    /// and the recount keeps its own pace.
+    inline bool HurryRecount(unsigned texturesInView, int slots) { return texturesInView <= static_cast<unsigned>(slots); }
+
     /// How much the bare ground's fallen-snow look counts at a spot, from how much of it is painted
     /// with a cover (covered, 0..1) and how much of that is snow or another cover. All of it where
     /// nothing is painted, none from a quarter covered up. Beside painted covers that aren't snow
