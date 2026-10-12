@@ -468,7 +468,7 @@ namespace wxl_livingazeroth::modelice
         bool EditPixel(std::string& src, std::string& why, bool rims)
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
-            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c17[3-9]|c18[0-9]|c19[0-9]|c2[0-2][0-9])\b)");
+            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
             // The variant's view-space position and normal: what its shadow fade reads (dp3 with c3) and
             // what its sun-facing term reads (dp3 with c4). Shadow-less variants have neither.

@@ -41,10 +41,13 @@ namespace wxl_livingazeroth::cover
     /// on and the near level was drawn in this scene's terrain stage, before the prints.
     bool PrintsOnCover();
     /// Rims around prints on building floors (features/WmoIce draws them on sand and snow floors): up to `max`, the
-    /// newest first, kWmoRingRegisters registers each (CoverRipples.hpp's PackRim, in world coordinates). Returns how
-    /// many.
+    /// newest first, kWmoRingRegisters registers each (CoverRipples.hpp's PackRim, in world coordinates), for a snow
+    /// floor (kWmoSnowRelaxSeconds) or a sand one (sand's 10 s). Returns how many.
     constexpr int kWmoRingRegisters = 3;
-    unsigned WmoRings(float* out, unsigned max);
+    /// Snow fills a print back in over this long (x the relax setting) on building floors: its rims last 2.5 x that,
+    /// 90 s, where sand's last 25 s ("snow rims work but fade too fast imo", the user, 2026-10-12).
+    constexpr float kWmoSnowRelaxSeconds = 36.0f;
+    unsigned WmoRings(float* out, unsigned max, bool snow);
     /// The rims' shading as the panel sets it (the terrain's cover uses them as they are): the steepest slope's tilt of
     /// the normal and the crest's brightening.
     void RingShading(float& slope, float& brightness);

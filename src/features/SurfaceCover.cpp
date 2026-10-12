@@ -246,7 +246,7 @@ namespace wxl_livingazeroth::cover
         // the client puts down get still rings around them (CoverRipples.hpp).
         std::vector<float> g_rippleCell(kTex * kTex, 0.0f);
         ripples::Set                       g_ripples;
-        ripples::Set                       g_wmoRipples(32); // prints on building floors (features/WmoIce draws them)
+        ripples::Set                       g_wmoRipples(64); // prints on building floors (features/WmoIce draws them)
         unsigned                           g_wmoRipplesMade = 0;
         // Each unit's last two prints, newest first (x, y pairs): which way its next one points.
         struct UnitPrints { float xy[4] = {}; int count = 0; };
@@ -1489,10 +1489,10 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             if (!terrain::HeightAt(unit->pos[0], unit->pos[1], ground) || std::fabs(unit->pos[2] - ground) > 0.35f)
             {
                 // On a building's floor (the Caverns of Time, the snowy caves): features/WmoIce draws these on its sand
-                // and snow floors only. Sand's own fill-in time.
+                // and snow floors only. Kept as long as snow's fill-in time; on sand they fade by sand's (WmoRings).
                 if (shape()) ++g_ripplesShaped;
                 if (!(r.shape.r0 > 0.0f)) return;
-                r.life = ripples::LifeFor(10.0f * g_settings.relaxMul);
+                r.life = ripples::LifeFor(kWmoSnowRelaxSeconds * g_settings.relaxMul);
                 g_wmoRipples.Add(r);
                 ++g_wmoRipplesMade;
                 return;
@@ -2923,8 +2923,9 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         brightness = g_settings.rippleBright;
     }
 
-    unsigned WmoRings(float* out, unsigned max)
+    unsigned WmoRings(float* out, unsigned max, bool snow)
     {
+        const float sandLife = ripples::LifeFor(10.0f * g_settings.relaxMul);
         if (!g_settings.enabled || !g_settings.ripples) return 0;
         // The newest first: the list keeps its order of arrival except where a newer one took an oldest's place.
         std::vector<const ripples::Ripple*> live;
@@ -2934,7 +2935,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         for (const ripples::Ripple* r : live)
         {
             if (n >= max) break;
-            const float strength = ripples::Strength(g_rippleClock - r->born, r->life);
+            const float strength = ripples::Strength(g_rippleClock - r->born, snow ? r->life : std::min(r->life, sandLife));
             if (strength <= 0.0f || !(r->shape.r0 > 0.0f)) continue;
             ripples::PackRim(r->shape, 0.0f, 0.0f, strength, out + n * 4 * kWmoRingRegisters);
             ++n;

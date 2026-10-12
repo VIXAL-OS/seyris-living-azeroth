@@ -82,7 +82,7 @@ namespace wxl_livingazeroth::wmoice
             const void* motx = nullptr;
             const void* materials = nullptr;
             std::vector<uint8_t> ice;     // per material: its modelice::Style (0 = not ice)
-            std::vector<uint8_t> sand;    // per material: its texture is sand (the footprint rims)
+            std::vector<uint8_t> sand;    // per material: its texture is a floor with footprint rims (1 sand, 2 snow)
             bool any = false, anySand = false;
         };
         std::unordered_map<const void*, RootIce> g_cache;
@@ -149,7 +149,8 @@ namespace wxl_livingazeroth::wmoice
                     {
                         if (const modelice::Style style = StyleOfTexture(name); style != modelice::Style::None)
                         { r.ice[i] = static_cast<uint8_t>(style); r.any = true; }
-                        if (IsSandTexture(name) || IsSnowFloorTexture(name)) { r.sand[i] = 1; r.anySand = true; }
+                        if (IsSandTexture(name)) { r.sand[i] = 1; r.anySand = true; }
+                        else if (IsSnowFloorTexture(name)) { r.sand[i] = 2; r.anySand = true; }
                     }
                 ++g_roots;
                 g_iceRoots += r.any ? 1 : 0;
@@ -213,12 +214,12 @@ namespace wxl_livingazeroth::wmoice
             }
         }
 
-        void RingsOn()
+        void RingsOn(bool snow)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             if (!dev) return;
             float rings[4 * cover::kWmoRingRegisters * modelice::kWmoRings] = {};   // a rim not in use stays zeros
-            if (!cover::WmoRings(rings, modelice::kWmoRings)) { RingsOff(); return; }
+            if (!cover::WmoRings(rings, modelice::kWmoRings, snow)) { RingsOff(); return; }
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
             // c184 is the sun's direction in view space; the rows c181..c183 turn it to world.
@@ -243,17 +244,17 @@ namespace wxl_livingazeroth::wmoice
             const char culled = g_origCull(record);
             if (!g_depth || culled) return culled;
             modelice::Style style = modelice::Style::None;
-            bool sand = false;
+            uint8_t floor = 0;   // 1 sand, 2 snow
             if (const RootIce* r = g_rootIce)
             {
                 uint8_t index = 0;
                 if (ReadMaterialIndex(record, index) && index < r->ice.size())
                 {
                     style = static_cast<modelice::Style>(r->ice[index]);
-                    sand = r->sand[index] != 0;
+                    floor = r->sand[index];
                 }
             }
-            if (sand) RingsOn();
+            if (floor) RingsOn(floor == 2);
             else RingsOff();
             if (style != modelice::Style::None)
             {
