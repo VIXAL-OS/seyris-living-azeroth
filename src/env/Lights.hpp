@@ -145,7 +145,8 @@ namespace wxl_livingazeroth::lights
         unsigned bakeWanted = 0, bakeDone = 0, bakeRays = 0, bakeCached = 0; // drawn lights asking for occlusion, of those ready; rays this frame; cache entries
         double   bakeMs = 0.0;                                                // time spent casting this frame
         double   candMs = 0.0, mergeMs = 0.0, activeMs = 0.0, gridMs = 0.0;   // this frame's steps (scanMs: the last scan)
-        double   scanMs = 0.0;
+        double   scanMs = 0.0;                                                // the last scan pass, all its slices
+        unsigned scanFrames = 0, scanRestarts = 0;                            // the frames it took; times it went back to the head
     };
 
     /// Every model the client's M2 scene holds near a point: map doodads, WMO doodads, game objects

@@ -2,6 +2,7 @@
 
 #include "../features/DoodadLightTable.hpp"
 #include "../features/GrassPerf.hpp"
+#include "SceneWalk.hpp"
 
 #include "game/Camera.hpp"
 #include "game/Doodad.hpp"
@@ -14,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace wxl_livingazeroth::lights
 {
@@ -174,6 +176,8 @@ namespace wxl_livingazeroth::lights
             const void* follow = nullptr;
             float localPos[3] = {}, localDir[3] = { 0.0f, 0.0f, -1.0f };
             const void* model = nullptr;  // the instance it belongs to
+            const void* shared = nullptr; // its model file object at the scan: while the instance still points at it,
+                                          // it is the same model (a scan's list now lives a second or two: env/SceneWalk.hpp)
             bool  bake = false;           // its DoodadLightProperties ask for baked occlusion
         };
         std::vector<Source>      g_sources;
@@ -198,7 +202,8 @@ namespace wxl_livingazeroth::lights
         float MatrixScale(const float m[16]) { return std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]); }
 
         // A table light on one placed doodad (or attached model: `follow`).
-        void AddTableLight(const lighttable::Assignment& a, const uint8_t* hdr, const float world[16], const void* model, const void* follow, Stats& st)
+        void AddTableLight(const lighttable::Assignment& a, const uint8_t* hdr, const float world[16], const void* model, const void* follow,
+                           const void* shared, std::vector<Source>& out, Stats& st)
         {
             const lighttable::Properties* p = lighttable::FindProperties(a.lightId);
             if (!p) return;
@@ -227,7 +232,8 @@ namespace wxl_livingazeroth::lights
                 s.spotScale = inner - s.cosOuter > 1e-4f ? 1.0f / (inner - s.cosOuter) : 1e4f;
             }
             s.flickerMode = p->flickerMode; s.flickerSpeed = p->flickerSpeed; s.flickerAmount = p->flickerAmount;
-            g_sources.push_back(s);
+            s.shared = shared;
+            out.push_back(s);
             ++st.tableLights;
         }
 
@@ -251,67 +257,55 @@ namespace wxl_livingazeroth::lights
             return rc.rows;
         }
 
-        void ScanModels(const float center[3])
+        // The lights one model in range brings into `out`: its DoodadLightAssignment rows (unless they switch its own
+        // off) and its own point lights.
+        void ExtractLights(const SceneModel& m, bool haveTable, std::vector<Source>& out, Stats& st)
         {
-            const double t0 = grassperf::Now();
-            g_sources.clear();
-            Stats st;
-            static std::vector<SceneModel> models;
-            st.models = SceneModels(center, g_settings.range, models);
-            st.modelsInRange = static_cast<unsigned>(models.size());
-            const bool haveTable = !lighttable::AllAssignments().empty();
+            if (!m.header) return;
+            const uint8_t* hdr = m.header;
+            const void* shared = nullptr;
+            Get(m.model, dd::off::kInstModel, shared);
 
-            for (const SceneModel& m : models)
-            {
-                if (!m.header) continue;
-                const uint8_t* hdr = m.header;
-
-                // Table rows for this model: its lights, and whether its own are suppressed.
-                bool suppress = false;
-                if (haveTable && m.path[0])
-                    for (const lighttable::Assignment* a : RowsFor(m.path))
-                    {
-                        if (a->flags & lighttable::kSuppressModelLights) suppress = true;
-                        if (a->lightId) AddTableLight(*a, hdr, m.world, m.model, m.parent ? m.model : nullptr, st);
-                    }
-                if (suppress) { ++st.suppressedModels; continue; }
-
-                // The model's own lights.
-                uint32_t count = 0;
-                const uint8_t* fileLights = nullptr;
-                const uint8_t* records = nullptr;
-                if (!Get(hdr, kHdrLights, count) || !count || count > 64 || !Get(hdr, kHdrLights + 4, fileLights) || !fileLights) continue;
-                Get(m.model, kInstLights, records);
-                for (uint32_t l = 0; l < count; ++l)
+            // Table rows for this model: its lights, and whether its own are suppressed.
+            bool suppress = false;
+            if (haveTable && m.path[0])
+                for (const lighttable::Assignment* a : RowsFor(m.path))
                 {
-                    const uint8_t* fl = fileLights + l * kFileLight;
-                    uint16_t type = 0;
-                    float local[3];
-                    if (!Get(fl, kFileType, type) || type != 1 || !Get(fl, kFilePos, local)) continue; // point lights only
-                    ++st.modelLights;
-                    Source s;
-                    s.cm2 = records ? records + l * kLightRecord + kRecordLight : nullptr;
-                    s.follow = m.parent ? m.model : nullptr;
-                    s.model = m.model;
-                    std::memcpy(s.localPos, local, sizeof(local));
-                    Mul(local, m.world, s.worldPos);
-                    s.scale = MatrixScale(m.world);
-                    float color[3], intensity = 1.0f;
-                    if (FirstTrackValue(fl + kFileDiffuse, color, sizeof(color)))
-                    {
-                        FirstTrackValue(fl + kFileIntensity, &intensity, sizeof(intensity));
-                        for (int c = 0; c < 3; ++c) s.fileColor[c] = color[c] * intensity;
-                        s.haveFileColor = true;
-                    }
-                    g_sources.push_back(s);
+                    if (a->flags & lighttable::kSuppressModelLights) suppress = true;
+                    if (a->lightId) AddTableLight(*a, hdr, m.world, m.model, m.parent ? m.model : nullptr, shared, out, st);
                 }
+            if (suppress) { ++st.suppressedModels; return; }
+
+            // The model's own lights.
+            uint32_t count = 0;
+            const uint8_t* fileLights = nullptr;
+            const uint8_t* records = nullptr;
+            if (!Get(hdr, kHdrLights, count) || !count || count > 64 || !Get(hdr, kHdrLights + 4, fileLights) || !fileLights) return;
+            Get(m.model, kInstLights, records);
+            for (uint32_t l = 0; l < count; ++l)
+            {
+                const uint8_t* fl = fileLights + l * kFileLight;
+                uint16_t type = 0;
+                float local[3];
+                if (!Get(fl, kFileType, type) || type != 1 || !Get(fl, kFilePos, local)) continue; // point lights only
+                ++st.modelLights;
+                Source s;
+                s.cm2 = records ? records + l * kLightRecord + kRecordLight : nullptr;
+                s.follow = m.parent ? m.model : nullptr;
+                s.model = m.model;
+                s.shared = shared;
+                std::memcpy(s.localPos, local, sizeof(local));
+                Mul(local, m.world, s.worldPos);
+                s.scale = MatrixScale(m.world);
+                float color[3], intensity = 1.0f;
+                if (FirstTrackValue(fl + kFileDiffuse, color, sizeof(color)))
+                {
+                    FirstTrackValue(fl + kFileIntensity, &intensity, sizeof(intensity));
+                    for (int c = 0; c < 3; ++c) s.fileColor[c] = color[c] * intensity;
+                    s.haveFileColor = true;
+                }
+                out.push_back(s);
             }
-            st.scanMs = grassperf::Now() - t0;
-            g_stats.models = st.models; g_stats.modelsInRange = st.modelsInRange; g_stats.modelLights = st.modelLights; g_stats.scanMs = st.scanMs;
-            g_stats.tableLights = st.tableLights; g_stats.suppressedModels = st.suppressedModels; g_stats.attachFallbacks = st.attachFallbacks;
-            unsigned attached = 0, atRest = 0;
-            for (const SceneModel& m : models) if (m.parent) { ++attached; atRest += m.animated ? 0 : 1; }
-            g_stats.attachedModels = attached; g_stats.attachedAtRest = atRest;
         }
 
         // A light this frame, before merging and choosing.
@@ -775,7 +769,7 @@ namespace wxl_livingazeroth::lights
         return sm.path;
     }
 
-    unsigned SceneModels(const float center[3], float range, std::vector<SceneModel>& out)
+    namespace
     {
         // The M2 scene's model list (CM2Model_AttachToScene 0x834540): head at scene +0x08, next at
         // model +0x0C. Model: shared model at +0x2C (path +0x3C, header +0x150; core's doodad SDK),
@@ -784,6 +778,10 @@ namespace wxl_livingazeroth::lights
         constexpr size_t kSceneModelHead = 0x08, kModelNext = 0x0C;
         constexpr unsigned kMaxModels = 100000; // a broken (cyclic) list stops here
         constexpr float kChildReach = 30.0f;    // a root this much past the range can still hold an item inside it
+    }
+
+    unsigned SceneModels(const float center[3], float range, std::vector<SceneModel>& out)
+    {
         out.clear();
         const void* scene = *reinterpret_cast<const void* const*>(kScene);
         const uint8_t* m = nullptr;
@@ -810,6 +808,120 @@ namespace wxl_livingazeroth::lights
         return total;
     }
 
+    namespace
+    {
+        // The model scan, a slice a frame (env/SceneWalk.hpp): the walk goes on from frame to frame for at most
+        // kScanBudgetMs each, gathering the lights of every model in range into the next list; when the pass ends,
+        // that list replaces the drawn one. A new pass starts kScanSeconds after the last one started (at once if it
+        // took longer). The last list stays in use meanwhile; each light's model is checked every frame (Source::shared).
+        constexpr double kScanBudgetMs = 0.5;
+        walk::Walk g_walk;
+        std::vector<Source> g_building;
+        std::unordered_set<const void*> g_buildSeen;   // models already taken this pass (a restart walks them again)
+        Stats    g_buildStats;
+        double   g_buildMs = 0.0;
+        unsigned g_buildFrames = 0, g_buildAttached = 0, g_buildAtRest = 0;
+        bool     g_buildTable = false;
+        bool     g_sceneCheck = false;                 // the models' scene pointer (+0x28) is the scene's: resume checks it
+
+        void BeginScan()
+        {
+            g_building.clear();
+            g_buildSeen.clear();
+            g_buildStats = Stats{};
+            g_buildMs = 0.0;
+            g_buildFrames = g_buildAttached = g_buildAtRest = 0;
+            g_buildTable = !lighttable::AllAssignments().empty();
+        }
+
+        void Take(const SceneModel& sm)
+        {
+            if (!g_buildSeen.insert(sm.model).second) return;
+            ++g_buildStats.modelsInRange;
+            if (sm.parent) { ++g_buildAttached; g_buildAtRest += sm.animated ? 0 : 1; }
+            ExtractLights(sm, g_buildTable, g_building, g_buildStats);
+        }
+
+        struct SceneHooks
+        {
+            const void* scene = nullptr;
+            float center[3] = {};
+            float range = 0.0f;
+            std::vector<SceneModel> children;
+            unsigned attached = 0;
+
+            const void* Head()
+            {
+                const uint8_t* m = nullptr;
+                if (!scene || !Get(scene, kSceneModelHead, m)) return nullptr;
+                // Whether a model's scene pointer is this scene, asked of the head: then a slice resumes only at a
+                // model still in it. Otherwise (unconfirmed layout) at any root model that still reads as one.
+                const void* s = nullptr;
+                g_sceneCheck = m && Get(m, kInstScene, s) && s == scene;
+                return m;
+            }
+            const void* Next(const void* node)
+            {
+                const uint8_t* n = nullptr;
+                return Get(node, kModelNext, n) ? n : nullptr;
+            }
+            bool StillListed(const void* node)
+            {
+                if (g_sceneCheck)
+                {
+                    const void* s = nullptr;
+                    return Get(node, kInstScene, s) && s == scene;
+                }
+                const uint8_t* parent = nullptr;
+                const void* shared = nullptr;
+                return Get(node, kInstParent, parent) && !parent && Get(node, dd::off::kInstModel, shared) && shared;
+            }
+            void Visit(const void* node)
+            {
+                const uint8_t* m = static_cast<const uint8_t*>(node);
+                SceneModel sm;
+                sm.model = m;
+                const uint8_t* parent = nullptr;
+                if (!Get(m, kInstParent, parent) || parent || !Get(m, kInstPlacement, sm.world)) return;
+                const float dx = sm.world[12] - center[0], dy = sm.world[13] - center[1], dz = sm.world[14] - center[2];
+                sm.distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (sm.distance <= range) { Describe(m, sm); Take(sm); }
+                if (sm.distance <= range + kChildReach)
+                {
+                    children.clear();
+                    AddChildren(m, center, range, children, 1, attached);
+                    for (const SceneModel& c : children) Take(c);
+                }
+            }
+            double NowMs() { return grassperf::Now(); }
+        };
+
+        // One frame's share of the scan; true when a pass ended (its lights are drawn from now on).
+        bool ScanSlice(const float eye[3])
+        {
+            const double t0 = grassperf::Now();
+            static SceneHooks hooks;
+            hooks.scene = *reinterpret_cast<const void* const*>(kScene);
+            std::memcpy(hooks.center, eye, sizeof(hooks.center));
+            hooks.range = g_settings.range;
+            if (!g_walk.Active()) BeginScan();
+            const bool ended = g_walk.Slice(hooks, kScanBudgetMs, kMaxModels);
+            g_buildMs += grassperf::Now() - t0;
+            ++g_buildFrames;
+            if (!ended) return false;
+            g_sources.swap(g_building);
+            g_stats.models = g_walk.Visited(); g_stats.modelsInRange = g_buildStats.modelsInRange;
+            g_stats.modelLights = g_buildStats.modelLights; g_stats.scanMs = g_buildMs; g_stats.scanFrames = g_buildFrames;
+            g_stats.scanRestarts = g_walk.Restarts();
+            g_stats.tableLights = g_buildStats.tableLights; g_stats.suppressedModels = g_buildStats.suppressedModels;
+            g_stats.attachFallbacks = g_buildStats.attachFallbacks;
+            g_stats.attachedModels = g_buildAttached; g_stats.attachedAtRest = g_buildAtRest;
+            g_lastAttached = hooks.attached;
+            hooks.attached = 0;
+            return true;
+        }
+    }
+
     Settings& Config() { return g_settings; }
     const std::vector<ActiveLight>& Active() { return g_active; }
     const Grid& CellGrid() { return g_grid; }
@@ -821,19 +933,26 @@ namespace wxl_livingazeroth::lights
         if (!snap.inWorld || !g_settings.enabled)
         {
             g_sources.clear();
+            g_walk.Abandon();
             if (g_grid.cells) { g_grid = Grid{ 0.0f, 0.0f, 16.0f, 0, 0, {}, {}, g_grid.generation + 1 }; }
             return;
         }
         float eye[3] = { snap.playerPos[0], snap.playerPos[1], snap.playerPos[2] };
         wxl::game::camera::GetPosition(eye);
 
-        // Rescan a few times a second, and at once when the tables changed (editor, reload).
+        // A new scan pass a few times a second, at once when the tables changed (editor, reload); a pass under way
+        // goes on a slice a frame (ScanSlice).
         g_scanTime += dt;
-        if (g_scanTime >= kScanSeconds || g_tableGeneration != lighttable::Generation())
+        if (g_tableGeneration != lighttable::Generation())
         {
-            g_scanTime = 0.0f;
             g_tableGeneration = lighttable::Generation();
-            ScanModels(eye);
+            g_walk.Abandon();
+            g_scanTime = kScanSeconds;
+        }
+        if (g_walk.Active() || g_scanTime >= kScanSeconds)
+        {
+            if (!g_walk.Active()) g_scanTime = 0.0f;
+            ScanSlice(eye);
         }
         g_time += dt;
 
@@ -844,6 +963,13 @@ namespace wxl_livingazeroth::lights
         const float range = g_settings.range;
         for (const Source& s : g_sources)
         {
+            // Its model still the one the scan saw (a pass's list now lives a second or two: a model unloaded and its
+            // memory reused would otherwise put a light where it read garbage).
+            if (s.model && s.shared)
+            {
+                const void* shared = nullptr;
+                if (!Get(s.model, dd::off::kInstModel, shared) || shared != s.shared) continue;
+            }
             Candidate c{};
             c.radius = s.radius; c.falloff = s.falloff;
             std::memcpy(c.spotDir, s.spotDir, sizeof(c.spotDir));

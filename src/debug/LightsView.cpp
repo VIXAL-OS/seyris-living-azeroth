@@ -263,12 +263,12 @@ namespace wxl_livingazeroth::debug
             std::snprintf(head, sizeof(head), "attached models in range (items in hands, ...): %u, of those %u at the parent's rest pose (not animated now); indoor lights (kept off the terrain): %u (%u locate call(s) this frame)",
                           ls.attachedModels, ls.attachedAtRest, ls.indoor, ls.indoorTests);
             g_api->UiText(head);
-            std::snprintf(head, sizeof(head), "our lights: %u models in the scene, %u in range (scan %.2f ms), %u model lights (%u placed by the client, %u via the world matrix, %u with the file's colour), %u in range, %u merged, %u drawn (max %d%s)",
-                          ls.models, ls.modelsInRange, ls.scanMs, ls.modelLights, ls.fromClient, ls.fromWorldMatrix, ls.fileColor,
+            std::snprintf(head, sizeof(head), "our lights: %u models in the scene, %u in range (scan %.2f ms over %u frame(s)), %u model lights (%u placed by the client, %u via the world matrix, %u with the file's colour), %u in range, %u merged, %u drawn (max %d%s)",
+                          ls.models, ls.modelsInRange, ls.scanMs, ls.scanFrames, ls.modelLights, ls.fromClient, ls.fromWorldMatrix, ls.fileColor,
                           ls.inRange, ls.merged, ls.active, lights::kMaxPool, ls.poolDropped ? ", the farthest dropped" : "");
             g_api->UiText(head);
-            std::snprintf(head, sizeof(head), "light update this frame: candidates %.2f ms, merging %.2f ms, drawn list + indoor tests %.2f ms, baking %.2f ms, grid %.2f ms; the last model scan (4x a second) %.2f ms",
-                          ls.candMs, ls.mergeMs, ls.activeMs, ls.bakeMs, ls.gridMs, ls.scanMs);
+            std::snprintf(head, sizeof(head), "light update this frame: candidates %.2f ms, merging %.2f ms, drawn list + indoor tests %.2f ms, baking %.2f ms, grid %.2f ms; the last model scan %.2f ms over %u frame(s) (%u restart(s))",
+                          ls.candMs, ls.mergeMs, ls.activeMs, ls.bakeMs, ls.gridMs, ls.scanMs, ls.scanFrames, ls.scanRestarts);
             g_api->UiText(head);
             {
                 const lights::Grid& grid = lights::CellGrid();
