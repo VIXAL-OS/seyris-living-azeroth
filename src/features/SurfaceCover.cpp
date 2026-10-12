@@ -103,7 +103,10 @@ namespace wxl_livingazeroth::cover
             int   drawPoint = 0;            // 0 right after the terrain (inside the world pass), 1 end of the scene
             int   printsOnCover = 1;        // the client's footprints drawn on top of the cover (features/CoverPrints)
             int   ripples = 1;              // covers with kFlagRipplePrints (sand): rings around prints, no trenches
-            float rippleSlope = 0.5f;       // the rings' steepest slope (shading)
+            // The rings' steepest slope (shading) and how much their crest lightens: 0.5 and 0.1 read only up close ("can
+            // we make the rings slightly more intense", the user, 2026-10-12, on Azuremyst's sand).
+            float rippleSlope = 0.9f;
+            float rippleBright = 0.18f;
         };
 
         const WXL_Api* g_api = nullptr;
@@ -2199,7 +2202,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
                     box[2] = std::max(box[2], o[0] + reach); box[3] = std::max(box[3], o[1] + reach);
                 }
                 dev->SetPixelShaderConstantF(18, box, 1);
-                const float c15[4] = { static_cast<float>(n), g_settings.rippleSlope, 0.1f, 0.0f };
+                const float c15[4] = { static_cast<float>(n), g_settings.rippleSlope, g_settings.rippleBright, 0.0f };
                 const float axes[8] = { vs9[0], vs9[1], vs9[2], 0.0f, vs9[4], vs9[5], vs9[6], 0.0f };
                 dev->SetPixelShaderConstantF(15, c15, 1);
                 dev->SetPixelShaderConstantF(16, axes, 2);
@@ -2419,6 +2422,7 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
             g_api->UiCheckbox("Sand: a still ring around each footprint instead of trenches", &g_settings.ripples);
             g_api->UiSliderFloat("Ring slope", &g_settings.rippleSlope, 0.0f, 1.5f);
+            g_api->UiSliderFloat("Ring brightness", &g_settings.rippleBright, 0.0f, 0.5f);
             std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made (%u following the print's outline) from %u prints found; on building floors %u live, %u made",
                           static_cast<unsigned>(g_ripples.List().size()), g_ripplesMade, g_ripplesShaped, coverprints::PrintsFound(),
                           static_cast<unsigned>(g_wmoRipples.List().size()), g_wmoRipplesMade);
@@ -2911,6 +2915,12 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
         if (worstH > 0.02f || worstG > 0.02f * mostG || peak < 0.9f || lit < 300 || outside || wholeSlots <= 0 || wholeSlots > 3500)
             return std::string("FAIL ") + line;
         return line;
+    }
+
+    void RingShading(float& slope, float& brightness)
+    {
+        slope = g_settings.rippleSlope;
+        brightness = g_settings.rippleBright;
     }
 
     unsigned WmoRings(float* out, unsigned max)

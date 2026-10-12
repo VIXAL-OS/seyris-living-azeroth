@@ -45,6 +45,9 @@ namespace wxl_livingazeroth::cover
     /// many.
     constexpr int kWmoRingRegisters = 3;
     unsigned WmoRings(float* out, unsigned max);
+    /// The rims' shading as the panel sets it (the terrain's cover uses them as they are): the steepest slope's tilt of
+    /// the normal and the crest's brightening.
+    void RingShading(float& slope, float& brightness);
     /// The uploads of only the changed cells against a full upload of the same data, read back from the GPU (tests,
     /// on a device of their own): a level of random data, then scattered cells, a row strip and a column strip
     /// (across the wrap) changed. Empty when what the GPU holds agrees bit for bit; else what differed.

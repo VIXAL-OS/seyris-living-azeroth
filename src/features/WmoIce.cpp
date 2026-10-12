@@ -193,11 +193,12 @@ namespace wxl_livingazeroth::wmoice
             }
         }
 
-        // The footprint rims (ModelIce's b8 block) for a sand-textured batch: the view (c180..c189, as for the ice), the
+        // The footprint rims (ModelIce's b8 block) for a sand or snow batch: the view (c180..c189, as for the ice), the
         // sun's world direction and the gains (c191), and the live rims on building floors (c192..). The slope gain
         // darkens a rim's side away from the sun and lightens the side toward it; the height gain lightens its crest.
-        constexpr float kRingSlopeGain = -0.35f;
-        constexpr float kRingHeightGain = 0.08f;
+        // Both follow the cover panel's ring slope and brightness (at their old defaults, 0.5 and 0.1: -0.35 and 0.08).
+        constexpr float kRingSlopeGainPerSlope = -0.7f;
+        constexpr float kRingHeightGainPerBrightness = 0.8f;
         bool g_ringsOn = false;
         unsigned g_ringBatches = 0;
 
@@ -225,7 +226,9 @@ namespace wxl_livingazeroth::wmoice
             float sun[2] = { l[0] * look[4] + l[1] * look[5] + l[2] * look[6], l[0] * look[8] + l[1] * look[9] + l[2] * look[10] };
             const float n = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1]);
             if (n > 1.0f) { sun[0] /= n; sun[1] /= n; }
-            const float control[4] = { sun[0], sun[1], kRingSlopeGain, kRingHeightGain };
+            float slope = 0.0f, brightness = 0.0f;
+            cover::RingShading(slope, brightness);
+            const float control[4] = { sun[0], sun[1], kRingSlopeGainPerSlope * slope, kRingHeightGainPerBrightness * brightness };
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kRingControl, control, 1);
             dev->SetPixelShaderConstantF(modelice::kRingConstant, rings, cover::kWmoRingRegisters * modelice::kWmoRings);
