@@ -601,7 +601,14 @@ VOut main(float2 ij : POSITION)
     o.n = nw.x * vr0.xyz + nw.y * vr1.xyz + nw.z * vr2.xyz;
     o.rel = p.xy - eye.xy;
     float4 q = float4(o.rel, p.z - eye.z, 1);
-    o.pos = float4(dot(q, vp0), dot(q, vp1), dot(q, vp2), dot(q, vp3));
+    // The depth tested is pulled toward the camera along the vertex's own ray, so the cover stays where it is on the
+    // screen: about 1 cm at 30 yd and 10 cm at 100 yd (as the depth buffer's precision falls off, with the square of the
+    // distance), at most 30 cm. Where the cover thins out to the terrain -- drifting sand, its edges, a print filling
+    // in -- the two fought for the far pixels ("lil bit of possibly actual z-fighting on this sand here", the user,
+    // 2026-10-12). Shading keeps the real position (vpos).
+    float reach = length(q.xyz);
+    float4 qd = float4(q.xyz * (1 - min(1e-5 * reach * reach, 0.3) / max(reach, 1)), 1);
+    o.pos = float4(dot(qd, vp0), dot(qd, vp1), dot(qd, vp2), dot(qd, vp3));
     o.vpos = q.x * vr0.xyz + q.y * vr1.xyz + q.z * vr2.xyz;
     float viewZ = o.vpos.z;
     o.fog = min(pow(max(viewZ * fogp.x + fogp.y, 0), fogp.z), 1);
