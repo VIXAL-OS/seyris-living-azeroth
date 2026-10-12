@@ -206,6 +206,14 @@ namespace
     const Spot kZoramStrand  { "Zoram Strand sand",       331,  1,   "tileset\\ashenvale\\ashenvalesand.blp", 0, 7 };
     const Spot kUngoroSand   { "Un'Goro lake sand",       490,  1,   "tileset\\feralas\\feralassand.blp", 0, 7 };
     const Spot kFjordShore   { "Howling Fjord pebble shore", 495, 571, "tileset\\expansion02\\howlingfjord\\hfjords_shorec.blp", 0, 7 };
+    // Mud on dry shores (rings like sand); pebble shores and the underwater muck as they were.
+    const Spot kDesolaceMud  { "Desolace mud",            405,  1,   "tileset\\desolace\\desolacemudsolid.blp", 0, 7 };
+    const Spot kFjordMud     { "Howling Fjord muddy shore", 495, 571, "tileset\\expansion02\\howlingfjord\\hfjords_shored.blp", 0, 7 };
+    const Spot kSilverpineMud { "Silverpine shore silt",  130,  0,   "tileset\\silverpine\\silverpineshore.blp", 0, 7 };
+    const Spot kSwampMud     { "Misty Reed Strand mud",   8,    0,   "tileset\\swamp of sorrows\\swampsorrowsdirt02.blp", 0, 7 };
+    const Spot kLochMud      { "Loch Modan mud",          38,   0,   "tileset\\loch modan\\lochmodanmud.blp", 0, 7 };
+    const Spot kTirisfalShore { "Tirisfal pebble shore",  85,   0,   "tileset\\tirisfall\\tirisfallshore.blp", 0, 7 };
+    const Spot kSwampMuck    { "Swamp of Sorrows muck (under water)", 8, 0, "tileset\\swamp of sorrows\\swampsorrowsmuckdark01.blp", 0, 8 };
     const Spot kElwynnDirt   { "Elwynn dirt (footprint outlines)", 12, 0, "tileset\\elwynn\\elwynndirtbase2.blp", 0, 0 };
     const Spot kStormIce     { "Storm Peaks clear ice",   67,   571, "tileset\\expansion02\\stormpeaks\\sp_icea.blp", 0, -1 };
 
@@ -277,7 +285,8 @@ int main(int argc, char** argv)
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     if (argc < 2) { std::printf("usage: cover_table_tests <data dir> [<data dir before the change>]\n"); return 2; }
     const std::string now = argv[1], before = argc > 2 ? argv[2] : "";
-    const Spot* const kUnchanged[] = { &kDunMorogh, &kNorthSnow, &kWinterspring, &kWestfallWet, &kFjordShore, &kElwynnDirt, &kStormIce, &kElwynnGrass,
+    const Spot* const kUnchanged[] = { &kDunMorogh, &kNorthSnow, &kWinterspring, &kWestfallWet, &kFjordShore, &kTirisfalShore,
+                                       &kSwampMuck, &kElwynnDirt, &kStormIce, &kElwynnGrass,
                                        &kSteppesRock, &kSteppesLava, &kSilithusRock, &kTanarisCrack, &kBlasted, &kHellfire, &kBoneRock, &kBoneTiles,
                                        &kTanarisBurn, &kTanarisRock, &kDarkshoreWaves };
     try
@@ -396,6 +405,24 @@ int main(int argc, char** argv)
             CHECK(At(kWestfallWet).material == 11 && Near(At(kWestfallWet).depth, 0.05f) && !(At(kWestfallWet).flags & ct::kFlagRipplePrints));
             CHECK(At(kFjordShore).depth == 0.0f);
             CHECK(std::string(mat::Name(6)) == "WestfallSandBase"); // the existing material, reparented, keeps its name
+        });
+        Test("mud shores ring like sand (\"mud would make sense to have the footprint rings\"); pebble shores and the underwater muck as they were", []
+        {
+            struct Want { const Spot* spot; uint32_t material; const char* texture; };
+            const Want wants[] = { { &kDesolaceMud, 71, "DesolaceMudSolid.blp" }, { &kFjordMud, 72, "HFjords_ShoreD.blp" },
+                                   { &kSilverpineMud, 73, "SilverpineShore.blp" }, { &kSwampMud, 74, "SwampSorrowsDirt02.blp" },
+                                   { &kLochMud, 75, "LochModanMud.blp" } };
+            for (const Want& w : wants)
+            {
+                const ct::Values v = At(*w.spot);
+                if (!(v.material == w.material && EndsWith(CoverPath(v), w.texture) && mat::Parent(v.material) == 70 &&
+                      std::string(mat::Name(70)) == "Mud" && Near(v.depth, 0.05f) && Near(v.relaxSeconds, 20.0f) &&
+                      Near(v.wetness, 0.25f) && Near(v.tintStrength, 0.1f) && (v.flags & ct::kFlagRipplePrints) &&
+                      (v.flags & ct::kFlagUseVertexColor) && (v.flags & ct::kFlagPreventUnderwater) && !ct::IsSnow(v.coverMaterial, 0, 0)))
+                    throw std::runtime_error(std::string("not mud as wanted: ") + w.spot->what);
+            }
+            CHECK(At(kFjordShore).depth == 0.0f && At(kTirisfalShore).depth == 0.0f);
+            CHECK(At(kSwampMuck).material == 13 && (At(kSwampMuck).flags & ct::kFlagPreventOnLand) && !(At(kSwampMuck).flags & ct::kFlagRipplePrints));
         });
         Test("no cover: Elwynn grass, Burning Steppes rock and lava, the Blasted Lands, Hellfire", []
         {

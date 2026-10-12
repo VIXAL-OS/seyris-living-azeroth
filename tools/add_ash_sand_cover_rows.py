@@ -42,7 +42,8 @@ BurningSteppsAsh01 material keeps its warmth (35 degC) and rest moisture.
         client's textures (3.3.5a, the _s variants have the same colours).
 
 IDs: materials, selectors and cover rows 50 (Ash) and 51 (Sand), 52..56 (the new ash textures), 57, 58
-(the Caverns of Time's), 59, 60 (Darkshore's sand) and 61..67 (the coasts the map survey found);
+(the Caverns of Time's), 59, 60 (Darkshore's sand), 61..67 (the coasts the map survey found), 70 (Mud) and 71..75
+(mud shores; tint at half strength, mud is darker);
 the existing rows changed in place: materials 2, 3, 6, 7, 8, 9 (Parent Sand) and 15 (Parent Ash), cover
 rows 2, 3, 6, 7, 8, 9 and 14. Westfall's own sand row (6: 0.05 yd, trenches, no tint) becomes a sand row like
 the rest; its wet strip (11, WestfallSandBaseWet) keeps its own row: wet sand holds sharp prints.
@@ -57,7 +58,7 @@ from pathlib import Path
 
 import cdbc_io as io
 
-ASH, SAND = 50, 51
+ASH, SAND, MUD = 50, 51, 70
 I, T = -1.0, -1000.0  # "take it from the parent" (floats), "not set" (signed columns)
 PREVENT_UNDERWATER = 0x1
 USE_VERTEX_COLOR = 0x4  # tinted by the terrain's MCCV like the ground (Northrend's grey sands get their colour from it)
@@ -90,6 +91,14 @@ TEXTURES = [
     (r"Tileset\Expansion02\SholazarBasin\SB_SandB.blp",             0xB4A892, 65, 65,   65, I,    SAND),  # Sholazar's river and lake sand
     (r"Tileset\Ashenvale\AshenvaleSand.blp",                        0x5B6243, 66, 66,   66, I,    SAND),  # the Zoram Strand
     (r"Tileset\Feralas\FeralasSand.blp",                            0x9B7A49, 67, 67,   67, 0.06, SAND),  # Un'Goro's and Feralas' lake shores, pebbly
+    # Mud on dry shores rings like sand ("mud would make sense to have the footprint rings the way sand does. Pebbles
+    # not so much", the user, 2026-10-11). Not the pebble shores (Howling Fjord's ShoreC, Tirisfal's, Zul'Drak's
+    # gravelly mud) nor the grassy and mossy mucks; the underwater mud rows (12, 13) stay as they are.
+    (r"Tileset\Desolace\DesolaceMudSolid.blp",                      0x7C550D, 71, 71,   71, I,    MUD),   # Desolace's mud flats
+    (r"Tileset\Expansion02\HowlingFjord\HFjords_ShoreD.blp",        0x2B241A, 72, 72,   72, I,    MUD),   # Howling Fjord's muddy shore
+    (r"Tileset\Silverpine\SilverpineShore.blp",                     0x373E2C, 73, 73,   73, I,    MUD),   # Silverpine's shore silt
+    (r"Tileset\Swamp of Sorrows\SwampSorrowsDirt02.blp",            0xB7A84F, 74, 74,   74, I,    MUD),   # the Misty Reed Strand
+    (r"Tileset\Loch Modan\LochModanMud.blp",                        0x3F361C, 75, 75,   75, I,    MUD),   # the Loch's shores
 ]
 
 # The same, for one area only (selector ScopeType 2 = Area, ScopeID = the AreaTable ID): "it would also be dope if
@@ -104,7 +113,7 @@ SCOPED = [
 
 def own_flags(parent):
     # A row with its own Depth decides Flags too (the rest take the parent's).
-    return PREVENT_UNDERWATER | (RIPPLE_PRINTS | USE_VERTEX_COLOR if parent == SAND else 0)
+    return PREVENT_UNDERWATER | (RIPPLE_PRINTS | USE_VERTEX_COLOR if parent in (SAND, MUD) else 0)
 
 
 def tint_of(average):
@@ -129,6 +138,9 @@ PARENT_COVERS = [
           tint_strength=0.0, z_offset=-0.02, wetness=0.0, flags=PREVENT_UNDERWATER),
     cover(SAND, SAND, depth=0.08, max_slope=30.0, slope_fade=10.0, drift=0.35, breakup=0.5, rim=0.5, relax=10.0,
           tint_strength=0.0, z_offset=-0.015, wetness=0.0, flags=PREVENT_UNDERWATER | RIPPLE_PRINTS | USE_VERTEX_COLOR),
+    # Mud: a thin damp layer of the ground's own texture, rings around prints that last twice as long as sand's.
+    cover(MUD, MUD, depth=0.05, max_slope=25.0, slope_fade=10.0, drift=0.2, breakup=0.5, rim=0.3, relax=20.0,
+          tint_strength=0.0, z_offset=-0.02, wetness=0.25, flags=PREVENT_UNDERWATER | RIPPLE_PRINTS | USE_VERTEX_COLOR),
 ]
 
 
@@ -167,6 +179,7 @@ def main() -> None:
     changed = 0
     changed += upsert(materials, material(ASH, "Ash"), io.GROUND_MATERIAL)
     changed += upsert(materials, material(SAND, "Sand"), io.GROUND_MATERIAL)
+    changed += upsert(materials, material(MUD, "Mud"), io.GROUND_MATERIAL)
     for row in PARENT_COVERS:
         changed += upsert(covers, row, io.SURFACE_COVER)
     for texture, average, material_id, selector_id, cover_id, depth, parent, scope, scope_id in (
@@ -185,7 +198,8 @@ def main() -> None:
             raise SystemExit(f"{paths['GroundMaterialSelector']}: no selector row puts material {material_id} on {texture}")
         # Depth (and with it Flags) where it differs from the parent; everything else from the parent.
         changed += upsert(covers, cover(cover_id, material_id, depth=depth, tint_color=tint_of(average),
-                                        tint_strength=TINT_STRENGTH, cover_texture=texture,
+                                        tint_strength=TINT_STRENGTH / 2 if parent == MUD else TINT_STRENGTH,
+                                        cover_texture=texture,
                                         flags=own_flags(parent) if depth != I else 0), io.SURFACE_COVER)
 
     paths["GroundMaterial"].write_bytes(io.build(io.GROUND_MATERIAL, materials))
