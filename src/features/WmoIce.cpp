@@ -49,14 +49,18 @@ namespace wxl_livingazeroth::wmoice
             "jlo_azjnub_ice", "jlo_azjnub_stalactite_ice_01", "ac_ice", "ac_icebottom",
             // Naxxramas's frost wyrm lair and the Scourge walls
             "jlo_udercity_ice", "jlo_udercity_icefloor", "jlo_udercity_icewall", "mm_udercity_icefloor", "mm_udercity_icewall",
-            // cliffs, shards, bridges and icebergs built into buildings
+            // cliffs, shards, bridges and icebergs built into buildings; the icy cliffs are Kaskala's coast in the Borean
+            // Tundra (snowy ice on top, crystal faces below: "some borean tundra coastal ice still looks really flat",
+            // the user, 2026-10-11) and Lake Indu'le's in Dragonblight
             "kaskala_icecliff_01", "kaskala_icecliff_01dirty", "nd_utgarde_iceshard_01", "ul_uldr_ice_02",
+            "icycliff_02", "icycliff_03",
             "frozenbridge01", "icicles0106", "dragonblight_iceberg_01", "dragonblight_shoreline_ice_01",
         };
         // Of those, Dragonblight's (the Crystal Vice, Wyrmrest's cliffs, the icebergs; the dirty cliff is the
-        // Storm Peaks' copy of it) take the glacier look, and the shoreline floe texture the floe one.
+        // Storm Peaks' copy of it) and the icy cliffs (whose models, Dragonblight's ice cliffs, are glacier already)
+        // take the glacier look, and the shoreline floe texture the floe one.
         const char* const kGlacierTextures[] = {
-            "kaskala_icecliff_01", "kaskala_icecliff_01dirty", "dragonblight_iceberg_01",
+            "kaskala_icecliff_01", "kaskala_icecliff_01dirty", "dragonblight_iceberg_01", "icycliff_02", "icycliff_03",
         };
         constexpr const char* kFloeTexture = "dragonblight_shoreline_ice_01";
 

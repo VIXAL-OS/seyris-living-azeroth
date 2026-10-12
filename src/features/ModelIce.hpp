@@ -45,10 +45,10 @@ namespace wxl_livingazeroth::modelice
     /// ps_3_0 promises 512): without them the client would get no shader at all.
     constexpr unsigned kRingsMinSlots = 1024;
 
-    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3, Floe = 4, Glacier = 5 };
+    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3, Floe = 4, Glacier = 5, SeaIce = 6 };
     /// Which look a model path (stem or file name, any case or slashes) gets: none, light (the ice models),
-    /// glacier (Dragonblight's ice rocks, shards, cliffs and icebergs), floe (the flat shoreline floes), or
-    /// frozen fall.
+    /// glacier (Dragonblight's ice rocks, shards, cliffs and icebergs), sea ice (the floating shoreline floes), or
+    /// frozen fall. (Floe is a building texture's: features/WmoIce.)
     Style StyleOf(const char* path);
     /// Whether a model path is one of the ice models (any style).
     bool IsIceModel(const char* path);

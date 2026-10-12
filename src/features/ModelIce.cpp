@@ -478,11 +478,11 @@ namespace wxl_livingazeroth::modelice
         for (const char* m : kFrozenFalls)
             if (p.find(m) != std::string::npos) return Style::FrozenFall;
         // The floating chunks all over Northrend's lakes and coasts (Wintergrasp's lake, Borean's shore: these
-        // models, placed at about 2x) keep the clear light style; the floe style is for Kaskala's big ground ice,
-        // the shoreline texture on its WMOs (WmoIce). The models had taken the floe style too and turned into
-        // opaque slabs (the user, 2026-10-11: "these wintergrasp ice chunks don't look as transparent").
+        // models, 7 x 11 yd placed at about 2.3x, up to 13x) take the sea-ice style: the clear light look (the floe
+        // style had turned them into opaque slabs: "these wintergrasp ice chunks don't look as transparent", the
+        // user, 2026-10-11) with wider, deeper detail ("some frozen sea ice should have bigger tiling too imo").
         if (p.find("dragonblight\\dragonblight_shoreline_ice") != std::string::npos)
-            return Style::Light;
+            return Style::SeaIce;
         for (const char* m : kIceModels)
             if (p.find(m) != std::string::npos)
                 return std::strncmp(m, "dragonblight\\", 13) == 0 ? Style::Glacier : Style::Light;
@@ -530,7 +530,7 @@ namespace wxl_livingazeroth::modelice
         constexpr float kDetailFadeStart = 60.0f, kDetailFadeEnd = 180.0f;
         c190[3] = -1.0f / (kDetailFadeEnd - kDetailFadeStart);
         look[39] = kDetailFadeEnd / (kDetailFadeEnd - kDetailFadeStart); // c189.w
-        if (style == Style::Light)
+        if (style == Style::Light || style == Style::SeaIce)
         {
             // Ice models and buildings: the texture's own colour is the body (icebergs, shoreline floes and
             // Icecrown's and the Nexus's ice are already bright, saturated ice, which the deep body only dulled), with a little of the cloudy depth
@@ -541,6 +541,14 @@ namespace wxl_livingazeroth::modelice
             look[23] = 0.45f;                                          // c185.w Fresnel strength
             look[27] = 1.0f;                                           // c186.w clarity
             look[32] = 0.85f; look[33] = 0.95f; look[34] = 1.0f;       // c188.xyz crack/bubble highlight
+            if (style == Style::SeaIce)
+            {
+                // The floating floes: the detail repeating every 4-7 yd tiled small across a 15-25 yd floe ("some
+                // frozen sea ice should have bigger tiling too imo", the user, 2026-10-11). 2.5x wider, and its
+                // layers about twice as deep (the floes are 1-6 yd thick as placed) so it lies inside the ice.
+                look[28] = 0.8f; look[29] = 2.4f;                      // c187.xy depths (yd)
+                look[30] = 1.0f / 10.0f; look[31] = 1.0f / 18.0f;      // c187.zw detail repeats per yd
+            }
             return;
         }
         if (style == Style::Floe)
