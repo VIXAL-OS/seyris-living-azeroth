@@ -641,6 +641,7 @@ float4 rippleInfo : register(c15);  // rings around prints in sand: x = how many
 float4 rippleAxisX : register(c16); // the world's x and y axes in the space the normal is lit in
 float4 rippleAxisY : register(c17);
 float4 rippleBox : register(c18);   // where any ring reaches, camera-relative (min x, min y, max x, max y)
+float4 dissolve : register(c19);    // the camera's world xy mod kDissolvePeriod, 1 / the dissolve's patch size (yd)
 float4 pcf[8] : register(c20);   // the terrain's PCF offsets (its PS c3..c10)
 float4 shadowM[12] : register(c30); // the terrain's shadow matrices (its VS c37..c48), from view space
 float4 ripples[96] : register(c42); // per print: (centre camera-relative, direction), (1 / semi-axes, strength, reach)
@@ -729,17 +730,30 @@ float CoverVisibility(float2 rel)
     float t = saturate((edgeFade.w - length(rel - edgeFade.xy)) / max(edgeFade.w - edgeFade.z, 0.001));
     return t * t * (3 - 2 * t);
 }
-float CoverThreshold(float2 pixel)
+// The cover's outer ring dissolves in patches of the ground, not of the screen: a fixed 8x8 screen pattern stayed put
+// while the ground moved under it, and crawled like z-fighting whenever the camera moved ("some z-fighting with the
+// snow cover mod ... near the edges specifically", the user, 2026-10-12). Smooth value noise in world space, about
+// 1 / dissolve.z yd across, two octaves; its lattice repeats every 512 cells, as the camera's position is passed mod
+// a whole number of them, so it never jumps. Discarded pixels keep the terrain's depth (alpha-blending while writing
+// depth would leave an invisible occluding sheet).
+float DissolveHash(float2 c)
 {
-    // Stable 8x8 ordered coverage: discarded pixels keep the terrain's depth.
-    // Alpha-blending while writing depth would leave an invisible occluding sheet.
-    float2 b0 = frac(floor(pixel) * 0.5) * 2;
-    float2 b1 = frac(floor(pixel * 0.5) * 0.5) * 2;
-    float2 b2 = frac(floor(pixel * 0.25) * 0.5) * 2;
-    float3 b = float3(2*b0.x + 3*b0.y - 4*b0.x*b0.y,
-                      2*b1.x + 3*b1.y - 4*b1.x*b1.y,
-                      2*b2.x + 3*b2.y - 4*b2.x*b2.y);
-    return (dot(b, float3(16, 4, 1)) + 0.5) / 64;
+    c -= 512 * floor(c / 512);
+    return frac(sin(dot(c, float2(127.1, 311.7))) * 43758.5453);
+}
+float DissolveNoise(float2 w)
+{
+    float2 i = floor(w), f = w - i;
+    f = f * f * (3 - 2 * f);
+    float a = DissolveHash(i), b = DissolveHash(i + float2(1, 0)), c = DissolveHash(i + float2(0, 1)), d = DissolveHash(i + 1);
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+float CoverThreshold(float2 rel)
+{
+    float2 w = (rel + dissolve.xy) * dissolve.z;
+    float n = 0.65 * DissolveNoise(w) + 0.35 * DissolveNoise(w * 2.73 + 17.3);
+    // Never 0 or 1: past the ring every pixel goes, inside it every pixel stays.
+    return saturate((n - 0.5) * 1.8 + 0.5) * 0.98 + 0.01;
 }
 // A still rim of sand around each of the client's footprints (features/CoverRipples.hpp): an oval through the print's
 // outline (semi-axes along and across its stride) scaled by kRimAt, kRimWidth of it wide ("would it be possible for
@@ -781,7 +795,7 @@ float RippleRings(float2 rel, float px, inout float3 nn)
 }
 float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, float fog : TEXCOORD3, float4 tint : TEXCOORD4, float2 wuv : TEXCOORD5, float3 vpos : TEXCOORD6, float far : TEXCOORD7, float3 lamps : TEXCOORD8, float2 pixel : VPOS) : COLOR
 {
-    clip(CoverVisibility(rel) - CoverThreshold(pixel));
+    clip(CoverVisibility(rel) - CoverThreshold(rel));
     clip(d.x - opts.x);
     // Not on a triangle reaching a hole (or unloaded ground): its vertex there sits 100,000 yd down, and drawn up
     // to its middle it hung from the hole's edge like a curtain (across the Caverns of Time's tunnel, where the
@@ -2027,6 +2041,15 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
             const float radius = std::max(0.0f, std::min(kHalfCells * outer.cell * kEdgeRadiusShare, available - 2 * outer.cell));
             const float edge[4] = {cx - eye[0], cy - eye[1], radius * kEdgeFullShare, radius};
             dev->SetPixelShaderConstantF(14, edge, 1);
+            // The outer ring dissolves in patches anchored to the ground (the PS's CoverThreshold): the camera's world
+            // xy mod a whole number of the noise's cells, so its lattice repeats instead of jumping.
+            {
+                constexpr double kDissolvePatch = 2.0, kDissolvePeriod = 512.0 * kDissolvePatch;
+                const float c19[4] = { static_cast<float>(std::fmod(static_cast<double>(eye[0]), kDissolvePeriod)),
+                                       static_cast<float>(std::fmod(static_cast<double>(eye[1]), kDissolvePeriod)),
+                                       static_cast<float>(1.0 / kDissolvePatch), 0.0f };
+                dev->SetPixelShaderConstantF(19, c19, 1);
+            }
             g_printLift = PrintLift{ inPass && g_levels[0].ShouldDraw(), lastDrawn == 0, cx, cy, radius };
             const float c8[4] = { 80.0f, 400.0f, g_settings.farLift, 0.0f };
             dev->SetVertexShaderConstantF(8, c8, 1);
