@@ -66,12 +66,26 @@ namespace wxl_livingazeroth::groundfog
         float       g_noiseOffset[3] = {};
         // The cloud deck where the player is (AreaClimate CloudBase/CloudTop), eased toward the place's values so crossing
         // a zone border doesn't pop it in or out.
-        // Per yd at Fogginess 1 where the cloud is thickest: inside the deck you see ~50-100 yd, like in a cloud (0.02
-        // let you see far across Stormcrest: "storm peak still not super foggy", the user, 2026-10-13).
-        constexpr float kDeckDensity = 0.06f;
+        // Per yd at Fogginess 1 where the cloud is thickest: inside the deck you see a few hundred yd, and the cloud's
+        // shapes show. (0.06, ~50 yd, was a white-out: the user slid it to about a tenth, "i feel like lower is better",
+        // 2026-10-13; 0.02 before that let you see far across Stormcrest: "storm peak still not super foggy".)
+        constexpr float kDeckDensity = 0.005f;
         constexpr float kDeckEaseSeconds = 2.0f;
-        constexpr float kDeckTileYards = 220.0f;  // its noise tile: patches of cloud from ~25 yd to the tile's size
-        struct DeckState { float base = 0.0f, top = 0.0f, density = 0.0f; float color[3] = { 1.0f, 1.0f, 1.0f }; };
+        constexpr float kDeckTileYards = 600.0f;  // its noise tile: cloud masses ~30 to ~150 yd across
+        // The sky over it clears and clouds over ("could we make the cloud deck weather-based, like the fog? so sometimes
+        // there'd be clear nights where you'd see the stars", the user, 2026-10-13): overcast in rain or snow, otherwise
+        // by spells of the clock (kSkySpellHours apart, different in each zone, the same for everyone: UTC). As it clears,
+        // gaps open in the deck until only the cloud clinging to slopes and buildings is left (within kClingYards of
+        // them, along the view).
+        constexpr double kSkySpellHours = 1.5;
+        constexpr float  kSkyEaseSeconds = 20.0f;
+        constexpr float  kClingYards = 150.0f;
+        constexpr float  kClearShift = 0.4f;       // how far the coverage threshold rises from overcast to clear
+        struct DeckState
+        {
+            float base = 0.0f, top = 0.0f, density = 0.0f; float color[3] = { 1.0f, 1.0f, 1.0f };
+            float cover = 1.0f; const char* coverWhy = "";
+        };
         DeckState g_deck;
 
         // GPU resources (D3DPOOL_MANAGED: they survive a reset; dropped when the device changes).
@@ -104,7 +118,7 @@ namespace wxl_livingazeroth::groundfog
         float        g_seenM22 = 0.0f, g_seenM32 = 0.0f;
         // The probe ray (diagnostics): the shader's own march for one pixel, read back. Row m - 1 is
         // probe mode m (see the shader's cProbe2); in modes 1 and 2 column k stops after k + 1 iterations.
-        constexpr int kProbeCols = 128, kProbeModes = 9, kConstRegs = 23;
+        constexpr int kProbeCols = 128, kProbeModes = 9, kConstRegs = 24;
         IDirect3DTexture9*  g_probeTex = nullptr;  // D3DPOOL_DEFAULT render target
         IDirect3DSurface9*  g_probeSys = nullptr;  // its system-memory copy for the readback
         bool                g_probeFailed = false;
@@ -506,6 +520,7 @@ float4 cNoise  : register(c10); // xyz = drift offset (the fog's tiles)
 float4 cUv     : register(c12); // depth texture uv = xy + uv * zw
 float4 cDeck      : register(c21); // x = its base (world z), y = its top, z = density per yd, w = its range (yd)
 float4 cDeckColor : register(c22); // rgb = its colour, w = 1 / its noise tile (yd)
+float4 cDeckSky   : register(c23); // x = how much the sky has cleared (the coverage threshold's rise), y = 1 / the clinging cloud's reach (yd)
 
 float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
 {
@@ -519,6 +534,7 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
     float dist = length(ray);
     float3 dir = ray / max(dist, 1e-4);
     float far = d > cDepth.z ? cDeck.w : min(dist, cDeck.w); // the sky: as far as the deck is drawn
+    float surf = d > cDepth.z ? 1e9 : dist;                   // where the ray meets a slope or a building (the sky: never)
     // Its base isn't flat: it wanders up and down by kWobble yd over a few hundred yd, and thins over up to 100 yd.
     // (A level base with a 40 yd fade, seen nearly edge-on from below, was one razor-sharp line across the view:
     // "extremely sharp line ascending into the deck", the user, 2026-10-13.) The ray is clipped to the lowest it reaches.
@@ -533,23 +549,39 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
     }
     else if (cCam.z < lo || cCam.z > cDeck.y) return float4(0, 0, 0, 1);
     if (ta >= tb) return float4(0, 0, 0, 1);
-    float j = frac(52.9829189 * frac(dot(vpos, float2(0.06711056, 0.00583715))));
+    // The steps' offset, per pixel: white noise (a hash). Interleaved gradient noise's diagonal pattern showed through
+    // thin cloud as fine hatching ("you start to see these weird lines", the user, 2026-10-13).
+    float3 h3 = frac(vpos.xyx * 0.1031);
+    h3 += dot(h3, h3.yzx + 33.33);
+    float j = frac((h3.x + h3.y) * h3.z);
     float span = tb - ta;
     float thick = max(cDeck.y - cDeck.x, 1);
     float edge = min(thick * 0.25, 100);  // yd over which it thins at its bottom and top
+    float texels = cDeckColor.w * 32;     // the noise's texels per yd (its first octave)
     float T = 1, lit = 0;
-    [loop] for (int k = 0; k < 12; ++k)
+    [loop] for (int k = 0; k < 16; ++k)
     {
         // Steps closer together near the camera (where detail shows), longer far away: u^2 spacing.
-        float u0 = (k + j) / 12, u1 = (k + 1 + j) / 12;
+        float u0 = (k + j) / 16, u1 = (k + 1 + j) / 16;
         float ds = span * (u1 * u1 - u0 * u0);
-        float3 p = cCam.xyz + dir * (ta + span * 0.5 * (u0 * u0 + u1 * u1));
-        float wob = (tex3Dlod(noiseTex, float4(p.xy * cDeckColor.w * 0.6, 0.71, 0)).r - 0.5) * 2 * kWobble;
+        float t = ta + span * 0.5 * (u0 * u0 + u1 * u1);
+        float3 p = cCam.xyz + dir * t;
+        // A long step reads the noise's blurrier levels: the cloud's average over the step, not one point of it (one
+        // point per 100 yd of thin cloud was a different answer for every pixel: lines and grain).
+        float lod = min(log2(max(ds * 0.5 * texels, 1)), 3);
+        float wob = (tex3Dlod(noiseTex, float4(p.xy * cDeckColor.w * 0.6, 0.71, max(lod - 0.7, 0))).r - 0.5) * 2 * kWobble;
         float shape = saturate((p.z - (cDeck.x + wob)) / edge) * saturate((cDeck.y - p.z) / edge);
-        float3 q = p * cDeckColor.w + cNoise.xyz * 0.32;
-        float n = tex3Dlod(noiseTex, float4(q, 0)).r * 0.6 + tex3Dlod(noiseTex, float4(q * 2.3 + 0.41, 0)).r * 0.4;
+        // Cloud masses wider than they're tall; the second octave turned (37 deg) so the two lattices never line up.
+        float3 q = float3(p.xy, p.z * 1.6) * cDeckColor.w + cNoise.xyz * 0.32;
+        float3 q2 = float3(q.x * 0.8 - q.y * 0.6, q.x * 0.6 + q.y * 0.8, q.z) * 2.3 + 0.41;
+        float n = tex3Dlod(noiseTex, float4(q, lod)).r * 0.6 + tex3Dlod(noiseTex, float4(q2, min(lod + 1.2, 3))).r * 0.4;
         // Puffy: cloud masses with soft but defined edges and clear gaps (a linear ramp gave grey veils everywhere).
-        float sigma = cDeck.z * shape * smoothstep(0.32, 0.56, n);
+        // As the sky clears the threshold rises: the gaps widen until only wisps are left; the cloud over the last of
+        // the ray before a slope or a building (it clings to them) stays whatever the sky.
+        float puff = smoothstep(0.32, 0.56, n);
+        float cover = smoothstep(0.32 + cDeckSky.x, 0.56 + cDeckSky.x, n);
+        float cling = saturate(1 - (surf - t) * cDeckSky.y) * puff;
+        float sigma = cDeck.z * shape * max(cover, cling);
         float a = 1 - exp(-sigma * ds);
         lit += T * a * (0.85 + 0.25 * saturate((p.z - cDeck.x) / thick));
         T *= 1 - a;
@@ -668,12 +700,14 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         }
 
         /// A tileable smooth noise volume (32^3, L8): two lattices (period 4 and 8 cells across the
-        /// tile), smoothly interpolated, so the hardware's trilinear filter adds no blockiness.
+        /// tile), smoothly interpolated, so the hardware's trilinear filter adds no blockiness. Three more
+        /// levels (16^3 .. 4^3), each the average of the one above, for the cloud deck's long steps (the
+        /// fog's march reads level 0 only).
         IDirect3DVolumeTexture9* MakeNoise(IDirect3DDevice9* dev)
         {
-            constexpr int N = 32;
+            constexpr int N = 32, kLevels = 4;
             IDirect3DVolumeTexture9* tex = nullptr;
-            if (FAILED(dev->CreateVolumeTexture(N, N, N, 1, 0, D3DFMT_L8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex) return nullptr;
+            if (FAILED(dev->CreateVolumeTexture(N, N, N, kLevels, 0, D3DFMT_L8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex) return nullptr;
             auto hash = [](int x, int y, int z, int seed) {
                 uint32_t h = static_cast<uint32_t>(x * 374761393 + y * 668265263 + z * 2147483647 + seed * 144665);
                 h = (h ^ (h >> 13)) * 1274126177u;
@@ -692,21 +726,46 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 const float c0 = c00 + (c10 - c00) * sy, c1 = c01 + (c11 - c01) * sy;
                 return c0 + (c1 - c0) * sz;
             };
-            D3DLOCKED_BOX box{};
-            if (FAILED(tex->LockBox(0, &box, nullptr, 0))) { tex->Release(); return nullptr; }
+            std::vector<float> level(static_cast<size_t>(N) * N * N);
             for (int z = 0; z < N; ++z)
                 for (int y = 0; y < N; ++y)
-                {
-                    auto* row = static_cast<uint8_t*>(box.pBits) + z * box.SlicePitch + y * box.RowPitch;
                     for (int x = 0; x < N; ++x)
                     {
                         const float a = lattice(x * 4.0f / N, y * 4.0f / N, z * 4.0f / N, 4, 1);
                         const float b = lattice(x * 8.0f / N, y * 8.0f / N, z * 8.0f / N, 8, 2);
-                        const float v = a * 0.7f + b * 0.3f;
-                        row[x] = static_cast<uint8_t>(v * 255.0f + 0.5f);
+                        level[(static_cast<size_t>(z) * N + y) * N + x] = a * 0.7f + b * 0.3f;
                     }
+            for (int lv = 0, size = N; lv < kLevels; ++lv, size /= 2)
+            {
+                if (lv > 0)
+                {
+                    // Each texel the average of the 2x2x2 above it (the volume tiles, so its edges lose nothing).
+                    const int up = size * 2;
+                    std::vector<float> next(static_cast<size_t>(size) * size * size);
+                    for (int z = 0; z < size; ++z)
+                        for (int y = 0; y < size; ++y)
+                            for (int x = 0; x < size; ++x)
+                            {
+                                float sum = 0.0f;
+                                for (int dz = 0; dz < 2; ++dz)
+                                    for (int dy = 0; dy < 2; ++dy)
+                                        for (int dx = 0; dx < 2; ++dx)
+                                            sum += level[(static_cast<size_t>(2 * z + dz) * up + 2 * y + dy) * up + 2 * x + dx];
+                                next[(static_cast<size_t>(z) * size + y) * size + x] = sum * 0.125f;
+                            }
+                    level.swap(next);
                 }
-            tex->UnlockBox(0);
+                D3DLOCKED_BOX box{};
+                if (FAILED(tex->LockBox(lv, &box, nullptr, 0))) { tex->Release(); return nullptr; }
+                for (int z = 0; z < size; ++z)
+                    for (int y = 0; y < size; ++y)
+                    {
+                        auto* row = static_cast<uint8_t*>(box.pBits) + z * box.SlicePitch + y * box.RowPitch;
+                        for (int x = 0; x < size; ++x)
+                            row[x] = static_cast<uint8_t>(level[(static_cast<size_t>(z) * size + y) * size + x] * 255.0f + 0.5f);
+                    }
+                tex->UnlockBox(lv);
+            }
             return tex;
         }
 
@@ -1449,6 +1508,34 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             return row.fogginess * kDeckDensity * g_settings.cloudDeckDensity;
         }
 
+        /// How overcast the sky over the deck is, 0 (clear) .. 1, and why.
+        float SkyCover(const char*& why)
+        {
+            if (g_settings.cloudDeckSky >= 0.0f) { why = "the panel's override"; return std::fmin(g_settings.cloudDeckSky, 1.0f); }
+            const climate::Weather& w = climate::CurrentWeather();
+            const float weather = w.type == 1 || w.type == 2 ? 0.7f + 0.3f * std::fmin(w.intensity * 2.0f, 1.0f) : 0.0f;
+            FILETIME ft{};
+            GetSystemTimeAsFileTime(&ft);
+            const uint64_t ticks = (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime; // 100 ns since 1601 (UTC)
+            const double spells = static_cast<double>(ticks) / 1.0e7 / 3600.0 / kSkySpellHours;
+            const int64_t i = static_cast<int64_t>(std::floor(spells));
+            const uint32_t zone = regional::PlayerZone();
+            auto spell = [zone](int64_t n) {
+                uint32_t h = static_cast<uint32_t>(n) * 2654435761u ^ zone * 2246822519u;
+                h = (h ^ (h >> 15)) * 2246822519u;
+                h = (h ^ (h >> 13)) * 3266489917u;
+                return ((h ^ (h >> 16)) & 0xFFFF) / 65535.0f;
+            };
+            float f = static_cast<float>(spells - static_cast<double>(i));
+            f = f * f * (3.0f - 2.0f * f);
+            const float v = spell(i) + (spell(i + 1) - spell(i)) * f;
+            // About a third of the time clear, a third overcast, broken cloud between.
+            float clock = std::fmin(std::fmax((v - 0.3f) / 0.4f, 0.0f), 1.0f);
+            clock = clock * clock * (3.0f - 2.0f * clock);
+            why = weather > clock ? (w.type == 2 ? "snow" : "rain") : clock < 0.05f ? "a clear spell" : clock > 0.95f ? "an overcast spell" : "broken cloud";
+            return std::fmax(weather, clock);
+        }
+
         bool DeckActive()
         {
             float base, top;
@@ -1461,7 +1548,10 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             float base, top;
             uint32_t area;
             const float target = DeckTarget(base, top, area);
-            if (target > 0.0f && g_deck.density <= 0.0f) { g_deck.base = base; g_deck.top = top; } // appearing: at its own heights
+            const float cover = SkyCover(g_deck.coverWhy);
+            if (target > 0.0f && g_deck.density <= 0.0f) { g_deck.base = base; g_deck.top = top; g_deck.cover = cover; } // appearing: as it is
+            const float ks = dt > 0.0f && dt < 1.0f ? 1.0f - std::exp(-dt / kSkyEaseSeconds) : 1.0f;
+            g_deck.cover += (cover - g_deck.cover) * ks;
             const float k = dt > 0.0f && dt < 1.0f ? 1.0f - std::exp(-dt / kDeckEaseSeconds) : 1.0f;
             g_deck.density += (target - g_deck.density) * k;
             if (target > 0.0f) { g_deck.base += (base - g_deck.base) * k; g_deck.top += (top - g_deck.top) * k; }
@@ -1662,6 +1752,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_settings.probe ? 1.0f : 0.0f, static_cast<float>(vp.Width), static_cast<float>(vp.Height), 0.0f,
                 g_deck.base, g_deck.top, g_deck.density * (1.0f - (interior > 0.0f ? interior : 0.0f)), std::fmax(g_settings.cloudDeckRange, 100.0f),
                 g_deck.color[0], g_deck.color[1], g_deck.color[2], 1.0f / kDeckTileYards,
+                (1.0f - g_deck.cover) * kClearShift, 1.0f / kClingYards, 0.0f, 0.0f,
             };
 
             // Everything the pass changes goes back through the state block, so the client's own cache
@@ -1711,7 +1802,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             dev->SetTexture(2, g_noise);
             dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
             dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-            dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+            dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR); // the deck's long steps read its smaller levels
             dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
             dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
             dev->SetSamplerState(2, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
@@ -1978,10 +2069,15 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         {
             g_api->UiSliderFloat("deck density##gfdeckd", &g_settings.cloudDeckDensity, 0.0f, 4.0f);
             g_api->UiSliderFloat("deck range (yd)##gfdeckr", &g_settings.cloudDeckRange, 200.0f, 3000.0f);
-            char line[160];
+            g_api->UiSliderFloat("deck sky: 0 clear .. 1 overcast (below 0: by weather and clock)##gfdecks", &g_settings.cloudDeckSky, -0.05f, 1.0f);
+            char line[200];
             if (g_deck.density > 0.0f)
+            {
                 std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f)%s", g_deck.base, g_deck.top,
                               g_deck.density, world::Current().playerPos[2], g_psDeck ? "" : " -- its shader failed (see the log)");
+                g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s)", g_deck.cover * 100.0f, g_deck.coverWhy);
+            }
             else
                 std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");
             g_api->UiText(line);
