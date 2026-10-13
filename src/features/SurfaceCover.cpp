@@ -785,8 +785,8 @@ float CoverThreshold(float2 rel)
 // A pixel shader can't index constants by a counter, so the loop over the prints is unrolled; working out an outline
 // in every pass came to some 5,400 instruction slots, past what the GPU takes. So the loop only picks the (at most)
 // two prints whose rims can reach this pixel -- a few instructions each --, and only those two are worked out.
-static const float kRimOffset = 0.2;
-static const float kRimBand = 0.45;
+static const float kRimOffset = 0.325; // = ripples::kRimOffset, kRimBand (-0.025 .. 0.675 r0); the self-test compares
+static const float kRimBand = 0.7;
 float2 CMul(float2 p, float2 q) { return float2(p.x * q.x - p.y * q.y, p.x * q.y + p.y * q.x); }
 float RimOne(float2 rel, float px, float4 a, float4 p1, float4 p2, inout float2 grad)
 {

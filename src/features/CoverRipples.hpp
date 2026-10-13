@@ -31,12 +31,17 @@ namespace wxl_livingazeroth::cover::ripples
     /// The rim on the terrain's cover follows the print's own outline ("would it be possible to make the rings into sand
     /// outlines around the prints themselves?", the user, 2026-10-12). A Shape is how far that outline lies from its
     /// centre, by the direction on the ground, as a Fourier series of kShapeTerms harmonics in units of its mean distance
-    /// r0 (eight keep the claw's toes and the paw's pads). The rim's centre line lies kRimOffset r0 outside the outline
-    /// (along the direction from the centre), and it is kRimBand r0 wide: nothing at either edge, full on that line.
+    /// r0 (eight keep the claw's toes and the paw's pads). The rim rises from kRimInner r0 outside the outline (along the
+    /// direction from the centre; just inside it, so it meets the print) to its crest and falls away to nothing at
+    /// kRimOuter r0. "The inner outline of the rim should still be fitted to the normal size print, and the outline of it
+    /// should be bigger" (the user, 2026-10-13): the inner edge stays where it was, the outer one went from 0.425 to 0.675.
+    /// The shaders take the band as its centre line (kRimOffset) and width (kRimBand); SurfaceCover's HLSL repeats both.
     constexpr int kShapeTerms = 8;
     constexpr int kShapeRays = 64;
-    constexpr float kRimOffset = 0.2f;
-    constexpr float kRimBand = 0.45f;
+    constexpr float kRimInner = -0.025f;
+    constexpr float kRimOuter = 0.675f;
+    constexpr float kRimOffset = 0.5f * (kRimInner + kRimOuter);
+    constexpr float kRimBand = kRimOuter - kRimInner;
 
     struct Shape
     {
