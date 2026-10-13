@@ -117,8 +117,8 @@ namespace wxl_livingazeroth::cover::detail
         g_api->UiSeparator();
         std::snprintf(line, sizeof(line), "SurfaceCover.cdbc: %s", covertable::Status());
         g_api->UiText(line);
-        g_api->UiSameLine();
-        if (g_api->UiButton("Reload table")) covertable::Load(g_cdbcApi);
+        // On its own line: the status runs past the window's edge and took the button with it.
+        if (g_api->UiButton("Reload table (SurfaceCover, GroundMaterial, GroundMaterialSelector)")) covertable::Load(g_cdbcApi);
         std::snprintf(line, sizeof(line), "  cover textures in view: %u (slots: %d)%s", g_texturesInView, covertable::kMaxCoverTextures,
                       g_texturesInView > static_cast<unsigned>(covertable::kMaxCoverTextures) ? " -- the least present ones draw without their texture" : "");
         g_api->UiText(line);
