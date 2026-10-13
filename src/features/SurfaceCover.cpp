@@ -131,6 +131,12 @@ namespace wxl_livingazeroth::cover
     using namespace detail;
 
     void PatchLightStats(unsigned& most, unsigned& full) { most = g_patchLightsMost; full = g_patchLightsFull; }
+    bool TerrainLight(float ambient[3], float diffuse[3])
+    {
+        if (!g_seenScene) return false;
+        for (int i = 0; i < 3; ++i) { ambient[i] = g_seenLight[4 + i]; diffuse[i] = g_seenLight[8 + i]; }
+        return ambient[0] + ambient[1] + ambient[2] + diffuse[0] + diffuse[1] + diffuse[2] > 0.0f;
+    }
 
     std::string RimShaderSelfTest(void* device)
     {

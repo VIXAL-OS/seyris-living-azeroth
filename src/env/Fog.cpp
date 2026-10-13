@@ -600,8 +600,9 @@ namespace wxl_livingazeroth::fog
             const float humid = Clamp01(Smooth(0.4f, 0.95f, here ? a.humidity : a.humidityDry) + 0.5f * wet);
             const float still = std::fmax(std::fmax(a.cooling, 0.7f * in.night), here ? kWetAirStill * g_wetAir : 0.0f);
             // A place with a cloud base: its fogginess is cloud on its upper slopes, not fog across the zone.
-            const float zoneFog = a.cloudBase > climate::kNoCloudBase * 0.5f ? 0.0f : a.fogginess;
-            out[kMist] = humid * still * Calm(kMist) * (0.4f + 0.6f * kAverageHollow) * (1.0f + 0.5f * zoneFog);
+            const bool clouded = a.cloudBase > climate::kNoCloudBase * 0.5f;
+            const float zoneFog = clouded ? 0.0f : a.fogginess;
+            out[kMist] = clouded ? 0.0f : humid * still * Calm(kMist) * (0.4f + 0.6f * kAverageHollow) * (1.0f + 0.5f * zoneFog);
             out[kAreaFog] = zoneFog * (0.6f + 0.4f * in.night) * Calm(kAreaFog);
             out[kHaze] = zone == regional::PlayerZone() ? (0.8f * in.rain + 0.4f * in.snow) * Calm(kHaze) : 0.0f; // others: weather unknown
             for (int k = 0; k < kKindCount; ++k)
@@ -739,7 +740,9 @@ namespace wxl_livingazeroth::fog
             // field filled ("fog has kinda janky loading-in effects at height") and never reached buildings.
             const bool clouded = a.cloudBase > climate::kNoCloudBase * 0.5f;
             const float placeFog = clouded ? 0.0f : a.fogginess;
-            out[kMist] = humid * still * Calm(kMist) * (0.4f + 0.6f * hollow) * (1.0f + 0.5f * placeFog);
+            // Nor ground mist there: from the air its pools came in as dark blotches on the snow at night, near the
+            // player only ("cloud loading in is still a bit janky", the user, 2026-10-13). The deck is its cloud.
+            out[kMist] = clouded ? 0.0f : humid * still * Calm(kMist) * (0.4f + 0.6f * hollow) * (1.0f + 0.5f * placeFog);
             note(kMist, "humid air / wet ground (humidity)", a.humidity, humid);
             note(kMist, "  ... ground wetness", wet, -1.0f);
             note(kMist, "  ... rain-wet air", g_wetAir, -1.0f);
@@ -776,7 +779,11 @@ namespace wxl_livingazeroth::fog
             // Area fog: the place's own fogginess, more at night.
             out[kAreaFog] = placeFog * (0.6f + 0.4f * in.night) * Calm(kAreaFog);
             note(kAreaFog, "the place's fogginess (AreaClimate)", a.fogginess, a.fogginess);
-            if (clouded) note(kAreaFog, "mountain cloud: the place's fog is its cloud deck (base z)", a.cloudBase, 0.0f);
+            if (clouded)
+            {
+                note(kAreaFog, "mountain cloud: the place's fog is its cloud deck (base z)", a.cloudBase, 0.0f);
+                note(kMist, "mountain cloud: no ground mist here (base z)", a.cloudBase, 0.0f);
+            }
             note(kAreaFog, "time of day (night)", in.night, 0.6f + 0.4f * in.night);
             note(kAreaFog, "calm (wind)", in.wind, Calm(kAreaFog));
             // Haze: rain (snow less).
