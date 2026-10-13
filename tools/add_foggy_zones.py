@@ -3,8 +3,12 @@
 its mist) on AreaClimate rows for the naturally misty zones, keeping every other row and field as it is.
 The shipped table leaves Fogginess unset everywhere, so no zone had any area fog ("add the starter set pls", the user,
 2026-10-13). The scale follows gen_default_climate.py's examples (Swamp of Sorrows 0.6, Duskwood 0.5).
-  0.6  the Plaguelands, Duskwood, Dustwallow Marsh, the Swamp of Sorrows, Felwood, Grizzly Hills, Howling Fjord
+  0.6  the Plaguelands, Duskwood, Dustwallow Marsh, the Swamp of Sorrows, Felwood, Grizzly Hills, Howling Fjord,
+       Zangarmarsh
+  0.4  forests: Feralas, Teldrassil, Darkshore, Ashenvale, Azshara, Moonglade, Stranglethorn Vale, Un'Goro Crater,
+       the Hinterlands, Terokkar Forest, Crystalsong Forest, the Ghostlands
   0.3  Tirisfal Glades, Silverpine Forest, Zul'Drak, Deadwind Pass, Sholazar Basin
+  0.2  Elwynn Forest, Eversong Woods
 A zone with a row already (the Swamp of Sorrows: 106) keeps its other fields; the rest get new rows (110..) that set
 Fogginess only, inheriting the rest (temperatures -1000, the others -1). Zone IDs: AreaTable.dbc (3.3.5a).
 Usage:  python add_foggy_zones.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
@@ -18,7 +22,7 @@ import cdbc_io as io
 
 AREA = 2
 I, T = -1.0, -1000.0
-STRONG, LIGHT = 0.6, 0.3
+STRONG, FOREST, LIGHT, GENTLE = 0.6, 0.4, 0.3, 0.2
 
 # (zone, AreaTable ID, fogginess, row ID for a new row)
 ZONES = [
@@ -35,6 +39,24 @@ ZONES = [
     ("Zul'Drak", 66, LIGHT, 120),
     ("Deadwind Pass", 41, LIGHT, 121),
     ("Sholazar Basin", 3711, LIGHT, 122),
+    # Forests ("can we also have forest zones added ... Feralas, Teldrassil, Darkshore, Ashenvale etc.", the user,
+    # 2026-10-13): mist under the trees, between the misty zones and the light ones. A marsh with the strong ones, and
+    # two gentle woods (morning mist, not gloom).
+    ("Feralas", 357, FOREST, 123),
+    ("Teldrassil", 141, FOREST, 124),
+    ("Darkshore", 148, FOREST, 125),
+    ("Ashenvale", 331, FOREST, 126),
+    ("Azshara", 16, FOREST, 127),
+    ("Moonglade", 493, FOREST, 128),
+    ("Stranglethorn Vale", 33, FOREST, 129),
+    ("Un'Goro Crater", 490, FOREST, 130),
+    ("The Hinterlands", 47, FOREST, 131),
+    ("Terokkar Forest", 3519, FOREST, 132),
+    ("Crystalsong Forest", 2817, FOREST, 133),
+    ("Ghostlands", 3433, FOREST, 134),
+    ("Zangarmarsh", 3521, STRONG, 135),
+    ("Elwynn Forest", 12, GENTLE, 136),
+    ("Eversong Woods", 3430, GENTLE, 137),
 ]
 FOGGINESS = 9  # column (ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment)
 
