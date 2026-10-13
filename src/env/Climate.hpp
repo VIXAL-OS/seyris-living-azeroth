@@ -26,8 +26,13 @@ namespace wxl_livingazeroth::climate
         float    seasonOffset = 0.0f;     // months the seasons are shifted (6 = flipped)
         float    humidity = 0.5f;         // 0 dry air .. 1 saturated (slows drying; later fog, dust)
         float    fogginess = 0.0f;        // 0 .. 1: how foggy the place is by nature (area fog, more mist)
+        // Mountain cloud: world z above which the place's own fog forms (its upper slopes and peaks in cloud);
+        // kNoCloudBase = at any height. Not blended across borders (At() leaves it unset): a place's own.
+        float    cloudBase = -100000.0f;
         uint32_t flags = 0;               // reserved
     };
+    constexpr float kNoCloudBase = -100000.0f;
+    inline bool HasCloudBase(const Row& r) { return r.cloudBase > kNoCloudBase * 0.5f; }
 
     /// The resolved row for a place (area chain + map), cached per (area, map). A hard step at every
     /// area border: for "the climate here", use At().

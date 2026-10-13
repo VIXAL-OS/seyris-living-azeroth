@@ -26,8 +26,8 @@ T = -1000.0       # inherit (temperatures)
 GLOBAL, MAP, AREA = 0, 1, 2
 
 
-def row(id, scope, scope_id=0, day=T, night=T, amplitude=I, offset=I, humidity=I, flags=0, fogginess=I, comment=""):
-    return (id, scope, scope_id, day, night, amplitude, offset, humidity, flags, fogginess, comment)
+def row(id, scope, scope_id=0, day=T, night=T, amplitude=I, offset=I, humidity=I, flags=0, fogginess=I, comment="", cloud_base=T):
+    return (id, scope, scope_id, day, night, amplitude, offset, humidity, flags, fogginess, comment, cloud_base)
 
 
 DEFAULT_ROWS = [

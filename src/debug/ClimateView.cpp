@@ -58,6 +58,12 @@ namespace wxl_livingazeroth::debug
             std::snprintf(line, sizeof(line), "here (area %u, map %d): day %.1f / night %.1f degC, season +-%.1f (offset %.1f months), humidity %.2f",
                           area, s.mapId, row.dayTemp, row.nightTemp, row.seasonAmplitude * 0.5f, row.seasonOffset, row.humidity);
             g_api->UiText(line);
+            if (climate::HasCloudBase(row))
+            {
+                std::snprintf(line, sizeof(line), "mountain cloud: its fog only above z %.0f (you're at %.0f; fogginess %.2f)",
+                              row.cloudBase, s.playerPos[2], row.fogginess);
+                g_api->UiText(line);
+            }
             const climate::Breakdown t = climate::Temperature(row);
             const climate::Weather& w = climate::CurrentWeather();
             static const char* const kWeather[] = { "fine", "rain", "snow", "sand" };

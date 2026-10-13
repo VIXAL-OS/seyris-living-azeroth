@@ -336,6 +336,7 @@ ground moisture (drying) now; later by snow melting and freezing, frost, fog and
 | Flags | reserved, 0 |
 | Fogginess | 0 .. 1: how foggy the place is by nature; drives area fog, boosts mist. −1 inherits. Appended 2026-10-08 |
 | Comment | free text for the editor (which place the row is); never read. `tools/fill_comments.py` fills empty ones with the place's name. Appended 2026-10-11 |
+| CloudBase | world z: the place's own fog (area fog) forms only above it, fading in over 40 yd: cloud on a mountain zone's upper slopes; and no zone-wide fog there. ≤ −1000 inherits / none. Appended 2026-10-13 (ChromieCraft fork; tools/add_mountain_clouds.py) |
 
 Lookup: Global < Map < Area (zone) < Area (sub-area); the more specific row wins **field by field**.
 No row at all: 18 °C day, 8 °C night, ±6 °C over the year, humidity 0.5, fogginess 0.
