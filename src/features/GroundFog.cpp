@@ -539,9 +539,10 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
         float shape = saturate((p.z - cDeck.x) / edge) * saturate((cDeck.y - p.z) / edge);
         float3 q = p * cDeckColor.w + cNoise.xyz * 0.32;
         float n = tex3Dlod(noiseTex, float4(q, 0)).r * 0.6 + tex3Dlod(noiseTex, float4(q * 2.3 + 0.41, 0)).r * 0.4;
-        float sigma = cDeck.z * shape * saturate((n - 0.26) * 2.0); // mostly cloud, with gaps and thinner patches
+        // Puffy: cloud masses with soft but defined edges and clear gaps (a linear ramp gave grey veils everywhere).
+        float sigma = cDeck.z * shape * smoothstep(0.32, 0.56, n);
         float a = 1 - exp(-sigma * ds);
-        lit += T * a * (0.8 + 0.3 * saturate((p.z - cDeck.x) / thick));
+        lit += T * a * (0.85 + 0.25 * saturate((p.z - cDeck.x) / thick));
         T *= 1 - a;
         if (T < 0.01) break;
     }
@@ -1458,13 +1459,14 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_deck.density < 1.0e-5f) g_deck.density = 0.0f;
             float c[3];
             FogColor(fog::kAreaFog, c, area); // the place's cloud look (its FogSettings area fog row)
-            // Lit like the terrain (its ambient + some of the sun or moon), where that's brighter: at night the fog colour
-            // is near black, and clouds darker than the moonlit snow under them read as smoke.
+            // Lit like the terrain (its ambient + the sun or moon, as on ground facing it), where that's brighter: at
+            // night the fog colour is near black and the clouds came out muddy grey over the moonlit snow ("the clouds
+            // look muddy and gray lol", the user, 2026-10-13).
             float ambient[3], diffuse[3];
             if (cover::TerrainLight(ambient, diffuse))
             {
                 constexpr float kTint[3] = { 0.95f, 0.97f, 1.0f };
-                for (int i = 0; i < 3; ++i) c[i] = std::fmax(c[i], (ambient[i] + 0.6f * diffuse[i]) * kTint[i]);
+                for (int i = 0; i < 3; ++i) c[i] = std::fmax(c[i], (ambient[i] + 0.9f * diffuse[i]) * kTint[i]);
             }
             for (int i = 0; i < 3; ++i) g_deck.color[i] += (c[i] - g_deck.color[i]) * k;
         }
