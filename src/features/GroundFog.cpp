@@ -519,24 +519,33 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
     float dist = length(ray);
     float3 dir = ray / max(dist, 1e-4);
     float far = d > cDepth.z ? cDeck.w : min(dist, cDeck.w); // the sky: as far as the deck is drawn
+    // Its base isn't flat: it wanders up and down by kWobble yd over a few hundred yd, and thins over up to 100 yd.
+    // (A level base with a 40 yd fade, seen nearly edge-on from below, was one razor-sharp line across the view:
+    // "extremely sharp line ascending into the deck", the user, 2026-10-13.) The ray is clipped to the lowest it reaches.
+    const float kWobble = 60;
+    float lo = cDeck.x - kWobble;
     float ta = 0, tb = far;
     if (abs(dir.z) > 1e-4)
     {
-        float ea = (cDeck.x - cCam.z) / dir.z, eb = (cDeck.y - cCam.z) / dir.z;
+        float ea = (lo - cCam.z) / dir.z, eb = (cDeck.y - cCam.z) / dir.z;
         ta = max(min(ea, eb), 0);
         tb = min(max(ea, eb), far);
     }
-    else if (cCam.z < cDeck.x || cCam.z > cDeck.y) return float4(0, 0, 0, 1);
+    else if (cCam.z < lo || cCam.z > cDeck.y) return float4(0, 0, 0, 1);
     if (ta >= tb) return float4(0, 0, 0, 1);
     float j = frac(52.9829189 * frac(dot(vpos, float2(0.06711056, 0.00583715))));
-    float ds = (tb - ta) / 12;
+    float span = tb - ta;
     float thick = max(cDeck.y - cDeck.x, 1);
-    float edge = min(thick * 0.25, 40);  // yd over which it thins at its bottom and top
+    float edge = min(thick * 0.25, 100);  // yd over which it thins at its bottom and top
     float T = 1, lit = 0;
     [loop] for (int k = 0; k < 12; ++k)
     {
-        float3 p = cCam.xyz + dir * (ta + (k + j) * ds);
-        float shape = saturate((p.z - cDeck.x) / edge) * saturate((cDeck.y - p.z) / edge);
+        // Steps closer together near the camera (where detail shows), longer far away: u^2 spacing.
+        float u0 = (k + j) / 12, u1 = (k + 1 + j) / 12;
+        float ds = span * (u1 * u1 - u0 * u0);
+        float3 p = cCam.xyz + dir * (ta + span * 0.5 * (u0 * u0 + u1 * u1));
+        float wob = (tex3Dlod(noiseTex, float4(p.xy * cDeckColor.w * 0.6, 0.71, 0)).r - 0.5) * 2 * kWobble;
+        float shape = saturate((p.z - (cDeck.x + wob)) / edge) * saturate((cDeck.y - p.z) / edge);
         float3 q = p * cDeckColor.w + cNoise.xyz * 0.32;
         float n = tex3Dlod(noiseTex, float4(q, 0)).r * 0.6 + tex3Dlod(noiseTex, float4(q * 2.3 + 0.41, 0)).r * 0.4;
         // Puffy: cloud masses with soft but defined edges and clear gaps (a linear ramp gave grey veils everywhere).
