@@ -8,6 +8,7 @@
 #include "Wind.hpp"
 
 #include "../features/GrassPerf.hpp"
+#include "../features/GroundMaterialTable.hpp"
 
 #include "game/Pick.hpp"
 
@@ -101,6 +102,12 @@ namespace wxl_livingazeroth::fog
         constexpr float kTraceFrom = 40.0f;      // yd above the terrain the ray starts
         constexpr float kMaxPool = 4.0f;         // amounts may pile up to this in hollows (heavy fog)
         std::vector<uint8_t> g_liquid;   // terrain liquid on the cell: 0 none, 1 water/ocean, 2 magma, 3 slime
+        // The liquid's own temperature (degC) where its GroundMaterialSelector row gives it one (hot
+        // springs, geysers); kNoLiquidTemperature otherwise. The temperature field only warms the
+        // ground by a share of a liquid's heat (made for magma), so a 70 degC pool in cold Borean air
+        // would never reach the steam rule's range through it.
+        constexpr float kNoLiquidTemperature = -1000.0f;
+        std::vector<float> g_liquidTemp;
         std::vector<uint32_t> g_area;    // the cell's area (its terrain chunk's), 0 = not known: the player's place
         std::vector<uint8_t> g_fresh;    // scrolled in, not started yet (starts from its target x the area's progress)
         // How far the fog around the player has come toward its targets. 1 on a fresh grid (login,
@@ -183,6 +190,7 @@ namespace wxl_livingazeroth::fog
             g_groundKnown.assign(kGridSize * kGridSize, 0);
             g_block.assign(kGridSize * kGridSize, kUntraced);
             g_liquid.assign(kGridSize * kGridSize, 0);
+            g_liquidTemp.assign(kGridSize * kGridSize, kNoLiquidTemperature);
             g_area.assign(kGridSize * kGridSize, 0);
             g_areaSlot.assign(kGridSize * kGridSize, 0);
             g_blendSlot.assign(kGridSize * kGridSize, 0);
@@ -196,7 +204,7 @@ namespace wxl_livingazeroth::fog
             g_grid.ground = g_ground.data();
             g_grid.groundKnown = g_groundKnown.data();
             g_grid.block = g_block.data();
-            g_stats.kilobytes = static_cast<unsigned>((kKindCount * (2 * sizeof(float) + 1) + 4 * sizeof(float) + sizeof(uint32_t) + 4 + 3) * kGridSize * kGridSize / 1024);
+            g_stats.kilobytes = static_cast<unsigned>((kKindCount * (2 * sizeof(float) + 1) + 5 * sizeof(float) + sizeof(uint32_t) + 4 + 3) * kGridSize * kGridSize / 1024);
         }
 
         void ForgetGround(int index)
@@ -205,6 +213,7 @@ namespace wxl_livingazeroth::fog
             g_ground[index] = g_terrain[index] = g_groundFallback;
             g_block[index] = kUntraced;
             g_liquid[index] = 0;
+            g_liquidTemp[index] = kNoLiquidTemperature;
             g_area[index] = 0;
             g_areaSlot[index] = 0;
             g_blendShare[index] = 0;
@@ -255,9 +264,12 @@ namespace wxl_livingazeroth::fog
                 ++queries;
                 float z = 0.0f;
                 if (!terrain::HeightAt(x, y, z)) { ++missing; continue; }
+                uint32_t area = 0;
+                g_area[index] = terrain::ChunkAreaAt(x, y, area) ? area : 0;
                 float liquid = 0.0f;
                 uint32_t liquidType = 0;
                 g_liquid[index] = 0;
+                g_liquidTemp[index] = kNoLiquidTemperature;
                 if (terrain::LiquidAt(x, y, liquid, liquidType) && liquid > z)
                 {
                     z = liquid;
@@ -267,10 +279,14 @@ namespace wxl_livingazeroth::fog
                         case terrain::kLiquidSlime: g_liquid[index] = 3; break;
                         default:                    g_liquid[index] = 1; break; // water, ocean, unknown
                     }
+                    // What the liquid is here (its GroundMaterialSelector row, by place): a hot spring's own heat.
+                    if (const uint32_t material = materials::SelectLiquid(liquidType, g_area[index], g_map))
+                    {
+                        const materials::Values v = materials::Get(material);
+                        if (v.hasTemperature) g_liquidTemp[index] = v.temperature;
+                    }
                 }
                 g_ground[index] = g_terrain[index] = z;
-                uint32_t area = 0;
-                g_area[index] = terrain::ChunkAreaAt(x, y, area) ? area : 0;
                 g_areaSlot[index] = SlotOf(g_area[index]);
                 g_groundKnown[index] = 1;
                 g_block[index] = kUntraced;
@@ -731,15 +747,17 @@ namespace wxl_livingazeroth::fog
             // Steam: rain or snow on hot ground or magma; hot water steams anyway; and drying ground:
             // fresh wetness (moisture above the ground's rest: recent rain, melt water) steams where
             // the ground is clearly warmer than the air (warm wet ground under cooler air: day or
-            // night, rain only halves it), and gives thin wisps on warm sunlit ground.
+            // night, rain only halves it), and gives thin wisps on warm sunlit ground. A hot spring is
+            // water at its own temperature (its GroundMaterialSelector row) or the ground's, the warmer.
             const float hot = std::fmax(Smooth(35.0f, 80.0f, groundTemp), liquid == 2 ? 1.0f : 0.0f);
-            const float hotSpring = liquid == 1 ? Smooth(35.0f, 60.0f, groundTemp) : 0.0f;
+            const float springTemp = std::fmax(groundTemp, g_liquidTemp[index]);
+            const float hotSpring = liquid == 1 ? Smooth(35.0f, 60.0f, springTemp) : 0.0f;
             const float sunWisps = Smooth(12.0f, 30.0f, groundTemp) * (1.0f - in.night) * (1.0f - in.precipitation);
             const float warmer = Smooth(2.0f, 15.0f, groundTemp - a.airNow) * (1.0f - 0.5f * in.precipitation);
             const float drying = 0.5f * ExcessAt(i, j) * std::fmax(sunWisps, warmer);
             out[kSteam] = std::fmax(std::fmax(in.precipitation * hot, hotSpring), drying) * Calm(kSteam);
             note(kSteam, "rain/snow on hot ground (ground degC)", groundTemp, in.precipitation * hot, true);
-            note(kSteam, "hot spring (water, ground degC)", groundTemp, hotSpring, true);
+            note(kSteam, "hot spring (water degC)", liquid == 1 ? springTemp : groundTemp, hotSpring, true);
             note(kSteam, "wet ground drying (moisture above rest)", ExcessAt(i, j), drying, true);
             note(kSteam, "  ... warmer than the air (degC)", groundTemp - a.airNow, warmer);
             note(kSteam, "  ... sun wisps (ground degC)", groundTemp, sunWisps);
