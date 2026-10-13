@@ -29,6 +29,7 @@ namespace wxl_livingazeroth::climate
         // Mountain cloud: world z above which the place's own fog forms (its upper slopes and peaks in cloud);
         // kNoCloudBase = at any height. Not blended across borders (At() leaves it unset): a place's own.
         float    cloudBase = -100000.0f;
+        float    cloudTop = -100000.0f;   // the cloud's top (world z); unset: the base + the fog panel's deck thickness
         uint32_t flags = 0;               // reserved
     };
     constexpr float kNoCloudBase = -100000.0f;

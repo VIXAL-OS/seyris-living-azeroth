@@ -28,6 +28,12 @@ namespace wxl_livingazeroth::groundfog
         int   fogLights = 1;            // our lights (torches, braziers...) light the fog around them
         float lightStrength = 1.0f;     // x their light in the fog
         float lightRange = 128.0f;      // yd from the camera: lights farther away don't light the fog
+        // The cloud deck: in places with a cloud base (AreaClimate CloudBase: mountain zones), a slab of cloud in the air
+        // from the base up, over the whole view; terrain and buildings stand out of it.
+        int   cloudDeck = 1;
+        float cloudDeckDensity = 1.0f;     // x its density (the place's Fogginess x kDeckDensity)
+        float cloudDeckThickness = 120.0f; // yd from its base to its top
+        float cloudDeckRange = 1200.0f;    // yd: how far it's drawn
         int   floorReach = 2;          // cells: the light layer starts on the lowest ground this far around (smoothed), so it doesn't drape up walls
         float dither = 0.0f;           // 0 sample each step's middle .. 1 anywhere in it, per pixel (grain instead of banding)
         float maxDistance = 250.0f;     // yd: the march ends here (and for sky pixels)

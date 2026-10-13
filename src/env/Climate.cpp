@@ -28,14 +28,15 @@ namespace wxl_livingazeroth::climate
             {"Fogginess",       9, WXL_CDBC_FIELD_VALUE}, // appended 2026-10-08 (ground fog)
             {"Comment",        10, WXL_CDBC_FIELD_STRING}, // appended 2026-10-11: for the editor, not read
             {"CloudBase",      11, WXL_CDBC_FIELD_VALUE}, // appended 2026-10-13 (ChromieCraft fork): mountain cloud
+            {"CloudTop",       12, WXL_CDBC_FIELD_VALUE}, // appended 2026-10-13 (ChromieCraft fork): the cloud deck's top
         };
-        constexpr WXL_SeyrisCdbcDefinition kDef = { "AreaClimate", "DBFilesClient\\AreaClimate.cdbc", kFields, 12 };
+        constexpr WXL_SeyrisCdbcDefinition kDef = { "AreaClimate", "DBFilesClient\\AreaClimate.cdbc", kFields, 13 };
 
         enum Scope : uint32_t { kGlobal = 0, kMap = 1, kArea = 2 };
-        enum Field { kDay, kNight, kAmplitude, kOffset, kHumidity, kFogginess, kCloudBase, kFieldCount };
+        enum Field { kDay, kNight, kAmplitude, kOffset, kHumidity, kFogginess, kCloudBase, kCloudTop, kFieldCount };
         constexpr const char* kColumns[kFieldCount] = { "DayTemp", "NightTemp", "SeasonAmplitude", "SeasonOffset", "Humidity", "Fogginess",
-                                                        "CloudBase" };
-        constexpr bool kSigned[kFieldCount] = { true, true, false, false, false, false, true };
+                                                        "CloudBase", "CloudTop" };
+        constexpr bool kSigned[kFieldCount] = { true, true, false, false, false, false, true, true };
 
         // Signed columns inherit at -1000 and below, the others at any negative value.
         bool IsSet(int f, float v) { return kSigned[f] ? v > -1000.0f : v >= 0.0f; }
@@ -146,6 +147,7 @@ namespace wxl_livingazeroth::climate
         if (set[kHumidity])  r.humidity = value[kHumidity] > 1.0f ? 1.0f : value[kHumidity];
         if (set[kFogginess]) r.fogginess = value[kFogginess] > 1.0f ? 1.0f : value[kFogginess];
         if (set[kCloudBase]) r.cloudBase = value[kCloudBase];
+        if (set[kCloudTop])  r.cloudTop = value[kCloudTop];
         r.flags = flags;
         if (g_cache.size() > 4096) g_cache.clear();
         return g_cache.emplace(key, r).first->second;

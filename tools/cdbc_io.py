@@ -67,8 +67,8 @@ SURFACE_COVER = ["u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "u", "f", "s"
 #  ID MaterialID CoverMaterial Depth MaxSlope SlopeFade DriftNoise EdgeBreakup Rim RelaxSeconds
 #  TintColor TintStrength CoverTexture Opacity Flatten ZOffset Wetness Flags MeltKeptShare MeltGoneTemperature
 #  MoistureMin (appended 2026-10-13)
-AREA_CLIMATE = ["u", "u", "u", "f", "f", "f", "f", "f", "u", "f", "s", "f"]
-#  ... Comment, CloudBase (appended 2026-10-13, ChromieCraft fork: world z above which the place's fog forms; -1000 = none)
+AREA_CLIMATE = ["u", "u", "u", "f", "f", "f", "f", "f", "u", "f", "s", "f", "f"]
+#  ... Comment, CloudBase, CloudTop (appended 2026-10-13, ChromieCraft fork: a cloud deck between these world z; -1000 = none)
 #  ID ScopeType ScopeID DayTemp NightTemp SeasonAmplitude SeasonOffset Humidity Flags Fogginess Comment
 FOG_SETTINGS = ["u", "u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "i", "f", "f", "f", "f", "f", "u", "s"]
 #  ID ScopeType ScopeID Kind Strength Density Thickness BuildUp BurnOff WindThin WindDrift Patchiness
@@ -88,7 +88,7 @@ TABLES = {
     "GroundMaterial": (GROUND_MATERIAL, [0, "", 0, -1.0, -1.0, 0, -1.0, -1000.0]),
     "GroundMaterialSelector": (GROUND_MATERIAL_SELECTOR, [0, 0, 0, "", 0, -1, 0, 0, 0]),
     "SurfaceCover": (SURFACE_COVER, [0, 0, 0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 0, -1.0, "", -1.0, -1.0, -1000.0, -1.0, 0, -1.0, -1000.0, -1.0]),
-    "AreaClimate": (AREA_CLIMATE, [0, 0, 0, -1000.0, -1000.0, -1.0, -1.0, -1.0, 0, -1.0, "", -1000.0]),
+    "AreaClimate": (AREA_CLIMATE, [0, 0, 0, -1000.0, -1000.0, -1.0, -1.0, -1.0, 0, -1.0, "", -1000.0, -1000.0]),
     "FogSettings": (FOG_SETTINGS, [0, 0, 0, 0] + [-1.0] * 9 + [-1] + [-1.0] * 5 + [0, ""]),
     "WindProfile": (WIND_PROFILE, [0, 0, 0] + [-1.0] * 11 + [0, ""]),
     "DoodadLightProperties": (DOODAD_LIGHT_PROPERTIES, [0, "", 0, 0xFFA050, 1.4, -1.0, -1.0, 20.0, 35.0, -1, -1.0, -1.0, 0]),

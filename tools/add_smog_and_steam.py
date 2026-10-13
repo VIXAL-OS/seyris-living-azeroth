@@ -87,8 +87,9 @@ def fog_row(id, scope, scope_id, kind, comment, strength=I, density=I, thickness
 
 
 def climate_row(id, scope, scope_id, fogginess, comment):
-    # ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment, CloudBase
-    return (id, scope, scope_id, T, T, I, I, I, 0, fogginess, comment, T)
+    # ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment, CloudBase,
+    # CloudTop
+    return (id, scope, scope_id, T, T, I, I, I, 0, fogginess, comment, T, T)
 
 
 def decode(path, columns):

@@ -60,8 +60,10 @@ namespace wxl_livingazeroth::debug
             g_api->UiText(line);
             if (climate::HasCloudBase(row))
             {
-                std::snprintf(line, sizeof(line), "mountain cloud: its fog only above z %.0f (you're at %.0f; fogginess %.2f)",
-                              row.cloudBase, s.playerPos[2], row.fogginess);
+                char top[32] = "base + deck thickness";
+                if (row.cloudTop > climate::kNoCloudBase * 0.5f) std::snprintf(top, sizeof(top), "%.0f", row.cloudTop);
+                std::snprintf(line, sizeof(line), "mountain cloud: a deck from z %.0f to %s (you're at %.0f; fogginess %.2f)",
+                              row.cloudBase, top, s.playerPos[2], row.fogginess);
                 g_api->UiText(line);
             }
             const climate::Breakdown t = climate::Temperature(row);

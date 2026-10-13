@@ -86,7 +86,7 @@ def main():
             continue
         if any(r[0] == new_id for r in rows):
             sys.exit(f"{path}: row ID {new_id} is taken by another row (for {name})")
-        rows.append([new_id, AREA, area, T, T, I, I, I, 0, fog, f"{name}: foggy by nature", T])
+        rows.append([new_id, AREA, area, T, T, I, I, I, 0, fog, f"{name}: foggy by nature", T, T])
         changed += 1
     rows.sort(key=lambda r: r[0])
     path.write_bytes(io.build(kinds, [tuple(r) for r in rows]))

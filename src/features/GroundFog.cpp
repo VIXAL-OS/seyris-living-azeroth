@@ -1,6 +1,7 @@
 #include "GroundFog.hpp"
 
 #include "../debug/Profiler.hpp"
+#include "../env/Climate.hpp"
 #include "../env/Fog.hpp"
 #include "../env/FogSettings.hpp"
 #include "../env/Lights.hpp"
@@ -62,11 +63,19 @@ namespace wxl_livingazeroth::groundfog
         unsigned    g_draws = 0, g_fieldUploads = 0;
         ULONGLONG   g_lastTick = 0;
         float       g_noiseOffset[3] = {};
+        // The cloud deck where the player is (AreaClimate CloudBase/CloudTop), eased toward the place's values so crossing
+        // a zone border doesn't pop it in or out.
+        constexpr float kDeckDensity = 0.02f;     // per yd at Fogginess 1 (in the noise's denser half)
+        constexpr float kDeckEaseSeconds = 2.0f;
+        constexpr float kDeckTileYards = 220.0f;  // its noise tile: patches of cloud from ~25 yd to the tile's size
+        struct DeckState { float base = 0.0f, top = 0.0f, density = 0.0f; float color[3] = { 1.0f, 1.0f, 1.0f }; };
+        DeckState g_deck;
 
         // GPU resources (D3DPOOL_MANAGED: they survive a reset; dropped when the device changes).
         IDirect3DDevice9*        g_device = nullptr;
         IDirect3DPixelShader9*   g_ps = nullptr;
         IDirect3DPixelShader9*   g_psUpscale = nullptr; // half resolution: the depth-aware upscale
+        IDirect3DPixelShader9*   g_psDeck = nullptr;    // the cloud deck (its own pass: the march's shader is at ps_3_0's register limit)
         IDirect3DTexture9*       g_halfTex = nullptr;   // half resolution: the march's target (D3DPOOL_DEFAULT: dropped on a reset)
         UINT                     g_halfW = 0, g_halfH = 0;
         bool                     g_halfFailed = false;  // couldn't make the target: full resolution
@@ -92,7 +101,7 @@ namespace wxl_livingazeroth::groundfog
         float        g_seenM22 = 0.0f, g_seenM32 = 0.0f;
         // The probe ray (diagnostics): the shader's own march for one pixel, read back. Row m - 1 is
         // probe mode m (see the shader's cProbe2); in modes 1 and 2 column k stops after k + 1 iterations.
-        constexpr int kProbeCols = 128, kProbeModes = 9, kConstRegs = 21;
+        constexpr int kProbeCols = 128, kProbeModes = 9, kConstRegs = 23;
         IDirect3DTexture9*  g_probeTex = nullptr;  // D3DPOOL_DEFAULT render target
         IDirect3DSurface9*  g_probeSys = nullptr;  // its system-memory copy for the readback
         bool                g_probeFailed = false;
@@ -475,6 +484,68 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
 }
 )";
 
+        // The cloud deck (mountain zones: AreaClimate CloudBase .. CloudTop): a slab of cloud in the air over the whole view,
+        // cut where the ray meets terrain or a building, so what rises above it stands out and what reaches into it is
+        // in cloud. Soft at its bottom and top, patchy at the scale of clouds, a little brighter higher up. Its own pass
+        // (full resolution, blended like the fog: rgb = its light, a = what it lets through), drawn before the fog when
+        // the camera is below its top, after it when above.
+        const char* const kDeckHlsl = R"(
+sampler2D depthTex : register(s0);
+sampler3D noiseTex : register(s2);
+float4 cDepth  : register(c0);  // x = viewport min z, y = 1 / (max z - min z), z = deepest world depth
+float4 cProj   : register(c1);  // projection m00, m11, m20, m21
+float4 cProj2  : register(c2);  // projection m22, m32, -, depth decode switch
+float4 cInv0   : register(c3);  // inverse view rows
+float4 cInv1   : register(c4);
+float4 cInv2   : register(c5);
+float4 cCam    : register(c6);  // xyz = the camera
+float4 cNoise  : register(c10); // xyz = drift offset (the fog's tiles)
+float4 cUv     : register(c12); // depth texture uv = xy + uv * zw
+float4 cDeck      : register(c21); // x = its base (world z), y = its top, z = density per yd, w = its range (yd)
+float4 cDeckColor : register(c22); // rgb = its colour, w = 1 / its noise tile (yd)
+
+float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
+{
+    float d = tex2Dlod(depthTex, float4(cUv.xy + uv * cUv.zw, 0, 0)).r;
+    float d01 = saturate((d - cDepth.x) * cDepth.y);
+    float ndcZ = cProj2.w > 0.5 ? d01 : d01 * 2 - 1;
+    float viewZ = cProj2.y / min(ndcZ - cProj2.x, -1e-6);
+    float2 ndc = float2(uv.x * 2 - 1, 1 - uv.y * 2);
+    float3 v = float3((ndc.x - cProj.z) * viewZ / cProj.x, (ndc.y - cProj.w) * viewZ / cProj.y, viewZ);
+    float3 ray = v.x * cInv0.xyz + v.y * cInv1.xyz + v.z * cInv2.xyz;
+    float dist = length(ray);
+    float3 dir = ray / max(dist, 1e-4);
+    float far = d > cDepth.z ? cDeck.w : min(dist, cDeck.w); // the sky: as far as the deck is drawn
+    float ta = 0, tb = far;
+    if (abs(dir.z) > 1e-4)
+    {
+        float ea = (cDeck.x - cCam.z) / dir.z, eb = (cDeck.y - cCam.z) / dir.z;
+        ta = max(min(ea, eb), 0);
+        tb = min(max(ea, eb), far);
+    }
+    else if (cCam.z < cDeck.x || cCam.z > cDeck.y) return float4(0, 0, 0, 1);
+    if (ta >= tb) return float4(0, 0, 0, 1);
+    float j = frac(52.9829189 * frac(dot(vpos, float2(0.06711056, 0.00583715))));
+    float ds = (tb - ta) / 12;
+    float thick = max(cDeck.y - cDeck.x, 1);
+    float edge = min(thick * 0.25, 40);  // yd over which it thins at its bottom and top
+    float T = 1, lit = 0;
+    [loop] for (int k = 0; k < 12; ++k)
+    {
+        float3 p = cCam.xyz + dir * (ta + (k + j) * ds);
+        float shape = saturate((p.z - cDeck.x) / edge) * saturate((cDeck.y - p.z) / edge);
+        float3 q = p * cDeckColor.w + cNoise.xyz * 0.32;
+        float n = tex3Dlod(noiseTex, float4(q, 0)).r * 0.6 + tex3Dlod(noiseTex, float4(q * 2.3 + 0.41, 0)).r * 0.4;
+        float sigma = cDeck.z * shape * saturate((n - 0.36) * 2.4);
+        float a = 1 - exp(-sigma * ds);
+        lit += T * a * (0.8 + 0.3 * saturate((p.z - cDeck.x) / thick));
+        T *= 1 - a;
+        if (T < 0.01) break;
+    }
+    return float4(lit * cDeckColor.rgb, T);
+}
+)";
+
         // The upscale: the fog was marched at half resolution, half-res pixel (i, j) = full pixel
         // (2i, 2j). Each full pixel blends its 4 nearest half-res samples by distance and by how close
         // each one's depth is to its own (so fog from the background doesn't bleed onto a silhouette in
@@ -548,6 +619,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             ReleaseProbe();
             if (g_ps) { g_ps->Release(); g_ps = nullptr; }
             if (g_psUpscale) { g_psUpscale->Release(); g_psUpscale = nullptr; }
+            if (g_psDeck) { g_psDeck->Release(); g_psDeck = nullptr; }
             if (g_halfTex) { g_halfTex->Release(); g_halfTex = nullptr; }
             g_halfFailed = false;
             if (g_field) { g_field->Release(); g_field = nullptr; }
@@ -1352,6 +1424,40 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             return nullptr;
         }
 
+        /// The cloud deck's target where the player is: its base and top (world z), its density per yd (0: none here).
+        float DeckTarget(float& base, float& top, uint32_t& area)
+        {
+            const world::Snapshot& s = world::Current();
+            area = s.areaCount > 0 ? s.areaChain[0] : 0;
+            const climate::Row& row = climate::For(area, s.mapId);
+            base = row.cloudBase;
+            top = row.cloudTop > row.cloudBase + 5.0f ? row.cloudTop : row.cloudBase + std::fmax(g_settings.cloudDeckThickness, 5.0f);
+            if (!g_settings.cloudDeck || !climate::HasCloudBase(row)) return 0.0f;
+            return row.fogginess * kDeckDensity * g_settings.cloudDeckDensity;
+        }
+
+        bool DeckActive()
+        {
+            float base, top;
+            uint32_t area;
+            return g_deck.density > 0.0f || DeckTarget(base, top, area) > 0.0f;
+        }
+
+        void StepDeck(float dt)
+        {
+            float base, top;
+            uint32_t area;
+            const float target = DeckTarget(base, top, area);
+            if (target > 0.0f && g_deck.density <= 0.0f) { g_deck.base = base; g_deck.top = top; } // appearing: at its own heights
+            const float k = dt > 0.0f && dt < 1.0f ? 1.0f - std::exp(-dt / kDeckEaseSeconds) : 1.0f;
+            g_deck.density += (target - g_deck.density) * k;
+            if (target > 0.0f) { g_deck.base += (base - g_deck.base) * k; g_deck.top += (top - g_deck.top) * k; }
+            if (g_deck.density < 1.0e-5f) g_deck.density = 0.0f;
+            float c[3];
+            FogColor(fog::kAreaFog, c, area); // the place's cloud look (its FogSettings area fog row)
+            for (int i = 0; i < 3; ++i) g_deck.color[i] += (c[i] - g_deck.color[i]) * k;
+        }
+
         /// Whether the fog draws this frame. Decided before the water, so the water's depth writes
         /// follow it.
         bool Decide()
@@ -1367,7 +1473,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_conflict)                      { g_inactive = "another fog/water mod is loaded (see the log); giving way"; return false; }
             if (!depth::Texture())               { g_inactive = "no readable scene depth (see the scene depth panel)"; return false; }
             if (*reinterpret_cast<const uint32_t*>(kCameraInLiquid)) { g_inactive = "camera under water"; return false; }
-            if (!AnyFog() && !g_settings.heightBands && g_settings.debugView != 3) { g_inactive = "no fog in the field (deposit some)"; return false; }
+            if (!AnyFog() && !DeckActive() && !g_settings.heightBands && g_settings.debugView != 3) { g_inactive = "no fog in the field (deposit some)"; return false; }
             if (*reinterpret_cast<const float*>(kInteriorBlend) >= 0.999f) { g_inactive = "indoors"; return false; }
             return true;
         }
@@ -1382,6 +1488,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             {
                 g_ps = Compile(dev, kPsHlsl);
                 g_psUpscale = g_ps ? Compile(dev, kUpscaleHlsl) : nullptr;
+                g_psDeck = g_ps ? Compile(dev, kDeckHlsl) : nullptr;
                 g_shaderFailed = !g_ps;
             }
             if (!g_ps) { g_inactive = "the fog shader failed to compile (see the log)"; return; }
@@ -1444,6 +1551,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_noiseOffset[1] = std::fmod(g_noiseOffset[1] - in.windDirY * speed * dt / tile, 64.0f);
                 g_noiseOffset[2] = std::fmod(g_noiseOffset[2] - 0.05f * dt / tile, 64.0f);
             }
+            StepDeck(dt);
 
             const fog::Grid& grid = fog::Current();
             const float extent = fog::kGridSize * fog::kCellSize;
@@ -1530,6 +1638,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 (probePx + 0.5f) / vp.Width, (probePy + 0.5f) / vp.Height,
                 static_cast<float>(half ? probePx / 2 : probePx), static_cast<float>(half ? probePy / 2 : probePy),
                 g_settings.probe ? 1.0f : 0.0f, static_cast<float>(vp.Width), static_cast<float>(vp.Height), 0.0f,
+                g_deck.base, g_deck.top, g_deck.density * (1.0f - (interior > 0.0f ? interior : 0.0f)), std::fmax(g_settings.cloudDeckRange, 100.0f),
+                g_deck.color[0], g_deck.color[1], g_deck.color[2], 1.0f / kDeckTileYards,
             };
 
             // Everything the pass changes goes back through the state block, so the client's own cache
@@ -1638,8 +1748,21 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             };
             dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
 
-            if (!half)
+            // The cloud deck: on the screen, blended like the fog; in front of the fog seen from above it, behind it below.
+            const bool deckOn = g_psDeck && g_deck.density > 0.0f;
+            const bool deckInFront = deckOn && cam[2] > g_deck.top;
+            auto drawDeck = [&](IDirect3DPixelShader9* restore) {
+                dev->SetPixelShader(g_psDeck);
                 drawQuad(static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width), static_cast<float>(vp.Height), 1.0f, 1.0f);
+                dev->SetPixelShader(restore);
+            };
+
+            if (!half)
+            {
+                if (deckOn && !deckInFront) drawDeck(g_ps);
+                drawQuad(static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width), static_cast<float>(vp.Height), 1.0f, 1.0f);
+                if (deckInFront) drawDeck(g_ps);
+            }
             else
             {
                 // 1. The march into the half-size target, unblended (rgb = scatter, a = transmittance).
@@ -1669,6 +1792,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                     dev->SetViewport(&vp);
                     dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
                     dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0x07);
+                    if (deckOn && !deckInFront) drawDeck(g_psUpscale);
                     dev->SetPixelShader(g_psUpscale);
                     dev->SetTexture(7, g_halfTex);
                     dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_POINT);
@@ -1679,6 +1803,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                     dev->SetSamplerState(7, D3DSAMP_SRGBTEXTURE, FALSE);
                     drawQuad(static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width), static_cast<float>(vp.Height), 1.0f, 1.0f);
                     dev->SetTexture(7, nullptr);
+                    if (deckInFront) drawDeck(g_psUpscale);
                 }
                 if (halfSurface) halfSurface->Release();
                 if (screen) screen->Release();
@@ -1826,6 +1951,19 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         g_api->UiSliderFloat("density scale##gfdens", &g_settings.densityScale, 0.0f, 4.0f);
         g_api->UiSliderFloat("colour brightness##gfbright", &g_settings.brightness, 0.0f, 3.0f);
         g_api->UiSliderFloat("max distance (yd)##gfdist", &g_settings.maxDistance, 30.0f, 600.0f);
+        g_api->UiCheckbox("cloud deck over mountain zones##gfdeck", &g_settings.cloudDeck);
+        if (g_settings.cloudDeck)
+        {
+            g_api->UiSliderFloat("deck density##gfdeckd", &g_settings.cloudDeckDensity, 0.0f, 4.0f);
+            g_api->UiSliderFloat("deck range (yd)##gfdeckr", &g_settings.cloudDeckRange, 200.0f, 3000.0f);
+            char line[160];
+            if (g_deck.density > 0.0f)
+                std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f)%s", g_deck.base, g_deck.top,
+                              g_deck.density, world::Current().playerPos[2], g_psDeck ? "" : " -- its shader failed (see the log)");
+            else
+                std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");
+            g_api->UiText(line);
+        }
     }
 
     void DrawPanelSection()
