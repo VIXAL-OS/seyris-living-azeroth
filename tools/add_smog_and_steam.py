@@ -6,12 +6,15 @@ fields in borean tundra should have steam also", "smoke in stratholme", the user
 
 Smog  the area fog kind (env/Fog: a place's Fogginess, more at night), with a smoke look in FogSettings: a tall
       (14 yd), thin, patchy layer that rises instead of pooling (Weight 0), drifts with the wind and only clears in a
-      strong one; the stock fog's brightness (it follows the time of day) in a brown-grey hue, darker.
+      strong one. The Steppes, the Gorge and the mountain: the stock fog's brightness (it follows the time of day) in a
+      brown-grey hue, darker.
         0.6  Burning Steppes (46), Stratholme (map 329), the Culling of Stratholme (map 595), and the Stratholme
              subzone of the Eastern Plaguelands (2279: the city's gates; the zone is 0.6 already, only the look
              changes there)
         0.5  Searing Gorge (51), Blackrock Mountain (25)
-      Stratholme's smoke is greyer (soot and ash) than the Steppes' brown.
+      Stratholme's smoke takes the stock fog colour itself (the burning city's glow), a little greyer and no darker:
+      smoke lit by the fires in front of the fire-lit sky. A darker soot grey only dimmed the already dark streets ("it's
+      fucking DARK in here lol", the user, 2026-10-13).
 Steam hot springs: their water (LiquidType 1, 5, 9 -- the map scan found Slow Water, 5, in all four) is the HotSpring
       material, 70 degC, so the steam rule's hot-spring term is full there (env/Fog reads the liquid's own temperature;
       the temperature field only warms ground by a share of a liquid's heat). In the cold ones the steam is thicker
@@ -44,15 +47,15 @@ HOT_SPRING_TEMPERATURE = 70.0
 WATER_LIQUIDS = (1, 5, 9)  # LiquidType.dbc: Water, Slow Water, Fast Water
 
 # (name, scope, scope ID, fogginess, AreaClimate ID, FogSettings ID, look)
-BROWN = dict(color=(0.45, 0.37, 0.31), saturation=0.6, brightness=0.75)
-SOOT = dict(color=(0.40, 0.38, 0.37), saturation=0.4, brightness=0.7)
+BROWN = dict(color_mode=HUE, color=(0.45, 0.37, 0.31), saturation=0.6, brightness=0.75)
+EMBER = dict(color_mode=STOCK, saturation=0.7, brightness=1.0)
 SMOKY = [
     ("Burning Steppes", AREA, 46, 0.6, 140, 110, BROWN),
     ("Searing Gorge", AREA, 51, 0.5, 141, 111, BROWN),
     ("Blackrock Mountain", AREA, 25, 0.5, 142, 112, BROWN),
-    ("Stratholme", MAP, 329, 0.6, 143, 113, SOOT),
-    ("The Culling of Stratholme", MAP, 595, 0.6, 144, 114, SOOT),
-    ("Stratholme (Eastern Plaguelands)", AREA, 2279, 0.6, 145, 115, SOOT),
+    ("Stratholme", MAP, 329, 0.6, 143, 113, EMBER),
+    ("The Culling of Stratholme", MAP, 595, 0.6, 144, 114, EMBER),
+    ("Stratholme (Eastern Plaguelands)", AREA, 2279, 0.6, 145, 115, EMBER),
 ]
 SMOG = dict(density=0.025, thickness=14.0, wind_thin=1.0, wind_drift=0.8, patchiness=0.8, weight=0.0)
 
@@ -123,7 +126,7 @@ def main() -> None:
 
     for name, scope, scope_id, fogginess, climate_id, fog_id, look in SMOKY:
         changed += climate(tables["AreaClimate"], climate_row(climate_id, scope, scope_id, fogginess, f"{name}: smoky"))
-        changed += upsert(tables["FogSettings"], fog_row(fog_id, scope, scope_id, AREA_FOG, f"{name}: smog", color_mode=HUE,
+        changed += upsert(tables["FogSettings"], fog_row(fog_id, scope, scope_id, AREA_FOG, f"{name}: smog",
                                                          **SMOG, **look), io.FOG_SETTINGS)
 
     # Hot springs: the water is a HotSpring (70 degC) there.
