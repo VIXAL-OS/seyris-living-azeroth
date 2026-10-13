@@ -347,6 +347,9 @@ namespace wxl_livingazeroth::cover::detail
     extern unsigned             g_drawPatches, g_emptyLevels, g_snowLookups;
     // Uploads (SurfaceCoverUpload.cpp): cover texture ID -> slot (-1 = none).
     extern std::vector<int> g_slotOfId;
+    // Level 0's trench strength at a slot from the grid as it is now (upstream's, SurfaceCoverUpload.cpp): the
+    // prints' lift (features/CoverPrints) reads the drawn depth with it.
+    float DeformK(const Level& L, int s);
     // Draw (SurfaceCoverDraw.cpp): the terrain's shadow mode as found, where prints lift the cover, the compiler.
     struct PrintLift { bool valid = false; bool outermost = false; float cx = 0.0f, cy = 0.0f, radius = 0.0f; };
     extern PrintLift g_printLift;

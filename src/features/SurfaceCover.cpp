@@ -334,7 +334,7 @@ namespace wxl_livingazeroth::cover
             const float base = L.base[s];
             if (base <= kHole * 0.5f) return 0.0f;
             // What the vertex shader draws: base + the uploaded depth (x its edge fade when outermost).
-            float c = blend::DeformedDepth(g_static0[s], g_rimCell[s] * g_settings.rimMul, g_rim[s], g_press[s], L.stiff[s] / 255.0f, g_deformK[s]);
+            float c = blend::DeformedDepth(g_static0[s], g_rimCell[s] * g_settings.rimMul, g_rim[s], g_press[s], L.stiff[s] / 255.0f, DeformK(L, s));
             if (d.outermost)
             {
                 const int ci = std::abs(corner[k][0] - (L.gridI + kHalfCells)), cj = std::abs(corner[k][1] - (L.gridJ + kHalfCells));

@@ -71,13 +71,13 @@ namespace wxl_livingazeroth::cover::detail
             char cam[128];
             std::snprintf(cam, sizeof(cam), "  camera tests %u, pulled in %u (last by %.2f yd)",
                           g_cameraStats.calls, g_cameraStats.pulled, g_cameraStats.lastPull);
-            g_api->UiTextWrapped(cam);
+            g_api->UiText(cam);
         }
         g_api->UiCheckbox("Effects at units' feet (auras) sit on the cover", &g_settings.liftBase);
         {
             char lift[96];
             std::snprintf(lift, sizeof(lift), "  lifted %u times (last by %.2f yd)", LiftedCount(), LastLift());
-            g_api->UiTextWrapped(lift);
+            g_api->UiText(lift);
         }
         g_api->UiCheckbox("Selection circles and spell ground effects on the cover", &g_settings.decals);
         {
@@ -85,15 +85,15 @@ namespace wxl_livingazeroth::cover::detail
             char decals[256];
             std::snprintf(decals, sizeof(decals), "  decal calls %u (%u from models): drawn on the cover %u; skipped: no cover drawn %u, nothing on the terrain %u, not overhead %u (last caller 0x%08X, flags 0x%X)",
                           ds.calls, ds.modelCalls, ds.drawn, ds.noCover, ds.noPieces, ds.noBox, static_cast<unsigned>(ds.lastCaller), ds.lastFlags);
-            g_api->UiTextWrapped(decals);
+            g_api->UiText(decals);
             std::snprintf(decals, sizeof(decals), "  last replayed (%s): colour %08X, patches %u; stage 0 coords 0x%X flags 0x%X, stage 1 coords 0x%X flags 0x%X; blend %u/%u, alpha test %u ref %u, z func %u, shaders %u",
                           ds.lastFromModel ? "model" : "decal", ds.lastColor, ds.lastPatches, ds.texCoordIndex, ds.transformFlags,
                           ds.texCoordIndex1, ds.transformFlags1, ds.srcBlend, ds.dstBlend, ds.alphaTest, ds.alphaRef, ds.zFunc, ds.shaders);
-            g_api->UiTextWrapped(decals);
+            g_api->UiText(decals);
             const float* m = ds.matrix;
             std::snprintf(decals, sizeof(decals), "  stage 0 matrix [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
                           m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
-            g_api->UiTextWrapped(decals);
+            g_api->UiText(decals);
             if (g_api->UiButton("Reset decal counts")) g_decalStats = DecalStats{};
         }
         g_api->UiSliderFloat("Snow brightness", &g_settings.brightness, 0.3f, 1.5f);
