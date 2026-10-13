@@ -213,7 +213,7 @@ namespace
     const Spot kSwampMud     { "Misty Reed Strand mud",   8,    0,   "tileset\\swamp of sorrows\\swampsorrowsdirt02.blp", 0, 7 };
     const Spot kLochMud      { "Loch Modan mud",          38,   0,   "tileset\\loch modan\\lochmodanmud.blp", 0, 7 };
     const Spot kTirisfalShore { "Tirisfal pebble shore",  85,   0,   "tileset\\tirisfall\\tirisfallshore.blp", 0, 7 };
-    const Spot kSwampMuck    { "Swamp of Sorrows muck (under water)", 8, 0, "tileset\\swamp of sorrows\\swampsorrowsmuckdark01.blp", 0, 8 };
+    const Spot kSwampMuck    { "Swamp of Sorrows muck (wet ground)", 8, 0, "tileset\\swamp of sorrows\\swampsorrowsmuckdark01.blp", 0, 8 };
     const Spot kElwynnDirt   { "Elwynn dirt (footprint outlines)", 12, 0, "tileset\\elwynn\\elwynndirtbase2.blp", 0, 0 };
     const Spot kStormIce     { "Storm Peaks clear ice",   67,   571, "tileset\\expansion02\\stormpeaks\\sp_icea.blp", 0, -1 };
 
@@ -424,7 +424,10 @@ int main(int argc, char** argv)
                     throw std::runtime_error(std::string("not mud as wanted: ") + w.spot->what);
             }
             CHECK(At(kFjordShore).depth == 0.0f && At(kTirisfalShore).depth == 0.0f);
-            CHECK(At(kSwampMuck).material == 13 && (At(kSwampMuck).flags & ct::kFlagPreventOnLand) && !(At(kSwampMuck).flags & ct::kFlagRipplePrints));
+            // The Swamp of Sorrows' own muck row (13): upstream's mud that forms on wet ground (MoistureMin 0.6, 2026-10-13),
+            // no longer kept under water; still not one of our ripple covers.
+            CHECK(At(kSwampMuck).material == 13 && ct::MoistureGated(At(kSwampMuck).moistureMin) && Near(At(kSwampMuck).moistureMin, 0.6f) &&
+                  !(At(kSwampMuck).flags & ct::kFlagPreventOnLand) && !(At(kSwampMuck).flags & ct::kFlagRipplePrints));
         });
         Test("no cover: Elwynn grass, Burning Steppes rock and lava, the Blasted Lands, Hellfire", []
         {

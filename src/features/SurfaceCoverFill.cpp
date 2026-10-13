@@ -1,6 +1,7 @@
 #include "SurfaceCoverInternal.hpp"
 
 #include "GrassPerf.hpp"
+#include "GroundMaterialTable.hpp"
 
 #include <memory>
 #include <array>
@@ -79,6 +80,8 @@ namespace wxl_livingazeroth::cover::detail
         int   texId[8] = {}; float texShare[8] = {}; int texCount = 0; // cover textures present, by ID
         float snowShare = 0.0f, paintedSnow = 0.0f;
         float ripple = 0.0f;   // share of the look from rows with kFlagRipplePrints (sand)
+        // The painted share that needs ground moisture (MoistureMin), its threshold and the ground's rest moisture.
+        float wetGate = 0.0f, wetMin = 0.0f, wetRest = 0.0f;
         bool  hasLook = false; // some row (painted or fallen snow's look) set the properties above
     };
 
@@ -212,6 +215,7 @@ namespace wxl_livingazeroth::cover::detail
         g_blendTarget = &b;
         float sum[kSumCount] = {}, lookW = 0.0f, total = 0.0f, snowPainted = 0.0f, otherPainted = 0.0f;
         float paintedDepth = 0.0f, snowDepth = 0.0f;
+        float gatedW = 0.0f, gatedMin = 0.0f, gatedRest = 0.0f;
         float bare[4] = {};
         for (int k = 0; k < count; ++k)
         {
@@ -227,22 +231,35 @@ namespace wxl_livingazeroth::cover::detail
             AddLook(pv, pw, lookW, sum);
             paintedDepth += pw * pv.depth;
             if (parts[k].rows->paintedSnow) { snowPainted += pw; snowDepth += pw * pv.depth; }
+            if (covertable::MoistureGated(pv.moistureMin))
+            {
+                gatedW += pw;
+                gatedMin += pw * pv.moistureMin;
+                gatedRest += pw * materials::Get(pv.material).restMoisture;
+            }
             else otherPainted += pw;
         }
         if (total <= 0.0f) return b;
-        // Fallen snow's look on the bare parts, fully only where nothing is painted (not beside
-        // other covers: their look keeps to their edge).
+        // Fallen snow's look on the bare parts, only where nothing is painted. (It used to fade in below
+        // a quarter painted, which is exactly a painted cover's thin edge: its untextured white diluted
+        // the cover's texture and tint there, a pale rim around sand and mud, wide on the coarse
+        // levels.) Fallen snow lying right at a painted edge takes the painted look instead.
         float bareTotal = 0.0f;
         for (int k = 0; k < count; ++k) bareTotal += bare[k];
-        const float lookShare = blend::BareSnowLookShare(b.covered, snowPainted, otherPainted);
-        if (lookShare > 0.0f)
-            for (int k = 0; k < count; ++k) AddLook(parts[k].rows->look, bare[k] * lookShare, lookW, sum);
+        if (b.covered <= 0.0f)
+            for (int k = 0; k < count; ++k) AddLook(parts[k].rows->look, bare[k], lookW, sum);
         // Where fallen snow may lie: bare ground and snow covers, not on or beside other covers,
         // not under a liquid's surface.
         const float other = otherPainted * 4.0f / total;
         const float dry = WaterFactor(covertable::kFlagPreventUnderwater);
         b.snowShare = (snowPainted + bareTotal) / total * (1.0f - (other > 1.0f ? 1.0f : other)) * dry;
         b.paintedSnow = paintedDepth > 0.0f ? snowDepth / paintedDepth : 0.0f;
+        if (gatedW > 0.0f)
+        {
+            b.wetGate = gatedW / b.covered;
+            b.wetMin = gatedMin / gatedW;
+            b.wetRest = gatedRest / gatedW;
+        }
         FinishBlend(b, lookW, sum);
         return b;
     }
@@ -305,9 +322,10 @@ namespace wxl_livingazeroth::cover::detail
 
     // Base height and coverage parts of one world cell of a level (level 0 also resets its trench
     // state when `fresh`). Everything depends only on the world position, so the levels agree
-    // wherever their vertices coincide.
-    void Sample(Level& L, bool isLevel0, int i, int j, bool fresh)
+    // wherever their vertices coincide. Returns what changed (kDirty* bits).
+    uint8_t Sample(Level& L, bool isLevel0, int i, int j, bool fresh)
     {
+        uint8_t changed = 0;
         const int s = SlotOf(i, j);
         const float x = i * L.cell, y = j * L.cell;
         float z;
@@ -344,7 +362,16 @@ namespace wxl_livingazeroth::cover::detail
         // The cover's base: the terrain, moved by the rows' ZOffset (below the terrain only what
         // rises above it shows, e.g. trench rims through grass).
         const float base = ok ? z + (b.hasLook ? b.zOffset : 0.0f) : kHole;
-        if (base != L.base[s]) { L.base[s] = base; MarkCell(L, s); }
+        if (base != L.base[s]) { L.base[s] = base; changed |= kDirtyBase; }
+        const uint8_t sink = b.hasLook && b.zOffset < 0.0f ? 1 : 0;
+        if (sink != L.sink[s]) { L.sink[s] = sink; changed |= kDirtyCover; }
+        const uint8_t wetGate = ToByte(b.wetGate), wetMin = ToByte(b.wetMin), wetRest = ToByte(b.wetRest);
+        if (wetGate != L.wetGate[s] || wetMin != L.wetMin[s] || wetRest != L.wetRest[s])
+        {
+            L.wetCells += (wetGate ? 1 : 0) - (L.wetGate[s] ? 1 : 0);
+            L.wetGate[s] = wetGate; L.wetMin[s] = wetMin; L.wetRest[s] = wetRest;
+            changed |= kDirtyCover;
+        }
         const uint8_t material = ToByte(b.covered), driftAmp = ToByte(b.drift), breakup = ToByte(b.breakup), stiff = ToByte(b.stiffness);
         const uint8_t drift = static_cast<uint8_t>(Drift(x, y) * 255.0f + 0.5f);
         const uint8_t edge = static_cast<uint8_t>(EdgeNoise(x, y) * 255.0f + 0.5f);
@@ -360,7 +387,7 @@ namespace wxl_livingazeroth::cover::detail
             L.material[s] = material; L.depth[s] = b.depth; L.slope[s] = slopeF; L.driftAmp[s] = driftAmp;
             L.breakup[s] = breakup; L.drift[s] = drift; L.edgeNoise[s] = edge; L.stiff[s] = stiff;
             L.snowShare[s] = snowShare; L.paintedSnow[s] = paintedSnow;
-            MarkCell(L, s);
+            changed |= kDirtyCover;
         }
         int a, c; // the two strongest (with the others' share, if there are more)
         float shareA, shareC;
@@ -369,28 +396,44 @@ namespace wxl_livingazeroth::cover::detail
         const uint16_t shares = static_cast<uint16_t>((a >= 0 ? ToByte(shareA) : 0) | (c >= 0 ? ToByte(shareC) << 8 : 0));
         const uint32_t props = (static_cast<uint32_t>(ToByte(b.wetness)) << 24) | (static_cast<uint32_t>(ToByte(b.vertexColor[0])) << 16) |
                                (static_cast<uint32_t>(ToByte(b.vertexColor[1])) << 8) | ToByte(b.vertexColor[2]);
-        const uint8_t lookless = b.hasLook ? 0 : 1;
-        if (tint != L.tint[s] || ids != L.texIds[s] || shares != L.texShares[s] || props != L.props[s] ||
-            lookless != L.lookless[s])
+        if (tint != L.tint[s] || ids != L.texIds[s] || shares != L.texShares[s] || props != L.props[s])
         {
             L.tint[s] = tint; L.texIds[s] = ids; L.texShares[s] = shares; L.props[s] = props;
-            L.lookless[s] = lookless;
-            // The cells beside it too: a lookless neighbour there borrows this cell's weights.
-            MarkLookCell(L, s);
+            changed |= kDirtyLook;
         }
         if (isLevel0)
         {
-            if (b.rim != g_rimCell[s]) { g_rimCell[s] = b.rim; MarkCell(L, s); }
+            if (b.rim != g_rimCell[s]) { g_rimCell[s] = b.rim; changed |= kDirtyCover; }
             g_relaxCell[s] = b.relax;
             g_rippleCell[s] = b.ripple;
             if (fresh) { g_press[s] = 0.0f; g_rim[s] = 0.0f; }
         }
+        return changed;
     }
 
+    // Marks what changed for the uploads: a segment across the whole filled width as its row, a
+    // shorter one (a recentre's strip along y) by its columns. A changed look also marks the
+    // neighbouring rows/columns: bare ground next to cover shows its neighbour's look (LookRect).
     void SampleRect(Level& L, bool isLevel0, int i0, int i1, int j0, int j1, bool fresh) // inclusive
     {
+        const bool wholeRows = i1 - i0 + 1 >= kFilled;
         for (int j = j0; j <= j1; ++j)
-            for (int i = i0; i <= i1; ++i) Sample(L, isLevel0, i, j, fresh);
+        {
+            uint8_t row = 0;
+            for (int i = i0; i <= i1; ++i)
+            {
+                const uint8_t changed = Sample(L, isLevel0, i, j, fresh);
+                if (wholeRows) row |= changed;
+                else if (changed)
+                {
+                    L.dirtyCol[Slot(i)] |= changed;
+                    if (changed & kDirtyLook) { L.dirtyCol[Slot(i - 1)] |= kDirtyLook; L.dirtyCol[Slot(i + 1)] |= kDirtyLook; }
+                }
+            }
+            if (!row) continue;
+            L.dirtyRow[Slot(j)] |= row;
+            if (row & kDirtyLook) { L.dirtyRow[Slot(j - 1)] |= kDirtyLook; L.dirtyRow[Slot(j + 1)] |= kDirtyLook; }
+        }
     }
 
     void PlanFill(Level& L, const float pos[3], Plan plan)
@@ -456,26 +499,14 @@ namespace wxl_livingazeroth::cover::detail
 
         L.gridI = L.jobI; L.gridJ = L.jobJ;
         L.haveGrid = true;
+        // A recentre only changed its strips (marked while sampling); a full fill changed everything.
         if (L.jobFull)
         {
-        L.coverDirty = true;
-        L.baseDirty = true;
-            L.lookDirty.All();
+            L.coverDirty = L.baseDirty = L.lookDirty = true;
+            RecountCoverTextures();
+            L.firstFillMs = L.jobMs;
+            L.boostRows = kFilled; // chunks still streaming in get picked up quickly
         }
-        else if (isLevel0)
-        {
-            // A recentre: its strips were marked cell by cell as they were sampled. Level 0's trench fade goes
-            // by the distance from the centre: every cell's moves with it, and the cells with a trench are
-            // folded again with it (the rest have nothing for it to fade).
-            for (int sl = 0; sl < kTex * kTex; ++sl)
-            {
-                const float k = g_static0[sl] > 0.0f ? DeformFade(L, sl / kTex, sl % kTex) : 0.0f;
-                if (k == g_deformK[sl]) continue;
-                g_deformK[sl] = k;
-                if (g_isActive[sl]) MarkCell(L, sl);
-            }
-        }
-        if (L.jobFull) { L.firstFillMs = L.jobMs; L.boostRows = kFilled; } // chunks still streaming in get picked up quickly
         L.fillMs = L.jobMs;
         L.jobActive = false;
         L.job.clear();

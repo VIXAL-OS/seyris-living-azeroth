@@ -26,12 +26,23 @@ namespace wxl_livingazeroth::cover
     bool  Trenches();
     float DepthMultiplier();
     float FillBudgetMs();
+    /// Effects at units' feet (Base attachment: auras) lifted onto the cover.
+    void SetLiftBaseEffects(bool on);
+    bool LiftBaseEffects();
 
     /// Loads SurfaceCover.cdbc (which ground gets cover, how deep) through the cdbc reader.
     void LoadTable(const void* cdbcApi);
 
     /// Once per frame on the main thread, after the world snapshot and the actors are refreshed.
     void Update(float dt, const world::Snapshot& snap);
+
+    /// The top of the cover as drawn at a world position (base + depth, level 0 with its trenches,
+    /// bilinear over the finest drawn level holding it). False where no cover is drawn: off, outside
+    /// the grid, a hole, or no depth there (z is then the terrain the cover sits on, if known).
+    bool TopAt(float x, float y, float& z);
+
+    /// Before IDirect3DDevice9::Reset: releases what has to go first (its textures are managed).
+    void OnDeviceLost();
 
     /// Last drawn frame: the most point lights any patch had, and how many patches had more than
     /// lights::kMaxLights (the nearest to the camera kept).
@@ -51,10 +62,6 @@ namespace wxl_livingazeroth::cover
     /// The rims' shading as the panel sets it (the terrain's cover uses them as they are): the steepest slope's tilt of
     /// the normal and the crest's brightening.
     void RingShading(float& slope, float& brightness);
-    /// The uploads of only the changed cells against a full upload of the same data, read back from the GPU (tests,
-    /// on a device of their own): a level of random data, then scattered cells, a row strip and a column strip
-    /// (across the wrap) changed. Empty when what the GPU holds agrees bit for bit; else what differed.
-    std::string PartialUploadSelfTest(void* device);
     /// The rims around prints in sand drawn by the GPU (the cover's own RippleRings, on a device of their own, tests)
     /// against CoverRipples' RimShade: a boot, a mirrored paw and an oval, two of them overlapping. A line saying how
     /// close they came, starting with "FAIL " when they don't agree or a rim reaches past where the shader looks.

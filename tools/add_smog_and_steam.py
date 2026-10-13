@@ -27,8 +27,9 @@ Steam hot springs: their water (LiquidType 1, 5, 9 -- the map scan found Slow Wa
       The Geyser Fields have hardly any terrain water (one chunk: the geysers are models), so the place gets a steam
       haze too: area fog at Fogginess 0.5, a near-white, low (6 yd), very patchy layer that comes and goes faster.
 
-IDs: AreaClimate 140..146, FogSettings 110..115 (smog) and 120..124 (steam), GroundMaterial 201 (HotSpring),
-GroundMaterialSelector 200..211. Zone, area and map IDs: AreaTable.dbc and Map.dbc (3.3.5a).
+IDs: AreaClimate 340..346, FogSettings 310..315 (smog) and 320..324 (steam), GroundMaterial 201 (HotSpring),
+GroundMaterialSelector 200..211 (300 and up stays clear of upstream's IDs). A place whose row already sets Fogginess
+keeps it (upstream's tuning: the Burning Steppes are 0.8 there); the smog's look applies either way. Zone, area and map IDs: AreaTable.dbc and Map.dbc (3.3.5a).
 
 Usage:  python add_smog_and_steam.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
 Sets the rows to exactly these values, so running it twice changes nothing. Then press "Reload AreaClimate" (climate
@@ -53,12 +54,12 @@ WATER_LIQUIDS = (1, 5, 9)  # LiquidType.dbc: Water, Slow Water, Fast Water
 BROWN = dict(color_mode=HUE, color=(0.45, 0.37, 0.31), saturation=0.6, brightness=0.75)
 EMBER = dict(color_mode=STOCK, saturation=0.7, brightness=1.0)
 SMOKY = [
-    ("Burning Steppes", AREA, 46, 0.6, 140, 110, BROWN),
-    ("Searing Gorge", AREA, 51, 0.5, 141, 111, BROWN),
-    ("Blackrock Mountain", AREA, 25, 0.5, 142, 112, BROWN),
-    ("Stratholme", MAP, 329, 0.6, 143, 113, EMBER),
-    ("The Culling of Stratholme", MAP, 595, 0.6, 144, 114, EMBER),
-    ("Stratholme (Eastern Plaguelands)", AREA, 2279, 0.6, 145, 115, EMBER),
+    ("Burning Steppes", AREA, 46, 0.6, 340, 310, BROWN),
+    ("Searing Gorge", AREA, 51, 0.5, 341, 311, BROWN),
+    ("Blackrock Mountain", AREA, 25, 0.5, 342, 312, BROWN),
+    ("Stratholme", MAP, 329, 0.6, 343, 313, EMBER),
+    ("The Culling of Stratholme", MAP, 595, 0.6, 344, 314, EMBER),
+    ("Stratholme (Eastern Plaguelands)", AREA, 2279, 0.6, 345, 315, EMBER),
 ]
 SMOG = dict(density=0.025, thickness=14.0, wind_thin=1.0, wind_drift=0.8, patchiness=0.8, weight=0.0)
 
@@ -69,10 +70,10 @@ SPRINGS = [
     ("Frostfire Hot Springs", 2246, True, 206),
     ("Golakka Hot Springs", 543, False, 209),
 ]
-COLD_STEAM_IDS = {4035: 121, 4117: 122, 2246: 123}
-WARM_STEAM_ID = 124
+COLD_STEAM_IDS = {4035: 321, 4117: 322, 2246: 323}
+WARM_STEAM_ID = 324
 STEAM_LOOK = dict(color_mode=HUE, color=(0.95, 0.97, 1.0), saturation=0.25, brightness=1.3)
-GEYSER_FIELDS, GEYSER_CLIMATE, GEYSER_HAZE = 4035, 146, 120
+GEYSER_FIELDS, GEYSER_CLIMATE, GEYSER_HAZE = 4035, 346, 320
 
 
 def fog_row(id, scope, scope_id, kind, comment, strength=I, density=I, thickness=I, build_up=I, burn_off=I,
@@ -115,9 +116,12 @@ def upsert(rows, row, columns):
 
 
 def climate(rows, row):
-    """A place's Fogginess: on its own row if it has one already (other fields kept), else the new row."""
+    """A place's Fogginess: on its own row if it has one already (other fields kept, and a Fogginess it sets wins),
+    else the new row."""
     existing = next((r for r in rows if r[1] == row[1] and r[2] == row[2] and r[0] != row[0]), None)
     if existing:
+        if existing[9] >= 0.0:
+            return 0
         return upsert(rows, existing[:9] + (row[9],) + existing[10:], io.AREA_CLIMATE)
     return upsert(rows, row, io.AREA_CLIMATE)
 

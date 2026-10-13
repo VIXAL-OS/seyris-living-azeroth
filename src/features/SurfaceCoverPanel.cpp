@@ -65,12 +65,45 @@ namespace wxl_livingazeroth::cover::detail
         g_api->UiSliderFloat("Far lift (yd, 80 -> 400 yd away)", &g_settings.farLift, 0.0f, 3.0f);
         g_api->UiCheckbox("Light and fog like the terrain", &g_settings.sceneLight);
         g_api->UiCheckbox("Dynamic shadows like the terrain", &g_settings.shadows);
+        g_api->UiCheckbox("Camera stays above the cover (debug; off looks like a bug)", &g_settings.camera);
+        g_api->UiSliderFloat("Camera clearance (yd)", &g_settings.cameraClearance, 0.0f, 1.5f);
+        {
+            char cam[128];
+            std::snprintf(cam, sizeof(cam), "  camera tests %u, pulled in %u (last by %.2f yd)",
+                          g_cameraStats.calls, g_cameraStats.pulled, g_cameraStats.lastPull);
+            g_api->UiTextWrapped(cam);
+        }
+        g_api->UiCheckbox("Effects at units' feet (auras) sit on the cover", &g_settings.liftBase);
+        {
+            char lift[96];
+            std::snprintf(lift, sizeof(lift), "  lifted %u times (last by %.2f yd)", LiftedCount(), LastLift());
+            g_api->UiTextWrapped(lift);
+        }
+        g_api->UiCheckbox("Selection circles and spell ground effects on the cover", &g_settings.decals);
+        {
+            const DecalStats& ds = g_decalStats;
+            char decals[256];
+            std::snprintf(decals, sizeof(decals), "  decal calls %u (%u from models): drawn on the cover %u; skipped: no cover drawn %u, nothing on the terrain %u, not overhead %u (last caller 0x%08X, flags 0x%X)",
+                          ds.calls, ds.modelCalls, ds.drawn, ds.noCover, ds.noPieces, ds.noBox, static_cast<unsigned>(ds.lastCaller), ds.lastFlags);
+            g_api->UiTextWrapped(decals);
+            std::snprintf(decals, sizeof(decals), "  last replayed (%s): colour %08X, patches %u; stage 0 coords 0x%X flags 0x%X, stage 1 coords 0x%X flags 0x%X; blend %u/%u, alpha test %u ref %u, z func %u, shaders %u",
+                          ds.lastFromModel ? "model" : "decal", ds.lastColor, ds.lastPatches, ds.texCoordIndex, ds.transformFlags,
+                          ds.texCoordIndex1, ds.transformFlags1, ds.srcBlend, ds.dstBlend, ds.alphaTest, ds.alphaRef, ds.zFunc, ds.shaders);
+            g_api->UiTextWrapped(decals);
+            const float* m = ds.matrix;
+            std::snprintf(decals, sizeof(decals), "  stage 0 matrix [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
+                          m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+            g_api->UiTextWrapped(decals);
+            if (g_api->UiButton("Reset decal counts")) g_decalStats = DecalStats{};
+        }
         g_api->UiSliderFloat("Snow brightness", &g_settings.brightness, 0.3f, 1.5f);
         g_api->UiSliderFloat("Fill budget (ms per frame)", &g_settings.fillBudgetMs, 0.5f, 10.0f);
         static const char* const sources[] = { "Painted strength of every layer (alpha maps)", "Dominant layer per terrain cell (old)" };
         g_api->UiCombo("Material from", &g_settings.materialSource, sources, 2);
         g_api->UiCheckbox("Swap alpha map axes (debug)", &g_settings.alphaSwap);
         g_api->UiCheckbox("Wireframe", &g_settings.wireframe);
+        static const char* const debugViews[] = { "Off", "Texture share (green = textured, red = plain colour)", "Shine only", "Light only" };
+        g_api->UiCombo("Debug colour", &g_settings.debugView, debugViews, 4);
         static const char* const drawPoints[] = { "Right after the terrain (inside the world pass)", "End of the scene (old)" };
         g_api->UiCombo("Draw point", &g_settings.drawPoint, drawPoints, 2);
 
@@ -140,6 +173,17 @@ namespace wxl_livingazeroth::cover::detail
             std::snprintf(line, sizeof(line), "here (table): depth %.2f, max slope %.0f, fade %.0f, drift %.2f, breakup %.2f, rim %.2f, relax %.0f s, tint %08X x %.2f, cover texture %d, z offset %.3f, wetness %.2f, flags 0x%X",
                           v.depth, v.maxSlope, v.slopeFade, v.driftNoise, v.edgeBreakup, v.rim, v.relaxSeconds, v.tintColor, v.tintStrength, v.coverTexture,
                           v.zOffset, v.wetness, v.flags); add();
+            if (covertable::MoistureGated(v.moistureMin))
+            {
+                const world::Snapshot& snap = world::Current();
+                const fields::MoistureDetail md = snap.inWorld ? fields::Moisture(snap.playerPos) : fields::MoistureDetail{};
+                if (md.known)
+                    std::snprintf(line, sizeof(line), "here (moisture): needs %.2f, ground %.2f -> %s", v.moistureMin, md.value,
+                                  md.value >= v.moistureMin + 0.1f ? "full cover" : (md.value > v.moistureMin ? "forming" : "none"));
+                else
+                    std::snprintf(line, sizeof(line), "here (moisture): needs %.2f, ground moisture not known here yet", v.moistureMin);
+                add();
+            }
             if (g_hereMccvValid)
                 std::snprintf(line, sizeof(line), "here: vertex colour (MCCV) r %.2f g %.2f b %.2f (0.50 = neutral)", g_hereMccv[0], g_hereMccv[1], g_hereMccv[2]);
             else
@@ -195,6 +239,10 @@ namespace wxl_livingazeroth::cover::detail
         std::snprintf(line, sizeof(line), "cover submitted: %u patches (%u vertices); empty levels skipped: %u; GPU completion is not timed",
                       g_drawPatches, g_drawPatches * kPatchVerts * kPatchVerts, g_emptyLevels); add();
         std::snprintf(line, sizeof(line), "snow depth lookups in last draw: %u; published fallen snow: %s", g_snowLookups, fields::FallenSnowActive() ? "present" : "none"); add();
+        if (g_resting) { std::snprintf(line, sizeof(line), "resting: no cover within the outermost level's reach, the finer levels wait"); add(); }
+        const UploadStats& us = g_uploadStats;
+        std::snprintf(line, sizeof(line), "uploads (last drawn frame): %u whole folds, %u whole looks, %u changed regions (%u slots); fold %.2f ms, look %.2f ms",
+                      us.fullFolds, us.fullLooks, us.regions, us.regionSlots, us.foldMs, us.lookMs); add();
         if (g_seenScene)
         {
             std::snprintf(line, sizeof(line), "terrain light: sun (view) %.3f %.3f %.3f, ambient %.3f %.3f %.3f, diffuse %.3f %.3f %.3f",

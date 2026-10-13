@@ -21,12 +21,14 @@ namespace wxl_livingazeroth::cover::detail
     uint32_t           g_slotGeneration = 1;
     int                g_slotFrame = 0;
     // Frames until the slots are recounted when a cell's look names a texture no slot holds (the usual recount
-    // is every 60 frames, and until then that cover drew without its texture).
+    // is every 60 frames, and until then that cover drew without its texture: snow-white).
     constexpr int      kSlotHurryFrames = 2;
     unsigned           g_texturesInView = 0;
     std::unordered_map<int, IDirect3DTexture9*> g_textureCache;
     std::unordered_map<int, std::string>       g_textureStatus;
     uint32_t           g_coverTexturesGeneration = 0;
+
+    void RecountCoverTextures() { g_slotFrame = 0; }
 
     void ReleaseCoverTextures()
     {
@@ -105,6 +107,8 @@ namespace wxl_livingazeroth::cover::detail
                     if (id > 0 && id <= ids && ((L.texShares[sl] >> (8 * k)) & 0xFF)) ++count[id];
                 }
         }
+        // Which IDs hold the slots: residents stay while they're still in view, so more textures in view than
+        // slots don't churn (blend::ChooseSlots, features/CoverBlend.hpp).
         g_texturesInView = 0;
         for (int id = 1; id <= ids; ++id) g_texturesInView += count[id] ? 1 : 0;
         const bool changed = blend::ChooseSlots(count, g_slotId, covertable::kMaxCoverTextures);
@@ -120,230 +124,370 @@ namespace wxl_livingazeroth::cover::detail
         ++g_slotGeneration;
     }
 
-    bool UploadLook(Level& L)
+    UploadStats g_uploadStats;
+
+    // Material shaping: steeper with more breakup, and the fine edge noise moves the threshold, so
+    // the transition breaks into patches. Fully covered and bare stay so.
+    float Shape(uint8_t coverage, float b, uint8_t edgeNoise)
     {
-        if (L.slotsUploaded != g_slotGeneration) L.lookDirty.All();
-        // Whole rows (new slots, new textures) join the changed cells.
-        if (!L.lookDirty.Empty())
+        float m = (coverage / 255.0f - 0.5f) * (1.0f + 2.0f * b) + 0.5f + 1.5f * b * (edgeNoise / 255.0f - 0.5f);
+        return m <= 0.0f ? 0.0f : (m >= 1.0f ? 1.0f : m * m * (3.0f - 2.0f * m));
+    }
+
+    // What a fold reads besides the slot: the multipliers, whether snow is around, the grid.
+    struct FoldInputs
+    {
+        float depthMul, driftMul, breakupMul;
+        int   slotI0, slotJ0;  // the grid's first cell, as texture slots
+        bool  snowOn;
+        bool  fallenSnowOn;    // fallen snow lies anywhere (without it a lookup can only thin painted snow)
+    };
+
+    FoldInputs Inputs(const Level& L)
+    {
+        const bool snowOn = fields::SnowActive();
+        return { g_settings.depthMul, g_settings.driftMul, g_settings.breakupMul, Slot(L.gridI), Slot(L.gridJ), snowOn,
+                 snowOn && fields::FallenSnowActive() };
+    }
+
+    // One slot's cover depth without trenches, from its parts, the multipliers and the snow.
+    // The world position of a slot's cell (the apron sits just before the grid's first cell).
+    void SlotWorld(const Level& L, const FoldInputs& in, int row, int col, float& wx, float& wy)
+    {
+        const int di = (col - in.slotI0 + kTex) % kTex, dj = (row - in.slotJ0 + kTex) % kTex;
+        wx = static_cast<float>(L.gridI + (di >= kTex - kApron ? di - kTex : di)) * L.cell;
+        wy = static_cast<float>(L.gridJ + (dj >= kTex - kApron ? dj - kTex : dj)) * L.cell;
+    }
+
+    // The ground's moisture (0..1) at a world position: the near grid's own value, else (beyond it,
+    // or not filled yet) the ground's rest moisture plus its zone's excess (per terrain chunk).
+    float MoistureAt(float x, float y, float rest)
+    {
+        static const int kMoisture = fields::Find("moisture");
+        const float pos[3] = { x, y, 0.0f };
+        float m;
+        if (kMoisture >= 0 && fields::Sample(kMoisture, pos, m)) return m;
+        const fields::WetGrid& g = fields::Wet();
+        float excess = g.farExcess;
+        if (g.farValues && g.farSize > 0 && g.farCellSize > 0.0f)
         {
-            for (int row = L.lookDirty.first; row < L.lookDirty.end; ++row) MarkSpan(L.lookC0, L.lookC1, row, 0, kTex - 1);
-            L.lookCells = true;
-        }
-        if (!L.lookCells) return true;
-        // The cells' cover texture IDs -> weights of whichever slots hold those IDs now. A cell
-        // with no look of its own takes its neighbour's (blend::BorrowedWeights).
-        const auto weightsOf = [&](int sl, uint8_t w[8])
-        {
-            for (int k = 0; k < 2; ++k)
+            const int i = static_cast<int>(std::floor(x / g.farCellSize)), j = static_cast<int>(std::floor(y / g.farCellSize));
+            if (i >= g.farFirstI && i < g.farFirstI + g.farSize && j >= g.farFirstJ && j < g.farFirstJ + g.farSize)
             {
-                const int id = static_cast<int>((L.texIds[sl] >> (16 * k)) & 0xFFFF);
-                const int slot = id > 0 && id < static_cast<int>(g_slotOfId.size()) ? g_slotOfId[id] : -1;
-                if (slot >= 0) w[slot] = static_cast<uint8_t>((L.texShares[sl] >> (8 * k)) & 0xFF);
-                else if (id > 0 && g_slotFrame > kSlotHurryFrames &&
-                         blend::HurryRecount(g_texturesInView, covertable::kMaxCoverTextures))
-                    g_slotFrame = kSlotHurryFrames;
+                const int mi = ((i % g.farSize) + g.farSize) % g.farSize, mj = ((j % g.farSize) + g.farSize) % g.farSize;
+                excess = g.farValues[mj * g.farSize + mi];
             }
-        };
-        for (int row = 0; row < kTex; ++row)
+        }
+        m = rest + excess;
+        return m < 0.0f ? 0.0f : (m > 1.0f ? 1.0f : m);
+    }
+
+    float FoldSlot(const Level& L, const FoldInputs& in, int row, int col)
+    {
+        const int s = row * kTex + col;
+        float b = L.breakup[s] / 255.0f * in.breakupMul;
+        b = b > 1.0f ? 1.0f : b;
+        float driftF = 1.0f + L.driftAmp[s] / 255.0f * in.driftMul * (L.drift[s] / 127.5f - 1.0f);
+        driftF = driftF < 0.0f ? 0.0f : driftF;
+        const float slope = L.slope[s] / 255.0f;
+        float cover = L.depth[s] > 0.0f ? in.depthMul * L.depth[s] * Shape(L.material[s], b, L.edgeNoise[s]) * slope * driftF : 0.0f;
+        // Moisture-gated (mud): only where the ground is wet enough, full 0.1 above the threshold.
+        if (L.wetGate[s] && cover > 0.0f)
         {
-            if (L.lookC0[row] > L.lookC1[row]) continue;
-            for (int sl = row * kTex + L.lookC0[row]; sl <= row * kTex + L.lookC1[row]; ++sl)
+            float wx, wy;
+            SlotWorld(L, in, row, col, wx, wy);
+            float t = (MoistureAt(wx, wy, L.wetRest[s] / 255.0f) - L.wetMin[s] / 255.0f) * 10.0f;
+            t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+            cover *= 1.0f - L.wetGate[s] / 255.0f * (1.0f - t);
+        }
+        // Snow: painted snow thinned by its kept share (patchy: where the drift and edge noise are
+        // low it opens first), fallen snow on top.
+        // With no fallen snow anywhere, the lookup can only thin painted snow: bare ground and zero-depth cover
+        // can't change (snow performance: these lookups were most of a fold's cost).
+        if (in.snowOn && ((in.fallenSnowOn && L.snowShare[s]) || (L.paintedSnow[s] && cover > 0.0f)))
+        {
+            float wx, wy, fallen, keep;
+            SlotWorld(L, in, row, col, wx, wy);
+            ++g_snowLookups;
+            fields::SnowAt(wx, wy, fallen, keep);
+            if (L.paintedSnow[s] && keep < 1.0f && cover > 0.0f)
             {
-                uint8_t w[8] = {};
-                if (!L.lookless[sl])
-                    weightsOf(sl, w);
-                else
-                {
-                    const int col = sl % kTex;
-                    uint8_t around[8][8] = {};
-                    const uint8_t* neighbours[8] = {};
-                    int n = 0;
-                    for (int dj = -1; dj <= 1; ++dj)
-                        for (int di = -1; di <= 1; ++di)
-                        {
-                            if (!di && !dj) continue;
-                            const int at = Slot(row + dj) * kTex + Slot(col + di);
-                            if (!L.lookless[at]) { weightsOf(at, around[n]); neighbours[n] = around[n]; }
-                            ++n;
-                        }
-                    blend::BorrowedWeights(neighbours, n, w);
+                constexpr float kPatchy = 0.6f;
+                const float noise = (0.6f * L.drift[s] + 0.4f * L.edgeNoise[s]) / 255.0f;
+                float t = keep * (1.0f + kPatchy) - kPatchy * (1.0f - noise);
+                t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+                cover *= 1.0f - L.paintedSnow[s] / 255.0f * (1.0f - t);
             }
-            for (int q = 0; q < 2; ++q)
-                L.texWeights[q][sl] = (static_cast<uint32_t>(w[q * 4 + 3]) << 24) | (static_cast<uint32_t>(w[q * 4]) << 16) |
-                                      (static_cast<uint32_t>(w[q * 4 + 1]) << 8) | w[q * 4 + 2];
+            if (L.snowShare[s] && fallen > 0.0f) cover += fallen * Shape(L.snowShare[s], b, L.edgeNoise[s]) * slope * driftF;
         }
+        return cover > 0.0f ? cover : 0.0f;
+    }
+
+    // Level 0's trench strength at a slot, from the grid as it is now: full near the centre,
+    // fading out before the morph band (so the border matches the static coarser level), none
+    // outside the grid.
+    float DeformK(const Level& L, int s)
+    {
+        const int di = (s % kTex - Slot(L.gridI) + kTex) % kTex, dj = (s / kTex - Slot(L.gridJ) + kTex) % kTex;
+        if (di >= kGridVerts || dj >= kGridVerts) return 0.0f;
+        const int ci = std::abs(di - kHalfCells), cj = std::abs(dj - kHalfCells);
+        const int cheb = ci > cj ? ci : cj;
+        return cheb <= kDeformFullCells ? 1.0f
+             : (cheb >= kDeformZeroCells ? 0.0f : float(kDeformZeroCells - cheb) / float(kDeformZeroCells - kDeformFullCells));
+    }
+
+    // Level 0's drawn depth at a slot: its static cover with the trench pressed in and the rim raised.
+    float Trenched(const Level& L, int s)
+    {
+        const float cover = g_static0[s];
+        if (cover <= 0.0f) return 0.0f;
+        const float deformed = cover * (1.0f + g_rimCell[s] * g_settings.rimMul * g_rim[s]) * (1.0f - g_press[s] * (1.0f - L.stiff[s] / 255.0f));
+        return cover + (deformed - cover) * DeformK(L, s);
+    }
+
+    float DrawnDepth(const Level& L, bool isLevel0, int row, int col, bool trenches)
+    {
+        if (!isLevel0) return FoldSlot(L, Inputs(L), row, col);
+        const int s = row * kTex + col;
+        return trenches ? Trenched(L, s) : g_static0[s];
+    }
+
+    // The depth as the cover texture holds it: negative where the cover sits below the terrain.
+    float Stored(const Level& L, int s, float depth) { return L.sink[s] ? -depth : depth; }
+
+    // A rectangle of slots, [c0, c1) x [r0, r1).
+    struct Rect { int c0, r0, c1, r1; int Slots() const { return (c1 - c0) * (r1 - r0); } };
+    constexpr Rect kWhole = { 0, 0, kTex, kTex };
+
+    // Copies 4-byte texels of `data` (one per slot) into the texture's rectangle. A managed texture
+    // only sends the locked rectangle to the GPU.
+    template <class T>
+    bool CopyRect(IDirect3DTexture9* tex, const std::vector<T>& data, const Rect& r)
+    {
+        static_assert(sizeof(T) == 4, "4-byte texels");
+        if (!tex) return true;
+        const RECT rect{ r.c0, r.r0, r.c1, r.r1 };
+        D3DLOCKED_RECT lr{};
+        if (FAILED(tex->LockRect(0, &lr, &rect, 0))) return false;
+        for (int row = r.r0; row < r.r1; ++row)
+            std::memcpy(static_cast<uint8_t*>(lr.pBits) + (row - r.r0) * lr.Pitch, &data[row * kTex + r.c0], (r.c1 - r.c0) * 4);
+        tex->UnlockRect(0);
+        return true;
+    }
+
+    // Folds a rectangle into the cover texture (level 0: keeps the static cover and draws the trenches).
+    bool FoldRect(Level& L, bool isLevel0, const FoldInputs& in, const Rect& r, bool& any)
+    {
+        const RECT rect{ r.c0, r.r0, r.c1, r.r1 };
+        D3DLOCKED_RECT lr{};
+        if (FAILED(L.coverTex->LockRect(0, &lr, &rect, 0))) return false;
+        for (int row = r.r0; row < r.r1; ++row)
+        {
+            float* out = reinterpret_cast<float*>(static_cast<uint8_t*>(lr.pBits) + (row - r.r0) * lr.Pitch);
+            for (int col = r.c0; col < r.c1; ++col)
+            {
+                const float cover = FoldSlot(L, in, row, col);
+                any = any || cover > 0.0f;
+                const int s = row * kTex + col;
+                if (!isLevel0) { out[col - r.c0] = Stored(L, s, cover); continue; }
+                g_static0[s] = cover;
+                out[col - r.c0] = Stored(L, s, Trenched(L, s));
+            }
         }
+        L.coverTex->UnlockRect(0);
+        return true;
+    }
+
+    // Whose look a slot shows. The look textures are filtered between slots, and the mesh's border
+    // vertices sit on the first slots without cover, so the cover's outermost edge took THEIR look:
+    // ground fallen snow could lie on has fallen snow's look (plain, untextured), which drew the
+    // border pure white wherever it showed above the terrain. A slot without painted cover, and
+    // without fallen snow lying on it now, shows a painted neighbour's look instead; its depth still
+    // tapers the cover out. (Per slot: the "snow active" flag is set by any zone's snow values, so it
+    // can be on in a desert.) Snow appearing on a border slot later keeps the neighbour's look until
+    // that slot's look is redone (one slot wide, while it snows there).
+    bool Painted(const Level& L, int s) { return L.depth[s] > 0.0f || L.paintedSnow[s]; }
+
+    bool SnowLiesOn(const Level& L, const FoldInputs& in, int row, int col)
+    {
+        const int s = row * kTex + col;
+        if (!in.fallenSnowOn || !L.snowShare[s]) return false;
+        float wx, wy, fallen, keep;
+        SlotWorld(L, in, row, col, wx, wy);
+        ++g_snowLookups;
+        fields::SnowAt(wx, wy, fallen, keep);
+        return fallen > 0.0f;
+    }
+
+    int LookSource(const Level& L, const FoldInputs& in, int row, int col)
+    {
+        const int s = row * kTex + col;
+        if (Painted(L, s) || SnowLiesOn(L, in, row, col)) return s;
+        static const int kAround[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 } };
+        for (const auto& d : kAround)
+        {
+            const int n = Slot(row + d[1]) * kTex + Slot(col + d[0]);
+            if (Painted(L, n)) return n;
+        }
+        return s;
+    }
+
+    // The look textures for the rectangle: tint (VS), the cover texture weights (each cell's two
+    // IDs -> whichever slots hold those IDs now) and props (PS).
+    bool LookRect(Level& L, const Rect& r, const FoldInputs& in)
+    {
         IDirect3DTexture9* const textures[4] = { L.lookTex, L.texWTex[0], L.texWTex[1], L.propsTex };
-        const std::vector<uint32_t>* const data[4] = { &L.tint, &L.texWeights[0], &L.texWeights[1], &L.props };
-        for (int t = 0; t < 4; ++t)
+        D3DLOCKED_RECT lr[4] = {};
+        const RECT rect{ r.c0, r.r0, r.c1, r.r1 };
+        int locked = 0;
+        for (; locked < 4; ++locked)
+            if (textures[locked] && FAILED(textures[locked]->LockRect(0, &lr[locked], &rect, 0))) break;
+        const bool ok = locked == 4;
+        if (ok)
+            for (int row = r.r0; row < r.r1; ++row)
+            {
+                uint32_t* out[4];
+                for (int t = 0; t < 4; ++t)
+                    out[t] = textures[t] ? reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(lr[t].pBits) + (row - r.r0) * lr[t].Pitch) : nullptr;
+                for (int col = r.c0; col < r.c1; ++col)
+                {
+                    const int src = LookSource(L, in, row, col);
+                    uint8_t w[8] = {};
+                    for (int k = 0; k < 2; ++k)
+                    {
+                        const int id = static_cast<int>((L.texIds[src] >> (16 * k)) & 0xFFFF);
+                        const int slot = id > 0 && id < static_cast<int>(g_slotOfId.size()) ? g_slotOfId[id] : -1;
+                        if (slot >= 0) w[slot] = static_cast<uint8_t>((L.texShares[src] >> (8 * k)) & 0xFF);
+                        else if (id > 0 && g_slotFrame > kSlotHurryFrames &&
+                                 blend::HurryRecount(g_texturesInView, covertable::kMaxCoverTextures))
+                            g_slotFrame = kSlotHurryFrames;
+                    }
+                    const int c = col - r.c0;
+                    if (out[0]) out[0][c] = L.tint[src];
+                    for (int q = 0; q < 2; ++q)
+                        out[1 + q][c] = (static_cast<uint32_t>(w[q * 4 + 3]) << 24) | (static_cast<uint32_t>(w[q * 4]) << 16) |
+                                        (static_cast<uint32_t>(w[q * 4 + 1]) << 8) | w[q * 4 + 2];
+                    out[3][c] = L.props[src];
+                }
+            }
+        for (int t = 0; t < locked; ++t) if (textures[t]) textures[t]->UnlockRect(0);
+        return ok;
+    }
+
+    // One changed region: whatever its kDirty* bits say.
+    bool UploadRegion(Level& L, bool isLevel0, const FoldInputs& in, const Rect& r, uint8_t bits)
+    {
+        ++g_uploadStats.regions;
+        g_uploadStats.regionSlots += r.Slots();
+        if ((bits & kDirtyBase) && !CopyRect(L.baseTex, L.base, r)) return false;
+        if (bits & kDirtyCover)
         {
-            if (!textures[t]) continue;
-            D3DLOCKED_RECT lr{};
-            if (FAILED(textures[t]->LockRect(0, &lr, nullptr, D3DLOCK_NO_DIRTY_UPDATE))) return false;
-            for (int row = 0; row < kTex; ++row)
-                if (L.lookC0[row] <= L.lookC1[row])
-                    std::memcpy(static_cast<uint8_t*>(lr.pBits) + row * lr.Pitch + L.lookC0[row] * 4, &(*data[t])[row * kTex + L.lookC0[row]],
-                                static_cast<size_t>(L.lookC1[row] - L.lookC0[row] + 1) * 4);
-            if (FAILED(textures[t]->UnlockRect(0))) return false;
-            AddDirtyRuns(textures[t], L.lookC0, L.lookC1);
+            const double t0 = grassperf::Now();
+            bool any = false;
+            if (!FoldRect(L, isLevel0, in, r, any)) return false;
+            L.anyCover = L.anyCover || any;
+            g_uploadStats.foldMs += grassperf::Now() - t0;
         }
-        // Keep everything pending until all textures succeeded: a partial failure retries the written cells too;
-        // a slot-generation change forces a full retry.
-        L.slotsUploaded = g_slotGeneration;
-        L.lookDirty.Clear();
-        ClearSpans(L.lookC0, L.lookC1);
-        L.lookCells = false;
+        if (bits & kDirtyLook)
+        {
+            const double t0 = grassperf::Now();
+            if (!LookRect(L, r, in)) return false;
+            g_uploadStats.lookMs += grassperf::Now() - t0;
+        }
+        return true;
+    }
+
+    // The marked rows (and columns), grouped into runs of neighbours, each run one rectangle
+    // across the whole texture.
+    bool UploadMarked(Level& L, bool isLevel0, const FoldInputs& in, std::vector<uint8_t>& marks, bool rows)
+    {
+        for (int a = 0; a < kTex;)
+        {
+            if (!marks[a]) { ++a; continue; }
+            int b = a;
+            uint8_t bits = 0;
+            while (b < kTex && marks[b]) bits |= marks[b++];
+            const Rect r = rows ? Rect{ 0, a, kTex, b } : Rect{ a, 0, b, kTex };
+            if (!UploadRegion(L, isLevel0, in, r, bits)) return false;
+            std::fill(marks.begin() + a, marks.begin() + b, 0);
+            a = b;
+        }
         return true;
     }
 
     bool UploadLevel(Level& L, bool isLevel0)
     {
         // No cell with cover of its own, and no fallen snow to settle where it could: nothing to fold
-        // or upload. The dirty flags stay, so the textures catch up the moment cover appears (snow
-        // starting re-folds through the snow path). (A recentre marks everything dirty: walking
-        // re-folded and re-uploaded whole empty levels, ~3 ms CPU + ~4 ms GPU.)
+        // or upload. The dirty flags and marks stay, so the textures catch up the moment cover
+        // appears (snow starting re-folds through the snow path).
         if (L.coverCells <= 0 && (L.snowCells <= 0 || !fields::SnowActive()))
         {
-            L.coverMayDraw = false;
+            L.anyCover = false;
             if (isLevel0) { g_changed.clear(); g_changedPending = false; } // no trenches without cover
             return true;
         }
-        D3DLOCKED_RECT lr{};
-        // The base: in full after a fill (or a device reset), else only the cells sampled to a new value.
+        const FoldInputs in = Inputs(L);
+
+        // Whole-texture passes (a refill, a setting, snow, the cover texture slots changing). The
+        // marks stay while a fill job runs: its strips are folded against the grid it ends with.
         if (L.baseDirty)
         {
-            if (FAILED(L.baseTex->LockRect(0, &lr, nullptr, 0))) return false;
-            for (int row = 0; row < kTex; ++row)
-                std::memcpy(static_cast<uint8_t*>(lr.pBits) + row * lr.Pitch, &L.base[row * kTex], kTex * 4);
-            L.baseTex->UnlockRect(0);
+            if (!CopyRect(L.baseTex, L.base, kWhole)) return false;
             L.baseDirty = false;
+            if (!L.jobActive) for (int k = 0; k < kTex; ++k) { L.dirtyRow[k] &= ~kDirtyBase; L.dirtyCol[k] &= ~kDirtyBase; }
         }
-        else if (L.cellsDirty)
-        {
-            if (FAILED(L.baseTex->LockRect(0, &lr, nullptr, D3DLOCK_NO_DIRTY_UPDATE))) return false;
-            for (int row = 0; row < kTex; ++row)
-                if (L.cellC0[row] <= L.cellC1[row])
-                    std::memcpy(static_cast<uint8_t*>(lr.pBits) + row * lr.Pitch + L.cellC0[row] * 4, &L.base[row * kTex + L.cellC0[row]],
-                                static_cast<size_t>(L.cellC1[row] - L.cellC0[row] + 1) * 4);
-            L.baseTex->UnlockRect(0);
-            AddDirtyRuns(L.baseTex, L.cellC0, L.cellC1);
-        }
-
-        // The depth: the coverage parts folded with the panel's multipliers and the snow; in full when a setting,
-        // the snow or a fill asks (coverDirty), else only the changed cells.
-        const float depthMul = g_settings.depthMul, driftMul = g_settings.driftMul, breakupMul = g_settings.breakupMul;
-        const int slotI0 = Slot(L.gridI), slotJ0 = Slot(L.gridJ);
-        const bool snowOn = fields::SnowActive();
-        const bool fallenSnowOn = snowOn && fields::FallenSnowActive();
-        // Material shaping: steeper with more breakup, and the fine edge noise moves the
-        // threshold, so the transition breaks into patches. Fully covered and bare stay so.
-        auto shape = [](uint8_t coverage, float b, uint8_t edgeNoise)
-        {
-            float m = (coverage / 255.0f - 0.5f) * (1.0f + 2.0f * b) + 0.5f + 1.5f * b * (edgeNoise / 255.0f - 0.5f);
-            return m <= 0.0f ? 0.0f : (m >= 1.0f ? 1.0f : m * m * (3.0f - 2.0f * m));
-        };
-        bool mayDraw = false;
-        const auto foldCell = [&](int row, int col) -> float
-        {
-            // The world cell this row holds (the apron sits just before the grid's first cell).
-            const int dj = (row - slotJ0 + kTex) % kTex;
-            const float wy = static_cast<float>(L.gridJ + (dj >= kTex - kApron ? dj - kTex : dj)) * L.cell;
-            const int s = row * kTex + col;
-            float b = L.breakup[s] / 255.0f * breakupMul;
-            b = b > 1.0f ? 1.0f : b;
-            float driftF = 1.0f + L.driftAmp[s] / 255.0f * driftMul * (L.drift[s] / 127.5f - 1.0f);
-            driftF = driftF < 0.0f ? 0.0f : driftF;
-            const float slope = L.slope[s] / 255.0f;
-            float cover = L.depth[s] > 0.0f ? depthMul * L.depth[s] * shape(L.material[s], b, L.edgeNoise[s]) * slope * driftF : 0.0f;
-            // Snow: painted snow thinned by its kept share (patchy: where the drift and edge
-            // noise are low it opens first), fallen snow on top.
-            // With no fallen snow anywhere, the lookup can only thin existing
-            // painted snow. Bare ground and zero-depth cover cannot be affected.
-            if (snowOn && ((fallenSnowOn && L.snowShare[s]) || (L.paintedSnow[s] && cover > 0.0f)))
-            {
-                const int di = (col - slotI0 + kTex) % kTex;
-                const float wx = static_cast<float>(L.gridI + (di >= kTex - kApron ? di - kTex : di)) * L.cell;
-                float fallen, keep;
-                ++g_snowLookups;
-                fields::SnowAt(wx, wy, fallen, keep);
-                if (L.paintedSnow[s] && keep < 1.0f && cover > 0.0f)
-                {
-                    constexpr float kPatchy = 0.6f;
-                    const float noise = (0.6f * L.drift[s] + 0.4f * L.edgeNoise[s]) / 255.0f;
-                    float t = keep * (1.0f + kPatchy) - kPatchy * (1.0f - noise);
-                    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-                    cover *= 1.0f - L.paintedSnow[s] / 255.0f * (1.0f - t);
-                }
-                if (L.snowShare[s] && fallen > 0.0f) cover += fallen * shape(L.snowShare[s], b, L.edgeNoise[s]) * slope * driftF;
-            }
-            // Measure the undeformed depth: a fully pressed footprint can
-            // relax later without a full upload. Zero stays zero under all
-            // normal footprint transforms; non-finite depths fail open.
-            if (!(cover <= 0.0f)) mayDraw = true;
-            if (!isLevel0) return cover > 0.0f ? cover : 0.0f;
-            g_static0[s] = cover > 0.0f ? cover : 0.0f;
-            if (cover <= 0.0f) { g_deformK[s] = 0.0f; return 0.0f; }
-            const float k = DeformFade(L, row, col);
-            g_deformK[s] = k;
-            return blend::DeformedDepth(cover, g_rimCell[s] * g_settings.rimMul, g_rim[s], g_press[s], L.stiff[s] / 255.0f, k);
-        };
         if (L.coverDirty)
         {
-            const double foldStart = grassperf::Now();
-            if (FAILED(L.coverTex->LockRect(0, &lr, nullptr, 0))) return false;
-            for (int row = 0; row < kTex; ++row)
-            {
-                float* out = reinterpret_cast<float*>(static_cast<uint8_t*>(lr.pBits) + row * lr.Pitch);
-                for (int col = 0; col < kTex; ++col) out[col] = foldCell(row, col);
-            }
-            if (FAILED(L.coverTex->UnlockRect(0))) return false;
-            L.coverMayDraw = mayDraw;
+            const double t0 = grassperf::Now();
+            bool any = false;
+            if (!FoldRect(L, isLevel0, in, kWhole, any)) return false;
             L.coverDirty = false;
-            L.foldMs = grassperf::Now() - foldStart;
-            if (isLevel0) { g_changed.clear(); g_changedPending = false; } // the full pass included them
+            L.anyCover = any;
+            L.foldMs = grassperf::Now() - t0;
+            g_uploadStats.foldMs += L.foldMs;
+            ++g_uploadStats.fullFolds;
+            if (!L.jobActive) for (int k = 0; k < kTex; ++k) { L.dirtyRow[k] &= ~kDirtyCover; L.dirtyCol[k] &= ~kDirtyCover; }
         }
-        else if (L.cellsDirty)
+        if (L.lookDirty || L.slotsUploaded != g_slotGeneration)
         {
-            if (FAILED(L.coverTex->LockRect(0, &lr, nullptr, D3DLOCK_NO_DIRTY_UPDATE))) return false;
-            for (int row = 0; row < kTex; ++row)
-            {
-                if (L.cellC0[row] > L.cellC1[row]) continue;
-                float* out = reinterpret_cast<float*>(static_cast<uint8_t*>(lr.pBits) + row * lr.Pitch);
-                for (int col = L.cellC0[row]; col <= L.cellC1[row]; ++col) out[col] = foldCell(row, col);
-            }
-            if (FAILED(L.coverTex->UnlockRect(0))) return false;
-            AddDirtyRuns(L.coverTex, L.cellC0, L.cellC1);
-            // A partial pass may make drawing necessary, but never proves the level empty.
-            if (mayDraw) L.coverMayDraw = true;
+            const double t0 = grassperf::Now();
+            if (!LookRect(L, kWhole, in)) return false;
+            L.lookDirty = false;
+            L.slotsUploaded = g_slotGeneration;
+            g_uploadStats.lookMs += grassperf::Now() - t0;
+            ++g_uploadStats.fullLooks;
+            if (!L.jobActive) for (int k = 0; k < kTex; ++k) { L.dirtyRow[k] &= ~kDirtyLook; L.dirtyCol[k] &= ~kDirtyLook; }
         }
-        ClearSpans(L.cellC0, L.cellC1);
-        L.cellsDirty = false;
 
-        // Level 0's trenches: only the changed cells, inside one dirty rectangle.
-        if (isLevel0 && !g_changed.empty())
+        // Changed regions: a finished recentre's strips, re-sampled rows.
+        if (!L.jobActive && (!UploadMarked(L, isLevel0, in, L.dirtyRow, true) || !UploadMarked(L, isLevel0, in, L.dirtyCol, false)))
+            return false;
+
+        // Level 0's trenches: the changed cells (every active trench, every frame), in one rectangle.
+        if (isLevel0)
         {
-            int c0 = kTex, c1 = -1, r0 = kTex, r1 = -1;
-            for (int sl : g_changed)
+            if (!g_changed.empty())
             {
-                const int c = sl % kTex, r = sl / kTex;
-                c0 = c < c0 ? c : c0; c1 = c > c1 ? c : c1;
-                r0 = r < r0 ? r : r0; r1 = r > r1 ? r : r1;
+                int c0 = kTex, c1 = -1, r0 = kTex, r1 = -1;
+                for (int sl : g_changed)
+                {
+                    const int c = sl % kTex, r = sl / kTex;
+                    c0 = c < c0 ? c : c0; c1 = c > c1 ? c : c1;
+                    r0 = r < r0 ? r : r0; r1 = r > r1 ? r : r1;
+                }
+                const RECT rect{ c0, r0, c1 + 1, r1 + 1 };
+                D3DLOCKED_RECT lr{};
+                if (FAILED(L.coverTex->LockRect(0, &lr, &rect, 0))) return false;
+                for (int sl : g_changed)
+                {
+                    const int c = sl % kTex, r = sl / kTex;
+                    *(reinterpret_cast<float*>(static_cast<uint8_t*>(lr.pBits) + (r - r0) * lr.Pitch) + (c - c0)) = Stored(L, sl, Trenched(L, sl));
+                }
+                L.coverTex->UnlockRect(0);
+                g_changed.clear();
             }
-            RECT rect{ c0, r0, c1 + 1, r1 + 1 };
-            if (FAILED(L.coverTex->LockRect(0, &lr, &rect, 0))) return false;
-            for (int sl : g_changed)
-            {
-                const int c = sl % kTex, r = sl / kTex;
-                float* out = reinterpret_cast<float*>(static_cast<uint8_t*>(lr.pBits) + (r - r0) * lr.Pitch) + (c - c0);
-                *out = blend::DeformedDepth(g_static0[sl], g_rimCell[sl] * g_settings.rimMul, g_rim[sl], g_press[sl], L.stiff[sl] / 255.0f, g_deformK[sl]);
-                // Fail open even for an unexpected non-finite result. A partial
-                // update may make drawing necessary, but never proves emptiness.
-                if (*out != 0.0f) L.coverMayDraw = true;
-            }
-            if (FAILED(L.coverTex->UnlockRect(0))) return false;
-            g_changed.clear();
+            g_changedPending = false;
         }
-        if (isLevel0) g_changedPending = false;
-        return UploadLook(L);
+        return true;
     }
 }

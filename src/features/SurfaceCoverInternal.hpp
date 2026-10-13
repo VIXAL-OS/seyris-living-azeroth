@@ -5,6 +5,8 @@
 //   SurfaceCoverUpload.cpp    cover texture slots, folding and texture uploads
 //   SurfaceCoverDraw.cpp      GPU objects, the draw and its hooks
 //   SurfaceCoverShaders.cpp   the cover's HLSL
+//   SurfaceCoverCamera.cpp    the 3rd-person camera kept above the cover
+//   SurfaceCoverLift.cpp      models at units' feet (Base attachment) lifted onto the cover
 //   SurfaceCoverPanel.cpp     the debug panel
 // Design and history: orchestration docs/r&d/immersion/deformable-surfaces.md.
 #pragma once
@@ -63,9 +65,7 @@ namespace wxl_livingazeroth::cover::detail
     constexpr int   kDeformFullCells = 120;    // level 0: trenches at full strength inside this (Chebyshev, cells)...
     constexpr int   kDeformZeroCells = 140;    // ...gone by this, before the morph band starts
     constexpr float kOuterFadeStart = 0.80f, kOuterFadeEnd = 0.97f; // outermost level: cover fades out (share of its half)
-    constexpr float kEdgeRadiusShare = 0.85f, kEdgeFullShare = 0.65f;
     constexpr float kHole = -100000.0f;        // base height of a hole / unloaded spot
-    constexpr float kMinDrawnDepth = 0.004f;   // thinner cover isn't drawn (no z-fighting with the terrain)
 
     // "Everywhere" (test): no painted cover, but fallen snow may lie anywhere (with the plain look);
     // the panel's deposit button puts some down.
@@ -89,27 +89,18 @@ namespace wxl_livingazeroth::cover::detail
         int   alphaSwap = 0;            // debug: read the alpha maps with rows and columns swapped
         int   wireframe = 0;
         int   drawPoint = 0;            // 0 right after the terrain (inside the world pass), 1 end of the scene
+        int   debugView = 0;            // 0 off, 1 cover texture share, 2 specular only, 3 lighting only
+        int   decals = 1;               // the client's projected textures (selection circles, spell ground effects) on the cover too
+        int   camera = 1;               // the 3rd-person camera can't sink into the cover
+        float cameraClearance = 0.4f;   // yd the camera's boom keeps above the cover (its near plane)
+        int   liftBase = 1;             // models on units' Base attachment (auras at the feet) sit on the cover
+        // ChromieCraft fork:
         int   printsOnCover = 1;        // the client's footprints drawn on top of the cover (features/CoverPrints)
         int   ripples = 1;              // covers with kFlagRipplePrints (sand): rings around prints, no trenches
         // The rings' steepest slope (shading) and how much their crest lightens: 0.5 and 0.1 read only up close ("can
         // we make the rings slightly more intense", the user, 2026-10-12, on Azuremyst's sand).
         float rippleSlope = 0.9f;
         float rippleBright = 0.18f;
-    };
-
-    // Physical texture rows, not world rows. A bounding interval deliberately includes
-    // unchanged rows between edits (including toroidal wrap); at most one lock per texture.
-    struct LookDirtyRows
-    {
-        int first = 0, end = kTex; // new/recreated textures require every row
-        bool Empty() const { return first == end; }
-        void All() { first = 0; end = kTex; }
-        void Clear() { first = end = 0; }
-        void Mark(int row)
-        {
-            if (Empty()) { first = row; end = row + 1; }
-            else { first = std::min(first, row); end = std::max(end, row + 1); }
-        }
     };
 
     struct Level
@@ -128,6 +119,17 @@ namespace wxl_livingazeroth::cover::detail
         std::vector<uint8_t>  driftAmp = std::vector<uint8_t>(kTex * kTex, 0);
         std::vector<uint8_t>  breakup = std::vector<uint8_t>(kTex * kTex, 0);
         std::vector<uint8_t>  stiff = std::vector<uint8_t>(kTex * kTex, 0); // cover material's stiffness (level 0's trenches)
+        // 1 = the cover's base sits below the terrain (ZOffset < 0, e.g. mud whose rims show through):
+        // written as a negative depth, so the VS lowers it far away instead of lifting it.
+        std::vector<uint8_t>  sink = std::vector<uint8_t>(kTex * kTex, 0);
+        // Moisture-gated covers (MoistureMin, e.g. mud): the share of the painted cover that needs
+        // moisture (0..255), the moisture it needs and the ground's rest moisture there (0..255 =
+        // 0..1; the rest stands in for the moisture beyond the near grid). Applied at fold, which
+        // re-runs every few seconds while the moisture data changes (wetCells: slots with a share).
+        std::vector<uint8_t>  wetGate = std::vector<uint8_t>(kTex * kTex, 0);
+        std::vector<uint8_t>  wetMin = std::vector<uint8_t>(kTex * kTex, 0);
+        std::vector<uint8_t>  wetRest = std::vector<uint8_t>(kTex * kTex, 0);
+        int                   wetCells = 0;
         // Fallen snow (regional-layer-and-snow.md): how much of the spot may hold it (0..255, the
         // share of bare and snow-covered layers, none on or beside other covers, none under
         // liquids), and the share of the painted depth that is snow (it melts by the near grid's
@@ -137,11 +139,6 @@ namespace wxl_livingazeroth::cover::detail
         uint32_t snowVersion = 0;       // the snow values last folded in (fields::SnowVersion)
         bool     snowFolded = false;    // whether that fold had any snow in it
         double   foldMs = 0;            // the last full depth pass (upload)
-        // Conservative: only a successful full upload may prove the entire depth
-        // texture empty. Include apron/stale slots and positive depths below the
-        // shader's cutoff. Footprint rims can amplify small positive depths later.
-        bool     coverMayDraw = true;
-        bool ShouldDraw() const { return haveGrid && coverMayDraw; }
         std::vector<uint8_t>  drift = std::vector<uint8_t>(kTex * kTex, 128);
         std::vector<uint8_t>  edgeNoise = std::vector<uint8_t>(kTex * kTex, 128);
         std::vector<uint32_t> tint = std::vector<uint32_t>(kTex * kTex, 0);
@@ -149,26 +146,10 @@ namespace wxl_livingazeroth::cover::detail
         // byte). Turned into per-slot weights at upload, with whatever IDs hold the slots then.
         std::vector<uint32_t> texIds = std::vector<uint32_t>(kTex * kTex, 0);
         std::vector<uint16_t> texShares = std::vector<uint16_t>(kTex * kTex, 0);
-        // 1 where the cell has no cover look of its own: it uploads a neighbour's texture weights
-        // (blend::BorrowedWeights).
-        std::vector<uint8_t>  lookless = std::vector<uint8_t>(kTex * kTex, 1);
-        std::vector<uint32_t> texWeights[2] = { std::vector<uint32_t>(kTex * kTex, 0), std::vector<uint32_t>(kTex * kTex, 0) };
         // A = wetness, RGB = the terrain's vertex colour where rows use it (0x80 = neutral).
         std::vector<uint32_t> props = std::vector<uint32_t>(kTex * kTex, 0x00808080u);
         uint32_t slotsUploaded = 0;     // the slot generation the weight textures were built with
-        LookDirtyRows lookDirty;
-        // Cells sampled to new values since the last upload, per texture row: the columns [c0, c1] (none: c0 > c1).
-        // A recentre's strips and the re-sampling of ground streaming in fold and upload only these; a whole pass
-        // is left to fills, settings and snow. Flying, recentres and re-sampling kept setting the whole level dirty
-        // (147,456 cells folded, six textures re-uploaded, several levels a frame): "some fps dips still while
-        // flying specifically" (the user, 2026-10-12; the cover's draw at 27.8 ms CPU, 20.2 ms GPU).
-        std::vector<int16_t> cellC0 = std::vector<int16_t>(kTex, static_cast<int16_t>(kTex));
-        std::vector<int16_t> cellC1 = std::vector<int16_t>(kTex, static_cast<int16_t>(-1));
-        bool cellsDirty = false;
-        // The look's (a cell and its neighbours: a lookless neighbour borrows its weights).
-        std::vector<int16_t> lookC0 = std::vector<int16_t>(kTex, static_cast<int16_t>(kTex));
-        std::vector<int16_t> lookC1 = std::vector<int16_t>(kTex, static_cast<int16_t>(-1));
-        bool lookCells = false;
+        bool lookDirty = true;
         int boostRows = 0;              // rows left to re-sample at full speed after a setting change
         bool  haveGrid = false;         // drawn: its grid at gridI/gridJ is filled
         // A fill in progress, worked through within the per-frame budget. The level keeps drawing
@@ -183,7 +164,15 @@ namespace wxl_livingazeroth::cover::detail
         double jobMs = 0;
         int   gridI = 0, gridJ = 0;     // world cell index (of this level) of the grid's first vertex
         int   refreshRow = 0;
+        // Whole-texture passes, for changes that touch every slot (a refill, a setting, snow,
+        // the cover texture slots) ...
         bool  baseDirty = true, coverDirty = true;
+        // ... and changed regions, per texture row and column (kDirty* bits): a recentre's new
+        // strips (whole rows, or columns for strips along y) and re-sampled rows. Folded and uploaded
+        // on their own once no fill job is running (the slots then map to the grid that draws them).
+        std::vector<uint8_t> dirtyRow = std::vector<uint8_t>(kTex, 0);
+        std::vector<uint8_t> dirtyCol = std::vector<uint8_t>(kTex, 0);
+        bool  anyCover = true;          // its last cover pass found cover somewhere (else it isn't drawn)
         int   coverCells = 0;           // cells with cover of their own (depth or painted snow), kept as they're sampled
         int   snowCells = 0;            // cells where fallen snow could settle (snow share)
         unsigned holes = 0;
@@ -202,6 +191,8 @@ namespace wxl_livingazeroth::cover::detail
     extern int            g_mapNow;           // the map being filled
     extern const void*    g_cdbcApi;
     extern double         g_simMs;
+    extern unsigned       g_frame;            // counts updates (in world, cover on)
+    extern bool           g_resting;          // the finer levels rest: nothing within the outermost's reach
 
     // What the table sees where the player is (for the panel, so rows can be authored on the spot).
     extern terrain::Surface   g_hereSurface;
@@ -218,59 +209,6 @@ namespace wxl_livingazeroth::cover::detail
 
     inline int Slot(int i) { const int m = i % kTex; return m < 0 ? m + kTex : m; }
     inline int SlotOf(int i, int j) { return Slot(j) * kTex + Slot(i); } // row = y (j), column = x (i)
-
-
-    // Changed cells, per texture row as an interval of columns (Level::cellC0 ...).
-    inline void MarkSpan(std::vector<int16_t>& c0, std::vector<int16_t>& c1, int row, int a, int b)
-    {
-        if (a < c0[row]) c0[row] = static_cast<int16_t>(a);
-        if (b > c1[row]) c1[row] = static_cast<int16_t>(b);
-    }
-    inline void ClearSpans(std::vector<int16_t>& c0, std::vector<int16_t>& c1)
-    {
-        std::fill(c0.begin(), c0.end(), static_cast<int16_t>(kTex));
-        std::fill(c1.begin(), c1.end(), static_cast<int16_t>(-1));
-    }
-    inline void MarkCell(Level& L, int s)
-    {
-        MarkSpan(L.cellC0, L.cellC1, s / kTex, s % kTex, s % kTex);
-        L.cellsDirty = true;
-    }
-    inline void MarkLookCell(Level& L, int s)
-    {
-        const int row = s / kTex, col = s % kTex;
-        const bool edge = col == 0 || col == kTex - 1; // its neighbour across the wrap: the whole row
-        for (int dr = -1; dr <= 1; ++dr)
-            MarkSpan(L.lookC0, L.lookC1, Slot(row + dr), edge ? 0 : col - 1, edge ? kTex - 1 : col + 1);
-        L.lookCells = true;
-    }
-    // The changed rows' rectangles (runs of rows with the same columns) on a managed texture locked with
-    // D3DLOCK_NO_DIRTY_UPDATE, so only they go to the GPU.
-    inline void AddDirtyRuns(IDirect3DTexture9* tex, const std::vector<int16_t>& c0, const std::vector<int16_t>& c1)
-    {
-        int row = 0;
-        while (row < kTex)
-        {
-            if (c0[row] > c1[row]) { ++row; continue; }
-            int end = row + 1;
-            while (end < kTex && c0[end] == c0[row] && c1[end] == c1[row]) ++end;
-            const RECT rect{ c0[row], row, c1[row] + 1, end };
-            tex->AddDirtyRect(&rect);
-            row = end;
-        }
-    }
-    // Level 0's trench strength by a cell's distance from the grid's centre (Chebyshev): full inside
-    // kDeformFullCells, gone by kDeformZeroCells, none outside the grid.
-    inline float DeformFade(const Level& L, int row, int col)
-    {
-        const int dj = (row - Slot(L.gridJ) + kTex) % kTex, di = (col - Slot(L.gridI) + kTex) % kTex;
-        const int cj = std::abs(dj - kHalfCells), ci = std::abs(di - kHalfCells);
-        const int cheb = ci > cj ? ci : cj;
-        float k = cheb <= kDeformFullCells ? 1.0f
-                : (cheb >= kDeformZeroCells ? 0.0f : float(kDeformZeroCells - cheb) / float(kDeformZeroCells - kDeformFullCells));
-        if (dj >= kGridVerts || di >= kGridVerts) k = 0.0f;
-        return k;
-    }
     inline int FloorDiv2(int v) { return v >= 0 ? v / 2 : -((-v + 1) / 2); }
 
     inline int ActiveLevels()
@@ -284,6 +222,9 @@ namespace wxl_livingazeroth::cover::detail
     void ClearCellCache();
     void ClearLayerValues();
     void SampleRect(Level& L, bool isLevel0, int i0, int i1, int j0, int j1, bool fresh); // inclusive
+
+    // What a sample changed, for Level::dirtyRow/dirtyCol.
+    constexpr uint8_t kDirtyBase = 1, kDirtyCover = 2, kDirtyLook = 4;
 
     // Plans a level's next grid around the player (origin on an even cell). The filled area is
     // the grid plus an apron of kApron cells: the normals of the border vertices read up to 2
@@ -304,7 +245,6 @@ namespace wxl_livingazeroth::cover::detail
     extern std::vector<int>   g_changed;          // slots to re-upload this frame
     extern bool               g_changedPending;   // changes not uploaded yet
     extern std::vector<float> g_static0;          // level 0 cover without trenches
-    extern std::vector<float> g_deformK;          // level 0 trench strength (fade-out)
     // Level 0's rim share and relax time per slot, from the rows of the cell's materials.
     extern std::vector<float> g_rimCell, g_relaxCell;
     extern unsigned           g_stamps;           // units stamping this frame
@@ -320,12 +260,26 @@ namespace wxl_livingazeroth::cover::detail
     extern std::unordered_map<int, std::string> g_textureStatus;
     constexpr float kCoverTextureTile = 33.3333333f / 8.0f; // one repeat per terrain cell, like the terrain's layers
     void EnsureCoverTextures(IDirect3DDevice9* dev);
+    // Recount which cover textures are around at the next draw (instead of within a second): a level
+    // just filled a new place, whose cover would draw plain until then.
+    void RecountCoverTextures();
     bool UploadLevel(Level& L, bool isLevel0);
+    // A slot's depth as the cover texture draws it (level 0 with its trenches, or without), unsigned.
+    float DrawnDepth(const Level& L, bool isLevel0, int row, int col, bool trenches);
+    // What the uploads did in the last drawn frame (all levels), for the panel.
+    struct UploadStats
+    {
+        unsigned fullFolds = 0, fullLooks = 0;   // whole-texture passes
+        unsigned regions = 0, regionSlots = 0;   // changed regions, and the slots in them
+        double   foldMs = 0, lookMs = 0;
+    };
+    extern UploadStats g_uploadStats;
     void ReleaseCoverTextures();
 
     // --- GPU and drawing (SurfaceCoverDraw.cpp, SurfaceCoverShaders.cpp) ------------------------
     extern const char* kVsHlsl;
     extern const char* kPsHlsl;
+    extern const char* kDecalPsHlsl;
     extern bool  g_tintSupported;
     // The terrain's lighting and fog as last read (for the panel): VS c12 fog, c24 sun direction
     // (view space), c25 ambient, c26 diffuse, PS c2 fog colour.
@@ -338,10 +292,51 @@ namespace wxl_livingazeroth::cover::detail
     extern unsigned g_patchLightsMost, g_patchLightsFull; // last frame: the busiest patch; patches over kMaxLights
     extern double g_uploadMs, g_drawMs;
     extern const char* g_inactive;
+    // The client's projected textures redrawn on the cover: what the calls came to since the last
+    // reset (panel).
+    struct DecalStats
+    {
+        unsigned calls = 0, modelCalls = 0, drawn = 0; // modelCalls: from models' projected batches (0x7E3AA0)
+        unsigned noCover = 0, noPieces = 0, noBox = 0; // skipped: cover not drawn this frame, nothing drawn on the terrain, not overhead
+        uintptr_t lastCaller = 0;
+        uint32_t  lastFlags = 0;
+        // The last replayed decal: the setup the client left, and the cover patches it went onto.
+        unsigned  patches = 0, patchesBefore = 0, lastPatches = 0;
+        bool      lastFromModel = false;
+        uint32_t  lastColor = 0;
+        DWORD     texCoordIndex = 0, transformFlags = 0, texCoordIndex1 = 0, transformFlags1 = 0;
+        DWORD     srcBlend = 0, dstBlend = 0, alphaTest = 0, alphaRef = 0, zFunc = 0;
+        unsigned  shaders = 0;        // bit 0: a vertex shader was bound, bit 1: a pixel shader
+        float     matrix[16] = {};    // stage 0 texture matrix
+    };
+    extern DecalStats g_decalStats;
     // The draw's hooks (terrain stage, end of the scene). From Install.
     void InstallDraw(const WXL_Api* api);
+    // Before IDirect3DDevice9::Reset: the draw's state block (a live one makes the Reset fail).
+    void ReleaseDrawDeviceState();
+
+    // The cover's top and depth at a world position over the first `levels` levels (cover::TopAt).
+    // Level 0 alone only reads fixed-size arrays: safe from the scene's animate threads; the
+    // coarser levels' folds read snow and moisture state the main thread changes.
+    // trenches = false: level 0 as if nobody had walked there (the surface around a unit, not its footprint).
+    bool SampleTop(float x, float y, int levels, float& z, float& depth, bool trenches = true);
+
+    // --- camera (SurfaceCoverCamera.cpp) -------------------------------------------------------
+    // Keeps the 3rd-person camera above the cover like the client keeps it out of the terrain. From Install.
+    void InstallCamera(const WXL_Api* api);
+    struct CameraStats { unsigned calls = 0, pulled = 0; float lastPull = 0.0f; };
+    extern CameraStats g_cameraStats;
+
+    // --- lift (SurfaceCoverLift.cpp) -------------------------------------------------------------
+    // Models on a unit's Base attachment (auras and other spell effects at the feet) lifted onto the
+    // cover. From Install.
+    void InstallLift(const WXL_Api* api);
+    unsigned LiftedCount(); // model builds lifted so far (panel; counted from the animate threads)
+    float    LastLift();    // yd, the last lift
 
     // --- ChromieCraft fork: names shared across the files above ----------------------------------
+    constexpr float kEdgeRadiusShare = 0.85f, kEdgeFullShare = 0.65f;
+    constexpr float kMinDrawnDepth = 0.004f;   // thinner cover isn't drawn (no z-fighting with the terrain)
     // Trenches (SurfaceCoverTrenches.cpp): cells with something on them this frame, the sand's still rings
     // around prints (features/CoverRipples), and the last draw's counts for the panel.
     extern std::vector<uint8_t> g_isActive;
