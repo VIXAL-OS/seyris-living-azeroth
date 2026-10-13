@@ -20,6 +20,8 @@ namespace wxl_livingazeroth::actors
         float    widthNow = 0.0f, widthNative = 0.0f; // collision widths, only filled when morphed
         float    effectiveRadius = 0.0f;              // bounding radius, scaled for morphs/shapeshifts
         bool     hasFootprint = true;            // false: the model makes no footprints (FootprintTextureID -1: bats, birds, ...)
+        bool     slithers = false;               // a legless body sliding on the ground (snakes, serpents, naga, worms): it
+                                                 // leaves a groove, not prints (the client still gives snakes a footprint texture)
         float    footprintLength = 0.0f;         // yd, one print, x the unit's scale (the mount's while mounted); 0 = unknown
         float    footprintWidth = 0.0f;
         bool     isPlayer = false;

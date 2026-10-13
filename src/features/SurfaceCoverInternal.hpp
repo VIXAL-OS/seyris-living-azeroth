@@ -101,6 +101,7 @@ namespace wxl_livingazeroth::cover::detail
         // we make the rings slightly more intense", the user, 2026-10-12, on Azuremyst's sand).
         float rippleSlope = 0.9f;
         float rippleBright = 0.18f;
+        int   slither = 1;              // bodies without legs (snakes, naga, worms) leave a weaving groove, not prints
     };
 
     struct Level
@@ -345,6 +346,7 @@ namespace wxl_livingazeroth::cover::detail
     extern unsigned             g_ripplesMade, g_ripplesShaped, g_wmoRipplesMade;
     extern float                g_rippleClock;
     extern unsigned             g_drawPatches, g_emptyLevels, g_snowLookups;
+    extern unsigned             g_slithering;   // bodies carving a slither trail this frame
     // Uploads (SurfaceCoverUpload.cpp): cover texture ID -> slot (-1 = none).
     extern std::vector<int> g_slotOfId;
     // Level 0's trench strength at a slot from the grid as it is now (upstream's, SurfaceCoverUpload.cpp): the

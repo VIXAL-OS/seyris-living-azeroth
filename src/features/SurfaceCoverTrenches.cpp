@@ -54,8 +54,9 @@ namespace wxl_livingazeroth::cover::detail
     unsigned g_snowLookups = 0; // actual SnowAt calls in the last cover draw
     unsigned g_stamps = 0;
 
-    // A trench under one grounded unit: pressed flat inside r, a rim between r and 1.6 r.
-    void Stamp(const float pos[3], float radius)
+    // A trench under one grounded unit: pressed flat inside r, a rim between r and 1.6 r. A groove (a slither
+    // trail) is carved in sand too, where feet only leave rings.
+    void Stamp(const float pos[3], float radius, bool groove = false)
     {
         const Level& L = g_levels[0];
         float ground;
@@ -73,7 +74,7 @@ namespace wxl_livingazeroth::cover::detail
                 if (d >= outer) continue;
                 const int s = SlotOf(i, j);
                 // Sand keeps no trench: its prints get rings instead (AddRipple).
-                const float keep = g_settings.ripples ? 1.0f - g_rippleCell[s] : 1.0f;
+                const float keep = g_settings.ripples && !groove ? 1.0f - g_rippleCell[s] : 1.0f;
                 if (d < radius)
                 {
                     const float t = (d < radius * 0.7f ? 1.0f : (radius - d) / (radius * 0.3f)) * keep;
@@ -82,6 +83,42 @@ namespace wxl_livingazeroth::cover::detail
                 const float r = (1.0f - std::fabs(d - rimPeak) / rimHalf) * keep;
                 if (r > g_rim[s]) { g_rim[s] = r; MarkActive(s); }
             }
+    }
+
+    // Slither trails ("would it be possible to have like slither lines for snake pets", the user, 2026-10-13): a
+    // body without legs (actors::Actor::slithers: snakes, serpents, naga, worms) leaves one groove along its path,
+    // weaving side to side, on every cover, sand included, instead of trenches under feet or rings around prints.
+    // Sized by the body (its bounding radius): a pet snake draws a thin line, a naga a broad furrow. At least a cell
+    // and a half wide, or level 0's 0.25 yd cells would break the line into dots.
+    struct SlitherPath { float x = 0.0f, y = 0.0f, travelled = 0.0f; bool started = false; };
+    std::unordered_map<unsigned long long, SlitherPath> g_slither;
+    unsigned g_slithering = 0;
+    constexpr float kGrooveShare = 0.3f;                 // half the groove's width, of the body's radius
+    constexpr float kGrooveMin = 0.15f, kGrooveMax = 0.8f;
+    constexpr float kSwayShare = 1.6f, kWaveShare = 14.0f; // the weave: its amplitude and wavelength, of the half width
+
+    void Groove(const actors::Actor& a)
+    {
+        float w = (a.effectiveRadius > 0.0f ? a.effectiveRadius : 0.3f) * kGrooveShare * g_settings.stampScale;
+        w = w < kGrooveMin ? kGrooveMin : (w > kGrooveMax ? kGrooveMax : w);
+        SlitherPath& path = g_slither[a.guid];
+        const float dx = a.pos[0] - path.x, dy = a.pos[1] - path.y;
+        const float d = std::sqrt(dx * dx + dy * dy);
+        if (!path.started || d > 8.0f) { path = SlitherPath{ a.pos[0], a.pos[1], 0.0f, true }; return; } // first seen, or a jump
+        const float step = w * 0.5f;
+        if (d < step) return;
+        ++g_slithering;
+        const float nx = -dy / d, ny = dx / d; // across the way it went
+        const float amplitude = w * kSwayShare, wavelength = w * kWaveShare;
+        const int n = static_cast<int>(std::ceil(d / step));
+        for (int k = 1; k <= n; ++k)
+        {
+            const float t = static_cast<float>(k) / static_cast<float>(n);
+            const float off = amplitude * std::sin((path.travelled + d * t) * 6.2831853f / wavelength);
+            const float p[3] = { path.x + dx * t + nx * off, path.y + dy * t + ny * off, a.pos[2] };
+            Stamp(p, w, true);
+        }
+        path.x = a.pos[0]; path.y = a.pos[1]; path.travelled += d;
     }
 
     // Rings around a print the client just put down, where it lies in sand on level 0's grid: sized by the
@@ -97,7 +134,7 @@ namespace wxl_livingazeroth::cover::detail
             const float d = std::hypot(a.pos[0] - p.x, a.pos[1] - p.y);
             if (d < best) { best = d; unit = &a; }
         }
-        if (!unit) return;
+        if (!unit || (unit->slithers && g_settings.slither)) return; // a snake's "prints": its groove shows instead
         // Which way it points: along the unit's stride (CoverRipples.hpp).
         if (g_unitPrints.size() > 512) g_unitPrints.clear();
         UnitPrints& history = g_unitPrints[unit->guid];
@@ -174,12 +211,15 @@ namespace wxl_livingazeroth::cover::detail
         }
 
         g_stamps = 0;
+        g_slithering = 0;
         if (!g_settings.stamp) return;
+        if (g_slither.size() > 256) g_slither.clear();
         // Sized like the client's own footprints (CreatureModelData, x the unit's scale): a frog
         // leaves a small trench, a tauren a wide one. Models without footprints (bats, birds and
         // other fliers that "walk" in the air) leave none.
         for (const actors::Actor& a : actors::Nearby())
         {
+            if (a.slithers && g_settings.slither) { Groove(a); continue; }
             if (!a.hasFootprint) continue;
             const float foot = a.footprintLength > a.footprintWidth ? a.footprintLength : a.footprintWidth;
             float r = (foot > 0.0f ? foot * kFootprintToTrench : (a.effectiveRadius > 0.0f ? a.effectiveRadius : 0.4f)) * g_settings.stampScale;

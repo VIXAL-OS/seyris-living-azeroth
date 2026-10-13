@@ -51,6 +51,7 @@ namespace wxl_livingazeroth::cover::detail
         g_api->UiSliderFloat("Relax time (x table)", &g_settings.relaxMul, 0.1f, 10.0f);
         g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
         g_api->UiCheckbox("Sand: a still ring around each footprint instead of trenches", &g_settings.ripples);
+        g_api->UiCheckbox("Slither trails: snakes, naga and worms leave a weaving groove", &g_settings.slither);
         g_api->UiSliderFloat("Ring slope", &g_settings.rippleSlope, 0.0f, 1.5f);
         g_api->UiSliderFloat("Ring brightness", &g_settings.rippleBright, 0.0f, 0.5f);
         std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made (%u following the print's outline) from %u prints found; on building floors %u live, %u made",
@@ -144,8 +145,8 @@ namespace wxl_livingazeroth::cover::detail
             std::snprintf(line, sizeof(line), "level %d: %.2f yd cells, %.0f yd out, first cell (%d, %d), holes/unloaded %u, full fill %.2f ms, last recentre %.2f ms%s",
                           k, L.cell, kHalfCells * L.cell, L.gridI, L.gridJ, L.holes, L.firstFillMs, L.fillMs, state); add();
         }
-        std::snprintf(line, sizeof(line), "%d x %d vertices; units stamping %u; terrain cells looked up %zu; tint %s",
-                      levels * kPatches * kPatches, kPatchVerts * kPatchVerts, g_stamps, static_cast<size_t>(g_cellMisses),
+        std::snprintf(line, sizeof(line), "%d x %d vertices; units stamping %u, slithering %u; terrain cells looked up %zu; tint %s",
+                      levels * kPatches * kPatches, kPatchVerts * kPatchVerts, g_stamps, g_slithering, static_cast<size_t>(g_cellMisses),
                       g_tintSupported ? "on" : "not supported by this GPU"); add();
         for (const actors::Actor& a : actors::Nearby())
         {

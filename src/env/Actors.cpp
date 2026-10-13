@@ -121,7 +121,18 @@ namespace wxl_livingazeroth::actors
         // Creature\InvisibleStalker\*.mdx, Creature\InvisibleMan\*.mdx, 146 displays). Most of their model
         // rows still carry a footprint texture, so the Argent Tournament's helpers carved snow trenches with
         // nothing standing in them (the user, 2026-10-10). They don't part grass or make ripples either.
-        std::unordered_map<uint32_t, bool> g_invisibleCache; // display id -> invisible model
+        //
+        // Bodies without legs that slide on the ground: they leave a groove (features/SurfaceCover's slither
+        // trails) instead of prints ("would it be possible to have like slither lines for snake pets", the user,
+        // 2026-10-13). By CreatureModelData path (3.3.5a): the snakes (the critter pets), serpents and skeletal
+        // serpents, naga (creatures, lords, sirens and the player models), worms and slith.
+        enum class ModelKind : uint8_t { Normal, Invisible, Slither };
+        std::unordered_map<uint32_t, ModelKind> g_kindCache; // display id -> what its model is
+        constexpr const char* kSlitherModels[] = {
+            "creature\\snake\\", "creature\\serpent\\", "creature\\skeletalserpent\\", "creature\\nagamale\\",
+            "creature\\nagafemale\\", "creature\\nagalordmale\\", "character\\naga_\\", "creature\\worm\\",
+            "creature\\slith\\",
+        };
 
         bool ReadName(uintptr_t address, char (&out)[128])
         {
@@ -136,21 +147,25 @@ namespace wxl_livingazeroth::actors
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
 
-        bool InvisibleDisplay(uint32_t displayId)
+        ModelKind KindOfDisplay(uint32_t displayId)
         {
-            if (!displayId) return false;
-            if (auto it = g_invisibleCache.find(displayId); it != g_invisibleCache.end()) return it->second;
-            bool invisible = false;
+            if (!displayId) return ModelKind::Normal;
+            if (auto it = g_kindCache.find(displayId); it != g_kindCache.end()) return it->second;
+            ModelKind kind = ModelKind::Normal;
             uint32_t display = Row(kDisplayInfoStorage, displayId), modelId = 0, name = 0;
             char path[128] = {};
             if (display && ReadU32(display + kDisplayModelId, modelId))
                 if (uint32_t model = Row(kModelDataStorage, modelId); model && ReadU32(model + kModelName, name) && name && ReadName(name, path))
                 {
                     for (char& c : path) c = c == '/' ? '\\' : static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
-                    invisible = std::strstr(path, "creature\\invisiblestalker\\") || std::strstr(path, "creature\\invisibleman\\");
+                    if (std::strstr(path, "creature\\invisiblestalker\\") || std::strstr(path, "creature\\invisibleman\\"))
+                        kind = ModelKind::Invisible;
+                    else
+                        for (const char* prefix : kSlitherModels)
+                            if (std::strncmp(path, prefix, std::strlen(prefix)) == 0) { kind = ModelKind::Slither; break; }
                 }
-            g_invisibleCache[displayId] = invisible;
-            return invisible;
+            g_kindCache[displayId] = kind;
+            return kind;
         }
     }
 
@@ -180,7 +195,9 @@ namespace wxl_livingazeroth::actors
                 ReadU32(descriptors + kFieldDisplayId, a.displayId);
                 ReadU32(descriptors + kFieldNativeDisplay, a.nativeDisplayId);
             }
-            if (InvisibleDisplay(a.displayId)) return true;
+            const ModelKind kind = KindOfDisplay(a.displayId);
+            if (kind == ModelKind::Invisible) return true;
+            a.slithers = kind == ModelKind::Slither && !a.mounted; // mounted, the mount's legs carry it
             // Guard against garbage if the field layout were ever off.
             if (!(a.boundingRadius > 0.01f && a.boundingRadius < 20.0f)) a.boundingRadius = 0.5f;
 
