@@ -17,14 +17,17 @@ Smog  the area fog kind (env/Fog: a place's Fogginess, more at night), with a sm
       fucking DARK in here lol", the user, 2026-10-13).
 Steam hot springs: their water (LiquidType 1, 5, 9 -- the map scan found Slow Water, 5, in all four) is the HotSpring
       material, 70 degC, so the steam rule's hot-spring term is full there (env/Fog reads the liquid's own temperature;
-      the temperature field only warms ground by a share of a liquid's heat). In the cold ones the steam is thicker
-      (4 yd, denser, patchier):
+      the temperature field only warms ground by a share of a liquid's heat). Steam is wisps, not a sheet: thin
+      (0.035/yd over 3 yd) and broken up (patchiness 0.95), so the water's reflections show between them, and whiter
+      than the sky's fog colour (its brightness, little of its hue, a bit brighter). The first look (0.1/yd over 4 yd,
+      the stock colour) hid Steam Springs' lake under a flat purple-grey sheet at dusk ("i would think steam would be a
+      bit whiter", the user, 2026-10-13):
         The Geyser Fields (4035) and Steam Springs (4117), Borean Tundra; Frostfire Hot Springs (2246), Winterspring;
-        Golakka Hot Springs (543), Un'Goro Crater (the built-in steam look: warm air).
+        Golakka Hot Springs (543), Un'Goro Crater (only the whiter colour: warm air, the built-in thin steam).
       The Geyser Fields have hardly any terrain water (one chunk: the geysers are models), so the place gets a steam
       haze too: area fog at Fogginess 0.5, a near-white, low (6 yd), very patchy layer that comes and goes faster.
 
-IDs: AreaClimate 140..146, FogSettings 110..115 (smog) and 120..123 (steam), GroundMaterial 201 (HotSpring),
+IDs: AreaClimate 140..146, FogSettings 110..115 (smog) and 120..124 (steam), GroundMaterial 201 (HotSpring),
 GroundMaterialSelector 200..211. Zone, area and map IDs: AreaTable.dbc and Map.dbc (3.3.5a).
 
 Usage:  python add_smog_and_steam.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
@@ -67,6 +70,8 @@ SPRINGS = [
     ("Golakka Hot Springs", 543, False, 209),
 ]
 COLD_STEAM_IDS = {4035: 121, 4117: 122, 2246: 123}
+WARM_STEAM_ID = 124
+STEAM_LOOK = dict(color_mode=HUE, color=(0.95, 0.97, 1.0), saturation=0.25, brightness=1.3)
 GEYSER_FIELDS, GEYSER_CLIMATE, GEYSER_HAZE = 4035, 146, 120
 
 
@@ -138,7 +143,10 @@ def main() -> None:
                               io.GROUND_MATERIAL_SELECTOR)
         if cold:
             changed += upsert(tables["FogSettings"], fog_row(COLD_STEAM_IDS[area], AREA, area, STEAM, f"{name}: steam in cold air",
-                                                             density=0.1, thickness=4.0, patchiness=0.8), io.FOG_SETTINGS)
+                                                             density=0.035, thickness=3.0, patchiness=0.95, **STEAM_LOOK), io.FOG_SETTINGS)
+        else:
+            changed += upsert(tables["FogSettings"], fog_row(WARM_STEAM_ID, AREA, area, STEAM, f"{name}: steam, whiter",
+                                                             **STEAM_LOOK), io.FOG_SETTINGS)
     # The Geyser Fields' steam haze.
     changed += climate(tables["AreaClimate"], climate_row(GEYSER_CLIMATE, AREA, GEYSER_FIELDS, 0.5, "The Geyser Fields: steam haze"))
     changed += upsert(tables["FogSettings"], fog_row(GEYSER_HAZE, AREA, GEYSER_FIELDS, AREA_FOG, "The Geyser Fields: steam haze",
