@@ -18,6 +18,7 @@ namespace wxl_livingazeroth::groundfog
     struct Settings
     {
         int   enabled = 1;
+        int   withModernWater = 1;      // draw alongside wxl-modern-water: it draws only the water now (its fog is wxl-vol-fog)
         int   steps = 48;               // the march's step budget per pixel (jumps through air + steps in the fog)
         int   farFog = 1;               // beyond the near field (128 yd): each zone's typical fog per 33 yd chunk (no edge wall)
         int   beyondMax = 1;            // past the max distance to the terrain drawn there: one long step through the far fog

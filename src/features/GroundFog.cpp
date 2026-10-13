@@ -1329,10 +1329,26 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             return true;
         }
 
+        // wxl-modern-water is the water half of the former combined wxl-vol-fog (its README: "Fog is a separate module");
+        // its fog code isn't wired up there. So with withModernWater the ground fog draws alongside it ("is there any way
+        // to keep the features of both mods?", the user, 2026-10-13); the fog mods themselves still make it give way.
+        constexpr const char* kModernWater = "wxl-modern-water.dll";
+        bool g_alongsideLogged = false;
+
         const char* FindConflict()
         {
             for (const char* dll : kConflicts)
-                if (GetModuleHandleA(dll)) return dll;
+            {
+                if (!GetModuleHandleA(dll)) continue;
+                if (g_settings.withModernWater && std::strcmp(dll, kModernWater) == 0)
+                {
+                    if (!g_alongsideLogged && g_api)
+                        g_api->Log(WXL_LOG_INFO, kTag, "ground fog: drawing alongside %s, which draws only the water (WithModernWater=0 gives way to it).", dll);
+                    g_alongsideLogged = true;
+                    continue;
+                }
+                return dll;
+            }
             return nullptr;
         }
 
@@ -1805,6 +1821,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
     void DrawMainControls()
     {
         g_api->UiCheckbox("draw the fog##gfon", &g_settings.enabled);
+        if (g_api->UiCheckbox("alongside Modern Water (off: give way to it)##gfmw", &g_settings.withModernWater))
+            g_conflictCheck = 0; // look again next frame
         g_api->UiSliderFloat("density scale##gfdens", &g_settings.densityScale, 0.0f, 4.0f);
         g_api->UiSliderFloat("colour brightness##gfbright", &g_settings.brightness, 0.0f, 3.0f);
         g_api->UiSliderFloat("max distance (yd)##gfdist", &g_settings.maxDistance, 30.0f, 600.0f);

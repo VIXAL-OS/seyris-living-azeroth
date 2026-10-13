@@ -153,6 +153,7 @@ namespace wxl_livingazeroth::config
             const char* f = kSectionFog;
             groundfog::Settings& g = groundfog::Config();
             g.enabled = In(s, f, "Enabled", "Draw the ground fog.", g.enabled);
+            g.withModernWater = Whole(s, f, "WithModernWater", "Draw alongside wxl-modern-water, which draws only the water (its fog is the separate wxl-vol-fog): 0 = give way to it.", g.withModernWater);
             g.densityScale = In(s, f, "DensityScale", "Your multiplier on every fog kind's density (1 = as FogSettings.cdbc says).", g.densityScale);
             g.maxDistance = In(s, f, "MaxDistance", "How far the fog is drawn, in yards.", g.maxDistance);
             g.farFog = In(s, f, "FarFog", "Beyond 128 yards the fog continues at each zone's typical level (no wall where the near fog ends).", g.farFog);
