@@ -22,13 +22,15 @@ Steam hot springs: their water (LiquidType 1, 5, 9 -- the map scan found Slow Wa
       than the sky's fog colour (its brightness, little of its hue, a bit brighter). The first look (0.1/yd over 4 yd,
       the stock colour) hid Steam Springs' lake under a flat purple-grey sheet at dusk ("i would think steam would be a
       bit whiter", the user, 2026-10-13):
-        The Geyser Fields (4035) and Steam Springs (4117), Borean Tundra; Frostfire Hot Springs (2246), Winterspring;
+        The Geyser Fields (4035), Scalding Pools (4116: its own area inside the Geyser Fields, a lake of Slow Water;
+        "it's in the geyser fields", the user, 2026-10-13) and Steam Springs (4117), Borean Tundra; Frostfire Hot
+        Springs (2246), Winterspring;
         Golakka Hot Springs (543), Un'Goro Crater (only the whiter colour: warm air, the built-in thin steam).
       The Geyser Fields have hardly any terrain water (one chunk: the geysers are models), so the place gets a steam
       haze too: area fog at Fogginess 0.5, a near-white, low (6 yd), very patchy layer that comes and goes faster.
 
-IDs: AreaClimate 340..346, FogSettings 310..315 (smog) and 320..324 (steam), GroundMaterial 201 (HotSpring),
-GroundMaterialSelector 200..211 (300 and up stays clear of upstream's IDs). A place whose row already sets Fogginess
+IDs: AreaClimate 340..346, FogSettings 310..315 (smog) and 320..325 (steam), GroundMaterial 201 (HotSpring),
+GroundMaterialSelector 200..214 (300 and up stays clear of upstream's IDs). A place whose row already sets Fogginess
 keeps it (upstream's tuning: the Burning Steppes are 0.8 there); the smog's look applies either way. Zone, area and map IDs: AreaTable.dbc and Map.dbc (3.3.5a).
 
 Usage:  python add_smog_and_steam.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
@@ -69,8 +71,9 @@ SPRINGS = [
     ("Steam Springs", 4117, True, 203),
     ("Frostfire Hot Springs", 2246, True, 206),
     ("Golakka Hot Springs", 543, False, 209),
+    ("Scalding Pools", 4116, True, 212),
 ]
-COLD_STEAM_IDS = {4035: 321, 4117: 322, 2246: 323}
+COLD_STEAM_IDS = {4035: 321, 4117: 322, 2246: 323, 4116: 325}
 WARM_STEAM_ID = 324
 STEAM_LOOK = dict(color_mode=HUE, color=(0.95, 0.97, 1.0), saturation=0.25, brightness=1.3)
 GEYSER_FIELDS, GEYSER_CLIMATE, GEYSER_HAZE = 4035, 346, 320
