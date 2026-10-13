@@ -387,21 +387,23 @@ int main(int argc, char** argv)
         });
         Test("the coasts the map survey found: sand on their sand textures (rings, the ground's vertex colour); wet sand and pebble shores as they were", []
         {
-            struct Want { const Spot* spot; uint32_t material; float depth; const char* texture; };
-            const Want wants[] = { { &kWestfall, 6, 0.08f, "WestfallSandBase.blp" }, { &kStvCoast, 6, 0.08f, "WestfallSandBase.blp" },
-                                   { &kDarkshorePlain, 61, 0.08f, "DarkshoreSand.blp" }, { &kBoreanA, 62, 0.08f, "BT_SandA.blp" },
-                                   { &kBoreanC, 63, 0.08f, "BT_SandC.blp" }, { &kBoreanE, 64, 0.06f, "BT_SandE.blp" },
-                                   { &kSholazarSand, 65, 0.08f, "SB_SandB.blp" }, { &kZoramStrand, 66, 0.08f, "AshenvaleSand.blp" },
-                                   { &kUngoroSand, 67, 0.06f, "FeralasSand.blp" } };
+            // Borean Tundra's sands lie half over dark rock: their tint is the texture's own colour, lightly (0.05), not 1.68 x it.
+            struct Want { const Spot* spot; uint32_t material; float depth; const char* texture; float tint; };
+            const Want wants[] = { { &kWestfall, 6, 0.08f, "WestfallSandBase.blp", 0.2f }, { &kStvCoast, 6, 0.08f, "WestfallSandBase.blp", 0.2f },
+                                   { &kDarkshorePlain, 61, 0.08f, "DarkshoreSand.blp", 0.2f }, { &kBoreanA, 62, 0.08f, "BT_SandA.blp", 0.05f },
+                                   { &kBoreanC, 63, 0.08f, "BT_SandC.blp", 0.05f }, { &kBoreanE, 64, 0.06f, "BT_SandE.blp", 0.05f },
+                                   { &kSholazarSand, 65, 0.08f, "SB_SandB.blp", 0.2f }, { &kZoramStrand, 66, 0.08f, "AshenvaleSand.blp", 0.2f },
+                                   { &kUngoroSand, 67, 0.06f, "FeralasSand.blp", 0.2f } };
             for (const Want& w : wants)
             {
                 const ct::Values v = At(*w.spot);
                 if (!(v.material == w.material && Near(v.depth, w.depth) && EndsWith(CoverPath(v), w.texture) && mat::Parent(v.material) == 51 &&
-                      Near(v.relaxSeconds, 10.0f) && Near(v.tintStrength, 0.2f) && (v.flags & ct::kFlagRipplePrints) &&
+                      Near(v.relaxSeconds, 10.0f) && Near(v.tintStrength, w.tint) && (v.flags & ct::kFlagRipplePrints) &&
                       (v.flags & ct::kFlagUseVertexColor) && (v.flags & ct::kFlagPreventUnderwater)))
                     throw std::runtime_error(std::string("not sand as wanted: ") + w.spot->what);
             }
             CHECK(At(kWestfall).tintColor == 0xFFFFA0u && At(kSholazarSand).tintColor == 0xFFFFF5u);
+            CHECK(At(kBoreanA).tintColor == 0x6C675Cu && At(kBoreanC).tintColor == 0x4C4B46u && At(kBoreanE).tintColor == 0x52514Cu);
             CHECK(At(kWestfallWet).material == 11 && Near(At(kWestfallWet).depth, 0.05f) && !(At(kWestfallWet).flags & ct::kFlagRipplePrints));
             CHECK(At(kFjordShore).depth == 0.0f);
             CHECK(std::string(mat::Name(6)) == "WestfallSandBase"); // the existing material, reparented, keeps its name

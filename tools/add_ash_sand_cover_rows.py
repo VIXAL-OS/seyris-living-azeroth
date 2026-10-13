@@ -64,6 +64,14 @@ PREVENT_UNDERWATER = 0x1
 USE_VERTEX_COLOR = 0x4  # tinted by the terrain's MCCV like the ground (Northrend's grey sands get their colour from it)
 RIPPLE_PRINTS = 0x10  # feet carve no trench; still rings around each print instead (sand)
 TINT_GAIN, TINT_STRENGTH = 1.68, 0.2
+# Sands painted half over dark rock, where the paler tint stood in for the rock: the cover came out ~40% lighter and
+# greyer than the shore beside it ("lake kumuya sand is a bit off color", the user, 2026-10-13; the panel there: BT_SandA
+# 0.56 over BT_DarkRockA 0.44, MCCV neutral). Their tint is the texture's own average, lightly: the part of the ground
+# that isn't sand fills with ~0.6 x that, near the rock, and the sand itself barely pales.
+NATIVE_TINT_STRENGTH = 0.05
+NATIVE_TINT = {t.lower() for t in (r"Tileset\Expansion02\BoreanTundra\BT_SandA.blp",
+                                   r"Tileset\Expansion02\BoreanTundra\BT_SandC.blp",
+                                   r"Tileset\Expansion02\BoreanTundra\BT_SandE.blp")}
 
 # Texture, its average colour (0xRRGGBB, measured), material ID, selector ID (None: the row exists),
 # cover row ID, depth (I: the parent's), parent.
@@ -116,8 +124,8 @@ def own_flags(parent):
     return PREVENT_UNDERWATER | (RIPPLE_PRINTS | USE_VERTEX_COLOR if parent in (SAND, MUD) else 0)
 
 
-def tint_of(average):
-    return sum(min(255, round(((average >> shift) & 0xFF) * TINT_GAIN)) << shift for shift in (16, 8, 0))
+def tint_of(average, gain=TINT_GAIN):
+    return sum(min(255, round(((average >> shift) & 0xFF) * gain)) << shift for shift in (16, 8, 0))
 
 
 def material(id, name, parent=0):
@@ -197,8 +205,9 @@ def main() -> None:
         elif not any(s[7] == material_id and s[3].lower() == texture.lower() for s in selectors):
             raise SystemExit(f"{paths['GroundMaterialSelector']}: no selector row puts material {material_id} on {texture}")
         # Depth (and with it Flags) where it differs from the parent; everything else from the parent.
-        changed += upsert(covers, cover(cover_id, material_id, depth=depth, tint_color=tint_of(average),
-                                        tint_strength=TINT_STRENGTH / 2 if parent == MUD else TINT_STRENGTH,
+        native = texture.lower() in NATIVE_TINT
+        changed += upsert(covers, cover(cover_id, material_id, depth=depth, tint_color=tint_of(average, 1.0 if native else TINT_GAIN),
+                                        tint_strength=NATIVE_TINT_STRENGTH if native else TINT_STRENGTH / 2 if parent == MUD else TINT_STRENGTH,
                                         cover_texture=texture,
                                         flags=own_flags(parent) if depth != I else 0), io.SURFACE_COVER)
 
