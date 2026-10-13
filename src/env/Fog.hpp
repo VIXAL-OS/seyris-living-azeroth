@@ -100,7 +100,8 @@ namespace wxl_livingazeroth::fog
         bool  valid = false;
         float airNow = 0.0f, airHourAgo = 0.0f, water = 0.0f; // degC
         float cooling = 0.0f;                                 // 0..1 (2.5 degC an hour = 1)
-        float humidity = 0.0f, fogginess = 0.0f, night = 0.0f;
+        float humidity = 0.0f, fogginess = 0.0f, night = 0.0f; // humidity with the rain-wet air in it
+        float wetAir = 0.0f;                                    // 0..1: how wet rain has made the air (dries over ~25 min)
         float wind = 0.0f, windDirX = 1.0f, windDirY = 0.0f; // the area's steady wind at the ground (not the player's lee)
         int   weatherType = 0;
         float precipitation = 0.0f, rain = 0.0f, snow = 0.0f;

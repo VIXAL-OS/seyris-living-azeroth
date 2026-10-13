@@ -99,7 +99,7 @@ namespace wxl_livingazeroth::debug
                 const fog::RulesInputs& in = fog::Inputs();
                 std::snprintf(line, sizeof(line), "air %.1f degC (an hour ago %.1f, cooling %.2f)", in.airNow, in.airHourAgo, in.cooling);
                 g_api->UiText(line);
-                std::snprintf(line, sizeof(line), "water %.1f degC, humidity %.2f, fogginess %.2f (AreaClimate)", in.water, in.humidity, in.fogginess);
+                std::snprintf(line, sizeof(line), "water %.1f degC, humidity %.2f (rain-wet air %.2f), fogginess %.2f (AreaClimate)", in.water, in.humidity, in.wetAir, in.fogginess);
                 g_api->UiText(line);
                 std::snprintf(line, sizeof(line), "wind %.2f, night %.2f, rain %.2f, snow %.2f", in.wind, in.night, in.rain, in.snow);
                 g_api->UiText(line);
