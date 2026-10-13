@@ -75,12 +75,14 @@ namespace wxl_livingazeroth::groundfog
         // The sky over it clears and clouds over ("could we make the cloud deck weather-based, like the fog? so sometimes
         // there'd be clear nights where you'd see the stars", the user, 2026-10-13): overcast in rain or snow, otherwise
         // by spells of the clock (kSkySpellHours apart, different in each zone, the same for everyone: UTC). As it clears,
-        // gaps open in the deck until only the cloud clinging to slopes and buildings is left (within kClingYards of
-        // them, along the view).
+        // the deck breaks into banks with clear sky between, which shrink until none are left; a faint veil clings to the
+        // slopes and buildings in its heights (the last kClingYards of the view before them) as the sky clears.
         constexpr double kSkySpellHours = 1.5;
         constexpr float  kSkyEaseSeconds = 20.0f;
-        constexpr float  kClingYards = 150.0f;
-        constexpr float  kClearShift = 0.4f;       // how far the coverage threshold rises from overcast to clear
+        constexpr float  kClingYards = 120.0f;
+        // The cling veil's density, as a share of the deck's, under a clear sky (none overcast). The whole deck's density
+        // along the last 150 yd plastered the buildings ("a bit TOO stuck to the buildings", the user, 2026-10-13).
+        constexpr float  kClingShare = 0.35f;
         struct DeckState
         {
             float base = 0.0f, top = 0.0f, density = 0.0f; float color[3] = { 1.0f, 1.0f, 1.0f };
@@ -520,7 +522,7 @@ float4 cNoise  : register(c10); // xyz = drift offset (the fog's tiles)
 float4 cUv     : register(c12); // depth texture uv = xy + uv * zw
 float4 cDeck      : register(c21); // x = its base (world z), y = its top, z = density per yd, w = its range (yd)
 float4 cDeckColor : register(c22); // rgb = its colour, w = 1 / its noise tile (yd)
-float4 cDeckSky   : register(c23); // x = how much the sky has cleared (the coverage threshold's rise), y = 1 / the clinging cloud's reach (yd)
+float4 cDeckSky   : register(c23); // x = the banks' threshold (0.2 overcast .. 0.8 clear), y = the cling veil's reach (yd), z = its share of the density
 
 float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
 {
@@ -576,16 +578,29 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
         float3 q2 = float3(q.x * 0.8 - q.y * 0.6, q.x * 0.6 + q.y * 0.8, q.z) * 2.3 + 0.41;
         float n = tex3Dlod(noiseTex, float4(q, lod)).r * 0.6 + tex3Dlod(noiseTex, float4(q2, min(lod + 1.2, 3))).r * 0.4;
         // Puffy: cloud masses with soft but defined edges and clear gaps (a linear ramp gave grey veils everywhere).
-        // As the sky clears the threshold rises: the gaps widen until only wisps are left; the cloud over the last of
-        // the ray before a slope or a building (it clings to them) stays whatever the sky.
-        float puff = smoothstep(0.32, 0.56, n);
-        float cover = smoothstep(0.32 + cDeckSky.x, 0.56 + cDeckSky.x, n);
-        float cling = saturate(1 - (surf - t) * cDeckSky.y) * puff;
-        float sigma = cDeck.z * shape * max(cover, cling);
+        // A broken sky: the deck lies in banks a few hundred yd across with clear sky between (a 2400 yd noise against
+        // the sky's clearness), which shrink and part as it clears. (Raising the puffs' own threshold left sparse small
+        // puffs, which the steps met at random: grain.)
+        float m = tex3Dlod(noiseTex, float4(p.xy * (cDeckColor.w * 0.25) + cNoise.xy * 0.08, 0.37, 0)).r;
+        float bank = smoothstep(cDeckSky.x - 0.12, cDeckSky.x + 0.12, m);
+        float sigma = cDeck.z * shape * smoothstep(0.32, 0.56, n) * bank;
         float a = 1 - exp(-sigma * ds);
         lit += T * a * (0.85 + 0.25 * saturate((p.z - cDeck.x) / thick));
         T *= 1 - a;
         if (T < 0.01) break;
+    }
+    // The veil clinging to the slopes and buildings in the deck's heights, behind the banks: over the last cDeckSky.y yd
+    // of the ray before them, once per pixel from the middle of that stretch (smooth across a surface, no grain).
+    [branch] if (cDeckSky.z > 0 && surf < 1e8 && T >= 0.01)
+    {
+        float L = min(cDeckSky.y, surf);
+        float3 pm = cCam.xyz + dir * (surf - 0.5 * L);
+        float wobm = (tex3Dlod(noiseTex, float4(pm.xy * cDeckColor.w * 0.6, 0.71, 0)).r - 0.5) * 2 * kWobble;
+        float shapem = saturate((pm.z - (cDeck.x + wobm)) / edge) * saturate((cDeck.y - pm.z) / edge);
+        float nm = tex3Dlod(noiseTex, float4(float3(pm.xy, pm.z * 1.6) * cDeckColor.w + cNoise.xyz * 0.32, 0)).r;
+        float a = 1 - exp(-cDeck.z * cDeckSky.z * shapem * smoothstep(0.32, 0.56, nm) * L);
+        lit += T * a * (0.85 + 0.25 * saturate((pm.z - cDeck.x) / thick));
+        T *= 1 - a;
     }
     return float4(lit * cDeckColor.rgb, T);
 }
@@ -1752,7 +1767,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_settings.probe ? 1.0f : 0.0f, static_cast<float>(vp.Width), static_cast<float>(vp.Height), 0.0f,
                 g_deck.base, g_deck.top, g_deck.density * (1.0f - (interior > 0.0f ? interior : 0.0f)), std::fmax(g_settings.cloudDeckRange, 100.0f),
                 g_deck.color[0], g_deck.color[1], g_deck.color[2], 1.0f / kDeckTileYards,
-                (1.0f - g_deck.cover) * kClearShift, 1.0f / kClingYards, 0.0f, 0.0f,
+                0.5f + (0.5f - g_deck.cover) * 0.6f, kClingYards, kClingShare * (1.0f - g_deck.cover), 0.0f,
             };
 
             // Everything the pass changes goes back through the state block, so the client's own cache
