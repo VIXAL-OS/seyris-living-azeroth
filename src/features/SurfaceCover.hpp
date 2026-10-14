@@ -48,7 +48,7 @@ namespace wxl_livingazeroth::cover
     /// lights::kMaxLights (the nearest to the camera kept).
     void PatchLightStats(unsigned& most, unsigned& full);
     /// The terrain's ambient and sun/moon (diffuse) light as the cover last read them from the terrain's shader (this
-    /// frame or the last one it drew in); false when not seen (no cover drawn). The cloud deck is lit with them.
+    /// frame or the last one it drew in, up to two minutes ago); false when not seen. The cloud deck is lit with them.
     bool TerrainLight(float ambient[3], float diffuse[3]);
 
     /// Whether the client's footprints go on top of the cover now (features/CoverPrints): the setting is

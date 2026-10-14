@@ -87,7 +87,10 @@ namespace wxl_livingazeroth::groundfog
         {
             float base = 0.0f, top = 0.0f, density = 0.0f; float color[3] = { 1.0f, 1.0f, 1.0f };
             float cover = 1.0f; const char* coverWhy = "";
+            const char* colorWhy = "";
         };
+        // The deck's colour never goes below this: a cloud ceiling under the moon is dim blue-grey, not black.
+        constexpr float kDeckNightFloor[3] = { 0.16f, 0.18f, 0.24f };
         DeckState g_deck;
 
         // GPU resources (D3DPOOL_MANAGED: they survive a reset; dropped when the device changes).
@@ -1577,11 +1580,19 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             // night the fog colour is near black and the clouds came out muddy grey over the moonlit snow ("the clouds
             // look muddy and gray lol", the user, 2026-10-13).
             float ambient[3], diffuse[3];
+            g_deck.colorWhy = "its fog colour";
             if (cover::TerrainLight(ambient, diffuse))
             {
                 constexpr float kTint[3] = { 0.95f, 0.97f, 1.0f };
-                for (int i = 0; i < 3; ++i) c[i] = std::fmax(c[i], (ambient[i] + 0.9f * diffuse[i]) * kTint[i]);
+                float lit[3];
+                for (int i = 0; i < 3; ++i) lit[i] = (ambient[i] + 0.9f * diffuse[i]) * kTint[i];
+                if (lit[0] + lit[1] + lit[2] > c[0] + c[1] + c[2]) g_deck.colorWhy = "lit like the terrain";
+                for (int i = 0; i < 3; ++i) c[i] = std::fmax(c[i], lit[i]);
             }
+            // Never black: where the cover hasn't read the terrain's light, the night fog colour is near black ("the sky
+            // is black now. halp", the user, 2026-10-13).
+            if (c[0] < kDeckNightFloor[0] && c[1] < kDeckNightFloor[1] && c[2] < kDeckNightFloor[2]) g_deck.colorWhy = "the night floor";
+            for (int i = 0; i < 3; ++i) c[i] = std::fmax(c[i], kDeckNightFloor[i]);
             for (int i = 0; i < 3; ++i) g_deck.color[i] += (c[i] - g_deck.color[i]) * k;
         }
 
@@ -2091,7 +2102,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f)%s", g_deck.base, g_deck.top,
                               g_deck.density, world::Current().playerPos[2], g_psDeck ? "" : " -- its shader failed (see the log)");
                 g_api->UiText(line);
-                std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s)", g_deck.cover * 100.0f, g_deck.coverWhy);
+                std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s); colour %.2f %.2f %.2f (%s)", g_deck.cover * 100.0f,
+                              g_deck.coverWhy, g_deck.color[0], g_deck.color[1], g_deck.color[2], g_deck.colorWhy);
             }
             else
                 std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");

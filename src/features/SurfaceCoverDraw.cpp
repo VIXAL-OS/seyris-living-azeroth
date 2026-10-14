@@ -86,6 +86,8 @@ namespace wxl_livingazeroth::cover::detail
     bool  g_shadowUsed = false;
     int   g_shadowMode = 0;
     bool  g_seenScene = false;
+    float g_lastLight[6] = {};       // ambient, diffuse as last read (the cloud deck's light; kept when the cover stops drawing)
+    unsigned long long g_lastLightTick = 0; // when (0: never)
 
     // The client's terrain shadow mode, as its own 0x00873FF0 computes it: 0 when shadows are off (0x00B1D51C),
     // else extShadowQuality (0x00D43154) through the table at 0x00B1D554. Read every frame: Adaptive FPS changes
@@ -356,6 +358,8 @@ namespace wxl_livingazeroth::cover::detail
             dev->GetVertexShaderConstantF(24, g_seenLight, 4);
             dev->GetPixelShaderConstantF(2, g_seenFogColor, 1);
             g_seenScene = true;
+            for (int i = 0; i < 3; ++i) { g_lastLight[i] = g_seenLight[4 + i]; g_lastLight[3 + i] = g_seenLight[8 + i]; }
+            g_lastLightTick = GetTickCount64();
         }
 
         // The terrain's dynamic shadows (its Terrain2/3 shaders): shadow matrices VS c37..c48, PCF

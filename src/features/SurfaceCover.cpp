@@ -133,8 +133,11 @@ namespace wxl_livingazeroth::cover
     void PatchLightStats(unsigned& most, unsigned& full) { most = g_patchLightsMost; full = g_patchLightsFull; }
     bool TerrainLight(float ambient[3], float diffuse[3])
     {
-        if (!g_seenScene) return false;
-        for (int i = 0; i < 3; ++i) { ambient[i] = g_seenLight[4 + i]; diffuse[i] = g_seenLight[8 + i]; }
+        // As last read, up to two minutes ago: the cover reads it only while it draws (none where there's no cover
+        // around, or high in the air), and the light changes slowly.
+        constexpr unsigned long long kKeepMs = 120000;
+        if (g_lastLightTick == 0 || GetTickCount64() - g_lastLightTick > kKeepMs) return false;
+        for (int i = 0; i < 3; ++i) { ambient[i] = g_lastLight[i]; diffuse[i] = g_lastLight[3 + i]; }
         return ambient[0] + ambient[1] + ambient[2] + diffuse[0] + diffuse[1] + diffuse[2] > 0.0f;
     }
 

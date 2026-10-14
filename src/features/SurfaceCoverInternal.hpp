@@ -290,6 +290,8 @@ namespace wxl_livingazeroth::cover::detail
     extern bool  g_shadowBound[4];
     extern bool  g_shadowUsed;
     extern bool  g_seenScene;
+    extern float g_lastLight[6];        // ambient, diffuse as last read, kept when the cover stops drawing
+    extern unsigned long long g_lastLightTick; // GetTickCount64 when (0: never)
     extern unsigned g_patchLightsMost, g_patchLightsFull; // last frame: the busiest patch; patches over kMaxLights
     extern double g_uploadMs, g_drawMs;
     extern const char* g_inactive;
