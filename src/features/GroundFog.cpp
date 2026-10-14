@@ -24,6 +24,7 @@
 #include <d3d9.h>
 #include <d3dcompiler.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -108,6 +109,10 @@ namespace wxl_livingazeroth::groundfog
             float cover = 1.0f; const char* coverWhy = "";
             const char* colorWhy = "";
         };
+        // Lights in the deck (torches, braziers): up to kDeckLights of the light list, each glowing in the cloud around
+        // it (kDeckLightGlow: its colour x the cloud's density there x this, in yd: a halo of ~0.25 at 2 yd from a torch).
+        constexpr int   kDeckLights = 4;
+        constexpr float kDeckLightGlow = 70.0f;
         // The deck's colour never goes below this: a cloud ceiling under the moon is blue-grey, not black. (0.16, 0.18,
         // 0.24, a third of the terrain's night light, read as black against the stars.)
         constexpr float kDeckNightFloor[3] = { 0.30f, 0.34f, 0.45f };
@@ -129,6 +134,9 @@ namespace wxl_livingazeroth::groundfog
         float                    g_lastConst[24 * 4] = {};
         bool                     g_haveLastConst = false;
         unsigned                 g_glowDraws = 0;
+        int                      g_deckLightsUsed = 0;   // lights glowing in the deck at its last draw
+        IDirect3DTexture9*       g_brightTex = nullptr;  // half size: what's brighter than the deck and far enough away
+        IDirect3DPixelShader9*   g_psBright = nullptr;
         UINT                     g_halfW = 0, g_halfH = 0;
         bool                     g_halfFailed = false;  // couldn't make the target: full resolution
         IDirect3DTexture9*       g_field = nullptr;
@@ -556,6 +564,7 @@ float4 cUv     : register(c12); // depth texture uv = xy + uv * zw
 float4 cDeck      : register(c21); // x = its base (world z), y = its top, z = density per yd, w = its range (yd)
 float4 cDeckColor : register(c22); // rgb = its colour, w = 1 / its noise tile (yd)
 float4 cDeckSky   : register(c23); // x = the banks' threshold (0.2 overcast .. 0.8 clear), y = the cling veil's reach (yd), z = its share of the density
+float4 cLight[8]  : register(c27); // up to 4 lights in the cloud: [2k] = world position, [2k + 1].rgb = colour x the cloud's density there x strength
 
 float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
 {
@@ -635,13 +644,53 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
         lit += T * a * (0.85 + 0.25 * saturate((pm.z - cDeck.x) / thick));
         T *= 1 - a;
     }
-    return float4(lit * cDeckColor.rgb, T);
+    // Lights in the cloud (torches, braziers, lamps on the peaks): their glow in it, a point light's in-scattering
+    // along the ray in closed form, the integral of dt / (h^2 + (t - t0)^2) from ta to tb = (atan((tb - t0) / h) -
+    // atan((ta - t0) / h)) / h (h: the light's distance from the ray, t0: where the ray passes it), dimmed by the
+    // cloud between the camera and the light.
+    float3 glow = 0;
+    [unroll] for (int i = 0; i < 4; ++i)
+    {
+        float3 col = cLight[2 * i + 1].rgb;
+        [branch] if (col.r + col.g + col.b > 0)
+        {
+            float3 rel = cLight[2 * i].xyz - cCam.xyz;
+            float t0 = dot(rel, dir);
+            float h = max(length(rel - dir * t0), 1.5);
+            glow += col * (atan((tb - t0) / h) - atan((ta - t0) / h)) / h * exp(-cDeck.z * 0.55 * max(t0 - ta, 0));
+        }
+    }
+    return float4(lit * cDeckColor.rgb + glow, T);
 }
 )";
 
         // The deck's glow (additive, at the end of the world frame): a soft halo of what's brighter than the deck's own
         // colour in the frame (copied down to 1/16), as much as the pixel looks through the deck (its slab out to the
         // deck's range, analytic: no depth, so what stands in front of a flash is lit by it too).
+        // The glow's source (half size): what's brighter than the deck's colour, from beyond cGlow2.y yd (fading in over
+        // cGlow2.z yd) or the sky. A lit drake's wings are as bright as a flash in an 8-bit frame; they're near.
+        const char* const kBrightHlsl = R"(
+sampler2D depthTex : register(s0);
+sampler2D colorTex : register(s11);
+float4 cDepth  : register(c0);  // x = viewport min z, y = 1 / (max z - min z), z = deepest world depth
+float4 cProj2  : register(c2);  // projection m22, m32, -, depth decode switch
+float4 cDeckColor : register(c22);
+float4 cGlow  : register(c24); // z = how much brighter than the deck a thing must be
+float4 cGlow2 : register(c25); // y = nearest it may be (yd), z = over how many yd it fades in
+
+float4 main(float2 uv : TEXCOORD0) : COLOR
+{
+    float3 over = max(tex2Dlod(colorTex, float4(uv, 0, 0)).rgb - cDeckColor.rgb * cGlow.z, 0);
+    [branch] if (over.r + over.g + over.b <= 0) return float4(0, 0, 0, 1);
+    float d = tex2Dlod(depthTex, float4(uv, 0, 0)).r;
+    float d01 = saturate((d - cDepth.x) * cDepth.y);
+    float ndcZ = cProj2.w > 0.5 ? d01 : d01 * 2 - 1;
+    float viewZ = abs(cProj2.y / min(ndcZ - cProj2.x, -1e-6));
+    float far = d > cDepth.z ? 1 : saturate((viewZ - cGlow2.y) / cGlow2.z);
+    return float4(over * far, 1);
+}
+)";
+
         const char* const kGlowHlsl = R"(
 sampler2D smallTex : register(s10);
 float4 cProj   : register(c1);  // projection m00, m11, m20, m21
@@ -652,7 +701,7 @@ float4 cInv2   : register(c5);
 float4 cCam    : register(c6);  // xyz = the camera
 float4 cDeck      : register(c21); // x = its base, y = its top, z = density per yd, w = its range (yd)
 float4 cDeckColor : register(c22); // rgb = its colour
-float4 cGlow  : register(c24); // xy = one texel of the small copy (uv), z = how much brighter than the deck a thing must be, w = strength
+float4 cGlow  : register(c24); // xy = one texel of the small copy (uv), w = strength
 float4 cGlow2 : register(c25); // x = the deck's mean extinction per yd (density x coverage x how overcast)
 float4 cGlowUv: register(c26); // the small copy's uv = xy + uv * zw
 
@@ -675,12 +724,11 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
     float op = 1 - exp(-cGlow2.x * L);
     [branch] if (op < 0.02) return float4(0, 0, 0, 0);
     float2 suv = cGlowUv.xy + uv * cGlowUv.zw;
-    float3 lim = cDeckColor.rgb * cGlow.z;
-    float3 g = max(tex2Dlod(smallTex, float4(suv, 0, 0)).rgb - lim, 0) * 0.2;
+    float3 g = tex2Dlod(smallTex, float4(suv, 0, 0)).rgb * 0.2;  // (already only what's bright and far: kBrightHlsl)
     [unroll] for (int k = 0; k < 8; ++k)
     {
-        g += max(tex2Dlod(smallTex, float4(suv + kRing[k] * 2.5 * cGlow.xy, 0, 0)).rgb - lim, 0) * 0.06;
-        g += max(tex2Dlod(smallTex, float4(suv + kRing[k].yx * float2(1, -1) * 6.0 * cGlow.xy, 0, 0)).rgb - lim, 0) * 0.04;
+        g += tex2Dlod(smallTex, float4(suv + kRing[k] * 2.5 * cGlow.xy, 0, 0)).rgb * 0.06;
+        g += tex2Dlod(smallTex, float4(suv + kRing[k].yx * float2(1, -1) * 6.0 * cGlow.xy, 0, 0)).rgb * 0.04;
     }
     return float4(g * op * cGlow.w, 0);
 }
@@ -763,6 +811,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_halfTex) { g_halfTex->Release(); g_halfTex = nullptr; }
             g_halfFailed = false;
             if (g_psGlow) { g_psGlow->Release(); g_psGlow = nullptr; }
+            if (g_psBright) { g_psBright->Release(); g_psBright = nullptr; }
+            if (g_brightTex) { g_brightTex->Release(); g_brightTex = nullptr; }
             for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
             g_glowW = g_glowH = 0;
             g_glowFailed = false;
@@ -1720,6 +1770,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_psUpscale = g_ps ? Compile(dev, kUpscaleHlsl) : nullptr;
                 g_psDeck = g_ps ? Compile(dev, kDeckHlsl) : nullptr;
                 g_psGlow = g_ps ? Compile(dev, kGlowHlsl) : nullptr;
+                g_psBright = g_ps ? Compile(dev, kBrightHlsl) : nullptr;
                 g_shaderFailed = !g_ps;
             }
             if (!g_ps) { g_inactive = "the fog shader failed to compile (see the log)"; return; }
@@ -1988,6 +2039,42 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             const bool deckOn = g_psDeck && g_deck.density > 0.0f;
             const bool deckInFront = deckOn && cam[2] > g_deck.top;
             g_deckDrewInside = deckOn; // (any camera: from below or above, the storm clouds are in the deck too)
+            // The lights glowing in the deck: the brightest for their distance, outdoors, within its heights.
+            if (deckOn)
+            {
+                float lightConst[kDeckLights * 8] = {};
+                struct Pick { float score; const lights::ActiveLight* l; float sigma; };
+                Pick picks[kDeckLights] = {};
+                const float thick = std::fmax(g_deck.top - g_deck.base, 1.0f), edge = std::fmin(thick * 0.25f, 100.0f);
+                for (const lights::ActiveLight& l : lights::Active())
+                {
+                    if (l.indoor) continue;
+                    const float z = l.pos[2];
+                    const float shape = std::clamp((z - (g_deck.base - 60.0f)) / edge, 0.0f, 1.0f) * std::clamp((g_deck.top - z) / edge, 0.0f, 1.0f);
+                    if (shape <= 0.0f) continue;
+                    const float dx = l.pos[0] - cam[0], dy = l.pos[1] - cam[1], dz = z - cam[2];
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 > 400.0f * 400.0f) continue;
+                    const float sigma = g_deck.density * 0.55f * (0.3f + 0.7f * g_deck.cover) * shape;
+                    const float score = (l.color[0] + l.color[1] + l.color[2]) * sigma / std::fmax(d2, 100.0f);
+                    int worst = 0;
+                    for (int k = 1; k < kDeckLights; ++k) if (picks[k].score < picks[worst].score) worst = k;
+                    if (score > picks[worst].score) picks[worst] = { score, &l, sigma };
+                }
+                int n = 0;
+                for (const Pick& p : picks)
+                {
+                    if (!p.l) continue;
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        lightConst[n * 8 + i] = p.l->pos[i];
+                        lightConst[n * 8 + 4 + i] = p.l->color[i] * p.sigma * kDeckLightGlow * g_settings.cloudDeckGlow;
+                    }
+                    ++n;
+                }
+                g_deckLightsUsed = n;
+                dev->SetPixelShaderConstantF(27, lightConst, kDeckLights * 2);
+            }
             auto drawDeck = [&](IDirect3DPixelShader9* restore) {
                 dev->SetPixelShader(g_psDeck);
                 drawQuad(static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width), static_cast<float>(vp.Height), 1.0f, 1.0f);
@@ -2135,7 +2222,10 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         void DrawGlow()
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
-            if (!dev || dev != g_device || !g_psGlow || !g_haveLastConst || g_glowFailed) return;
+            if (!dev || dev != g_device || !g_psGlow || !g_psBright || !g_haveLastConst || g_glowFailed) return;
+            // The depth, readable now (the world's targets are still bound).
+            if (!depth::Refresh(dev) || !depth::Texture()) return;
+            auto* depthTex = static_cast<IDirect3DTexture9*>(depth::Texture());
             IDirect3DSurface9* screen = nullptr;
             if (FAILED(dev->GetRenderTarget(0, &screen)) || !screen) return;
             D3DSURFACE_DESC sd{};
@@ -2143,7 +2233,17 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (sd.Width != g_glowW || sd.Height != g_glowH)
             {
                 for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
+                if (g_brightTex) { g_brightTex->Release(); g_brightTex = nullptr; }
                 g_glowW = sd.Width; g_glowH = sd.Height;
+                if (FAILED(dev->CreateTexture(std::max(1u, sd.Width >> 1), std::max(1u, sd.Height >> 1), 1, D3DUSAGE_RENDERTARGET, sd.Format,
+                                              D3DPOOL_DEFAULT, &g_brightTex, nullptr)))
+                {
+                    g_brightTex = nullptr;
+                    g_glowFailed = true;
+                    g_api->Log(WXL_LOG_WARN, kTag, "cloud deck glow: couldn't create its half-size source; the glow stays off.");
+                    screen->Release();
+                    return;
+                }
                 for (int k = 0; k < kGlowLevels; ++k)
                 {
                     const UINT w = std::max(1u, sd.Width >> k), h = std::max(1u, sd.Height >> k);
@@ -2165,11 +2265,13 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 screen->Release();
                 return;
             }
-            // Down in 2x steps (each a box filter of the one above).
+            D3DVIEWPORT9 vp{};
+            dev->GetViewport(&vp);
+            // Down to half size (a full-size resolve first for a multisampled frame).
             IDirect3DSurface9* from = screen;
             from->AddRef();
             bool ok = true;
-            for (int k = 0; k < kGlowLevels && ok; ++k)
+            for (int k = 0; k < 2 && ok; ++k)
             {
                 if (!g_glowTex[k]) continue;
                 IDirect3DSurface9* to = nullptr;
@@ -2179,40 +2281,89 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 from = to;
             }
             if (from) from->Release();
-            screen->Release();
-            if (!ok) return;
+            if (!ok) { screen->Release(); return; }
 
-            D3DVIEWPORT9 vp{};
-            dev->GetViewport(&vp);
             IDirect3DStateBlock9* saved = nullptr;
-            if (FAILED(dev->CreateStateBlock(D3DSBT_ALL, &saved)) || !saved) return;
-            dev->SetRenderState(D3DRS_ZENABLE, FALSE);
-            dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
-            dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
-            dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
-            dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-            dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
-            dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
-            dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
-            dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
-            dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
-            dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-            dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-            dev->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
-            dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0x07);
-            dev->SetVertexShader(nullptr);
-            dev->SetPixelShader(g_psGlow);
-            dev->SetPixelShaderConstantF(0, g_lastConst, kConstRegs);
+            if (FAILED(dev->CreateStateBlock(D3DSBT_ALL, &saved)) || !saved) { screen->Release(); return; }
             const UINT sw = std::max(1u, g_glowW >> (kGlowLevels - 1)), sh = std::max(1u, g_glowH >> (kGlowLevels - 1));
             // Through the deck at its mean coverage (~0.55), as much as the sky is overcast (its banks).
             const float extinction = g_lastConst[21 * 4 + 2] * 0.55f * (0.3f + 0.7f * g_deck.cover);
             const float glow[12] = {
                 1.0f / sw, 1.0f / sh, 1.15f, 1.5f * g_settings.cloudDeckGlow,
-                extinction, 0.0f, 0.0f, 0.0f,
+                extinction, 60.0f, 30.0f, 0.0f,
                 static_cast<float>(vp.X) / g_glowW, static_cast<float>(vp.Y) / g_glowH,
                 static_cast<float>(vp.Width) / g_glowW, static_cast<float>(vp.Height) / g_glowH,
             };
+            struct Vtx { float x, y, z, rhw, u, v; };
+            dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+            dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+            dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+            dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+            dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+            dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+            dev->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+            dev->SetVertexShader(nullptr);
+            dev->SetPixelShaderConstantF(0, g_lastConst, kConstRegs);
             dev->SetPixelShaderConstantF(24, glow, 3);
+            for (DWORD s : { 0u, 11u })
+            {
+                dev->SetSamplerState(s, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+                dev->SetSamplerState(s, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+                dev->SetSamplerState(s, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+                dev->SetSamplerState(s, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+                dev->SetSamplerState(s, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+                dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, FALSE);
+            }
+
+            // The source: what's bright and far, at half size (no depth surface bound: the depth is read, not tested).
+            IDirect3DSurface9* depthNow = nullptr;
+            dev->GetDepthStencilSurface(&depthNow);
+            IDirect3DSurface9* bright = nullptr;
+            ok = SUCCEEDED(g_brightTex->GetSurfaceLevel(0, &bright)) && bright;
+            if (ok)
+            {
+                dev->SetRenderTarget(0, bright);
+                dev->SetDepthStencilSurface(nullptr);
+                const UINT hw = std::max(1u, g_glowW >> 1), hh = std::max(1u, g_glowH >> 1);
+                const D3DVIEWPORT9 hv = { 0, 0, hw, hh, 0.0f, 1.0f };
+                dev->SetViewport(&hv);
+                dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+                dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0x0F);
+                dev->SetPixelShader(g_psBright);
+                dev->SetTexture(0, depthTex);
+                dev->SetTexture(11, g_glowTex[1]);
+                const float bx1 = hw - 0.5f, by1 = hh - 0.5f;
+                const Vtx bq[4] = { { -0.5f, -0.5f, 0, 1, 0, 0 }, { bx1, -0.5f, 0, 1, 1, 0 }, { -0.5f, by1, 0, 1, 0, 1 }, { bx1, by1, 0, 1, 1, 1 } };
+                dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bq, sizeof(Vtx));
+                dev->SetTexture(0, nullptr);
+                dev->SetTexture(11, nullptr);
+                dev->SetRenderTarget(0, screen); // (resets the viewport: put the world's back)
+                dev->SetDepthStencilSurface(depthNow);
+                dev->SetViewport(&vp);
+            }
+            if (depthNow) depthNow->Release();
+            screen->Release();
+            // Then down to 1/16 (each a box filter of the one above).
+            from = bright;
+            for (int k = 2; k < kGlowLevels && ok; ++k)
+            {
+                IDirect3DSurface9* to = nullptr;
+                ok = SUCCEEDED(g_glowTex[k]->GetSurfaceLevel(0, &to)) && to && SUCCEEDED(dev->StretchRect(from, nullptr, to, nullptr, D3DTEXF_LINEAR));
+                if (from) from->Release();
+                from = to;
+            }
+            if (from) from->Release();
+            if (!ok) { saved->Apply(); saved->Release(); return; }
+            // The halo, added over the frame.
+            dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+            dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+            dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+            dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+            dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+            dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0x07);
+            dev->SetPixelShader(g_psGlow);
             dev->SetTexture(10, g_glowTex[kGlowLevels - 1]);
             dev->SetSamplerState(10, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
             dev->SetSamplerState(10, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
@@ -2220,10 +2371,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             dev->SetSamplerState(10, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
             dev->SetSamplerState(10, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
             dev->SetSamplerState(10, D3DSAMP_SRGBTEXTURE, FALSE);
-            struct Vtx { float x, y, z, rhw, u, v; };
             const float x0 = vp.X - 0.5f, y0 = vp.Y - 0.5f, x1 = x0 + vp.Width, y1 = y0 + vp.Height;
             const Vtx quad[4] = { { x0, y0, 0, 1, 0, 0 }, { x1, y0, 0, 1, 1, 0 }, { x0, y1, 0, 1, 0, 1 }, { x1, y1, 0, 1, 1, 1 } };
-            dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
             dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Vtx));
             dev->SetTexture(10, nullptr);
             saved->Apply();
@@ -2368,7 +2517,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_settings.cloudDeckSky = byHand ? g_deck.cover : -1.0f;
             if (byHand) g_api->UiSliderFloat("deck sky: 0 clear .. 1 overcast##gfdecks", &g_settings.cloudDeckSky, 0.0f, 1.0f);
             g_api->UiCheckbox("in the deck, see-through models fog to the cloud's colour##gfdeckt", &g_settings.cloudDeckTint);
-            g_api->UiSliderFloat("deck glow around bright things (lightning, the moon)##gfdeckg", &g_settings.cloudDeckGlow, 0.0f, 3.0f);
+            g_api->UiSliderFloat("deck glow: lights in it, and lightning and the moon beyond 60 yd##gfdeckg", &g_settings.cloudDeckGlow, 0.0f, 3.0f);
             char line[200];
             if (g_deck.density > 0.0f)
             {
@@ -2378,8 +2527,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s); colour %.2f %.2f %.2f (%s)", g_deck.cover * 100.0f,
                               g_deck.coverWhy, g_deck.color[0], g_deck.color[1], g_deck.color[2], g_deck.colorWhy);
                 g_api->UiText(line);
-                std::snprintf(line, sizeof(line), "see-through draws after it: %u fogged to the cloud's colour, %u left (another fog colour)%s",
-                              g_tintedShown, g_tintOtherShown, g_hookedFrame ? "" : " -- no world frame hook: off");
+                std::snprintf(line, sizeof(line), "see-through draws after it: %u fogged to the cloud's colour, %u left (another fog colour)%s; lights glowing in it: %d",
+                              g_tintedShown, g_tintOtherShown, g_hookedFrame ? "" : " -- no world frame hook: off", g_deckLightsUsed);
             }
             else
                 std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");
@@ -2525,6 +2674,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         g_halfW = g_halfH = 0;
         g_halfFailed = false;
         for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
+        if (g_brightTex) { g_brightTex->Release(); g_brightTex = nullptr; }
         g_glowW = g_glowH = 0;
         g_glowFailed = false;
         ReleaseProbe();
