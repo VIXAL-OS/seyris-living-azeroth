@@ -303,7 +303,27 @@ namespace wxl_livingazeroth::cover::detail
         prof::Scope scope(prof::kOursCoverDraw);
         g_drawPatches = g_emptyLevels = 0;
         g_drawMs = 0;
-        if (!dev || !EnsureGpu(dev)) return;
+        if (!dev) return;
+        // The terrain's ambient and sun/moon light for the cloud deck (features/GroundFog), read here, right after the
+        // terrain stage, before anything below can return: where there's no cover to draw (flying high, looking at the
+        // sky) the deck still needs it ("still black clouds at certain angles", the user, 2026-10-13). Only plausible
+        // values (finite, 0..4, some ambient): if no terrain drew, the registers may hold another shader's.
+        if (inPass)
+        {
+            float light[12] = {};
+            if (SUCCEEDED(dev->GetVertexShaderConstantF(24, light, 3)))
+            {
+                bool ok = light[4] + light[5] + light[6] > 0.01f;
+                for (int i = 4; i < 11; ++i)
+                    if (i != 7 && !(std::isfinite(light[i]) && light[i] >= 0.0f && light[i] <= 4.0f)) ok = false;
+                if (ok)
+                {
+                    for (int i = 0; i < 3; ++i) { g_lastLight[i] = light[4 + i]; g_lastLight[3 + i] = light[8 + i]; }
+                    g_lastLightTick = GetTickCount64();
+                }
+            }
+        }
+        if (!EnsureGpu(dev)) return;
         const int levels = ActiveLevels();
         // Levels still filling a new place aren't drawn yet; the others are (near ones first).
         int drawn = 0, lastDrawn = -1;
@@ -358,8 +378,6 @@ namespace wxl_livingazeroth::cover::detail
             dev->GetVertexShaderConstantF(24, g_seenLight, 4);
             dev->GetPixelShaderConstantF(2, g_seenFogColor, 1);
             g_seenScene = true;
-            for (int i = 0; i < 3; ++i) { g_lastLight[i] = g_seenLight[4 + i]; g_lastLight[3 + i] = g_seenLight[8 + i]; }
-            g_lastLightTick = GetTickCount64();
         }
 
         // The terrain's dynamic shadows (its Terrain2/3 shaders): shadow matrices VS c37..c48, PCF

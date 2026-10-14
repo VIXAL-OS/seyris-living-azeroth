@@ -89,8 +89,9 @@ namespace wxl_livingazeroth::groundfog
             float cover = 1.0f; const char* coverWhy = "";
             const char* colorWhy = "";
         };
-        // The deck's colour never goes below this: a cloud ceiling under the moon is dim blue-grey, not black.
-        constexpr float kDeckNightFloor[3] = { 0.16f, 0.18f, 0.24f };
+        // The deck's colour never goes below this: a cloud ceiling under the moon is blue-grey, not black. (0.16, 0.18,
+        // 0.24, a third of the terrain's night light, read as black against the stars.)
+        constexpr float kDeckNightFloor[3] = { 0.30f, 0.34f, 0.45f };
         DeckState g_deck;
 
         // GPU resources (D3DPOOL_MANAGED: they survive a reset; dropped when the device changes).
@@ -1593,6 +1594,17 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             // is black now. halp", the user, 2026-10-13).
             if (c[0] < kDeckNightFloor[0] && c[1] < kDeckNightFloor[1] && c[2] < kDeckNightFloor[2]) g_deck.colorWhy = "the night floor";
             for (int i = 0; i < 3; ++i) c[i] = std::fmax(c[i], kDeckNightFloor[i]);
+            // Tinted toward the sky's own hue (the stock fog colour's, at its brightness kept: purple on a Storm Peaks
+            // night, "for reference the normal skybox is like, purple", the user, 2026-10-13), so the deck sits in the
+            // skybox's colours instead of grey-blue on purple.
+            {
+                const uint32_t argb = *reinterpret_cast<const uint32_t*>(kFogColor);
+                const float sky[3] = { ((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f, (argb & 0xFF) / 255.0f };
+                const float top = std::fmax(sky[0], std::fmax(sky[1], sky[2]));
+                constexpr float kSkyTint = 0.45f;
+                if (top > 0.02f)
+                    for (int i = 0; i < 3; ++i) c[i] *= 1.0f + kSkyTint * (sky[i] / top - 1.0f);
+            }
             for (int i = 0; i < 3; ++i) g_deck.color[i] += (c[i] - g_deck.color[i]) * k;
         }
 
