@@ -10,7 +10,8 @@ The shipped table leaves Fogginess unset everywhere, so no zone had any area fog
   0.3  Tirisfal Glades, Silverpine Forest, Zul'Drak, Deadwind Pass, Sholazar Basin
   0.2  Elwynn Forest, Eversong Woods
 A zone with a row already keeps its other fields, and its Fogginess too where the row sets one: upstream's tables
-(Morfium-G's, "the owner's tested tables", 2026-10-13) tune many of these zones themselves, and theirs win. The rest
+(Morfium-G's, "the owner's tested tables", 2026-10-13) tune many of these zones themselves, and theirs win -- except
+for the zones in OVERRIDE, where the user asked for something else. The rest
 get new rows (300..) that set Fogginess only, inheriting the rest (temperatures -1000, the others -1); 300 and up stays
 clear of upstream's IDs. Zone IDs: AreaTable.dbc (3.3.5a).
 Usage:  python add_foggy_zones.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
@@ -60,6 +61,9 @@ ZONES = [
     ("Elwynn Forest", 12, GENTLE, 336),
     ("Eversong Woods", 3430, GENTLE, 337),
 ]
+# Zones whose value here wins even over a row of upstream's own. Zangarmarsh: upstream's row 109 has it at 1.0, the top
+# of the scale ("very pretty but possibly too foggy lol", the user, 2026-10-14, flying over Umbrafen).
+OVERRIDE = {3521}
 FOGGINESS = 9  # column (ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment)
 
 
@@ -80,7 +84,8 @@ def main():
     for name, area, fog, new_id in ZONES:
         existing = next((r for r in rows if r[1] == AREA and r[2] == area), None)
         if existing:
-            if existing[FOGGINESS] < 0.0:  # unset: ours fills it; a value of its own (upstream's tuning) stays
+            # unset: ours fills it; a value of its own (upstream's tuning) stays, unless overridden
+            if (existing[FOGGINESS] < 0.0 or area in OVERRIDE) and abs(existing[FOGGINESS] - fog) > 1e-6:  # (as stored: float32)
                 existing[FOGGINESS] = fog
                 changed += 1
             continue
