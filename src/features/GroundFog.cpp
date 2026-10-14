@@ -668,7 +668,9 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
         // colour in the frame (copied down to 1/16), as much as the pixel looks through the deck (its slab out to the
         // deck's range, analytic: no depth, so what stands in front of a flash is lit by it too).
         // The glow's source (half size): what's brighter than the deck's colour, from beyond cGlow2.y yd (fading in over
-        // cGlow2.z yd) or the sky. A lit drake's wings are as bright as a flash in an 8-bit frame; they're near.
+        // cGlow2.z yd) or the sky. A lit drake's wings are as bright as a flash in an 8-bit frame; they're near. And only
+        // near-white light (a flash, the moon: luminance from 0.75, full at 0.95): Icecrown's bright cyan night sky made
+        // the whole view glow ("what the fuck happened to the fog here", the user, 2026-10-13).
         const char* const kBrightHlsl = R"(
 sampler2D depthTex : register(s0);
 sampler2D colorTex : register(s11);
@@ -680,7 +682,8 @@ float4 cGlow2 : register(c25); // y = nearest it may be (yd), z = over how many 
 
 float4 main(float2 uv : TEXCOORD0) : COLOR
 {
-    float3 over = max(tex2Dlod(colorTex, float4(uv, 0, 0)).rgb - cDeckColor.rgb * cGlow.z, 0);
+    float3 c = tex2Dlod(colorTex, float4(uv, 0, 0)).rgb;
+    float3 over = max(c - cDeckColor.rgb * cGlow.z, 0) * smoothstep(0.75, 0.95, dot(c, float3(0.2126, 0.7152, 0.0722)));
     [branch] if (over.r + over.g + over.b <= 0) return float4(0, 0, 0, 1);
     float d = tex2Dlod(depthTex, float4(uv, 0, 0)).r;
     float d01 = saturate((d - cDepth.x) * cDepth.y);
@@ -730,7 +733,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         g += tex2Dlod(smallTex, float4(suv + kRing[k] * 2.5 * cGlow.xy, 0, 0)).rgb * 0.06;
         g += tex2Dlod(smallTex, float4(suv + kRing[k].yx * float2(1, -1) * 6.0 * cGlow.xy, 0, 0)).rgb * 0.04;
     }
-    return float4(g * op * cGlow.w, 0);
+    // At most a soft lift: the halo never washes the view out.
+    return float4(min(g * op * cGlow.w, 0.3), 0);
 }
 )";
 
