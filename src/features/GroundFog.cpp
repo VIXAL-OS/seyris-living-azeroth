@@ -61,7 +61,7 @@ namespace wxl_livingazeroth::groundfog
         // See-through things drawn after the deck (Blizzard's own storm clouds at the Temple of Storms, effects) are
         // fogged by the client toward its own fog colour, near black at night, and came out as dark blobs in the white
         // cloud ("can we make the lightning at temple of storms not show black through the clouds", the user,
-        // 2026-10-13). While the camera is in the deck, from its draw to the end of the world frame (the window), the
+        // 2026-10-13). While the deck is drawn, from its draw to the end of the world frame (the window), the
         // client's pixel constant cache's c2 (the models' fog colour, core offsets/engine/Gx.hpp kPsConstCache) is
         // swapped for the deck's colour right before each draw that has the stock fog colour there (additive batches
         // fog to black and keep it), marked dirty so the draw's own flush uploads it; the stock value goes back at the
@@ -71,7 +71,7 @@ namespace wxl_livingazeroth::groundfog
         float    g_tintStock[3] = {};    // what it held before
         float    g_tintColour[3] = {};   // ours this frame
         unsigned g_tinted = 0, g_tintOther = 0, g_tintedShown = 0, g_tintOtherShown = 0; // draws this frame / last frame
-        bool     g_deckDrewInside = false; // set by Draw: the deck drawn with the camera inside it
+        bool     g_deckDrewInside = false; // set by Draw: the deck drawn this frame
         bool     g_hookedFrame = false;      // the world frame hook (closes the window); without it no tint
 
         int         g_liquidPass = -1;
@@ -119,6 +119,16 @@ namespace wxl_livingazeroth::groundfog
         IDirect3DPixelShader9*   g_psUpscale = nullptr; // half resolution: the depth-aware upscale
         IDirect3DPixelShader9*   g_psDeck = nullptr;    // the cloud deck (its own pass: the march's shader is at ps_3_0's register limit)
         IDirect3DTexture9*       g_halfTex = nullptr;   // half resolution: the march's target (D3DPOOL_DEFAULT: dropped on a reset)
+        // The deck's glow: the frame copied down in 2x steps to 1/16 (D3DPOOL_DEFAULT render targets; [0] is full size,
+        // for a multisampled frame), its shader, and the fog pass's constants of this frame (the glow runs at its end).
+        constexpr int            kGlowLevels = 5;
+        IDirect3DTexture9*       g_glowTex[kGlowLevels] = {};
+        UINT                     g_glowW = 0, g_glowH = 0;
+        bool                     g_glowFailed = false;
+        IDirect3DPixelShader9*   g_psGlow = nullptr;
+        float                    g_lastConst[24 * 4] = {};
+        bool                     g_haveLastConst = false;
+        unsigned                 g_glowDraws = 0;
         UINT                     g_halfW = 0, g_halfH = 0;
         bool                     g_halfFailed = false;  // couldn't make the target: full resolution
         IDirect3DTexture9*       g_field = nullptr;
@@ -629,6 +639,53 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
 }
 )";
 
+        // The deck's glow (additive, at the end of the world frame): a soft halo of what's brighter than the deck's own
+        // colour in the frame (copied down to 1/16), as much as the pixel looks through the deck (its slab out to the
+        // deck's range, analytic: no depth, so what stands in front of a flash is lit by it too).
+        const char* const kGlowHlsl = R"(
+sampler2D smallTex : register(s10);
+float4 cProj   : register(c1);  // projection m00, m11, m20, m21
+float4 cProj2  : register(c2);  // projection m22, m32
+float4 cInv0   : register(c3);  // inverse view rows
+float4 cInv1   : register(c4);
+float4 cInv2   : register(c5);
+float4 cCam    : register(c6);  // xyz = the camera
+float4 cDeck      : register(c21); // x = its base, y = its top, z = density per yd, w = its range (yd)
+float4 cDeckColor : register(c22); // rgb = its colour
+float4 cGlow  : register(c24); // xy = one texel of the small copy (uv), z = how much brighter than the deck a thing must be, w = strength
+float4 cGlow2 : register(c25); // x = the deck's mean extinction per yd (density x coverage x how overcast)
+float4 cGlowUv: register(c26); // the small copy's uv = xy + uv * zw
+
+static const float2 kRing[8] = { float2(1, 0), float2(0.7071, 0.7071), float2(0, 1), float2(-0.7071, 0.7071),
+                                 float2(-1, 0), float2(-0.7071, -0.7071), float2(0, -1), float2(0.7071, -0.7071) };
+
+float4 main(float2 uv : TEXCOORD0) : COLOR
+{
+    float2 ndc = float2(uv.x * 2 - 1, 1 - uv.y * 2);
+    float viewZ = cProj2.y / min(1 - cProj2.x, -1e-6);
+    float3 v = float3((ndc.x - cProj.z) * viewZ / cProj.x, (ndc.y - cProj.w) * viewZ / cProj.y, viewZ);
+    float3 dir = normalize(v.x * cInv0.xyz + v.y * cInv1.xyz + v.z * cInv2.xyz);
+    float L = 0;
+    if (abs(dir.z) > 1e-4)
+    {
+        float ea = (cDeck.x - cCam.z) / dir.z, eb = (cDeck.y - cCam.z) / dir.z;
+        L = max(min(max(ea, eb), cDeck.w) - max(min(ea, eb), 0), 0);
+    }
+    else if (cCam.z > cDeck.x && cCam.z < cDeck.y) L = cDeck.w;
+    float op = 1 - exp(-cGlow2.x * L);
+    [branch] if (op < 0.02) return float4(0, 0, 0, 0);
+    float2 suv = cGlowUv.xy + uv * cGlowUv.zw;
+    float3 lim = cDeckColor.rgb * cGlow.z;
+    float3 g = max(tex2Dlod(smallTex, float4(suv, 0, 0)).rgb - lim, 0) * 0.2;
+    [unroll] for (int k = 0; k < 8; ++k)
+    {
+        g += max(tex2Dlod(smallTex, float4(suv + kRing[k] * 2.5 * cGlow.xy, 0, 0)).rgb - lim, 0) * 0.06;
+        g += max(tex2Dlod(smallTex, float4(suv + kRing[k].yx * float2(1, -1) * 6.0 * cGlow.xy, 0, 0)).rgb - lim, 0) * 0.04;
+    }
+    return float4(g * op * cGlow.w, 0);
+}
+)";
+
         // The upscale: the fog was marched at half resolution, half-res pixel (i, j) = full pixel
         // (2i, 2j). Each full pixel blends its 4 nearest half-res samples by distance and by how close
         // each one's depth is to its own (so fog from the background doesn't bleed onto a silhouette in
@@ -705,6 +762,10 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_psDeck) { g_psDeck->Release(); g_psDeck = nullptr; }
             if (g_halfTex) { g_halfTex->Release(); g_halfTex = nullptr; }
             g_halfFailed = false;
+            if (g_psGlow) { g_psGlow->Release(); g_psGlow = nullptr; }
+            for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
+            g_glowW = g_glowH = 0;
+            g_glowFailed = false;
             if (g_field) { g_field->Release(); g_field = nullptr; }
             if (g_colorTex) { g_colorTex->Release(); g_colorTex = nullptr; }
             if (g_topTex) { g_topTex->Release(); g_topTex = nullptr; }
@@ -1658,6 +1719,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_ps = Compile(dev, kPsHlsl);
                 g_psUpscale = g_ps ? Compile(dev, kUpscaleHlsl) : nullptr;
                 g_psDeck = g_ps ? Compile(dev, kDeckHlsl) : nullptr;
+                g_psGlow = g_ps ? Compile(dev, kGlowHlsl) : nullptr;
                 g_shaderFailed = !g_ps;
             }
             if (!g_ps) { g_inactive = "the fog shader failed to compile (see the log)"; return; }
@@ -1812,6 +1874,10 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 0.5f + (0.5f - g_deck.cover) * 0.6f, kClingYards, kClingShare * (1.0f - g_deck.cover), 0.0f,
             };
 
+            static_assert(sizeof(g_lastConst) == sizeof(c), "the glow keeps the pass's constants");
+            std::memcpy(g_lastConst, c, sizeof(c));
+            g_haveLastConst = true;
+
             // Everything the pass changes goes back through the state block, so the client's own cache
             // stays true. The depth binding isn't part of a state block: an INTZ surface can't be bound
             // while it's sampled, so the client's original surface stands in (Active); multisampled
@@ -1921,7 +1987,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             // The cloud deck: on the screen, blended like the fog; in front of the fog seen from above it, behind it below.
             const bool deckOn = g_psDeck && g_deck.density > 0.0f;
             const bool deckInFront = deckOn && cam[2] > g_deck.top;
-            g_deckDrewInside = deckOn && !deckInFront && cam[2] >= g_deck.base - 60.0f; // (the base wobbles +-60 yd)
+            g_deckDrewInside = deckOn; // (any camera: from below or above, the storm clouds are in the deck too)
             auto drawDeck = [&](IDirect3DPixelShader9* restore) {
                 dev->SetPixelShader(g_psDeck);
                 drawQuad(static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width), static_cast<float>(vp.Height), 1.0f, 1.0f);
@@ -2065,6 +2131,106 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             g_liquidPass = saved;
         }
 
+        // The deck's glow, at the end of the world frame (the frame hook): the image copied down, then the halo added.
+        void DrawGlow()
+        {
+            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+            if (!dev || dev != g_device || !g_psGlow || !g_haveLastConst || g_glowFailed) return;
+            IDirect3DSurface9* screen = nullptr;
+            if (FAILED(dev->GetRenderTarget(0, &screen)) || !screen) return;
+            D3DSURFACE_DESC sd{};
+            screen->GetDesc(&sd);
+            if (sd.Width != g_glowW || sd.Height != g_glowH)
+            {
+                for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
+                g_glowW = sd.Width; g_glowH = sd.Height;
+                for (int k = 0; k < kGlowLevels; ++k)
+                {
+                    const UINT w = std::max(1u, sd.Width >> k), h = std::max(1u, sd.Height >> k);
+                    if (k == 0 && sd.MultiSampleType == D3DMULTISAMPLE_NONE) continue; // only to resolve a multisampled frame
+                    if (FAILED(dev->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, sd.Format, D3DPOOL_DEFAULT, &g_glowTex[k], nullptr)))
+                    {
+                        g_glowTex[k] = nullptr;
+                        g_glowFailed = true;
+                        g_api->Log(WXL_LOG_WARN, kTag, "cloud deck glow: couldn't create its %ux%u copy; the glow stays off.", w, h);
+                        screen->Release();
+                        return;
+                    }
+                }
+            }
+            if (sd.MultiSampleType != D3DMULTISAMPLE_NONE && g_glowTex[0] == nullptr)
+            {
+                // The frame turned multisampled after the copies were made: make them again next frame.
+                g_glowW = g_glowH = 0;
+                screen->Release();
+                return;
+            }
+            // Down in 2x steps (each a box filter of the one above).
+            IDirect3DSurface9* from = screen;
+            from->AddRef();
+            bool ok = true;
+            for (int k = 0; k < kGlowLevels && ok; ++k)
+            {
+                if (!g_glowTex[k]) continue;
+                IDirect3DSurface9* to = nullptr;
+                ok = SUCCEEDED(g_glowTex[k]->GetSurfaceLevel(0, &to)) && to &&
+                     SUCCEEDED(dev->StretchRect(from, nullptr, to, nullptr, k == 0 ? D3DTEXF_NONE : D3DTEXF_LINEAR));
+                from->Release();
+                from = to;
+            }
+            if (from) from->Release();
+            screen->Release();
+            if (!ok) return;
+
+            D3DVIEWPORT9 vp{};
+            dev->GetViewport(&vp);
+            IDirect3DStateBlock9* saved = nullptr;
+            if (FAILED(dev->CreateStateBlock(D3DSBT_ALL, &saved)) || !saved) return;
+            dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+            dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+            dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+            dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+            dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+            dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+            dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+            dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+            dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+            dev->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+            dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0x07);
+            dev->SetVertexShader(nullptr);
+            dev->SetPixelShader(g_psGlow);
+            dev->SetPixelShaderConstantF(0, g_lastConst, kConstRegs);
+            const UINT sw = std::max(1u, g_glowW >> (kGlowLevels - 1)), sh = std::max(1u, g_glowH >> (kGlowLevels - 1));
+            // Through the deck at its mean coverage (~0.55), as much as the sky is overcast (its banks).
+            const float extinction = g_lastConst[21 * 4 + 2] * 0.55f * (0.3f + 0.7f * g_deck.cover);
+            const float glow[12] = {
+                1.0f / sw, 1.0f / sh, 1.15f, 1.5f * g_settings.cloudDeckGlow,
+                extinction, 0.0f, 0.0f, 0.0f,
+                static_cast<float>(vp.X) / g_glowW, static_cast<float>(vp.Y) / g_glowH,
+                static_cast<float>(vp.Width) / g_glowW, static_cast<float>(vp.Height) / g_glowH,
+            };
+            dev->SetPixelShaderConstantF(24, glow, 3);
+            dev->SetTexture(10, g_glowTex[kGlowLevels - 1]);
+            dev->SetSamplerState(10, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(10, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(10, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+            dev->SetSamplerState(10, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+            dev->SetSamplerState(10, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+            dev->SetSamplerState(10, D3DSAMP_SRGBTEXTURE, FALSE);
+            struct Vtx { float x, y, z, rhw, u, v; };
+            const float x0 = vp.X - 0.5f, y0 = vp.Y - 0.5f, x1 = x0 + vp.Width, y1 = y0 + vp.Height;
+            const Vtx quad[4] = { { x0, y0, 0, 1, 0, 0 }, { x1, y0, 0, 1, 1, 0 }, { x0, y1, 0, 1, 0, 1 }, { x1, y1, 0, 1, 1, 1 } };
+            dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+            dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Vtx));
+            dev->SetTexture(10, nullptr);
+            saved->Apply();
+            saved->Release();
+            ++g_glowDraws;
+        }
+
         void MarkC2Dirty()
         {
             namespace gxo = wxl::offsets::engine::gx;
@@ -2121,8 +2287,11 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             EndTint();
             g_tintedShown = g_tinted; g_tintOtherShown = g_tintOther;
             g_tinted = g_tintOther = 0;
+            const bool glow = g_settings.cloudDeckGlow > 0.0f;
+            g_deckDrewInside = false;
             g_origFrame(self, edx);
             EndTint();
+            if (glow && g_deckDrewInside) DrawGlow();
         }
 
         void __fastcall hkWeather(void* self, void* edx)
@@ -2199,6 +2368,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_settings.cloudDeckSky = byHand ? g_deck.cover : -1.0f;
             if (byHand) g_api->UiSliderFloat("deck sky: 0 clear .. 1 overcast##gfdecks", &g_settings.cloudDeckSky, 0.0f, 1.0f);
             g_api->UiCheckbox("in the deck, see-through models fog to the cloud's colour##gfdeckt", &g_settings.cloudDeckTint);
+            g_api->UiSliderFloat("deck glow around bright things (lightning, the moon)##gfdeckg", &g_settings.cloudDeckGlow, 0.0f, 3.0f);
             char line[200];
             if (g_deck.density > 0.0f)
             {
@@ -2354,6 +2524,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         if (g_halfTex) { g_halfTex->Release(); g_halfTex = nullptr; }
         g_halfW = g_halfH = 0;
         g_halfFailed = false;
+        for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
+        g_glowW = g_glowH = 0;
+        g_glowFailed = false;
         ReleaseProbe();
     }
 }

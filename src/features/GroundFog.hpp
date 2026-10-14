@@ -36,6 +36,7 @@ namespace wxl_livingazeroth::groundfog
         float cloudDeckRange = 1200.0f;    // yd: how far it's drawn
         float cloudDeckSky = -1.0f;        // the panel's test override of the sky's cover, 0 clear .. 1 overcast; < 0 by weather and clock
         int   cloudDeckTint = 1;           // in the deck, see-through models and effects drawn after it fog toward its colour
+        float cloudDeckGlow = 1.0f;        // the deck glows around what's much brighter than it (lightning flashes, the moon): x this
         int   floorReach = 2;          // cells: the light layer starts on the lowest ground this far around (smoothed), so it doesn't drape up walls
         float dither = 0.0f;           // 0 sample each step's middle .. 1 anywhere in it, per pixel (grain instead of banding)
         float maxDistance = 250.0f;     // yd: the march ends here (and for sky pixels)
