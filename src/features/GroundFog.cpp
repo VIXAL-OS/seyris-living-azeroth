@@ -213,13 +213,17 @@ float4 cProbe2 : register(c20); // x = probe on (draw its cross), yz = the viewp
 // temporary registers: the march uses 30.)
 
 // The wake at a step (its middle pm, height zm): how much of the fog stays (the push reaches up to
-// the unit's height, softly), and the patch pattern's displacement there.
+// the unit's height, softly, and down 8 yd from there, gone by 12: a unit stands at most ~7 yd tall,
+// and a flyer well over the fog left a trail cut through all of it below -- "flying mounts probably
+// shouldn't cause a ground fog trail above a certain height", the user, 2026-10-14), and the patch
+// pattern's displacement there.
 float WakeKeep(float3 pm, float zm, out float2 displace)
 {
     displace = 0;
     if (cWake.w < 0.5) return 1;
     float4 w = tex2Dlod(wakeTex, float4((pm.xy - cWake.xy) * cWake.z, 0, 0));
-    float below = saturate((w.g + cCam.w - zm) / 0.5 + 0.5);
+    float top = w.g + cCam.w;
+    float below = saturate((top - zm) / 0.5 + 0.5) * saturate((zm - top + 12) / 4);
     displace = w.ba * below;
     return max(1 - w.r * below, 0);
 }
