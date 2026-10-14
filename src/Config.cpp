@@ -177,6 +177,7 @@ namespace wxl_livingazeroth::config
             g.cloudDeckDensity = In(s, f, "CloudDeckDensity", "Your multiplier on the cloud deck's density.", g.cloudDeckDensity);
             g.cloudDeckThickness = In(s, f, "CloudDeckThickness", "The cloud deck's thickness in yards, from its base up.", g.cloudDeckThickness);
             g.cloudDeckRange = In(s, f, "CloudDeckRange", "How far the cloud deck is drawn, in yards.", g.cloudDeckRange);
+            g.cloudDeckTint = In(s, f, "CloudDeckTint", "In the cloud deck, see-through models and effects drawn after it (Blizzard's own storm clouds) fog toward the cloud's colour instead of the night fog's.", g.cloudDeckTint);
             g.poolSoftness = In(s, f, "PoolSoftness", "How soft heavy fog's edges are, 0 (crisp top, sharp sides) .. 1: its top blurs over this share of its depth, thin pools fade out.", g.poolSoftness);
             fog::Field().poolSpeed = In(s, f, "PoolSpeed", "How fast heavy fog (each kind's Weight share) runs downhill into hollows: 1 = default, 0 = it stays where it formed.", fog::Field().poolSpeed);
             fog::Field().steepStart = In(s, f, "SteepStart", "Degrees: from this slope a growing share of the ground-hugging fog runs off (it doesn't hang on steep ground).", fog::Field().steepStart);

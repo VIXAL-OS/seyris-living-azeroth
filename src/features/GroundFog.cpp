@@ -16,6 +16,7 @@
 #include "GrassPerf.hpp"
 
 #include "game/Camera.hpp"
+#include "offsets/engine/Gx.hpp"
 #include "game/Gfx.hpp"
 #include "game/Gx.hpp"
 
@@ -51,9 +52,27 @@ namespace wxl_livingazeroth::groundfog
         using WeatherFn    = void(__fastcall*)(void* self, void* edx);
         using LiquidFn     = void(__fastcall*)(void* bank, void* edx, void* transform, int passType);
         using DeviceDrawFn = void(__fastcall*)(void* device, void* edx, uint32_t* batch, int indexed);
+        using FrameFn      = void(__fastcall*)(void* self, void* edx);
         WeatherFn    g_origWeather = nullptr;
         LiquidFn     g_origLiquid = nullptr;
         DeviceDrawFn g_origDraw = nullptr;
+        FrameFn      g_origFrame = nullptr;
+
+        // See-through things drawn after the deck (Blizzard's own storm clouds at the Temple of Storms, effects) are
+        // fogged by the client toward its own fog colour, near black at night, and came out as dark blobs in the white
+        // cloud ("can we make the lightning at temple of storms not show black through the clouds", the user,
+        // 2026-10-13). While the camera is in the deck, from its draw to the end of the world frame (the window), the
+        // client's pixel constant cache's c2 (the models' fog colour, core offsets/engine/Gx.hpp kPsConstCache) is
+        // swapped for the deck's colour right before each draw that has the stock fog colour there (additive batches
+        // fog to black and keep it), marked dirty so the draw's own flush uploads it; the stock value goes back at the
+        // window's end.
+        bool     g_tintWindow = false;   // inside the window this frame
+        bool     g_tintHolds = false;    // the cache's c2 holds our colour
+        float    g_tintStock[3] = {};    // what it held before
+        float    g_tintColour[3] = {};   // ours this frame
+        unsigned g_tinted = 0, g_tintOther = 0, g_tintedShown = 0, g_tintOtherShown = 0; // draws this frame / last frame
+        bool     g_deckDrewInside = false; // set by Draw: the deck drawn with the camera inside it
+        bool     g_hookedFrame = false;      // the world frame hook (closes the window); without it no tint
 
         int         g_liquidPass = -1;
         bool        g_drawThisFrame = false;  // decided before the water draws
@@ -1902,6 +1921,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             // The cloud deck: on the screen, blended like the fog; in front of the fog seen from above it, behind it below.
             const bool deckOn = g_psDeck && g_deck.density > 0.0f;
             const bool deckInFront = deckOn && cam[2] > g_deck.top;
+            g_deckDrewInside = deckOn && !deckInFront && cam[2] >= g_deck.base - 60.0f; // (the base wobbles +-60 yd)
             auto drawDeck = [&](IDirect3DPixelShader9* restore) {
                 dev->SetPixelShader(g_psDeck);
                 drawQuad(static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width), static_cast<float>(vp.Height), 1.0f, 1.0f);
@@ -2045,19 +2065,83 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             g_liquidPass = saved;
         }
 
+        void MarkC2Dirty()
+        {
+            namespace gxo = wxl::offsets::engine::gx;
+            auto& start = *reinterpret_cast<uint32_t*>(gxo::kPsDirtyRegStart); // lowest dirty register, 0xFF none
+            auto& end = *reinterpret_cast<uint32_t*>(gxo::kPsDirtyRegEnd);     // highest dirty register, 0 none
+            if (start == 0xFF || start > 2) start = 2;
+            if (end < 2) end = 2; // inclusive: the flush (0x69F63D) uploads end - start + 1 registers from start
+        }
+
+        // Right before a client draw inside the window: the stock fog colour in c2 -> the deck's.
+        void TintFogColour()
+        {
+            float* c2 = reinterpret_cast<float*>(wxl::offsets::engine::gx::kPsConstCache) + 2 * 4;
+            if (g_tintHolds && c2[0] == g_tintColour[0] && c2[1] == g_tintColour[1] && c2[2] == g_tintColour[2]) { ++g_tinted; return; }
+            const uint32_t argb = *reinterpret_cast<const uint32_t*>(kFogColor);
+            const float stock[3] = { ((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f, (argb & 0xFF) / 255.0f };
+            if (std::fabs(c2[0] - stock[0]) > 0.03f || std::fabs(c2[1] - stock[1]) > 0.03f || std::fabs(c2[2] - stock[2]) > 0.03f)
+            {
+                ++g_tintOther; // black (additive), or not a fog colour at all: left alone
+                g_tintHolds = false;
+                return;
+            }
+            for (int i = 0; i < 3; ++i) { g_tintStock[i] = c2[i]; c2[i] = g_tintColour[i]; }
+            g_tintHolds = true;
+            MarkC2Dirty();
+            ++g_tinted;
+        }
+
+        // The window's end: the stock fog colour back in the cache (where ours still is), for the next draws.
+        void EndTint()
+        {
+            if (g_tintHolds)
+            {
+                float* c2 = reinterpret_cast<float*>(wxl::offsets::engine::gx::kPsConstCache) + 2 * 4;
+                if (c2[0] == g_tintColour[0] && c2[1] == g_tintColour[1] && c2[2] == g_tintColour[2])
+                {
+                    for (int i = 0; i < 3; ++i) c2[i] = g_tintStock[i];
+                    MarkC2Dirty();
+                }
+            }
+            g_tintHolds = false;
+            g_tintWindow = false;
+        }
+
         void __fastcall hkDraw(void* device, void* edx, uint32_t* batch, int indexed)
         {
             if (g_liquidPass == 1 && g_drawThisFrame && g_settings.forceWaterDepth) gxstate::Force(gxstate::kDepthWrite, 1);
+            if (g_tintWindow) TintFogColour();
             g_origDraw(device, edx, batch, indexed);
+        }
+
+        void __fastcall hkFrame(void* self, void* edx)
+        {
+            EndTint();
+            g_tintedShown = g_tinted; g_tintOtherShown = g_tintOther;
+            g_tinted = g_tintOther = 0;
+            g_origFrame(self, edx);
+            EndTint();
         }
 
         void __fastcall hkWeather(void* self, void* edx)
         {
             // Above water the order is: water -> weather -> see-through models; under water the weather
             // comes before the water, and the fog stays off there (Decide).
+            g_deckDrewInside = false;
             if (g_drawThisFrame || Decide())
                 if (auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice())) Draw(dev);
             g_drawThisFrame = false;
+            // The window opens: what's drawn from here on in the world frame is in (or behind) the cloud. The colour:
+            // the deck's, as much as the sky is overcast (a clear sky's thin wisps don't light up the night).
+            if (g_deckDrewInside && g_settings.cloudDeckTint && g_hookedFrame)
+            {
+                const uint32_t argb = *reinterpret_cast<const uint32_t*>(kFogColor);
+                const float stock[3] = { ((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f, (argb & 0xFF) / 255.0f };
+                for (int i = 0; i < 3; ++i) g_tintColour[i] = stock[i] + (g_deck.color[i] - stock[i]) * g_deck.cover;
+                g_tintWindow = true;
+            }
             g_origWeather(self, edx);
         }
 
@@ -2079,6 +2163,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         const int a = AttachFront(api, "Weather.Render", &hkWeather, &g_origWeather);
         const int b = AttachFront(api, "Gx.LiquidRenderPass", &hkLiquid, &g_origLiquid);
         const int c = AttachFront(api, "Gx.DeviceDraw", &hkDraw, &g_origDraw);
+        g_hookedFrame = AttachFront(api, "Gx.WorldOnRender", &hkFrame, &g_origFrame) != 0;
         if (!a) g_settings.enabled = 0;
         api->Log((a && b && c) ? WXL_LOG_INFO : WXL_LOG_WARN, kTag, "ground fog: hooks weather %d liquid %d draw %d%s",
                  a, b, c, a ? "" : " (no draw point: the fog stays off)");
@@ -2113,6 +2198,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_api->UiCheckbox("set the deck's sky by hand (off: by weather and clock)##gfdeckh", &byHand))
                 g_settings.cloudDeckSky = byHand ? g_deck.cover : -1.0f;
             if (byHand) g_api->UiSliderFloat("deck sky: 0 clear .. 1 overcast##gfdecks", &g_settings.cloudDeckSky, 0.0f, 1.0f);
+            g_api->UiCheckbox("in the deck, see-through models fog to the cloud's colour##gfdeckt", &g_settings.cloudDeckTint);
             char line[200];
             if (g_deck.density > 0.0f)
             {
@@ -2121,6 +2207,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_api->UiText(line);
                 std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s); colour %.2f %.2f %.2f (%s)", g_deck.cover * 100.0f,
                               g_deck.coverWhy, g_deck.color[0], g_deck.color[1], g_deck.color[2], g_deck.colorWhy);
+                g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "see-through draws after it: %u fogged to the cloud's colour, %u left (another fog colour)%s",
+                              g_tintedShown, g_tintOtherShown, g_hookedFrame ? "" : " -- no world frame hook: off");
             }
             else
                 std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");
