@@ -2095,7 +2095,12 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         {
             g_api->UiSliderFloat("deck density##gfdeckd", &g_settings.cloudDeckDensity, 0.0f, 4.0f);
             g_api->UiSliderFloat("deck range (yd)##gfdeckr", &g_settings.cloudDeckRange, 200.0f, 3000.0f);
-            g_api->UiSliderFloat("deck sky: 0 clear .. 1 overcast (below 0: by weather and clock)##gfdecks", &g_settings.cloudDeckSky, -0.05f, 1.0f);
+            // A checkbox for the override, not a slider whose -1 meant "by weather and clock" ("why does the deck sky
+            // start at -1 tho", the user, 2026-10-13). Switched on, it starts from the sky as it is.
+            int byHand = g_settings.cloudDeckSky >= 0.0f ? 1 : 0;
+            if (g_api->UiCheckbox("set the deck's sky by hand (off: by weather and clock)##gfdeckh", &byHand))
+                g_settings.cloudDeckSky = byHand ? g_deck.cover : -1.0f;
+            if (byHand) g_api->UiSliderFloat("deck sky: 0 clear .. 1 overcast##gfdecks", &g_settings.cloudDeckSky, 0.0f, 1.0f);
             char line[200];
             if (g_deck.density > 0.0f)
             {
