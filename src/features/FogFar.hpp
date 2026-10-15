@@ -26,9 +26,10 @@ namespace wxl_livingazeroth::fogfar
         float highestTop = -1.0e9f;           // world z of its highest fog top (the ray's height clip)
     };
 
-    /// Each frame before the fog draws: samples some chunks' ground, rebuilds and uploads the map at
-    /// most twice a second (at once when the window moved). False: nothing to draw far (no zone map
-    /// yet, or no fog in any zone around).
+    /// Each frame before the fog draws: samples some chunks' ground, builds the map at most twice a
+    /// second (at once when the window moved, within ~0.1 s of new ground), eases what's shown toward
+    /// the last build and uploads it while it moves. False: nothing to draw far (no zone map yet, or no
+    /// fog in any zone around).
     bool Update(IDirect3DDevice9* dev, float groundRef, ColourFn colour, Maps& out);
 
     /// The far map's fog top at a world position (its chunk's, dilated; world z), as last built;

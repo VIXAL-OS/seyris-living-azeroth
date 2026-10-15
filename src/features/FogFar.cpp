@@ -28,7 +28,6 @@ namespace wxl_livingazeroth::fogfar
         int       g_size = 0, g_cursor = 0;
         int       g_firstI = 0x7FFFFFFF, g_firstJ = 0;
         ULONGLONG g_lastBuild = 0;
-        float     g_lastRef = -1.0e9f;
         bool      g_any = false;
         float     g_highestTop = -1.0e9f;
         float     g_chunk = 0.0f;
@@ -141,48 +140,26 @@ namespace wxl_livingazeroth::fogfar
         }
     }
 
-    bool Update(IDirect3DDevice9* dev, float groundRef, ColourFn colour, Maps& out)
+    namespace
     {
-        const regional::ZoneMap& map = regional::Map();
-        if (!map.zone || map.size <= 0) return false;
-        if (dev != g_device) { Release(); g_device = dev; }
-        if (g_size != map.size)
-        {
-            g_size = map.size;
-            g_chunks.assign(static_cast<size_t>(g_size) * g_size, Chunk{});
-        }
+        // The map as built and as shown. Built at most twice a second (BlendNear, the near field's fog folded in, is
+        // most of its ~0.4 ms), sooner when new ground comes in; shown values ease toward the built ones every frame,
+        // so a chunk glides from one look to the next instead of stepping where the near field blends in, and a chunk
+        // whose fog arrives late fades in ("squares", the user, 2026-10-15). Per slot (texel), world units.
+        struct Look { float density = 0.0f, thickness = 1.0f, floor = 0.0f, top = kNoTop, rgb[3] = {}; };
+        struct Shown : Look { int i = 0x7FFFFFFF, j = 0; };   // + the world chunk it shows
+        std::vector<Look>  g_built;
+        std::vector<Shown> g_shown;
+        bool      g_haveBuilt = false;
+        bool      g_newGround = false;      // a chunk's ground came in since the last build
+        bool      g_upload = true;          // the shown map changed since it was uploaded
+        float     g_uploadedRef = -1.0e9f;
+        ULONGLONG g_lastEase = 0;
+        constexpr ULONGLONG kRebuildSoonMs = 125; // new ground: built again this soon
+        constexpr float kEaseSeconds = 0.25f;     // ~86% of a change shown within half a second
 
-        // Ground: chunks that now hold another world chunk, or whose terrain wasn't loaded yet.
-        int sampled = 0;
-        for (int n = 0; n < g_size * g_size && sampled < kGroundPerFrame; ++n)
+        void Build(const regional::ZoneMap& map, ColourFn colour)
         {
-            const int k = g_cursor;
-            g_cursor = (g_cursor + 1) % (g_size * g_size);
-            const int i = map.firstI + k % g_size, j = map.firstJ + k / g_size;
-            Chunk& c = g_chunks[Mod(j) * g_size + Mod(i)];
-            if (c.i == i && c.j == j && c.groundKnown) continue;
-            c.i = i; c.j = j;
-            c.groundKnown = LowestGround(i, j, map.cellSize, c.ground);
-            ++sampled;
-        }
-
-        const bool moved = map.firstI != g_firstI || map.firstJ != g_firstJ;
-        const ULONGLONG now = GetTickCount64();
-        // Any change of the reference height rebuilds at once: the heights are stored relative to it,
-        // and the shader adds the current one. (A 32 yd change waited up to 500 ms: the far floor sat
-        // 32 yd off, above the terrain, and thick fog filled the distance for a moment.)
-        if (!moved && g_field && now - g_lastBuild < kRebuildMs && groundRef == g_lastRef)
-        {
-            if (!g_any) return false;
-        }
-        else
-        {
-            g_firstI = map.firstI; g_firstJ = map.firstJ;
-            g_lastBuild = now;
-            g_lastRef = groundRef;
-            if (!g_field && FAILED(dev->CreateTexture(g_size, g_size, 1, 0, D3DFMT_A16B16G16R16F, D3DPOOL_MANAGED, &g_field, nullptr))) { g_field = nullptr; return false; }
-            if (!g_colour && FAILED(dev->CreateTexture(g_size, g_size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &g_colour, nullptr))) { g_colour = nullptr; return false; }
-
             // Per zone (a handful around): its fog's light-layer density, thickness and colour.
             std::unordered_map<uint32_t, ZoneLook> zones;
             auto lookOf = [&](uint32_t zone) -> const ZoneLook& {
@@ -211,62 +188,78 @@ namespace wxl_livingazeroth::fogfar
             };
 
             const int N = g_size;
-            static std::vector<float> top;
-            top.assign(static_cast<size_t>(N) * N, kNoTop);
+            auto inWindow = [&](int i, int j) { return i >= g_firstI && i < g_firstI + N && j >= g_firstJ && j < g_firstJ + N; };
+            auto chunkAt = [&](int i, int j) -> const Chunk* {   // a world chunk whose ground is read
+                if (!inWindow(i, j)) return nullptr;
+                const Chunk& n = g_chunks[Mod(j) * N + Mod(i)];
+                return n.i == i && n.j == j && n.groundKnown ? &n : nullptr;
+            };
+            static std::vector<float> top, ground;
+            static std::vector<uint8_t> have;
             static std::vector<ZoneLook> looks;
-            looks.assign(static_cast<size_t>(N) * N, ZoneLook{});
-            static std::vector<float> ground;
+            top.assign(static_cast<size_t>(N) * N, kNoTop);
             ground.assign(static_cast<size_t>(N) * N, 0.0f);
-            g_any = false;
+            have.assign(static_cast<size_t>(N) * N, 0);
+            looks.assign(static_cast<size_t>(N) * N, ZoneLook{});
             for (int r = 0; r < N; ++r)
                 for (int c = 0; c < N; ++c)
                 {
                     const int i = g_firstI + c, j = g_firstJ + r;           // world chunk (texel = its slot)
                     const int slot = Mod(j) * N + Mod(i);
-                    const Chunk& ch = g_chunks[slot];
-                    const uint32_t zone = map.zone[slot];
-                    if (ch.i != i || ch.j != j || !ch.groundKnown) continue;
+                    uint32_t zone = map.zone[slot];
+                    float g = 0.0f;
+                    if (const Chunk* own = chunkAt(i, j))
+                        g = own->ground;
+                    else
+                    {
+                        // Not read yet: on the lowest of its read neighbours' ground (in their zone if its own isn't
+                        // known), so where its terrain comes in it's in fog already. A chunk's ground is read up to
+                        // ~0.7 s after it loads (96 a frame), and its fog came in at the next build: freshly loaded
+                        // terrain stood clear, then its fog arrived a chunk at a time.
+                        float low = 1.0e9f;
+                        for (int dj = -1; dj <= 1; ++dj)
+                            for (int di = -1; di <= 1; ++di)
+                            {
+                                const Chunk* n = (di || dj) ? chunkAt(i + di, j + dj) : nullptr;
+                                if (!n) continue;
+                                low = std::fmin(low, n->ground);
+                                if (!zone) zone = map.zone[Mod(j + dj) * N + Mod(i + di)];
+                            }
+                        if (low > 1.0e8f) continue;
+                        g = low;
+                    }
+                    have[slot] = 1;
+                    ground[slot] = g;
                     ZoneLook l = zone ? lookOf(zone) : ZoneLook{};
                     BlendNear(i, j, map.cellSize, colour, l);
                     if (l.density <= 1.0e-5f) continue;
                     looks[slot] = l;
-                    ground[slot] = ch.ground;
-                    top[slot] = ch.ground + l.thickness * 4.0f;
-                    g_any = true;
+                    top[slot] = g + l.thickness * 4.0f;
                 }
-            g_highestTop = -1.0e9f;
-            g_chunk = map.cellSize;
-            g_topWorld.assign(static_cast<size_t>(N) * N, kNoTop);
-            D3DLOCKED_RECT lf{}, lc{};
-            if (FAILED(g_field->LockRect(0, &lf, nullptr, 0))) return false;
-            if (FAILED(g_colour->LockRect(0, &lc, nullptr, 0))) { g_field->UnlockRect(0); return false; }
-            auto byteOf = [](float v) { v *= 0.5f; return static_cast<uint8_t>((v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v)) * 255.0f + 0.5f); };
             for (int r = 0; r < N; ++r)
-            {
-                auto* texel = reinterpret_cast<uint16_t*>(static_cast<uint8_t*>(lf.pBits) + r * lf.Pitch);
-                auto* rgb = static_cast<uint8_t*>(lc.pBits) + r * lc.Pitch;
-                for (int c = 0; c < N; ++c, texel += 4, rgb += 4)
+                for (int c = 0; c < N; ++c)
                 {
                     const int slot = r * N + c; // texel (c, r) holds slot (c, r): the zone map's own layout
+                    const int i = g_firstI + Mod(c - g_firstI), j = g_firstJ + Mod(r - g_firstJ); // its world chunk
                     float most = kNoTop;
                     for (int dr = -1; dr <= 1; ++dr)
                         for (int dc = -1; dc <= 1; ++dc)
                             most = std::fmax(most, top[Mod(r + dr) * N + Mod(c + dc)]);
-                    const ZoneLook& l = looks[slot];
                     // The layer lies on the lowest ground among the chunk and its 8 neighbours (~100 yd),
                     // like the near field's fog floor: level in valleys, cliffs rising out of it. On each
                     // chunk's own lowest ground the floor jumped tens of yards between chunks on cliffs,
                     // and the march's shells around the camera cut it into flickering rings.
                     float low = 1.0e9f;
-                    for (int dr = -1; dr <= 1; ++dr)
-                        for (int dc = -1; dc <= 1; ++dc)
+                    for (int dj = -1; dj <= 1; ++dj)
+                        for (int di = -1; di <= 1; ++di)
                         {
-                            const Chunk& n = g_chunks[Mod(r + dr) * N + Mod(c + dc)];
-                            if (n.groundKnown) low = std::fmin(low, n.ground);
+                            if (!inWindow(i + di, j + dj)) continue;
+                            const int n = Mod(j + dj) * N + Mod(i + di);
+                            if (have[n]) low = std::fmin(low, ground[n]);
                         }
                     // Chunks without fog take their foggy neighbour's colour (the filter fades the
                     // density to them), on the same low floor.
-                    float g = low < 1.0e8f ? low : ground[slot];
+                    const ZoneLook& l = looks[slot];
                     const ZoneLook* colourFrom = &l;
                     if (l.density <= 1.0e-5f)
                         for (int dr = -1; dr <= 1 && colourFrom == &l; ++dr)
@@ -275,22 +268,154 @@ namespace wxl_livingazeroth::fogfar
                                 const int n = Mod(r + dr) * N + Mod(c + dc);
                                 if (looks[n].density > 1.0e-5f) { colourFrom = &looks[n]; break; }
                             }
-                    texel[0] = ToHalf(l.density);
-                    texel[1] = ToHalf(colourFrom->thickness);
-                    texel[2] = ToHalf(g - groundRef);
-                    texel[3] = ToHalf(most > kNoTop ? most - groundRef : kNoTop);
-                    g_topWorld[slot] = most;
-                    rgb[0] = byteOf(colourFrom->rgb[2]);
-                    rgb[1] = byteOf(colourFrom->rgb[1]);
-                    rgb[2] = byteOf(colourFrom->rgb[0]);
+                    Look& b = g_built[slot];
+                    b.density = l.density;
+                    b.thickness = colourFrom->thickness;
+                    b.floor = low < 1.0e8f ? low : ground[slot];
+                    b.top = most;
+                    for (int ch = 0; ch < 3; ++ch) b.rgb[ch] = colourFrom->rgb[ch];
+                    // A slot that now shows another chunk (the window moved; the first build) takes its look at once.
+                    Shown& s = g_shown[slot];
+                    if (s.i != i || s.j != j)
+                    {
+                        static_cast<Look&>(s) = b;
+                        s.i = i;
+                        s.j = j;
+                        g_upload = true;
+                    }
+                }
+            g_haveBuilt = true;
+        }
+
+        void Ease(ULONGLONG now)
+        {
+            const float dt = g_lastEase ? std::fmin(static_cast<float>(now - g_lastEase) / 1000.0f, 0.5f) : 0.0f;
+            g_lastEase = now;
+            if (dt <= 0.0f) return;
+            const float k = 1.0f - std::exp(-dt / kEaseSeconds), kTop = 1.0f - std::exp(-dt / (2.0f * kEaseSeconds));
+            bool moving = false;
+            auto toward = [&](float& v, float target, float rate, float close) {
+                const float d = target - v;
+                if (d == 0.0f) return;
+                v = std::fabs(d) <= close ? target : v + d * rate;
+                moving = true;
+            };
+            for (size_t n = 0; n < g_shown.size(); ++n)
+            {
+                Shown& s = g_shown[n];
+                const Look& b = g_built[n];
+                toward(s.density, b.density, k, 1.0e-5f);
+                toward(s.thickness, b.thickness, k, 0.01f);
+                toward(s.floor, b.floor, k, 0.02f);
+                for (int ch = 0; ch < 3; ++ch) toward(s.rgb[ch], b.rgb[ch], k, 0.002f);
+                // The top bounds the fog shown (the march skips the air above it): up at once, down slower than the
+                // fog under it, gone only once that fog is.
+                if (b.top > s.top) { s.top = b.top; moving = true; }
+                else if (b.top > kNoTop) toward(s.top, b.top, kTop, 0.05f);
+                else if (s.top > kNoTop && s.density <= 1.0e-5f) { s.top = kNoTop; moving = true; }
+            }
+            if (moving) g_upload = true;
+        }
+
+        bool UploadShown(float groundRef)
+        {
+            D3DLOCKED_RECT lf{}, lc{};
+            if (FAILED(g_field->LockRect(0, &lf, nullptr, 0))) return false;
+            if (FAILED(g_colour->LockRect(0, &lc, nullptr, 0))) { g_field->UnlockRect(0); return false; }
+            auto byteOf = [](float v) { v *= 0.5f; return static_cast<uint8_t>((v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v)) * 255.0f + 0.5f); };
+            const int N = g_size;
+            g_any = false;
+            g_highestTop = -1.0e9f;
+            g_topWorld.assign(static_cast<size_t>(N) * N, kNoTop);
+            for (int r = 0; r < N; ++r)
+            {
+                auto* texel = reinterpret_cast<uint16_t*>(static_cast<uint8_t*>(lf.pBits) + r * lf.Pitch);
+                auto* rgb = static_cast<uint8_t*>(lc.pBits) + r * lc.Pitch;
+                for (int c = 0; c < N; ++c, texel += 4, rgb += 4)
+                {
+                    const int slot = r * N + c;
+                    const Shown& s = g_shown[slot];
+                    texel[0] = ToHalf(s.density);
+                    texel[1] = ToHalf(s.thickness);
+                    texel[2] = ToHalf(s.floor - groundRef);
+                    texel[3] = ToHalf(s.top > kNoTop ? s.top - groundRef : kNoTop);
+                    g_topWorld[slot] = s.top;
+                    rgb[0] = byteOf(s.rgb[2]);
+                    rgb[1] = byteOf(s.rgb[1]);
+                    rgb[2] = byteOf(s.rgb[0]);
                     rgb[3] = 255;
-                    if (top[slot] > g_highestTop) g_highestTop = top[slot];
+                    if (s.density > 1.0e-5f)
+                    {
+                        g_any = true;
+                        if (s.top > g_highestTop) g_highestTop = s.top;
+                    }
                 }
             }
             g_field->UnlockRect(0);
             g_colour->UnlockRect(0);
-            if (!g_any) return false;
+            g_uploadedRef = groundRef;
+            g_upload = false;
+            return true;
         }
+    }
+
+    bool Update(IDirect3DDevice9* dev, float groundRef, ColourFn colour, Maps& out)
+    {
+        const regional::ZoneMap& map = regional::Map();
+        if (!map.zone || map.size <= 0) return false;
+        if (dev != g_device) { Release(); g_device = dev; }
+        if (g_size != map.size)
+        {
+            g_size = map.size;
+            const size_t slots = static_cast<size_t>(g_size) * g_size;
+            g_chunks.assign(slots, Chunk{});
+            g_built.assign(slots, Look{});
+            g_shown.assign(slots, Shown{});
+            g_haveBuilt = false;
+        }
+
+        // Ground: chunks that now hold another world chunk, or whose terrain wasn't loaded yet.
+        int sampled = 0;
+        for (int n = 0; n < g_size * g_size && sampled < kGroundPerFrame; ++n)
+        {
+            const int k = g_cursor;
+            g_cursor = (g_cursor + 1) % (g_size * g_size);
+            const int i = map.firstI + k % g_size, j = map.firstJ + k / g_size;
+            Chunk& c = g_chunks[Mod(j) * g_size + Mod(i)];
+            if (c.i == i && c.j == j && c.groundKnown) continue;
+            c.i = i; c.j = j;
+            c.groundKnown = LowestGround(i, j, map.cellSize, c.ground);
+            if (c.groundKnown) g_newGround = true;
+            ++sampled;
+        }
+
+        // Built when the window moved, twice a second, and soon after new ground (heights are kept in world units:
+        // a change of the reference height only uploads again).
+        const bool moved = map.firstI != g_firstI || map.firstJ != g_firstJ;
+        const ULONGLONG now = GetTickCount64();
+        if (!g_haveBuilt || moved || now - g_lastBuild >= kRebuildMs || (g_newGround && now - g_lastBuild >= kRebuildSoonMs))
+        {
+            g_firstI = map.firstI; g_firstJ = map.firstJ;
+            g_lastBuild = now;
+            g_newGround = false;
+            g_chunk = map.cellSize;
+            Build(map, colour);
+        }
+        Ease(now);
+
+        bool created = false;
+        if (!g_field)
+        {
+            if (FAILED(dev->CreateTexture(g_size, g_size, 1, 0, D3DFMT_A16B16G16R16F, D3DPOOL_MANAGED, &g_field, nullptr))) { g_field = nullptr; return false; }
+            created = true;
+        }
+        if (!g_colour)
+        {
+            if (FAILED(dev->CreateTexture(g_size, g_size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &g_colour, nullptr))) { g_colour = nullptr; return false; }
+            created = true;
+        }
+        if ((created || g_upload || groundRef != g_uploadedRef) && !UploadShown(groundRef)) return false;
+        if (!g_any) return false;
 
         out.field = g_field;
         out.colour = g_colour;
