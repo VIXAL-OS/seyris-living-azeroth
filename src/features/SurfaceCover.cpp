@@ -30,7 +30,7 @@ namespace wxl_livingazeroth::cover::detail
     const void* g_cdbcApi = nullptr;
     uint32_t    g_tableGeneration = 0;
 
-    int   g_lastCoverage = -1, g_lastMaterialSource = -1, g_lastAlphaSwap = -1;
+    int   g_lastCoverage = -1, g_lastMaterialSource = -1, g_lastAlphaSwap = -1, g_lastMatchGround = -1;
     int   g_lastMap = -1;
     float g_lastDepthMul = -1.0f, g_lastDriftMul = -1.0f, g_lastBreakupMul = -1.0f;
 
@@ -392,11 +392,13 @@ namespace wxl_livingazeroth::cover
         g_mapNow = snap.mapId;
         const bool newMap = g_lastMap != snap.mapId;
         const bool refill = newMap || g_lastCoverage != g_settings.coverage || g_tableGeneration != covertable::Generation() ||
-                            g_lastMaterialSource != g_settings.materialSource || g_lastAlphaSwap != g_settings.alphaSwap;
+                            g_lastMaterialSource != g_settings.materialSource || g_lastAlphaSwap != g_settings.alphaSwap ||
+                            g_lastMatchGround != g_settings.matchGround;
         if (refill) { ClearCellCache(); ClearLayerValues(); }
         if (newMap) terrain::ClearLayerCache();
         g_lastMaterialSource = g_settings.materialSource;
         g_lastAlphaSwap = g_settings.alphaSwap;
+        g_lastMatchGround = g_settings.matchGround;
         g_lastCoverage = g_settings.coverage;
         g_lastMap = snap.mapId;
         g_tableGeneration = covertable::Generation();

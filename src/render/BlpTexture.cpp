@@ -1,5 +1,6 @@
 #include "BlpTexture.hpp"
 
+#include "BlpColour.hpp"
 #include "game/Io.hpp"
 
 #include <cstdint>
@@ -66,6 +67,12 @@ namespace wxl_livingazeroth::blp
                 out[i] = c | (a << 24);
             }
         }
+    }
+
+    bool AverageColour(const char* path, float rgb[3])
+    {
+        std::vector<uint8_t> file;
+        return ReadFile(path, file) && AverageColour(file.data(), file.size(), rgb);
     }
 
     IDirect3DTexture9* Load(IDirect3DDevice9* dev, const char* path, std::string& error)

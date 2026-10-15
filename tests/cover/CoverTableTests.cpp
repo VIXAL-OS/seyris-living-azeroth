@@ -7,6 +7,7 @@
 // Usage:  cover_table_tests <data dir> [<data dir before the change>]
 //   (the repo's data/; the second one, e.g. the files from git HEAD, adds the unchanged-rows checks)
 #include "features/CoverBlend.hpp"
+#include "render/BlpColour.hpp"
 #include "features/GroundMaterialTable.hpp"
 #include "features/SurfaceCoverTable.hpp"
 #include "env/WorldQuery.hpp"
@@ -25,6 +26,7 @@
 namespace mat = wxl_livingazeroth::materials;
 namespace ct = wxl_livingazeroth::covertable;
 namespace blend = wxl_livingazeroth::cover::blend;
+namespace blp = wxl_livingazeroth::blp;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__)); } while (false)
 
@@ -545,6 +547,76 @@ int main(int argc, char** argv)
             const uint8_t* snowOnly[1] = { plainSnow };
             blend::BorrowedWeights(snowOnly, 1, out);
             for (int s = 0; s < 8; ++s) CHECK(out[s] == 0);         // plain snow beside it: white, as before
+        });
+        Test("look rule: sand over mixed ground takes the rest of the ground's colour at its share (the same as two lerps)", []
+        {
+            // Borean's shore: its sand cover (tint 0x6C675C at 0.05) where the alpha maps paint 44% dark rock.
+            const float sand[3] = { 0.9f, 0.85f, 0.75f }, rock[3] = { 0.25f, 0.24f, 0.22f };
+            float tint[3] = { 0x6C / 255.0f, 0x67 / 255.0f, 0x5C / 255.0f }, strength = 0.05f;
+            const float ownTint[3] = { tint[0], tint[1], tint[2] }, ownStrength = strength;
+            blend::MatchGround(tint, strength, rock, 0.44f);
+            CHECK(strength > 0.44f && strength < 1.0f);
+            for (int k = 0; k < 3; ++k)
+            {
+                const float once = sand[k] + (ownTint[k] - sand[k]) * ownStrength;        // the shader's lerp by its own tint
+                const float twice = once + (rock[k] - once) * 0.44f;                     // then the ground's share
+                const float merged = sand[k] + (tint[k] - sand[k]) * strength;           // what the shader now draws
+                CHECK(std::fabs(merged - twice) < 1e-5f);
+                CHECK(tint[k] >= 0.0f && tint[k] <= 1.0f);                               // still a colour
+                CHECK(merged < sand[k]);                                                 // darker than pure sand
+            }
+            // No other ground there, or no tint (snow): untouched.
+            float t2[3] = { 0.5f, 0.4f, 0.3f }, s2 = 0.2f;
+            blend::MatchGround(t2, s2, rock, 0.0f);
+            CHECK(Near(t2[0], 0.5f) && Near(t2[1], 0.4f) && Near(t2[2], 0.3f) && Near(s2, 0.2f));
+            // All the ground other: the ground's colour, fully.
+            float t3[3] = { 0.5f, 0.4f, 0.3f }, s3 = 0.2f;
+            blend::MatchGround(t3, s3, rock, 1.0f);
+            CHECK(Near(s3, 1.0f) && Near(t3[0], rock[0]) && Near(t3[1], rock[1]) && Near(t3[2], rock[2]));
+        });
+        Test("ground colour: DXT colour blocks decode as the formats say; a BLP's average from its ~32 px mip", []
+        {
+            // Pure red (0xF800) and pure blue (0x001F) endpoints; texel t's index in bits 2t.
+            const uint8_t four[8] = { 0x00, 0xF8, 0x1F, 0x00, 0xE4, 0xE4, 0xE4, 0xE4 }; // indices 0,1,2,3 per row
+            float rgb[16][3];
+            bool opaque[16];
+            blp::DecodeColourBlock(four, true, rgb, opaque);
+            CHECK(Near(rgb[0][0], 1.0f) && Near(rgb[0][2], 0.0f));                         // index 0: red
+            CHECK(Near(rgb[1][0], 0.0f) && Near(rgb[1][2], 1.0f));                         // index 1: blue
+            CHECK(Near(rgb[2][0], 2.0f / 3.0f) && Near(rgb[2][2], 1.0f / 3.0f));           // index 2: 2/3 red
+            CHECK(Near(rgb[3][0], 1.0f / 3.0f) && Near(rgb[3][2], 2.0f / 3.0f) && opaque[3]);
+            const uint8_t three[8] = { 0x1F, 0x00, 0x00, 0xF8, 0xE4, 0xE4, 0xE4, 0xE4 };  // c0 <= c1: DXT1's 3 colours
+            blp::DecodeColourBlock(three, true, rgb, opaque);
+            CHECK(Near(rgb[2][0], 0.5f) && Near(rgb[2][2], 0.5f) && opaque[2] && !opaque[3]);
+            blp::DecodeColourBlock(three, false, rgb, opaque);                              // DXT3/5: always 4 colours
+            CHECK(opaque[3] && Near(rgb[2][2], 2.0f / 3.0f));
+
+            // A 64 x 64 DXT1 BLP with mips 64, 32, 16: level 1 (32 px) is read. Level 0 all red, level 1 half red half
+            // blue by blocks, level 2 all blue: the average is level 1's, half and half.
+            std::vector<uint8_t> file(148 + 1024, 0);
+            std::memcpy(file.data(), "BLP2", 4);
+            file[4] = 1; file[8] = 2; file[9] = 0; file[10] = 0; file[11] = 1;
+            auto put32 = [&](size_t at, uint32_t v) { std::memcpy(file.data() + at, &v, 4); };
+            put32(12, 64); put32(16, 64);
+            const uint8_t red[8] = { 0x00, 0xF8, 0x00, 0xF8, 0, 0, 0, 0 }, blue[8] = { 0x1F, 0x00, 0x1F, 0x00, 0, 0, 0, 0 };
+            const uint32_t sizes[3] = { 64, 32, 16 };
+            for (int m = 0; m < 3; ++m)
+            {
+                put32(20 + 4 * m, static_cast<uint32_t>(file.size()));
+                const uint32_t blocks = (sizes[m] / 4) * (sizes[m] / 4);
+                put32(84 + 4 * m, blocks * 8);
+                for (uint32_t b = 0; b < blocks; ++b)
+                {
+                    const uint8_t* block = m == 0 ? red : m == 2 ? blue : (b % 2 ? blue : red);
+                    file.insert(file.end(), block, block + 8);
+                }
+            }
+            float average[3] = {};
+            CHECK(blp::AverageColour(file.data(), file.size(), average));
+            CHECK(Near(average[0], 0.5f) && Near(average[1], 0.0f) && Near(average[2], 0.5f));
+            CHECK(!blp::AverageColour(file.data(), 100, average));                           // not a whole header
+            file[0] = 'X';
+            CHECK(!blp::AverageColour(file.data(), file.size(), average));                   // not BLP2
         });
         Test("the tables reload: a second load gives the same answers", [&]
         {

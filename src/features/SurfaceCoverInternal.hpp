@@ -86,6 +86,7 @@ namespace wxl_livingazeroth::cover::detail
         float brightness = 0.93f;       // cover albedo
         float fillBudgetMs = 2.0f;      // sampling work per frame for fills and recentres
         int   materialSource = 0;       // 0 the painted strength of every layer (alpha maps), 1 the dominant layer per cell
+        int   matchGround = 1;          // sand, ash and mud over mixed ground take the other layers' colour (blend::MatchGround)
         int   alphaSwap = 0;            // debug: read the alpha maps with rows and columns swapped
         int   wireframe = 0;
         int   drawPoint = 0;            // 0 right after the terrain (inside the world pass), 1 end of the scene

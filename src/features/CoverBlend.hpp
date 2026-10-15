@@ -87,6 +87,23 @@ namespace wxl_livingazeroth::cover::blend
         if (top > 0.0f) { shareA *= all / top; shareC *= all / top; }
     }
 
+    /// A ground-like cover (one with a tint -- sand, ash, mud: the ground's own texture, not snow's white) lying on
+    /// ground the alpha maps paint only partly with it: `bareShare` of the ground there is other textures, whose
+    /// average colour is `ground`. Drawn as its own texture alone, the cover was paler than the blend it lay on, in
+    /// patches wherever its coverage crossed the edge noise (Borean Tundra's shores: "borean tundra sand is still
+    /// kinda whack sadly", the user, 2026-10-15). The shader leans the cover toward its tint by the tint's strength
+    /// (colour = lerp(cover, tint, strength)), so the ground's colour goes in there: lerp(lerp(cover, tint, s),
+    /// ground, f) is the one lerp(cover, T, A) with 1 - A = (1 - s)(1 - f), T A = tint s (1 - f) + ground f -- a
+    /// convex mix, so T stays a colour. No bare share (or no tint: snow) leaves both as they were.
+    inline void MatchGround(float tint[3], float& strength, const float ground[3], float bareShare)
+    {
+        const float f = std::clamp(bareShare, 0.0f, 1.0f), s = std::clamp(strength, 0.0f, 1.0f);
+        const float a = 1.0f - (1.0f - s) * (1.0f - f);
+        if (f <= 0.0f || a <= 0.0f) return;
+        for (int k = 0; k < 3; ++k) tint[k] = (tint[k] * s * (1.0f - f) + ground[k] * f) / a;
+        strength = a;
+    }
+
     /// The cover texture weights (8 slots, 0..255) uploaded for a cell with no cover look of its own
     /// (bare ground, no cover row and no fallen snow): those of its neighbour with the most texture,
     /// or none. `neighbours` holds each neighbour's weights, null for one that has no look either.

@@ -101,6 +101,7 @@ namespace wxl_livingazeroth::cover::detail
         g_api->UiSliderFloat("Fill budget (ms per frame)", &g_settings.fillBudgetMs, 0.5f, 10.0f);
         static const char* const sources[] = { "Painted strength of every layer (alpha maps)", "Dominant layer per terrain cell (old)" };
         g_api->UiCombo("Material from", &g_settings.materialSource, sources, 2);
+        g_api->UiCheckbox("Sand, ash and mud take the colour of the ground they lie on", &g_settings.matchGround);
         g_api->UiCheckbox("Swap alpha map axes (debug)", &g_settings.alphaSwap);
         g_api->UiCheckbox("Wireframe", &g_settings.wireframe);
         static const char* const debugViews[] = { "Off", "Texture share (green = textured, red = plain colour)", "Shine only", "Light only" };

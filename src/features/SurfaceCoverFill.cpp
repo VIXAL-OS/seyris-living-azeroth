@@ -2,11 +2,14 @@
 
 #include "GrassPerf.hpp"
 #include "GroundMaterialTable.hpp"
+#include "../render/BlpTexture.hpp"
 
 #include <memory>
 #include <array>
+#include <cctype>
 #include <climits>
 #include <cmath>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -22,13 +25,36 @@ namespace wxl_livingazeroth::cover::detail
         covertable::Values painted;
         covertable::Values look;
         bool paintedSnow = false;
+        bool hasGround = false; // the layer's texture's average colour is known
+        float ground[3] = {};   // (RGB 0..1): what a ground-like cover over it takes (blend::MatchGround)
     };
+
+    // Each terrain texture's average colour, read once per session from the client's archives (render/BlpColour.hpp;
+    // a few textures per zone, tens of KB each).
+    std::unordered_map<std::string, std::array<float, 4>> g_groundColours;
+    bool GroundColour(const char* texture, float out[3])
+    {
+        if (!texture || !*texture) return false;
+        std::string key(texture);
+        for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        auto it = g_groundColours.find(key);
+        if (it == g_groundColours.end())
+        {
+            std::array<float, 4> v{};
+            v[3] = blp::AverageColour(texture, v.data()) ? 1.0f : 0.0f;
+            it = g_groundColours.emplace(std::move(key), v).first;
+        }
+        for (int k = 0; k < 3; ++k) out[k] = it->second[k];
+        return it->second[3] > 0.0f;
+    }
+
     LayerRows RowsFor(uint32_t area, int map, const char* texture, uint32_t effect, int terrainType)
     {
         LayerRows r;
         r.painted = covertable::Resolve(area, map, texture, effect, terrainType);
         r.paintedSnow = r.painted.depth > 0.0f && covertable::IsSnow(r.painted.coverMaterial, area, map);
         r.look = covertable::SnowLook(area, map, texture, effect, terrainType);
+        r.hasGround = GroundColour(texture, r.ground);
         return r;
     }
 
@@ -217,6 +243,7 @@ namespace wxl_livingazeroth::cover::detail
         float paintedDepth = 0.0f, snowDepth = 0.0f;
         float gatedW = 0.0f, gatedMin = 0.0f, gatedRest = 0.0f;
         float bare[4] = {};
+        float groundSum[3] = {}, groundW = 0.0f; // the bare layers' colours (those known), for MatchGround below
         for (int k = 0; k < count; ++k)
         {
             const float wk = parts[k].weight;
@@ -225,6 +252,11 @@ namespace wxl_livingazeroth::cover::detail
             const covertable::Values& pv = parts[k].rows->painted;
             const float pw = pv.depth > 0.0f ? wk * WaterFactor(pv.flags) : 0.0f;
             bare[k] = wk - pw;
+            if (bare[k] > 0.0f && parts[k].rows->hasGround)
+            {
+                for (int c = 0; c < 3; ++c) groundSum[c] += bare[k] * parts[k].rows->ground[c];
+                groundW += bare[k];
+            }
             if (pw <= 0.0f) continue;
             b.covered += pw;
             sum[kSumDepth] += pw * pv.depth;
@@ -261,6 +293,15 @@ namespace wxl_livingazeroth::cover::detail
             b.wetRest = gatedRest / gatedW;
         }
         FinishBlend(b, lookW, sum);
+        // A ground-like cover (tinted: sand, ash, mud) on ground painted partly with other textures takes their
+        // colour at their share, as the cover's own texture is (x the cover's albedo), so it looks like the blend it
+        // lies on rather than a paler patch of pure sand. Snow (no tint) stays white.
+        if (g_settings.matchGround && b.covered > 0.0f && b.tintStrength > 0.0f && groundW > 0.0f)
+        {
+            float ground[3];
+            for (int c = 0; c < 3; ++c) ground[c] = groundSum[c] / groundW * g_settings.brightness;
+            blend::MatchGround(b.tint, b.tintStrength, ground, groundW / total);
+        }
         return b;
     }
 
