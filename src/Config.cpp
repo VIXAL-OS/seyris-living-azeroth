@@ -175,6 +175,7 @@ namespace wxl_livingazeroth::config
             g.lightRange = In(s, f, "LightRange", "Lights farther than this from the camera (yards) don't light the fog. Lower = cheaper.", g.lightRange);
             g.cloudDeck = In(s, f, "CloudDeck", "Mountain zones (AreaClimate CloudBase): a deck of cloud in the air from the base up; peaks and buildings stand out of it.", g.cloudDeck);
             g.cloudDeckDensity = In(s, f, "CloudDeckDensity", "Your multiplier on the cloud deck's density.", g.cloudDeckDensity);
+            g.cloudDeckInside = In(s, f, "CloudDeckInside", "The cloud deck's density while you're inside it, as a share (back to 1 as you leave it through its soft bottom or top): lower = you see further when flying through an overcast deck.", g.cloudDeckInside);
             g.cloudDeckThickness = In(s, f, "CloudDeckThickness", "The cloud deck's thickness in yards, from its base up.", g.cloudDeckThickness);
             g.cloudDeckRange = In(s, f, "CloudDeckRange", "How far the cloud deck is drawn, in yards.", g.cloudDeckRange);
             g.cloudDeckSmooth = In(s, f, "CloudDeckSmooth", "1 = the cloud deck is worked out at half resolution and blurred onto the screen (smooth; about a quarter of its GPU time), 0 = every pixel (finer, grainy at a distance).", g.cloudDeckSmooth);

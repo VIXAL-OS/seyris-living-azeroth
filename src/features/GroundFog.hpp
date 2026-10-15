@@ -32,6 +32,7 @@ namespace wxl_livingazeroth::groundfog
         // from the base up, over the whole view; terrain and buildings stand out of it.
         int   cloudDeck = 1;
         float cloudDeckDensity = 1.0f;     // x its density (the place's Fogginess x kDeckDensity)
+        float cloudDeckInside = 0.5f;      // x its density while the camera is inside it (back to 1 over its soft bottom and top)
         float cloudDeckThickness = 120.0f; // yd from its base to its top
         float cloudDeckRange = 1200.0f;    // yd: how far it's drawn
         float cloudDeckSky = -1.0f;        // the panel's test override of the sky's cover, 0 clear .. 1 overcast; < 0 by weather and clock

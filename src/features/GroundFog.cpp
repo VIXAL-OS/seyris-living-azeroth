@@ -1767,6 +1767,16 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             return g_deck.density > 0.0f || DeckTarget(base, top, area) > 0.0f;
         }
 
+        // The deck drawn thinner while the camera is inside it (Settings::cloudDeckInside), so flying through an
+        // overcast deck you see across the zone ("extremely cloudy out", Icecrown, the user, 2026-10-15: "thin the
+        // cloud a little while you're inside it"); back to full over the deck's soft bottom and top, as its shape fades.
+        float DeckThinning(float camZ)
+        {
+            const float thick = std::fmax(g_deck.top - g_deck.base, 1.0f), edge = std::fmin(thick * 0.25f, 100.0f);
+            const float inside = std::clamp((camZ - g_deck.base) / edge, 0.0f, 1.0f) * std::clamp((g_deck.top - camZ) / edge, 0.0f, 1.0f);
+            return 1.0f - (1.0f - std::clamp(g_settings.cloudDeckInside, 0.0f, 1.0f)) * inside;
+        }
+
         void StepDeck(float dt)
         {
             float base, top;
@@ -1996,7 +2006,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 (probePx + 0.5f) / vp.Width, (probePy + 0.5f) / vp.Height,
                 static_cast<float>(half ? probePx / 2 : probePx), static_cast<float>(half ? probePy / 2 : probePy),
                 g_settings.probe ? 1.0f : 0.0f, static_cast<float>(vp.Width), static_cast<float>(vp.Height), 0.0f,
-                g_deck.base, g_deck.top, g_deck.density * (1.0f - (interior > 0.0f ? interior : 0.0f)), std::fmax(g_settings.cloudDeckRange, 100.0f),
+                g_deck.base, g_deck.top, g_deck.density * (1.0f - (interior > 0.0f ? interior : 0.0f)) * DeckThinning(cam[2]), std::fmax(g_settings.cloudDeckRange, 100.0f),
                 g_deck.color[0], g_deck.color[1], g_deck.color[2], 1.0f / kDeckTileYards,
                 0.5f + (0.5f - g_deck.cover) * 0.6f, kClingYards, kClingShare * (1.0f - g_deck.cover), 0.0f,
             };
@@ -2131,7 +2141,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                     const float dx = l.pos[0] - cam[0], dy = l.pos[1] - cam[1], dz = z - cam[2];
                     const float d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 > 400.0f * 400.0f) continue;
-                    const float sigma = g_deck.density * 0.55f * (0.3f + 0.7f * g_deck.cover) * shape;
+                    const float sigma = g_deck.density * DeckThinning(cam[2]) * 0.55f * (0.3f + 0.7f * g_deck.cover) * shape;
                     const float score = (l.color[0] + l.color[1] + l.color[2]) * sigma / std::fmax(d2, 100.0f);
                     int worst = 0;
                     for (int k = 1; k < kDeckLights; ++k) if (picks[k].score < picks[worst].score) worst = k;
@@ -2660,6 +2670,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         if (g_settings.cloudDeck)
         {
             g_api->UiSliderFloat("deck density##gfdeckd", &g_settings.cloudDeckDensity, 0.0f, 4.0f);
+            g_api->UiSliderFloat("deck density while you're inside it (x; lower = see further)##gfdecki", &g_settings.cloudDeckInside, 0.1f, 1.0f);
             g_api->UiSliderFloat("deck range (yd)##gfdeckr", &g_settings.cloudDeckRange, 200.0f, 3000.0f);
             // A checkbox for the override, not a slider whose -1 meant "by weather and clock" ("why does the deck sky
             // start at -1 tho", the user, 2026-10-13). Switched on, it starts from the sky as it is.
@@ -2673,8 +2684,10 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             char line[200];
             if (g_deck.density > 0.0f)
             {
-                std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f)%s", g_deck.base, g_deck.top,
-                              g_deck.density, world::Current().playerPos[2], g_psDeck ? "" : " -- its shader failed (see the log)");
+                float camNow[3] = {};
+                wxl::game::camera::GetPosition(camNow);
+                std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f; drawn x%.2f)%s", g_deck.base, g_deck.top,
+                              g_deck.density, world::Current().playerPos[2], DeckThinning(camNow[2]), g_psDeck ? "" : " -- its shader failed (see the log)");
                 g_api->UiText(line);
                 std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s); colour %.2f %.2f %.2f (%s)", g_deck.cover * 100.0f,
                               g_deck.coverWhy, g_deck.color[0], g_deck.color[1], g_deck.color[2], g_deck.colorWhy);
