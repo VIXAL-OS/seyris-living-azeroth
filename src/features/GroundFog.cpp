@@ -304,12 +304,20 @@ float PoolGate(FogSample s) { return cPool.w > 0.5 ? saturate(s.col.a * 4 / max(
 void StepSigma(FogSample A, FogSample B, float za, float zb, out float2 gA, out float2 gB)
 {
     float ref = cCam.w;
-    // An end in a cell not started yet (thickness < 0, its ground a placeholder) takes the other's
-    // near floor, thickness and pool; an end without far fog the other's far floor.
-    bool rA = A.f.g > 0, rB = B.f.g > 0;
+    // An end outside the near field (edge 0: past its box, or in a cell not started yet) takes the other's near floor,
+    // thickness and pool; an end without far fog the other's far floor. Past the box the field texture wraps round to a
+    // cell 256 yd away, and only its density was weighed out: its floor and pool still set the layer's height over the
+    // whole step, so seen from high up (the step past MaxDistance down to the ground, ~130 yd) the near fog filled
+    // the air in a band ending dead straight where the ground left the box ("square fog loadin", the user's probe
+    // over Crystalsong, 2026-10-15: the field's own ground at 175..187 rising east, the camera 350 yd up).
+    bool rA = A.edge > 0, rB = B.edge > 0;
     float bA = rA || !rB ? A.f.b : B.f.b, bB = rB || !rA ? B.f.b : A.f.b; // near layer floor (empty cells hold their ground)
     float tA = rA ? A.f.g : B.f.g, tB = rB ? B.f.g : A.f.g;
     float fA = A.far.r > 0 ? A.far.b : B.far.b, fB = B.far.r > 0 ? B.far.b : A.far.b;
+    // Over the field's edge band its floor fades into the far map's (the low ground around each chunk), so where an
+    // end leaves the box nothing jumps.
+    if (A.far.r > 0) bA = lerp(A.far.b, bA, A.edge);
+    if (B.far.r > 0) bB = lerp(B.far.b, bB, B.edge);
     float light = LightAverage(0, max(0.5 * (tA + tB), 0.25), za - (bA + ref), zb - (bB + ref));
     float far = LightAverage(0, max(max(A.far.g, B.far.g), 0.25), za - (fA + ref), zb - (fB + ref));
     FogSample pA = A, pB = B;
