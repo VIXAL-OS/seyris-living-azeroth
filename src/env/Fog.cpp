@@ -826,7 +826,9 @@ namespace wxl_livingazeroth::fog
             g_steep[index] = static_cast<uint8_t>(Smooth(g_field.steepStart, std::fmax(g_field.steepFull, g_field.steepStart + 0.1f), degrees) * 255.0f + 0.5f);
         }
 
-        /// A quarter of the grid's rows per step: their targets, and new cells started.
+        constexpr int kStartsPerStep = 2048;  // cells that scrolled in, started outside the quarter (~1.4 ms at most)
+
+        /// A quarter of the grid's rows per step: their targets; and new cells started, anywhere in the grid.
         void RulesPass()
         {
             if (!g_inputs.valid) return;
@@ -835,6 +837,71 @@ namespace wxl_livingazeroth::fog
             const double t0 = grassperf::Now();
             static std::vector<int> startedNow;
             startedNow.clear();
+            // One cell: its targets; a reseed jumps it to them, a cell that just scrolled in starts.
+            auto ruleCell = [&](int i, int j, int index, bool reseed, bool refreshBlend) {
+                // Areas don't move: a cell's blend for new cells, else every 4th visit of its row
+                // (~4 s; picks up chunks loaded late), not every second (part of its ~0.4 ms).
+                if (g_fresh[index] || refreshBlend || reseed) UpdateBlend(i, j, index);
+                UpdateSlope(i, j, index);
+                float t[kKindCount];
+                CellTargets(i, j, index, t);
+                for (int k = 0; k < kKindCount; ++k)
+                {
+                    g_target[k][index] = static_cast<uint8_t>(t[k] * 255.0f + 0.5f);
+                    const float weight = HeavyShare(k, index);
+                    if (reseed)
+                    {
+                        g_amount[k][index] = t[k];
+                        g_pool[k][index] = weight * t[k];
+                        if (kAnchored[k]) g_floor[k][index] = g_ground[index];
+                    }
+                    // A cell that just scrolled in continues its running neighbours: their progress
+                    // (amount / target, averaged) applied to its own target, so where the targets
+                    // match it starts at the neighbours' amount, and a hilltop next to a hollow still
+                    // starts at its own lower target. Where their targets have gone but fog lingers,
+                    // their amount (minus the steep share). Neighbours started in this same pass
+                    // don't count (after a teleport one row would be copied over the grid). Each new
+                    // strip at the field's edge used to start from an estimate (the zone's progress)
+                    // and then relax for minutes (mist: 300 s half-life): bands of rows at a
+                    // distance, differing while their targets were equal (probe cross-sections,
+                    // 2026-10-12). No running neighbour: the zone's progress (zone-wide kinds), else
+                    // the progress around the player.
+                    else if (g_fresh[index] == 1)
+                    {
+                        const float before = g_amount[k][index];
+                        float sumRatio = 0.0f, sumAmount = 0.0f;
+                        int ratios = 0, amounts = 0;
+                        for (int dj = -1; dj <= 1; ++dj)
+                            for (int di = -1; di <= 1; ++di)
+                            {
+                                const int ni = i + di, nj = j + dj;
+                                if ((di == 0 && dj == 0) || ni < g_grid.firstI || ni >= g_grid.firstI + kGridSize ||
+                                    nj < g_grid.firstJ || nj >= g_grid.firstJ + kGridSize) continue;
+                                const int n = Index(ni, nj);
+                                if (!g_groundKnown[n] || g_fresh[n] != 0) continue;
+                                const float tn = g_target[k][n] / 255.0f;
+                                if (tn > 0.01f) { sumRatio += g_amount[k][n] / tn; ++ratios; }
+                                sumAmount += g_amount[k][n];
+                                ++amounts;
+                            }
+                        float start;
+                        if (t[k] > 0.01f && ratios) start = t[k] * std::fmin(sumRatio / ratios, 2.0f);
+                        else if (amounts) start = sumAmount / amounts * (1.0f - g_steep[index] / 255.0f);
+                        else
+                        {
+                            const ZoneFog* zone = kZoneWide[k] ? FindZoneFog(InputsFor(g_area[index] ? g_area[index] : g_playerArea).zone) : nullptr;
+                            start = t[k] * g_progress[k];
+                            if (zone && zone->started)
+                                start = zone->target[k] > 0.01f ? t[k] * std::fmin(zone->amount[k] / zone->target[k], 2.0f)
+                                                                : zone->amount[k] * (1.0f - g_steep[index] / 255.0f);
+                        }
+                        g_amount[k][index] = std::fmax(before, Clamp01(start));
+                        g_pool[k][index] = std::fmax(g_pool[k][index], weight * g_amount[k][index]);
+                        AddFrom(k, index, before, g_amount[k][index], g_ground[index]);
+                    }
+                }
+                if (g_fresh[index]) { g_fresh[index] = 2; startedNow.push_back(index); } // 2: started in this pass
+            };
             for (int r = 0; r < kGridSize / 4; ++r)
             {
                 const int j = g_grid.firstJ + g_rulesRow;
@@ -845,69 +912,24 @@ namespace wxl_livingazeroth::fog
                 for (int i = g_grid.firstI; i < g_grid.firstI + kGridSize; ++i)
                 {
                     const int index = Index(i, j);
-                    if (!g_groundKnown[index]) continue;
-                    // Areas don't move: a cell's blend for new cells, else every 4th visit of its row
-                    // (~4 s; picks up chunks loaded late), not every second (part of its ~0.4 ms).
-                    if (g_fresh[index] || refreshBlend || reseed) UpdateBlend(i, j, index);
-                    UpdateSlope(i, j, index);
-                    float t[kKindCount];
-                    CellTargets(i, j, index, t);
-                    for (int k = 0; k < kKindCount; ++k)
-                    {
-                        g_target[k][index] = static_cast<uint8_t>(t[k] * 255.0f + 0.5f);
-                        const float weight = HeavyShare(k, index);
-                        if (reseed)
-                        {
-                            g_amount[k][index] = t[k];
-                            g_pool[k][index] = weight * t[k];
-                            if (kAnchored[k]) g_floor[k][index] = g_ground[index];
-                        }
-                        // A cell that just scrolled in continues its running neighbours: their progress
-                        // (amount / target, averaged) applied to its own target, so where the targets
-                        // match it starts at the neighbours' amount, and a hilltop next to a hollow still
-                        // starts at its own lower target. Where their targets have gone but fog lingers,
-                        // their amount (minus the steep share). Neighbours started in this same pass
-                        // don't count (after a teleport one row would be copied over the grid). Each new
-                        // strip at the field's edge used to start from an estimate (the zone's progress)
-                        // and then relax for minutes (mist: 300 s half-life): bands of rows at a
-                        // distance, differing while their targets were equal (probe cross-sections,
-                        // 2026-10-12). No running neighbour: the zone's progress (zone-wide kinds), else
-                        // the progress around the player.
-                        else if (g_fresh[index] == 1)
-                        {
-                            const float before = g_amount[k][index];
-                            float sumRatio = 0.0f, sumAmount = 0.0f;
-                            int ratios = 0, amounts = 0;
-                            for (int dj = -1; dj <= 1; ++dj)
-                                for (int di = -1; di <= 1; ++di)
-                                {
-                                    const int ni = i + di, nj = j + dj;
-                                    if ((di == 0 && dj == 0) || ni < g_grid.firstI || ni >= g_grid.firstI + kGridSize ||
-                                        nj < g_grid.firstJ || nj >= g_grid.firstJ + kGridSize) continue;
-                                    const int n = Index(ni, nj);
-                                    if (!g_groundKnown[n] || g_fresh[n] != 0) continue;
-                                    const float tn = g_target[k][n] / 255.0f;
-                                    if (tn > 0.01f) { sumRatio += g_amount[k][n] / tn; ++ratios; }
-                                    sumAmount += g_amount[k][n];
-                                    ++amounts;
-                                }
-                            float start;
-                            if (t[k] > 0.01f && ratios) start = t[k] * std::fmin(sumRatio / ratios, 2.0f);
-                            else if (amounts) start = sumAmount / amounts * (1.0f - g_steep[index] / 255.0f);
-                            else
-                            {
-                                const ZoneFog* zone = kZoneWide[k] ? FindZoneFog(InputsFor(g_area[index] ? g_area[index] : g_playerArea).zone) : nullptr;
-                                start = t[k] * g_progress[k];
-                                if (zone && zone->started)
-                                    start = zone->target[k] > 0.01f ? t[k] * std::fmin(zone->amount[k] / zone->target[k], 2.0f)
-                                                                    : zone->amount[k] * (1.0f - g_steep[index] / 255.0f);
-                            }
-                            g_amount[k][index] = std::fmax(before, Clamp01(start));
-                            g_pool[k][index] = std::fmax(g_pool[k][index], weight * g_amount[k][index]);
-                            AddFrom(k, index, before, g_amount[k][index], g_ground[index]);
-                        }
-                    }
-                    if (g_fresh[index]) { g_fresh[index] = 2; startedNow.push_back(index); } // 2: started in this pass
+                    if (g_groundKnown[index]) ruleCell(i, j, index, reseed, refreshBlend);
+                }
+            }
+            // Cells that scrolled in elsewhere start now too, not when the quarter reaches their row: up to a second
+            // later, so flying fast a strip up to ~26 yd deep at the field's leading edge showed the far map's zone fog
+            // and then switched to its own at once ("things loading in squares", "it seemed like this one", the user,
+            // 2026-10-15). Now at most a step's travel (~7 yd at 280%), out where the field fades into the far map.
+            // Capped per step: after a teleport the whole grid is new (the quarters start it within a second anyway).
+            int starts = 0;
+            for (int r = 0; r < kGridSize - kGridSize / 4 && starts < kStartsPerStep; ++r)
+            {
+                const int j = g_grid.firstJ + (g_rulesRow + r) % kGridSize; // the rows this quarter didn't reach
+                for (int i = g_grid.firstI; i < g_grid.firstI + kGridSize; ++i)
+                {
+                    const int index = Index(i, j);
+                    if (g_fresh[index] != 1 || !g_groundKnown[index]) continue;
+                    ruleCell(i, j, index, false, false);
+                    ++starts;
                 }
             }
             for (int index : startedNow) g_fresh[index] = 0;
