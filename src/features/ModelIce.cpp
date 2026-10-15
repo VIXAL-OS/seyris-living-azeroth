@@ -1,4 +1,5 @@
 #include "ModelIce.hpp"
+#include "DoodadFade.hpp"
 
 #include "CoverRipples.hpp"
 
@@ -829,7 +830,18 @@ namespace wxl_livingazeroth::modelice
         rule.name = "model ice (M2 pixel)";
         rule.pixel = true;
         rule.contains = [](const void* wrapper) { return m2effects::IsPixelWrapper(wrapper) && !m2effects::IsWmoPixelWrapper(wrapper); };
-        rule.edit = &EditPixelCounted;
+        // Then the doodads' dissolve (features/DoodadFade): ShaderPatch applies one table rule per shader, and this one
+        // owns the M2 pixel shaders. Its block goes in after the ice's edit (which refuses variants using any b register).
+        rule.edit = [](std::string& src, std::string& why)
+        {
+            const std::string stock = src;
+            const bool ice = EditPixelCounted(src, why);
+            if (!ice) src = stock;
+            std::string whyNot;
+            const bool dissolve = doodadfade::EditPixelDissolve(src, whyNot);
+            if (!ice && !dissolve) why += "; dissolve: " + whyNot;
+            return ice || dissolve;
+        };
         shaderpatch::Register(std::move(rule));
         // The buildings' (MapObj*) variants: the ice, and the footprint rims on their sand floors (features/WmoIce).
         shaderpatch::TableRule wmo;

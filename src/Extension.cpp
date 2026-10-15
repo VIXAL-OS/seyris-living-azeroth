@@ -232,6 +232,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::terrainice::Install(api); // the chunk draw: each chunk's ice mask
     wxl_livingazeroth::modelice::Install(api);   // the M2 batch draws: ice models switch their block on
     wxl_livingazeroth::playerdepth::Install(api); // the player's see-through batches (mount wings) write depth too
+    wxl_livingazeroth::doodadfade::Install(api);  // the doodad fade and the M2 batch draws: fading doodads dissolve in
     wxl_livingazeroth::modellights::Register();
     wxl_livingazeroth::modelice::Register();
     wxl_livingazeroth::shaderpatch::Install(api);
