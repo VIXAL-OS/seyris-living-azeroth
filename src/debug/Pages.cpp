@@ -15,6 +15,31 @@ namespace wxl_livingazeroth::pages
         struct Item { const char* title; WXL_PanelFn draw; };
         std::vector<Item> g_panels, g_quick;
         bool g_published = false;
+
+        // Without the control panel's pages: one overlay panel, its sections picked from a list. WarcraftXL's
+        // overlay holds 16 panels for all modules together and drops the rest without a word; this module's
+        // own ~16 filled it, and a new one pushed fog, lights and the light editor out ("I don't see this
+        // option at all", the user, 2026-10-15).
+        const WXL_Api* g_api = nullptr;
+        std::vector<WXL_PanelFn> g_overlayDraw; // the panels that went to the overlay's section list
+        std::vector<const char*> g_names;      // their titles without the module prefix
+        const char* g_overlayTitle = kTag;     // the first one's full title
+        int g_section = 0;
+
+        const char* ShortTitle(const char* title)
+        {
+            const size_t prefix = std::strncmp(title, kPrefix, std::strlen(kPrefix)) == 0 ? std::strlen(kPrefix) : 0;
+            return title + prefix;
+        }
+
+        void __cdecl Sections(void* /*user*/)
+        {
+            if (!g_api || g_overlayDraw.empty()) return;
+            if (g_api->UiCombo) g_api->UiCombo("section##lapages", &g_section, g_names.data(), static_cast<int>(g_names.size()));
+            if (g_section < 0 || g_section >= static_cast<int>(g_overlayDraw.size())) g_section = 0;
+            if (g_api->UiSeparator) g_api->UiSeparator();
+            g_overlayDraw[g_section](nullptr);
+        }
     }
 
     void AddPanel(const char* title, WXL_PanelFn draw) { g_panels.push_back({ title, draw }); }
@@ -24,19 +49,26 @@ namespace wxl_livingazeroth::pages
     {
         if (g_published) return;
         g_published = true;
+        g_api = api;
         const auto* controls = static_cast<const WXL_SeyrisControlsApi*>(
             api->GetInterface(WXL_SEYRIS_CONTROLS_INTERFACE_NAME, WXL_SEYRIS_CONTROLS_INTERFACE_VERSION));
         const bool pages = controls && controls->HasFeature("pages") && controls->AddPage;
         for (const Item& p : g_panels)
         {
-            const size_t prefix = std::strncmp(p.title, kPrefix, std::strlen(kPrefix)) == 0 ? std::strlen(kPrefix) : 0;
-            if (!pages || !controls->AddPage(kGroup, p.title + prefix, p.draw, nullptr))
-                api->UiAddPanel(p.title, p.draw, nullptr);
+            if (pages && controls->AddPage(kGroup, ShortTitle(p.title), p.draw, nullptr)) continue;
+            if (g_overlayDraw.empty()) g_overlayTitle = p.title;
+            g_overlayDraw.push_back(p.draw);
+            g_names.push_back(ShortTitle(p.title));
         }
+        // It opens on the fog, the section most often wanted.
+        for (size_t n = 0; n < g_names.size(); ++n)
+            if (std::strcmp(g_names[n], "fog") == 0) { g_section = static_cast<int>(n); break; }
+        if (g_overlayDraw.size() == 1) api->UiAddPanel(g_overlayTitle, g_overlayDraw[0], nullptr); // one alone keeps its own
+        else if (!g_overlayDraw.empty()) api->UiAddPanel(kTag, &Sections, nullptr);
         if (controls && controls->HasFeature("quick-features") && controls->AddQuickFeature)
             for (const Item& q : g_quick) controls->AddQuickFeature(kGroup, q.title, q.draw, nullptr);
-        api->Log(WXL_LOG_INFO, kTag, "ui: %zu panel(s) %s, %zu quick feature(s)%s.", g_panels.size(),
-                 pages ? "as pages of the control panel" : "as overlay panels (wxl-seyris-tools' control panel not found)",
-                 g_quick.size(), pages ? "" : " not shown");
+        api->Log(WXL_LOG_INFO, kTag, "ui: %zu panel(s) as pages of the control panel, %zu as sections of one overlay panel%s; %zu quick feature(s)%s.",
+                 g_panels.size() - g_overlayDraw.size(), g_overlayDraw.size(),
+                 pages ? "" : " (wxl-seyris-tools' control panel pages not found)", g_quick.size(), pages ? "" : " not shown");
     }
 }
