@@ -49,6 +49,7 @@
 #include "features/ModelLights.hpp"
 #include "features/SurfaceCover.hpp"
 #include "features/ModelIce.hpp"
+#include "features/PlayerDepth.hpp"
 #include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
 #include "features/WmoIce.hpp"
@@ -150,6 +151,7 @@ namespace
         wxl_livingazeroth::clientweather::Apply();
         wxl_livingazeroth::doodadfade::Update();
         const auto& snap = wxl_livingazeroth::world::Refresh();
+        wxl_livingazeroth::playerdepth::Update(snap.inWorld);
         {
             prof::Scope scope(prof::kOursEnv);
             wxl_livingazeroth::climate::Update(snap);
@@ -229,6 +231,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::terrainwet::Register();
     wxl_livingazeroth::terrainice::Install(api); // the chunk draw: each chunk's ice mask
     wxl_livingazeroth::modelice::Install(api);   // the M2 batch draws: ice models switch their block on
+    wxl_livingazeroth::playerdepth::Install(api); // the player's see-through batches (mount wings) write depth too
     wxl_livingazeroth::modellights::Register();
     wxl_livingazeroth::modelice::Register();
     wxl_livingazeroth::shaderpatch::Install(api);
