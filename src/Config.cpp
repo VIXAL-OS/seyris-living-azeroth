@@ -177,6 +177,7 @@ namespace wxl_livingazeroth::config
             g.cloudDeckDensity = In(s, f, "CloudDeckDensity", "Your multiplier on the cloud deck's density.", g.cloudDeckDensity);
             g.cloudDeckThickness = In(s, f, "CloudDeckThickness", "The cloud deck's thickness in yards, from its base up.", g.cloudDeckThickness);
             g.cloudDeckRange = In(s, f, "CloudDeckRange", "How far the cloud deck is drawn, in yards.", g.cloudDeckRange);
+            g.cloudDeckSmooth = In(s, f, "CloudDeckSmooth", "1 = the cloud deck is worked out at half resolution and blurred onto the screen (smooth; about a quarter of its GPU time), 0 = every pixel (finer, grainy at a distance).", g.cloudDeckSmooth);
             g.cloudDeckGlow = In(s, f, "CloudDeckGlow", "The cloud deck glows around what's much brighter than it (lightning flashes, the moon): your multiplier, 0 = off.", g.cloudDeckGlow);
             g.cloudDeckTint = In(s, f, "CloudDeckTint", "In the cloud deck, see-through models and effects drawn after it (Blizzard's own storm clouds) fog toward the cloud's colour instead of the night fog's.", g.cloudDeckTint);
             g.poolSoftness = In(s, f, "PoolSoftness", "How soft heavy fog's edges are, 0 (crisp top, sharp sides) .. 1: its top blurs over this share of its depth, thin pools fade out.", g.poolSoftness);

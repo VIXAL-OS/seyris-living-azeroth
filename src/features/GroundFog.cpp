@@ -123,6 +123,10 @@ namespace wxl_livingazeroth::groundfog
         IDirect3DPixelShader9*   g_ps = nullptr;
         IDirect3DPixelShader9*   g_psUpscale = nullptr; // half resolution: the depth-aware upscale
         IDirect3DPixelShader9*   g_psDeck = nullptr;    // the cloud deck (its own pass: the march's shader is at ps_3_0's register limit)
+        IDirect3DPixelShader9*   g_psDeckBlur = nullptr; // the deck's half-resolution result blurred onto the screen
+        IDirect3DTexture9*       g_deckTex = nullptr;   // the deck's half-resolution target (D3DPOOL_DEFAULT)
+        UINT                     g_deckW = 0, g_deckH = 0;
+        bool                     g_deckTexFailed = false;
         IDirect3DTexture9*       g_halfTex = nullptr;   // half resolution: the march's target (D3DPOOL_DEFAULT: dropped on a reset)
         // The deck's glow: the frame copied down in 2x steps to 1/16 (D3DPOOL_DEFAULT render targets; [0] is full size,
         // for a multisampled frame), its shader, and the fog pass's constants of this frame (the glow runs at its end).
@@ -551,8 +555,9 @@ float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
         // The cloud deck (mountain zones: AreaClimate CloudBase .. CloudTop): a slab of cloud in the air over the whole view,
         // cut where the ray meets terrain or a building, so what rises above it stands out and what reaches into it is
         // in cloud. Soft at its bottom and top, patchy at the scale of clouds, a little brighter higher up. Its own pass
-        // (full resolution, blended like the fog: rgb = its light, a = what it lets through), drawn before the fog when
-        // the camera is below its top, after it when above.
+        // (rgb = its light, a = what it lets through), drawn before the fog when the camera is below its top, after it
+        // when above: at half resolution into its own target and blurred onto the screen (kDeckBlurHlsl), or straight
+        // onto the screen, blended like the fog.
         const char* const kDeckHlsl = R"(
 sampler2D depthTex : register(s0);
 sampler3D noiseTex : register(s2);
@@ -569,9 +574,11 @@ float4 cDeck      : register(c21); // x = its base (world z), y = its top, z = d
 float4 cDeckColor : register(c22); // rgb = its colour, w = 1 / its noise tile (yd)
 float4 cDeckSky   : register(c23); // x = the banks' threshold (0.2 overcast .. 0.8 clear), y = the cling veil's reach (yd), z = its share of the density
 float4 cLight[8]  : register(c27); // up to 4 lights in the cloud: [2k] = world position, [2k + 1].rgb = colour x the cloud's density there x strength
+float4 cDeckHalf  : register(c26); // xy = at half resolution, the uv shift onto full pixel (2i, 2j)'s centre; 0 at full
 
 float4 main(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR
 {
+    uv -= cDeckHalf.xy;
     float d = tex2Dlod(depthTex, float4(cUv.xy + uv * cUv.zw, 0, 0)).r;
     float d01 = saturate((d - cDepth.x) * cDepth.y);
     float ndcZ = cProj2.w > 0.5 ? d01 : d01 * 2 - 1;
@@ -790,6 +797,55 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
 }
 )";
 
+        // The deck onto the screen from its half-resolution target: 4 x 4 of its pixels round this one, a tent of radius
+        // 2 (its pixels) by distance, each weighed by how close its depth is to this pixel's (as the upscale: no cloud
+        // from the sky bleeding onto a peak in front of it). Each of its pixels took its 16 steps at its own random
+        // offset (white noise, so no pattern shows through thin cloud); averaged over ~10 of them the grain fades to
+        // about a third, and the clouds, hundreds of yards across, lose nothing.
+        const char* const kDeckBlurHlsl = R"(
+sampler2D depthTex : register(s0);
+sampler2D deckTex  : register(s7);
+float4 cDepth : register(c0);
+float4 cProj2 : register(c2);
+float4 cUv    : register(c12);
+float4 cSize  : register(c17);  // xy = the viewport in pixels (the deck's target: half of it, rounded up)
+
+float Distance(float2 vuv)
+{
+    float d = tex2Dlod(depthTex, float4(cUv.xy + vuv * cUv.zw, 0, 0)).r;
+    float d01 = saturate((d - cDepth.x) * cDepth.y);
+    float ndc = cProj2.w > 0.5 ? d01 : d01 * 2 - 1;
+    return abs(cProj2.y / min(ndc - cProj2.x, -1e-6));
+}
+
+float4 main(float2 uv : TEXCOORD0) : COLOR
+{
+    float z0 = Distance(uv);
+    float2 size = floor((cSize.xy + 1) * 0.5);
+    float2 l = (uv * cSize.xy - 0.5) * 0.5;
+    float2 base = floor(l) - 1;
+    float2 t = l - floor(l);
+    float4 sum = 0, nearest = float4(0, 0, 0, 1);
+    float weights = 0, nearestGap = 1e9;
+    [unroll] for (int y = 0; y < 4; ++y)
+    {
+        [unroll] for (int x = 0; x < 4; ++x)
+        {
+            float2 off = float2(x, y) - 1 - t;
+            float2 tent = max(2 - abs(off), 0);
+            float2 i = clamp(base + float2(x, y), 0, size - 1);
+            float4 v = tex2Dlod(deckTex, float4((i + 0.5) / size, 0, 0));
+            float gap = abs(Distance((2 * i + 0.5) / cSize.xy) - z0);
+            float w = tent.x * tent.y * saturate(1 - gap / (0.05 * z0 + 0.25));
+            sum += v * w;
+            weights += w;
+            if (gap < nearestGap) { nearestGap = gap; nearest = v; }
+        }
+    }
+    return weights > 1e-3 ? sum / weights : nearest;
+}
+)";
+
         // ------------------------------------------------------------------ helpers
         uint16_t ToHalf(float f)
         {
@@ -818,6 +874,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_psDeck) { g_psDeck->Release(); g_psDeck = nullptr; }
             if (g_halfTex) { g_halfTex->Release(); g_halfTex = nullptr; }
             g_halfFailed = false;
+            if (g_psDeckBlur) { g_psDeckBlur->Release(); g_psDeckBlur = nullptr; }
+            if (g_deckTex) { g_deckTex->Release(); g_deckTex = nullptr; }
+            g_deckTexFailed = false;
             if (g_psGlow) { g_psGlow->Release(); g_psGlow = nullptr; }
             if (g_psBright) { g_psBright->Release(); g_psBright = nullptr; }
             if (g_brightTex) { g_brightTex->Release(); g_brightTex = nullptr; }
@@ -1776,6 +1835,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             {
                 g_ps = Compile(dev, kPsHlsl);
                 g_psUpscale = g_ps ? Compile(dev, kUpscaleHlsl) : nullptr;
+                g_psDeckBlur = g_ps ? Compile(dev, kDeckBlurHlsl) : nullptr;
                 g_psDeck = g_ps ? Compile(dev, kDeckHlsl) : nullptr;
                 g_psGlow = g_ps ? Compile(dev, kGlowHlsl) : nullptr;
                 g_psBright = g_ps ? Compile(dev, kBrightHlsl) : nullptr;
@@ -2083,9 +2143,84 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_deckLightsUsed = n;
                 dev->SetPixelShaderConstantF(27, lightConst, kDeckLights * 2);
             }
+            // Smooth: the deck marched at half resolution into its own target first (unblended), then drawDeck blurs it
+            // onto the screen. Straight onto the screen if the target or the blur can't be had.
+            bool deckSmooth = deckOn && g_settings.cloudDeckSmooth && g_psDeckBlur && !g_deckTexFailed;
+            if (deckOn)
+            {
+                const float none[4] = {}; // (c26 is past the pass's own constants: whatever drew last left it)
+                dev->SetPixelShaderConstantF(26, none, 1);
+            }
+            if (deckSmooth)
+            {
+                const UINT w = (vp.Width + 1) / 2, h = (vp.Height + 1) / 2;
+                if (g_deckTex && (w != g_deckW || h != g_deckH)) { g_deckTex->Release(); g_deckTex = nullptr; }
+                if (!g_deckTex)
+                {
+                    if (FAILED(dev->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &g_deckTex, nullptr)) &&
+                        FAILED(dev->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &g_deckTex, nullptr)))
+                    {
+                        g_deckTex = nullptr;
+                        g_deckTexFailed = true;
+                        g_api->Log(WXL_LOG_WARN, kTag, "cloud deck: couldn't create its half-resolution target (%ux%u); drawing it at full resolution.", w, h);
+                    }
+                    g_deckW = w;
+                    g_deckH = h;
+                }
+                IDirect3DSurface9* screen = nullptr;
+                IDirect3DSurface9* deckSurface = nullptr;
+                IDirect3DSurface9* depthNow = nullptr;
+                deckSmooth = g_deckTex && SUCCEEDED(g_deckTex->GetSurfaceLevel(0, &deckSurface)) && deckSurface &&
+                             SUCCEEDED(dev->GetRenderTarget(0, &screen)) && screen;
+                if (deckSmooth)
+                {
+                    dev->GetDepthStencilSurface(&depthNow);
+                    DWORD blendWas = FALSE, writeWas = 0x07;
+                    dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &blendWas);
+                    dev->GetRenderState(D3DRS_COLORWRITEENABLE, &writeWas);
+                    dev->SetRenderTarget(0, deckSurface);
+                    dev->SetDepthStencilSurface(nullptr);
+                    D3DVIEWPORT9 dv = { 0, 0, g_deckW, g_deckH, 0.0f, 1.0f };
+                    dev->SetViewport(&dv);
+                    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+                    dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0x0F);
+                    const float shift[4] = { 0.5f / vp.Width, 0.5f / vp.Height, 0.0f, 0.0f };
+                    dev->SetPixelShaderConstantF(26, shift, 1);
+                    IDirect3DPixelShader9* psWas = nullptr;
+                    dev->GetPixelShader(&psWas);
+                    dev->SetPixelShader(g_psDeck);
+                    drawQuad(0.0f, 0.0f, static_cast<float>(g_deckW), static_cast<float>(g_deckH),
+                             2.0f * g_deckW / vp.Width, 2.0f * g_deckH / vp.Height);
+                    dev->SetPixelShader(psWas);
+                    if (psWas) psWas->Release();
+                    const float none[4] = {};
+                    dev->SetPixelShaderConstantF(26, none, 1);
+                    dev->SetRenderTarget(0, screen); // (resets the viewport: put the world's back)
+                    dev->SetDepthStencilSurface(depthNow);
+                    dev->SetViewport(&vp);
+                    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, blendWas);
+                    dev->SetRenderState(D3DRS_COLORWRITEENABLE, writeWas);
+                }
+                if (depthNow) depthNow->Release();
+                if (deckSurface) deckSurface->Release();
+                if (screen) screen->Release();
+            }
             auto drawDeck = [&](IDirect3DPixelShader9* restore) {
-                dev->SetPixelShader(g_psDeck);
+                if (deckSmooth)
+                {
+                    dev->SetPixelShader(g_psDeckBlur);
+                    dev->SetTexture(7, g_deckTex);
+                    dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+                    dev->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+                    dev->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+                    dev->SetSamplerState(7, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+                    dev->SetSamplerState(7, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+                    dev->SetSamplerState(7, D3DSAMP_SRGBTEXTURE, FALSE);
+                }
+                else
+                    dev->SetPixelShader(g_psDeck);
                 drawQuad(static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width), static_cast<float>(vp.Height), 1.0f, 1.0f);
+                if (deckSmooth) dev->SetTexture(7, nullptr);
                 dev->SetPixelShader(restore);
             };
 
@@ -2526,6 +2661,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (byHand) g_api->UiSliderFloat("deck sky: 0 clear .. 1 overcast##gfdecks", &g_settings.cloudDeckSky, 0.0f, 1.0f);
             g_api->UiCheckbox("in the deck, see-through models fog to the cloud's colour##gfdeckt", &g_settings.cloudDeckTint);
             g_api->UiSliderFloat("deck glow: lights in it, and lightning and the moon beyond 60 yd##gfdeckg", &g_settings.cloudDeckGlow, 0.0f, 3.0f);
+            g_api->UiCheckbox("smooth deck (half resolution, blurred: no pixel grain)##gfdecks", &g_settings.cloudDeckSmooth);
             char line[200];
             if (g_deck.density > 0.0f)
             {
@@ -2680,6 +2816,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         // (D3DPOOL_DEFAULT) and has to go before it. It's made again on the next draw.
         if (g_halfTex) { g_halfTex->Release(); g_halfTex = nullptr; }
         g_halfW = g_halfH = 0;
+        if (g_deckTex) { g_deckTex->Release(); g_deckTex = nullptr; }
+        g_deckW = g_deckH = 0;
+        g_deckTexFailed = false;
         g_halfFailed = false;
         for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
         if (g_brightTex) { g_brightTex->Release(); g_brightTex = nullptr; }
