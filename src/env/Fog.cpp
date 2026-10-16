@@ -124,7 +124,7 @@ namespace wxl_livingazeroth::fog
             uint32_t zone = 0;
             uint16_t slot = 0;   // its kind settings (g_slots)
             float airNow = 0.0f, airHourAgo = 0.0f, water = 0.0f, humidity = 0.0f, fogginess = 0.0f, cooling = 0.0f;
-            float humidityDry = 0.0f;   // the climate's own, without the rain-wet air (for other zones' targets)
+            float wetAir = 0.0f;        // its zone's rain-wet air (WetAirOf); humidity includes it
             float cloudBase = climate::kNoCloudBase; // the area's own (AreaClimate CloudBase; not blended: At() has none)
             float strength[kKindCount] = {};
         };
@@ -389,23 +389,47 @@ namespace wxl_livingazeroth::fog
         // the air's wetness rises toward a target from the rain's strength (the server's grade: light rain, ~0.04,
         // already counts), over a couple of minutes, and dries over ~25 minutes after. Wet air raises the humidity the
         // rules see, and counts toward the stillness mist needs (rain-cooled air), so showers mist up in the day too.
-        // Only around the player: the client knows no other place's weather.
+        // Per zone (server weather is per zone): the player's zone follows the live weather, and every other zone dries
+        // with no rain assumed (the client knows no other place's weather). One value that followed the player carried
+        // a shower's wet air along a flight path, and dry Arathi Highlands misted over at midday, its whole distance hazy
+        // from the air ("why is everything foggy asf in arathi highlands rn lol" / "but it wasn't raining in Arathi at
+        // the time?", the user, 2026-10-16). Looking back at a zone it rained in, its mist still shows while it dries.
         constexpr float kWetAirPerRain = 4.0f;       // target = sqrt(min(1, rain x this)): 0.04 -> 0.4; 0.25 and up -> 1
         constexpr float kWetAirRiseSeconds = 120.0f;
         constexpr float kWetAirDrySeconds = 1500.0f;
         constexpr float kWetAirHumidity = 0.8f;      // of the way from the place's humidity to saturated, fully wet
         constexpr float kWetAirStill = 0.6f;         // what fully wet air counts toward mist's stillness
-        float g_wetAir = 0.0f;
+        constexpr float kWetAirGone = 1.0e-3f;       // a zone's wet air below this is forgotten
+        struct ZoneWetAir { int map = -1; uint32_t zone = 0; float wet = 0.0f; };
+        std::vector<ZoneWetAir> g_wetAir; // session only
+
+        /// A zone's rain-wet air (0 for zones it hasn't rained in this session).
+        float WetAirOf(uint32_t zone)
+        {
+            for (const ZoneWetAir& z : g_wetAir) if (z.map == g_map && z.zone == zone) return z.wet;
+            return 0.0f;
+        }
 
         void StepWetAir(float dt)
         {
             const climate::Weather& w = climate::CurrentWeather();
-            const float target = std::sqrt(Clamp01((w.type == 1 ? w.intensity : 0.0f) * kWetAirPerRain));
-            const float seconds = target > g_wetAir ? kWetAirRiseSeconds : kWetAirDrySeconds;
-            g_wetAir += (target - g_wetAir) * (1.0f - std::exp(-dt / seconds));
+            const float rain = std::sqrt(Clamp01((w.type == 1 ? w.intensity : 0.0f) * kWetAirPerRain));
+            const uint32_t here = regional::PlayerZone();
+            auto mine = [&](const ZoneWetAir& z) { return here && z.map == g_map && z.zone == here; };
+            if (here && rain > 0.0f && std::none_of(g_wetAir.begin(), g_wetAir.end(), mine))
+                g_wetAir.push_back(ZoneWetAir{ g_map, here, 0.0f });
+            for (ZoneWetAir& z : g_wetAir)
+            {
+                const float target = mine(z) ? rain : 0.0f;
+                const float seconds = target > z.wet ? kWetAirRiseSeconds : kWetAirDrySeconds;
+                z.wet += (target - z.wet) * (1.0f - std::exp(-dt / seconds));
+            }
+            g_wetAir.erase(std::remove_if(g_wetAir.begin(), g_wetAir.end(),
+                                          [&](const ZoneWetAir& z) { return z.wet < kWetAirGone && !mine(z); }),
+                           g_wetAir.end());
         }
 
-        float WetHumidity(float humidity) { return humidity + (1.0f - Clamp01(humidity)) * kWetAirHumidity * g_wetAir; }
+        float WetHumidity(float humidity, float wetAir) { return humidity + (1.0f - Clamp01(humidity)) * kWetAirHumidity * wetAir; }
         float Smooth(float a, float b, float v) { const float t = Clamp01((v - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
 
         /// What the rules need about the place and the moment (the player's place; per-cell values
@@ -421,8 +445,8 @@ namespace wxl_livingazeroth::fog
             in.airNow = climate::Temperature(row).total;
             in.airHourAgo = climate::TemperatureAtTime(row, climate::Now().dayFraction - 1.0f / 24.0f).total;
             in.water = climate::WaterTemperature(row);
-            in.humidity = WetHumidity(row.humidity);
-            in.wetAir = g_wetAir;
+            in.wetAir = WetAirOf(regional::PlayerZone());
+            in.humidity = WetHumidity(row.humidity, in.wetAir);
             in.fogginess = row.fogginess;
             // The area's steady ground wind, not the sample at the player: standing in a lee or under a
             // roof mustn't calm the fog everywhere. Bearing clockwise from north (+X), east is -Y.
@@ -546,14 +570,13 @@ namespace wxl_livingazeroth::fog
             return s.windThin <= 0.0f ? 0.0f : Clamp01(1.0f - g_inputs.wind / s.windThin);
         }
 
-        /// The climate parts of a place's inputs, from a climate row.
+        /// The climate parts of a place's inputs, from a climate row (with a.wetAir, its zone's).
         void SetClimate(AreaInputs& a, const climate::Row& row)
         {
             a.airNow = climate::Temperature(row).total;
             a.airHourAgo = climate::TemperatureAtTime(row, climate::Now().dayFraction - 1.0f / 24.0f).total;
             a.water = climate::WaterTemperature(row);
-            a.humidityDry = row.humidity;
-            a.humidity = WetHumidity(row.humidity);
+            a.humidity = WetHumidity(row.humidity, a.wetAir);
             a.fogginess = row.fogginess;
             a.cooling = Clamp01((a.airHourAgo - a.airNow) / 2.5f);
         }
@@ -565,9 +588,10 @@ namespace wxl_livingazeroth::fog
             if (found != g_areaInputs.end()) return found->second;
             AreaInputs a;
             const climate::Row& own = climate::For(area, g_map);
+            a.zone = area ? regional::ZoneOf(area) : 0;
+            a.wetAir = WetAirOf(a.zone);
             SetClimate(a, own); // the area's own row: zones' typical fog (cells use At)
             a.cloudBase = own.cloudBase;
-            a.zone = area ? regional::ZoneOf(area) : 0;
             a.slot = SlotOf(area);
             for (int k = 0; k < kKindCount; ++k) a.strength[k] = g_slots[a.slot].kind[k].strength;
             return g_areaInputs.emplace(area, a).first->second;
@@ -596,9 +620,8 @@ namespace wxl_livingazeroth::fog
             const RulesInputs& in = g_inputs;
             auto Calm = [&](int k) { return CalmFor(g_slots[a.slot].kind[k]); }; // the zone's own WindThin
             const float wet = Clamp01(regional::RainSoak(g_map, zone));
-            const bool here = zone == regional::PlayerZone(); // the rain-wet air only where the weather is known
-            const float humid = Clamp01(Smooth(0.4f, 0.95f, here ? a.humidity : a.humidityDry) + 0.5f * wet);
-            const float still = std::fmax(std::fmax(a.cooling, 0.7f * in.night), here ? kWetAirStill * g_wetAir : 0.0f);
+            const float humid = Clamp01(Smooth(0.4f, 0.95f, a.humidity) + 0.5f * wet);   // with the zone's own wet air
+            const float still = std::fmax(std::fmax(a.cooling, 0.7f * in.night), kWetAirStill * a.wetAir);
             // A place with a cloud base: its fogginess is cloud on its upper slopes, not fog across the zone.
             const bool clouded = a.cloudBase > climate::kNoCloudBase * 0.5f;
             const float zoneFog = clouded ? 0.0f : a.fogginess;
@@ -733,7 +756,7 @@ namespace wxl_livingazeroth::fog
             const RulesInputs& in = g_inputs; // the player's: time of day, wind, weather
             // Mist: humid air or wet ground, air cooling (or simply night), calm; pools in low ground.
             const float humid = Clamp01(Smooth(0.4f, 0.95f, a.humidity) + 0.5f * wet);
-            const float still = std::fmax(std::fmax(a.cooling, 0.7f * in.night), kWetAirStill * g_wetAir);
+            const float still = std::fmax(std::fmax(a.cooling, 0.7f * in.night), kWetAirStill * a.wetAir);
             // Mountain cloud (AreaClimate CloudBase): the place's fogginess is its cloud deck (features/GroundFog draws
             // it in the air, over the whole view), not fog on its ground ("cloudy air at the tops of the mountains in
             // storm peaks", the user, 2026-10-13). On the ground, near the player only, it came in in blotches as the
@@ -745,7 +768,7 @@ namespace wxl_livingazeroth::fog
             out[kMist] = clouded ? 0.0f : humid * still * Calm(kMist) * (0.4f + 0.6f * hollow) * (1.0f + 0.5f * placeFog);
             note(kMist, "humid air / wet ground (humidity)", a.humidity, humid);
             note(kMist, "  ... ground wetness", wet, -1.0f);
-            note(kMist, "  ... rain-wet air", g_wetAir, -1.0f);
+            note(kMist, "  ... rain-wet air (its zone's)", a.wetAir, -1.0f);
             note(kMist, "cooling, night or rain-cooled air (cooling)", a.cooling, still);
             note(kMist, "  ... night", in.night, -1.0f);
             note(kMist, "calm (wind)", in.wind, Calm(kMist));
