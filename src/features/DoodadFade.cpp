@@ -7,9 +7,10 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <regex>
 #include <unordered_map>
-#include <unordered_set>
+#include <vector>
 
 namespace wxl_livingazeroth::doodadfade
 {
@@ -40,6 +41,10 @@ namespace wxl_livingazeroth::doodadfade
         // The M2 batch draw context (core offsets/engine/Gx.hpp): the batch record drawing and its instance; the
         // batched doodad draw (0x820AE0) draws a head record's run of copies (+0x1C, read at its entry) in one call.
         constexpr uintptr_t kCtxElement = 0x50, kCtxInstance = 0x60, kElementRun = 0x1C;
+        // Its records (0x820AE0 reads them as elements[index] for each index of the run): 0x44 bytes, +4 the copy's
+        // instance (whose +0x98 bones it uploads).
+        constexpr uintptr_t kElementSize = 0x44, kElementInstance = 0x04;
+        constexpr uint32_t  kMaxRun = 4096;
         // The block's switch and constant: c100 = (alpha, the dither's two weights, its scale).
         constexpr int kDissolveBool = 12, kDissolveConst = 100;
 
@@ -56,11 +61,9 @@ namespace wxl_livingazeroth::doodadfade
         // Instances dissolving: their fade alpha, as noted since the last Update and the frame before (the fade may
         // run after the draws in a frame).
         std::unordered_map<uintptr_t, float> g_fadeNow, g_fadePrev;
-        // Models seen drawn as copies together: their copies keep the client's fade.
-        std::unordered_set<uintptr_t> g_grouped;
         unsigned g_variants = 0, g_variantsLeft = 0;
         std::string g_leftWhy;
-        unsigned g_noted = 0, g_held = 0, g_lastNoted = 0, g_lastHeld = 0, g_draws = 0;
+        unsigned g_noted = 0, g_lastNoted = 0, g_split = 0, g_lastSplit = 0, g_draws = 0;
 
         volatile float* Row(uintptr_t at) { return reinterpret_cast<volatile float*>(at); }
 
@@ -84,6 +87,16 @@ namespace wxl_livingazeroth::doodadfade
             __try { *reinterpret_cast<float*>(at) = value; return true; }
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
+        bool WriteU32(uintptr_t at, uint32_t value)
+        {
+            __try { *reinterpret_cast<uint32_t*>(at) = value; return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        bool CopyU32s(const uint32_t* from, uint32_t* to, uint32_t count)
+        {
+            __try { std::memcpy(to, from, count * sizeof(uint32_t)); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
 
         bool Dissolving() { return g_settings.dissolve && g_hookedFade && g_hookedBatch && g_hookedDoodad && g_variants > 0; }
 
@@ -91,15 +104,39 @@ namespace wxl_livingazeroth::doodadfade
         {
             g_origFade(doodad, arg);
             if (!Dissolving() || !doodad) return;
-            uintptr_t instance = 0, model = 0;
+            uintptr_t instance = 0;
             float alpha = 1.0f;
             if (!ReadPtr(reinterpret_cast<uintptr_t>(doodad) + kDoodadInstance, instance) || !instance) return;
             if (!ReadFloat(instance + kInstFade, alpha) || !(alpha > 0.0f && alpha < 0.99999f)) return;
-            ReadPtr(instance + kInstModel, model);
-            if (model && g_grouped.count(model)) { ++g_held; return; } // drawn with copies: the client's own fade
-            if (!WriteFloat(instance + kInstFade, 1.0f)) return;        // opaque: the opaque pass, before the fog
+            if (!WriteFloat(instance + kInstFade, 1.0f)) return; // opaque: the opaque pass, before the fog
             g_fadeNow[instance] = alpha;
             ++g_noted;
+        }
+
+        bool FadeOf(uintptr_t instance, float& alpha)
+        {
+            auto found = g_fadeNow.find(instance);
+            if (found == g_fadeNow.end())
+            {
+                found = g_fadePrev.find(instance);
+                if (found == g_fadePrev.end()) return false;
+            }
+            alpha = found->second;
+            return true;
+        }
+
+        // The block on for the next draw, keeping `alpha` of its pixels.
+        bool BeginAlpha(float alpha)
+        {
+            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+            if (!dev) return false;
+            // Interleaved gradient noise on the pixel's position: a fine, even dither (no visible tile).
+            const float c[4] = { alpha, 0.06711056f, 0.00583715f, 52.9829189f };
+            dev->SetPixelShaderConstantF(kDissolveConst, c, 1);
+            const BOOL on = TRUE;
+            dev->SetPixelShaderConstantB(kDissolveBool, &on, 1);
+            ++g_draws;
+            return true;
         }
 
         // The block on for one draw if its instance is dissolving.
@@ -107,22 +144,9 @@ namespace wxl_livingazeroth::doodadfade
         {
             if (g_fadeNow.empty() && g_fadePrev.empty()) return false;
             uintptr_t instance = 0;
+            float alpha = 1.0f;
             if (!ReadPtr(reinterpret_cast<uintptr_t>(ctx) + kCtxInstance, instance) || !instance) return false;
-            auto found = g_fadeNow.find(instance);
-            if (found == g_fadeNow.end())
-            {
-                found = g_fadePrev.find(instance);
-                if (found == g_fadePrev.end()) return false;
-            }
-            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
-            if (!dev) return false;
-            // Interleaved gradient noise on the pixel's position: a fine, even dither (no visible tile).
-            const float c[4] = { found->second, 0.06711056f, 0.00583715f, 52.9829189f };
-            dev->SetPixelShaderConstantF(kDissolveConst, c, 1);
-            const BOOL on = TRUE;
-            dev->SetPixelShaderConstantB(kDissolveBool, &on, 1);
-            ++g_draws;
-            return true;
+            return FadeOf(instance, alpha) && BeginAlpha(alpha);
         }
 
         void End()
@@ -141,26 +165,72 @@ namespace wxl_livingazeroth::doodadfade
             if (on) End();
         }
 
+        // A run of copies drawn together (per copy only its bones reach the shader, so they can't each dissolve by their
+        // own fade) with dissolving copies in it: the run's index list reordered (the others first, then those), the
+        // others drawn as one run, each dissolving copy as a run of one with its own alpha; the list and the run length
+        // put back after (the caller's cursor reads the run length again when the call returns: core
+        // offsets/engine/Gx.hpp). The copies of a run share the head record's batch and model, so any order draws them
+        // alike. Stock draws a fading doodad on its own too (a see-through batch), so the draw count stays about stock.
+        // False (nothing drawn): no copy dissolving, or the list couldn't be read or written.
+        bool SplitRun(void* ctx, void* edx, void* elements, void* indices, uintptr_t element, uint32_t run)
+        {
+            if (run > kMaxRun || !elements || !indices) return false;
+            auto* list = static_cast<uint32_t*>(indices);
+            std::vector<uint32_t> saved(run), order, dissolving; // (locals: safe if a draw below ever came back here)
+            std::vector<float> alphas;
+            if (!CopyU32s(list, saved.data(), run)) return false;
+            const uintptr_t records = reinterpret_cast<uintptr_t>(elements);
+            for (uint32_t k = 0; k < run; ++k)
+            {
+                uintptr_t instance = 0;
+                float alpha = 1.0f;
+                if (ReadPtr(records + static_cast<uintptr_t>(saved[k]) * kElementSize + kElementInstance, instance) && instance &&
+                    FadeOf(instance, alpha))
+                {
+                    dissolving.push_back(saved[k]);
+                    alphas.push_back(alpha);
+                }
+                else
+                    order.push_back(saved[k]);
+            }
+            if (dissolving.empty()) return false;
+            const uint32_t kept = static_cast<uint32_t>(order.size());
+            order.insert(order.end(), dissolving.begin(), dissolving.end());
+            if (!CopyU32s(order.data(), list, run) || !WriteU32(element + kElementRun, kept > 0 ? kept : 1))
+            {
+                CopyU32s(saved.data(), list, run);
+                WriteU32(element + kElementRun, run);
+                return false;
+            }
+            if (kept > 0)
+            {
+                g_origDoodad(ctx, edx, elements, indices);
+                WriteU32(element + kElementRun, 1);
+            }
+            for (size_t j = 0; j < dissolving.size(); ++j)
+            {
+                const bool on = BeginAlpha(alphas[j]);
+                g_origDoodad(ctx, edx, elements, list + kept + j);
+                if (on) End();
+                WriteU32(element + kElementRun, 1); // (in case the draw rewrote it)
+                ++g_split;
+            }
+            CopyU32s(saved.data(), list, run);
+            WriteU32(element + kElementRun, run);
+            return true;
+        }
+
         void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
         {
-            bool on = false;
+            const bool any = Dissolving() && !(g_fadeNow.empty() && g_fadePrev.empty());
             uintptr_t element = 0;
             uint32_t run = 0;
-            if (ReadPtr(reinterpret_cast<uintptr_t>(ctx) + kCtxElement, element) && element && ReadU32(element + kElementRun, run) && run >= 2)
+            if (any && ReadPtr(reinterpret_cast<uintptr_t>(ctx) + kCtxElement, element) && element && ReadU32(element + kElementRun, run) && run >= 2)
             {
-                // Copies drawn together share the call (per copy only its bones reach the shader): no dissolve each.
-                // Their model keeps the client's fade from now on (the copy that just began dissolving shows solid
-                // this once).
-                uintptr_t instance = 0, model = 0;
-                if (ReadPtr(reinterpret_cast<uintptr_t>(ctx) + kCtxInstance, instance) && instance &&
-                    ReadPtr(instance + kInstModel, model) && model)
-                {
-                    if (g_grouped.size() > 20000) g_grouped.clear();
-                    g_grouped.insert(model);
-                }
+                if (!SplitRun(ctx, edx, elements, indices, element, run)) g_origDoodad(ctx, edx, elements, indices);
+                return;
             }
-            else
-                on = Begin(ctx);
+            const bool on = any && Begin(ctx); // a doodad drawn on its own
             g_origDoodad(ctx, edx, elements, indices);
             if (on) End();
         }
@@ -187,8 +257,8 @@ namespace wxl_livingazeroth::doodadfade
         g_fadePrev.swap(g_fadeNow);
         g_fadeNow.clear();
         g_lastNoted = g_noted;
-        g_lastHeld = g_held;
-        g_noted = g_held = 0;
+        g_lastSplit = g_split;
+        g_noted = g_split = 0;
 
         volatile float* base = Row(kBaseDistance);
         volatile float* width = Row(kBaseFadeWidth);
@@ -267,7 +337,7 @@ namespace wxl_livingazeroth::doodadfade
     void DrawPanelSection(const WXL_Api* api)
     {
         if (!api->UiCollapsingHeader("Doodads fading in##ddfade")) return;
-        api->UiCheckbox("dissolve in (drawn solid, so the fog covers them; copies drawn together fade as stock)##dddissolve", &g_settings.dissolve);
+        api->UiCheckbox("dissolve in (drawn solid, so the fog covers them)##dddissolve", &g_settings.dissolve);
         api->UiCheckbox("small doodads (mugs, plates: fixed 30 yd) use the next size's view distance##ddsmall", &g_settings.smallUseNext);
         api->UiSliderInt(Dissolving() ? "fade only from size category (set aside while dissolving)##ddfrom"
                                       : "fade only from size category (0 stock, 5 none: doodads pop in, fogged)##ddfrom",
@@ -282,10 +352,9 @@ namespace wxl_livingazeroth::doodadfade
         if (!g_hookedFade || !g_hookedBatch || !g_hookedDoodad)
             std::snprintf(line, sizeof(line), "dissolve: off, a hook is missing (fade %d, batch %d, doodad %d)", g_hookedFade ? 1 : 0, g_hookedBatch ? 1 : 0, g_hookedDoodad ? 1 : 0);
         else
-            std::snprintf(line, sizeof(line), "dissolve: %s; last frame %u doodads dissolving, %u fading as stock (their models are drawn as copies together, %u known); "
+            std::snprintf(line, sizeof(line), "dissolve: %s; last frame %u doodads dissolving (%u of them drawn out of shared draws of copies); "
                                               "M2 pixel shader variants with it %u, without %u%s%s; dissolving draws so far %u",
-                          Dissolving() ? "on" : (g_settings.dissolve ? "waiting for the shaders" : "off"), g_lastNoted, g_lastHeld,
-                          static_cast<unsigned>(g_grouped.size()), g_variants, g_variantsLeft, g_leftWhy.empty() ? "" : ": ", g_leftWhy.c_str(), g_draws);
+                          Dissolving() ? "on" : (g_settings.dissolve ? "waiting for the shaders" : "off"), g_lastNoted, g_lastSplit, g_variants, g_variantsLeft, g_leftWhy.empty() ? "" : ": ", g_leftWhy.c_str(), g_draws);
         api->UiText(line);
     }
 }

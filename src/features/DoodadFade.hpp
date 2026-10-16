@@ -16,7 +16,9 @@
 // set back to opaque; the M2 batch draws switch a block on in the M2 pixel shaders (chained into
 // features/ModelIce's rule) for those instances. Copies of a model drawn together in one call (the
 // batched doodad draw: per copy only its bones reach the shader) can't each dissolve by their own
-// fade, so a model once seen drawn that way keeps the client's fade.
+// fade there, so a run with dissolving copies is split: the others drawn as one run, each dissolving
+// copy on its own (stock draws fading doodads one by one too, as see-through batches). Nearly every
+// fading doodad is such a copy (Icecrown: 123 of 125 in a frame).
 //
 // Known limit: another mod writing the same table would fight with this one.
 #pragma once
