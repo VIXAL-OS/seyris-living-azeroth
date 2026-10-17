@@ -275,6 +275,11 @@ Generator with examples: `tools/gen_doodad_lights.py` (a torch flame replacing `
 own light at its flame, a lantern, a downlight). After editing the files by hand, press "Reload
 light tables from disk".
 
+`tools/add_settlement_lights.py` adds warm lights (properties 101+, assignments 1001+) to the lit
+lanterns, chandeliers, candles and hearths of inns and other lived-in buildings that have no light
+of their own; its header lists which models, where they stand, and which were left out because
+their rooms are already full.
+
 ### DoodadLightProperties.cdbc — `DoodadLightProperties.xml`
 
 What a light is. A value of **−1 takes the default** (the lights panel's settings).
