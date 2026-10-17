@@ -3,15 +3,17 @@
 its mist) on AreaClimate rows for the naturally misty zones, keeping every other row and field as it is.
 The shipped table leaves Fogginess unset everywhere, so no zone had any area fog ("add the starter set pls", the user,
 2026-10-13). The scale follows gen_default_climate.py's examples (Swamp of Sorrows 0.6, Duskwood 0.5).
-  0.6  the Plaguelands, Duskwood, Dustwallow Marsh, the Swamp of Sorrows, Felwood, Grizzly Hills, Howling Fjord,
-       Zangarmarsh
-  0.4  forests: Feralas, Teldrassil, Darkshore, Ashenvale, Azshara, Moonglade, Stranglethorn Vale, Un'Goro Crater,
-       the Hinterlands, Terokkar Forest, Crystalsong Forest, the Ghostlands
-  0.3  Tirisfal Glades, Silverpine Forest, Zul'Drak, Deadwind Pass, Sholazar Basin
-  0.2  Elwynn Forest, Eversong Woods
+  0.6   the Plaguelands, Duskwood, Dustwallow Marsh, the Swamp of Sorrows, Felwood, Howling Fjord, Zangarmarsh
+  0.4   the Ghostlands (blighted)
+  0.3   Tirisfal Glades, Silverpine Forest, Zul'Drak, Deadwind Pass
+  0.15  MISTY: ordinary forests and jungles -- Elwynn, Ashenvale, Feralas, Teldrassil, Darkshore, Azshara, Moonglade,
+        Un'Goro Crater, the Hinterlands, Terokkar, Crystalsong, Stranglethorn Vale, Grizzly Hills, Sholazar Basin,
+        Eversong Woods, Redridge Mountains. "Normal non-haunted forest zones should feel misty rather than foggy" (the
+        user, 2026-10-17): little area fog (0.09 by day, 0.15 at night), so the ground mist, which comes with damp
+        mornings, evenings and rain, carries the look. Haunted, blighted, marsh, smoke and sea-fog zones keep theirs.
 A zone with a row already keeps its other fields, and its Fogginess too where the row sets one: upstream's tables
-(Morfium-G's, "the owner's tested tables", 2026-10-13) tune many of these zones themselves, and theirs win -- except
-for the zones in OVERRIDE, where the user asked for something else. The rest
+(Morfium-G's, 2026-10-13) tune many of these zones themselves, and theirs win -- except for the zones in OVERRIDE,
+where the user asked for something else (Duskwood and Burning Steppes at upstream's 1.0 and 0.8 "felt fine"). The rest
 get new rows (300..) that set Fogginess only, inheriting the rest (temperatures -1000, the others -1); 300 and up stays
 clear of upstream's IDs. Zone IDs: AreaTable.dbc (3.3.5a).
 Usage:  python add_foggy_zones.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
@@ -25,7 +27,7 @@ import cdbc_io as io
 
 AREA = 2
 I, T = -1.0, -1000.0
-STRONG, FOREST, LIGHT, GENTLE = 0.6, 0.4, 0.3, 0.2
+STRONG, FOREST, LIGHT, MISTY = 0.6, 0.4, 0.3, 0.15
 
 # (zone, AreaTable ID, fogginess, row ID for a new row)
 ZONES = [
@@ -35,36 +37,37 @@ ZONES = [
     ("Dustwallow Marsh", 15, STRONG, 313),
     ("Swamp of Sorrows", 8, STRONG, 314),
     ("Felwood", 361, STRONG, 315),
-    ("Grizzly Hills", 394, STRONG, 316),
     ("Howling Fjord", 495, STRONG, 317),
     ("Tirisfal Glades", 85, LIGHT, 318),
     ("Silverpine Forest", 130, LIGHT, 319),
     ("Zul'Drak", 66, LIGHT, 320),
     ("Deadwind Pass", 41, LIGHT, 321),
-    ("Sholazar Basin", 3711, LIGHT, 322),
-    # Forests ("can we also have forest zones added ... Feralas, Teldrassil, Darkshore, Ashenvale etc.", the user,
-    # 2026-10-13): mist under the trees, between the misty zones and the light ones. A marsh with the strong ones, and
-    # two gentle woods (morning mist, not gloom).
-    ("Feralas", 357, FOREST, 323),
-    ("Teldrassil", 141, FOREST, 324),
-    ("Darkshore", 148, FOREST, 325),
-    ("Ashenvale", 331, 0.25, 326),  # less: its stock fog is already close and purple ("a bit thiq lol", the user, 2026-10-17)
-    ("Azshara", 16, FOREST, 327),
-    ("Moonglade", 493, FOREST, 328),
-    ("Stranglethorn Vale", 33, FOREST, 329),
-    ("Un'Goro Crater", 490, FOREST, 330),
-    ("The Hinterlands", 47, FOREST, 331),
-    ("Terokkar Forest", 3519, FOREST, 332),
-    ("Crystalsong Forest", 2817, FOREST, 333),
     ("Ghostlands", 3433, FOREST, 334),
     ("Zangarmarsh", 3521, STRONG, 335),
-    ("Elwynn Forest", 12, GENTLE, 336),
-    ("Eversong Woods", 3430, GENTLE, 337),
+    # Ordinary forests and jungles: misty, not foggy (the user, 2026-10-17, after Ashenvale at dusk: 0.4 was "a bit
+    # thiq", 0.25 "much better"). On 2026-10-13 they were 0.4 ("can we also have forest zones added ... Feralas,
+    # Teldrassil, Darkshore, Ashenvale etc."), Grizzly Hills 0.6, Sholazar 0.3, Elwynn and Eversong 0.2.
+    ("Elwynn Forest", 12, MISTY, 336),
+    ("Ashenvale", 331, MISTY, 326),
+    ("Feralas", 357, MISTY, 323),
+    ("Teldrassil", 141, MISTY, 324),
+    ("Darkshore", 148, MISTY, 325),
+    ("Azshara", 16, MISTY, 327),
+    ("Moonglade", 493, MISTY, 328),
+    ("Un'Goro Crater", 490, MISTY, 330),
+    ("The Hinterlands", 47, MISTY, 331),
+    ("Terokkar Forest", 3519, MISTY, 332),
+    ("Crystalsong Forest", 2817, MISTY, 333),
+    ("Stranglethorn Vale", 33, MISTY, 329),
+    ("Grizzly Hills", 394, MISTY, 316),
+    ("Sholazar Basin", 3711, MISTY, 322),
+    ("Eversong Woods", 3430, MISTY, 337),
+    ("Redridge Mountains", 44, MISTY, 338),
 ]
-# Zones whose value here wins even over a row of upstream's own. Zangarmarsh: upstream's row 109 has it at 1.0, the top
-# of the scale ("very pretty but possibly too foggy lol", the user, 2026-10-14, flying over Umbrafen). Ashenvale: our own
-# row, lowered from the forest 0.4 once seen at dusk (2026-10-17).
-OVERRIDE = {3521, 331}
+# Zones whose value here wins even over a row of upstream's own: every misty forest (upstream has Elwynn 0.5, Redridge
+# 0.45, Stranglethorn 0.3), and Zangarmarsh, where upstream's row 109 has 1.0, the top of the scale ("very pretty but
+# possibly too foggy lol", the user, 2026-10-14, flying over Umbrafen).
+OVERRIDE = {3521} | {area for _, area, fog, _ in ZONES if fog == MISTY}
 FOGGINESS = 9  # column (ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment)
 
 
