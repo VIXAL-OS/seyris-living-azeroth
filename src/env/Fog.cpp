@@ -432,6 +432,18 @@ namespace wxl_livingazeroth::fog
         float WetHumidity(float humidity, float wetAir) { return humidity + (1.0f - Clamp01(humidity)) * kWetAirHumidity * wetAir; }
         float Smooth(float a, float b, float v) { const float t = Clamp01((v - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
 
+        /// Night as the fog sees it: the sky's, not the sun's. The client's default lights keep their day colours until
+        /// 21:00, are night by 22:00, and dawn from 03:00 to 06:00 (LightIntBand keys), while climate::SunNow's daylight
+        /// ends at 18:00. Night fog at 18:00 sat on a still-bright sky ("a bit thiq", Ashenvale at dusk, 2026-10-17),
+        /// so the fog eases into the night over the evening, 18:00 to 22:00, and out of it with the dawn.
+        float FogNight(float dayFraction)
+        {
+            const float hour = 24.0f * (dayFraction - std::floor(dayFraction));
+            if (hour >= 18.0f) return Smooth(18.0f, 22.0f, hour);
+            if (hour < 3.0f) return 1.0f;
+            return 1.0f - Smooth(3.0f, 6.0f, hour);
+        }
+
         /// What the rules need about the place and the moment (the player's place; per-cell values
         /// come from the cell). The air an hour ago is computed from the climate, not remembered, so a
         /// place you just arrived at knows whether it's been cooling.
@@ -454,7 +466,8 @@ namespace wxl_livingazeroth::fog
             const float bearing = wind::BearingDegrees() * 3.14159265f / 180.0f;
             in.windDirX = std::cos(bearing);
             in.windDirY = -std::sin(bearing);
-            in.night = 1.0f - climate::SunNow().daylight;
+            in.daylight = climate::SunNow().daylight;
+            in.night = FogNight(climate::Now().dayFraction);
             const climate::Weather& w = climate::CurrentWeather();
             in.weatherType = w.type;
             in.precipitation = (w.type == 1 || w.type == 2) ? w.intensity : 0.0f;
@@ -789,7 +802,7 @@ namespace wxl_livingazeroth::fog
             const float hot = std::fmax(Smooth(35.0f, 80.0f, groundTemp), liquid == 2 ? 1.0f : 0.0f);
             const float springTemp = std::fmax(groundTemp, g_liquidTemp[index]);
             const float hotSpring = liquid == 1 ? Smooth(35.0f, 60.0f, springTemp) : 0.0f;
-            const float sunWisps = Smooth(12.0f, 30.0f, groundTemp) * (1.0f - in.night) * (1.0f - in.precipitation);
+            const float sunWisps = Smooth(12.0f, 30.0f, groundTemp) * in.daylight * (1.0f - in.precipitation);
             const float warmer = Smooth(2.0f, 15.0f, groundTemp - a.airNow) * (1.0f - 0.5f * in.precipitation);
             const float drying = 0.5f * ExcessAt(i, j) * std::fmax(sunWisps, warmer);
             out[kSteam] = std::fmax(std::fmax(in.precipitation * hot, hotSpring), drying) * Calm(kSteam);
