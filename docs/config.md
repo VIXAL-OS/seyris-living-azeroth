@@ -2,7 +2,7 @@
 
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
-sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]` and `[LivingAzeroth.Storm]` (an ini
+sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]` and `[LivingAzeroth.Windows]` (an ini
 has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
@@ -121,3 +121,23 @@ strikes.
 | BoltRange | 900 | Strikes farther than this (yards) get no bolt model. |
 | Scorch | 0 | Experimental: a scorch mark on the terrain where a near strike lands. |
 | ScorchSeconds | 45 | Seconds the scorch mark takes to fade. |
+
+## `[LivingAzeroth.Windows]`: lit windows at night
+
+The lit windows of towns and cities (`WindowLights.cdbc`, [cdbc-tables.md](cdbc-tables.md)) cast a
+warm light on the ground and the walls in front of them, and their glass glows. Both follow the
+client's own lit windows: full from 21:30 to 06:00, fading over the hour before and after, off by
+day. The lights panel's **Windows** section changes all of this at runtime and shows the night
+factor, the client's Full Screen Glow and what's drawn.
+
+| Key | Default | Meaning |
+|---|---|---|
+| Lights | 1 | Warm light spills from the lit windows at night. |
+| LightStrength | 1 | Your multiplier on the window lights' brightness. |
+| LightRange | 160 | Window lights farther than this from the camera (yards) are left out. |
+| MaxLights | 96 | At most this many window lights at once (the nearest). |
+| LightsPerCell | 4 | At most this many window lights in one cell of the lights' grid (16 lights per 16-yd cell by default). They rank after torches and lanterns, so a full cell keeps those. |
+| Glow | 1 | A soft glow (bloom) around the lit window glass. Only the glass glows: not snow or bright ground (it must be the window, at the window's depth, bright and coloured), and never name text or the UI (drawn before them). |
+| GlowStrength | 1 | Your multiplier on the window glow. |
+| GlowRange | 220 | Windows farther than this (yards) don't glow; the glow fades out over the last third. |
+| WithClientGlow | 1 | While the client's own Full Screen Glow (`ffxGlow`) is on: 0 = the window glow at full strength, 1 = half, 2 = off. |

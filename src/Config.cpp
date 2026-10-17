@@ -15,6 +15,7 @@
 #include "features/TerrainIce.hpp"
 #include "features/WmoIce.hpp"
 #include "features/TerrainWetness.hpp"
+#include "features/Windows.hpp"
 #include "render/PostAA.hpp"
 #include "wxl_seyris/SettingsApi.hpp"
 
@@ -225,6 +226,21 @@ namespace wxl_livingazeroth::config
             t.scorchSeconds = In(s, f, "ScorchSeconds", "Seconds the scorch mark takes to fade.", t.scorchSeconds);
         }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm);
+        // Lit windows at night: their light and their glow.
+        {
+            const char* f = kSectionWindows;
+            windows::Settings& w = windows::Config();
+            w.lights = In(s, f, "Lights", "Warm light spills from the lit windows of towns and cities at night, fading in and out with the client's own lit windows (WindowLights.cdbc).", w.lights);
+            w.lightStrength = In(s, f, "LightStrength", "Your multiplier on the window lights' brightness.", w.lightStrength);
+            w.lightRange = In(s, f, "LightRange", "Window lights farther than this from the camera (yards) are left out.", w.lightRange);
+            w.maxLights = Whole(s, f, "MaxLights", "At most this many window lights at once (the nearest).", w.maxLights);
+            w.perCell = Whole(s, f, "LightsPerCell", "At most this many window lights in one cell of the lights' grid; they rank after torches and lanterns, so a full cell keeps those.", w.perCell);
+            w.glow = In(s, f, "Glow", "A soft glow (bloom) around the lit window glass at night. Only the glass glows: not snow, bright ground, name text or the UI.", w.glow);
+            w.glowStrength = In(s, f, "GlowStrength", "Your multiplier on the window glow.", w.glowStrength);
+            w.glowRange = In(s, f, "GlowRange", "Windows farther than this from the camera (yards) don't glow; the glow fades out over the last third.", w.glowRange);
+            w.withClientGlow = Whole(s, f, "WithClientGlow", "While the client's own Full Screen Glow (ffxGlow) is on: 0 = the window glow at full strength, 1 = half, 2 = off.", w.withClientGlow);
+        }
+
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows);
     }
 }

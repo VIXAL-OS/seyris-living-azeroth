@@ -8,6 +8,7 @@
 #include "../features/SurfaceCover.hpp"
 #include "../features/TerrainLights.hpp"
 #include "../features/TerrainWetness.hpp"
+#include "../features/Windows.hpp"
 #include "../render/M2Effects.hpp"
 #include "ShaderDump.hpp"
 #include "WmoBindProbe.hpp"
@@ -225,6 +226,7 @@ namespace wxl_livingazeroth::debug
                               bs.bakeWanted, bs.bakeDone, bs.bakeRays, bs.bakeMs, bs.bakeCached, lights::kOccCells);
                 g_api->UiText(bakeLine);
             }
+            windows::DrawPanelSection(g_api);
             g_api->UiSliderFloat("merge lights closer than (yd)", &cfg.mergeDistance, 0.0f, 3.0f);
             g_api->UiSliderFloat("flicker (how much a flame's light dips)", &cfg.flicker, 0.0f, 0.8f);
             g_api->UiSliderFloat("flicker speed", &cfg.flickerSpeed, 0.1f, 4.0f);
@@ -256,7 +258,7 @@ namespace wxl_livingazeroth::debug
             std::snprintf(head, sizeof(head), "DoodadLightProperties / DoodadLightAssignment: %s%s; in range: %u table light(s), %u model(s) with their own lights suppressed, %u attachment(s) not found (at the origin instead)",
                           lighttable::Status(), lighttable::Dirty() ? " (edited, not saved)" : "", ls.tableLights, ls.suppressedModels, ls.attachFallbacks);
             g_api->UiText(head);
-            if (g_api->UiButton("Reload light tables from disk")) lighttable::Load(g_cdbc);
+            if (g_api->UiButton("Reload light tables from disk")) { lighttable::Load(g_cdbc); windows::Load(g_cdbc); }
             // Research for M2 receivers: the M2 shaders the client has loaded so far.
             std::snprintf(head, sizeof(head), "Dump M2 shaders (%u effect(s) loaded; Logs\\living-azeroth)",
                           static_cast<unsigned>(m2effects::Effects().size()));

@@ -54,6 +54,8 @@
 #include "features/PlayerDepth.hpp"
 #include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
+#include "features/WindowGlow.hpp"
+#include "features/Windows.hpp"
 #include "features/WmoIce.hpp"
 #include "lua/EnvironmentLua.hpp"
 #include "lua/LuaApi.hpp"
@@ -110,6 +112,7 @@ namespace
         wxl_livingazeroth::fogsettings::Load(cdbc);
         wxl_livingazeroth::debug::SetClimateCdbc(cdbc);
         wxl_livingazeroth::lighttable::Load(cdbc);
+        wxl_livingazeroth::windows::Load(cdbc);
         wxl_livingazeroth::debug::SetLightsCdbc(cdbc);
         wxl_livingazeroth::debug::SetLightEditorCdbc(cdbc);
 
@@ -171,6 +174,7 @@ namespace
         }
         {
             prof::Scope scope(prof::kOursLights);
+            wxl_livingazeroth::windows::Update(); // the night factor the window lights and glow follow
             wxl_livingazeroth::lights::Update(dt, snap);
         }
         {
@@ -194,6 +198,7 @@ namespace
         wxl_livingazeroth::grassinst::OnDeviceLost();
         wxl_livingazeroth::postaa::OnDeviceLost();
         wxl_livingazeroth::groundfog::OnDeviceLost();
+        wxl_livingazeroth::windowglow::OnDeviceLost();
         wxl_livingazeroth::prof::OnDeviceLost();
         wxl_livingazeroth::cover::OnDeviceLost();
     }
@@ -246,6 +251,8 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::debug::InstallFogProbe(api);
     // Ground fog: drawn at the weather render's entry (after the water, before rain and see-through models).
     wxl_livingazeroth::groundfog::Install(api);
+    // Window glow: at the same point, right after the fog (its link calls ours).
+    wxl_livingazeroth::windowglow::Install(api);
     // Records the M2 shader effects as the client loads them (research: dumps; later M2 patches).
     wxl_livingazeroth::m2effects::Install(api);
     // Storms: the day-night colours, shaded right before the client's sky, light and fog take them.

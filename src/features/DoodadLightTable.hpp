@@ -22,7 +22,11 @@ namespace wxl_livingazeroth::lighttable
     enum Attach : uint32_t { kOrigin = 0, kAttachmentPoint = 1, kBone = 2, kParticleEmitter = 3, kAttachCount };
     enum AssignmentFlag : uint32_t { kSuppressModelLights = 0x1 };
     /// DoodadLightProperties.Flags (the column was reserved, so the layout doesn't change).
-    enum PropertiesFlag : uint32_t { kBakeOcclusion = 0x1 }; // walls/floors between it and a surface block it (lights::Settings bake*)
+    enum PropertiesFlag : uint32_t
+    {
+        kBakeOcclusion = 0x1, // walls/floors between it and a surface block it (lights::Settings bake*)
+        kNightOnly = 0x2,     // shines only at night, fading with the client's lit windows (windows::Night)
+    };
     enum FlickerMode : int32_t { kFlickerDefault = -1, kFlickerOff = 0, kFlickerSmooth = 1, kFlickerNoise = 2, kFlickerSteps = 3 };
 
     /// DoodadLightProperties.cdbc. A value of -1 takes the default (the lights panel's settings).
@@ -40,7 +44,7 @@ namespace wxl_livingazeroth::lighttable
         int32_t     flickerMode = kFlickerDefault;
         float       flickerSpeed = -1.0f;   // x the default pace
         float       flickerAmount = -1.0f;  // 0..1 how much it dips
-        uint32_t    flags = 0;              // reserved
+        uint32_t    flags = 0;              // PropertiesFlag
     };
 
     /// DoodadLightAssignment.cdbc.

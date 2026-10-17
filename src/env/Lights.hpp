@@ -105,6 +105,7 @@ namespace wxl_livingazeroth::lights
         // Baked occlusion, when complete: per direction (octahedral, kOccSide x kOccSide, from the light
         // outward), how far it reaches before terrain or a WMO. Valid for this frame. Null = none.
         const float* occlusion = nullptr;
+        bool  window = false; // a lit window's light (features/Windows): ranks below the others in a full grid cell
     };
 
     /// Whether a point lies in an indoor WMO group: the client's own viewer locate (core

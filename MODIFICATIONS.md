@@ -25,6 +25,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   sea ice.
 - **Fields:** the shore pass runs on a background worker thread.
 - **Diagnostics:** the frame profiler's "other" time is split up, and a periodic status line goes to the log.
-- **Tests** under `tests/`: cover tables and prints, lights, shore.
+- **Lit windows at night** (17 October 2026): warm light in front of the lit windows of towns and cities and a
+  soft glow on the glass, following the client's own window fade (`WindowLights.cdbc`,
+  `tools/gen_window_lights.py`, `[LivingAzeroth.Windows]`).
+- **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

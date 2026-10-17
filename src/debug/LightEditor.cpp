@@ -375,6 +375,9 @@ namespace wxl_livingazeroth::debug
                 int bake = (p->flags & lt::kBakeOcclusion) ? 1 : 0;
                 std::snprintf(label, sizeof(label), "bake occlusion (walls and floors block it; only where it doesn't move)##bk%u", p->id);
                 if (g_api->UiCheckbox(label, &bake)) { p->flags = bake ? (p->flags | lt::kBakeOcclusion) : (p->flags & ~lt::kBakeOcclusion); changed = true; }
+                int night = (p->flags & lt::kNightOnly) ? 1 : 0;
+                std::snprintf(label, sizeof(label), "night only (fades in and out with the client's lit windows)##no%u", p->id);
+                if (g_api->UiCheckbox(label, &night)) { p->flags = night ? (p->flags | lt::kNightOnly) : (p->flags & ~lt::kNightOnly); changed = true; }
                 if (changed) lt::Touch();
                 std::snprintf(label, sizeof(label), "Delete light %u##dl%u", p->id, p->id);
                 if (g_api->UiButton(label)) { lt::RemoveProperties(id); break; }

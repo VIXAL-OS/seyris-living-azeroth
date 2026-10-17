@@ -2,6 +2,7 @@
 
 #include "../features/DoodadLightTable.hpp"
 #include "../features/GrassPerf.hpp"
+#include "../features/Windows.hpp"
 #include "SceneWalk.hpp"
 
 #include "game/Camera.hpp"
@@ -179,6 +180,7 @@ namespace wxl_livingazeroth::lights
             const void* shared = nullptr; // its model file object at the scan: while the instance still points at it,
                                           // it is the same model (a scan's list now lives a second or two: env/SceneWalk.hpp)
             bool  bake = false;           // its DoodadLightProperties ask for baked occlusion
+            bool  nightOnly = false;      // ... and to shine only at night (the client's window fade)
         };
         std::vector<Source>      g_sources;
         std::vector<ActiveLight> g_active;
@@ -215,6 +217,7 @@ namespace wxl_livingazeroth::lights
             s.follow = follow;
             s.model = model;
             s.bake = (p->flags & lighttable::kBakeOcclusion) != 0;
+            s.nightOnly = (p->flags & lighttable::kNightOnly) != 0;
             std::memcpy(s.localPos, local, sizeof(local));
             std::memcpy(s.localDir, a.direction, sizeof(s.localDir));
             s.scale = MatrixScale(world);
@@ -320,6 +323,8 @@ namespace wxl_livingazeroth::lights
             const void* model;
             bool  bake;     // wants baked occlusion
             bool  moving;   // attached (follows a model): never baked
+            bool  window;   // a window's light (WindowLights.cdbc): ranks below the others in a full cell
+            float night;    // the night factor its colour carries (night-only lights), else 1
         };
 
         double g_time = 0.0;
@@ -354,7 +359,8 @@ namespace wxl_livingazeroth::lights
         Grid g_grid;
         std::vector<float> g_baseLum;   // per active light: its brightness before fade and flicker (ranks it in full cells)
 
-        struct CellEntry { uint32_t cell; float score; uint16_t light; };
+        struct CellEntry { uint32_t cell; float score; uint16_t light; bool window; };
+        std::vector<char> g_isWindow;   // per active light: a window's
 
         // The grid snaps to whole cells around the camera, so a cell only changes when lights do.
         // A light goes into every cell its radius reaches (circle vs square). A cell holding more than
@@ -394,24 +400,31 @@ namespace wxl_livingazeroth::lights
                         if (nx * nx + ny * ny > r * r) continue;
                         const float cx = (x + 0.5f) * cs - lx, cy = (y + 0.5f) * cs - ly;
                         const float t = 1.0f - std::min(std::sqrt(cx * cx + cy * cy) / (r + halfDiag), 1.0f);
-                        entries.push_back({ static_cast<uint32_t>(y * next.cells + x), g_baseLum[i] * t * t, static_cast<uint16_t>(i) });
+                        entries.push_back({ static_cast<uint32_t>(y * next.cells + x), g_baseLum[i] * t * t, static_cast<uint16_t>(i), g_isWindow[i] != 0 });
                     }
             }
             std::sort(entries.begin(), entries.end(), [](const CellEntry& a, const CellEntry& b)
                       { return a.cell != b.cell ? a.cell < b.cell : (a.score != b.score ? a.score > b.score : a.light < b.light); });
 
-            unsigned busiest = 0, full = 0, dropped = 0;
+            // Per cell, the strongest first; windows (scored down by windows::kWindowRank) at most the windows panel's
+            // per-cell number of them (windows::PickCell).
+            unsigned busiest = 0, full = 0, dropped = 0, windowsOut = 0;
+            static std::vector<windows::CellEntry> cell;
+            const int windowCap = std::max(0, windows::Config().perCell);
             for (size_t e = 0; e < entries.size();)
             {
                 const uint32_t c = entries[e].cell;
-                unsigned n = 0;
-                for (; e < entries.size() && entries[e].cell == c; ++e, ++n)
-                    if (n < static_cast<unsigned>(next.perCell)) next.index[c * next.perCell + n] = entries[e].light;
+                cell.clear();
+                for (; e < entries.size() && entries[e].cell == c; ++e)
+                    cell.push_back({ entries[e].score, entries[e].light, entries[e].window });
+                const unsigned n = static_cast<unsigned>(cell.size());
+                const unsigned taken = windows::PickCell(cell.data(), cell.size(), next.perCell, windowCap, &next.index[c * next.perCell], windowsOut);
                 busiest = std::max(busiest, n);
-                if (n > static_cast<unsigned>(next.perCell)) { ++full; dropped += n - next.perCell; }
-                next.count[c] = static_cast<uint8_t>(std::min(n, static_cast<unsigned>(next.perCell)));
+                if (n > taken) { ++full; dropped += n - taken; }
+                next.count[c] = static_cast<uint8_t>(taken);
             }
             g_stats.busiestCell = busiest; g_stats.fullCells = full; g_stats.droppedFromCells = dropped;
+            windows::GetStats().leftOutOfCells = windowsOut;
 
             const bool same = next.cells == g_grid.cells && next.perCell == g_grid.perCell && next.originX == g_grid.originX &&
                               next.originY == g_grid.originY && next.cellSize == g_grid.cellSize &&
@@ -923,6 +936,67 @@ namespace wxl_livingazeroth::lights
         }
     }
 
+    namespace
+    {
+        constexpr float kNightOff = 0.002f;   // below this night factor, night-only lights are off (left out)
+
+        // The windows near the camera (WindowLights.cdbc, features/Windows), at night: a spot light each, facing out
+        // and tilted down (windows::SpotDirection), as its DoodadLightProperties row says (colour, intensity, reach,
+        // cone, flicker, baked occlusion), x the row's strength and the panel's, x the night factor if the row is
+        // night only (the shipped ones are). Glow-only rows cast none. Never merged (spots don't).
+        void AddWindowLights(const world::Snapshot& snap, const float eye[3], float night, std::vector<Candidate>& cands)
+        {
+            windows::Stats& ws = windows::GetStats();
+            ws.inRange = 0;
+            const windows::Settings& cfg = windows::Config();
+            if (!cfg.lights || cfg.maxLights <= 0 || night <= kNightOff || snap.mapId < 0) return;
+            static std::vector<const windows::Window*> nearby;
+            windows::Near(static_cast<uint32_t>(snap.mapId), eye, std::min(cfg.lightRange, g_settings.range), false,
+                          static_cast<size_t>(cfg.maxLights), nearby);
+            ws.inRange = static_cast<unsigned>(nearby.size());
+            for (const windows::Window* w : nearby)
+            {
+                const lighttable::Properties* p = lighttable::FindProperties(w->lightId);
+                static const lighttable::Properties kFallback = [] {
+                    lighttable::Properties f;   // a warm window (2700 K) if the row's light is gone
+                    f.type = lighttable::kSpot; f.color = 0xFFA757; f.intensity = 0.9f; f.radius = 10.0f; f.falloff = 1.3f;
+                    f.innerAngle = 30.0f; f.outerAngle = 72.0f; f.flags = lighttable::kNightOnly;
+                    return f;
+                }();
+                if (!p) p = &kFallback;
+                const float nightScale = (p->flags & lighttable::kNightOnly) ? night : 1.0f;
+                const float k = p->intensity * w->strength * cfg.lightStrength * nightScale;
+                if (k <= 0.0f) continue;
+                Candidate c{};
+                c.night = nightScale;
+                std::memcpy(c.pos, w->pos, sizeof(c.pos));
+                c.color[0] = ((p->color >> 16) & 0xFF) / 255.0f * k;
+                c.color[1] = ((p->color >> 8) & 0xFF) / 255.0f * k;
+                c.color[2] = (p->color & 0xFF) / 255.0f * k;
+                c.radius = w->radius > 0.0f ? w->radius : p->radius;
+                c.falloff = p->falloff;
+                c.spotDir[0] = 0.0f; c.spotDir[1] = 0.0f; c.spotDir[2] = -1.0f;
+                c.cosOuter = -2.0f; c.spotScale = 1.0f;
+                if (p->type == lighttable::kSpot)
+                {
+                    windows::SpotDirection(w->facing, c.spotDir);
+                    constexpr float kRad = 3.14159265f / 180.0f;
+                    const float inner = std::cos(std::min(p->innerAngle, p->outerAngle) * kRad);
+                    c.cosOuter = std::cos(p->outerAngle * kRad);
+                    c.spotScale = inner - c.cosOuter > 1e-4f ? 1.0f / (inner - c.cosOuter) : 1e4f;
+                }
+                c.flickerMode = p->flickerMode; c.flickerSpeed = p->flickerSpeed; c.flickerAmount = p->flickerAmount;
+                c.scale = 1.0f;
+                c.model = nullptr;
+                c.bake = (p->flags & lighttable::kBakeOcclusion) != 0;
+                c.moving = false;
+                c.window = true;
+                c.weight = 1.0f;
+                cands.push_back(c);
+            }
+        }
+    }
+
     Settings& Config() { return g_settings; }
     const std::vector<ActiveLight>& Active() { return g_active; }
     const Grid& CellGrid() { return g_grid; }
@@ -967,8 +1041,10 @@ namespace wxl_livingazeroth::lights
         }
         g_time += dt;
 
-        // This frame's lights: the client's current values where it has them.
+        // This frame's lights: the client's current values where it has them. Lights whose DoodadLightProperties say
+        // "night only" follow the client's window fade (windows::Night: 0 by day, and they're left out then).
         const double t0 = grassperf::Now();
+        const float night = windows::Night();
         std::vector<Candidate> cands;
         unsigned fromClient = 0, fromWorld = 0, fileColor = 0;
         const float range = g_settings.range;
@@ -1004,8 +1080,10 @@ namespace wxl_livingazeroth::lights
             }
             if (s.table)
             {
+                if (s.nightOnly && night <= kNightOff) continue;
                 std::memcpy(c.pos, worldPos, sizeof(c.pos));
-                std::memcpy(c.color, s.color, sizeof(c.color));
+                c.night = s.nightOnly ? night : 1.0f;
+                for (int k = 0; k < 3; ++k) c.color[k] = s.color[k] * c.night;
             }
             else
             {
@@ -1025,9 +1103,11 @@ namespace wxl_livingazeroth::lights
             const float dx = c.pos[0] - eye[0], dy = c.pos[1] - eye[1], dz = c.pos[2] - eye[2];
             if (dx * dx + dy * dy + dz * dz > range * range) continue;
             c.weight = 1.0f;
+            if (!s.table) c.night = 1.0f;
             cands.push_back(c);
         }
         g_stats.fromClient = fromClient; g_stats.fromWorldMatrix = fromWorld; g_stats.fileColor = fileColor;
+        AddWindowLights(snap, eye, night, cands);
         g_stats.inRange = static_cast<unsigned>(cands.size());
 
         const double tCand = grassperf::Now();
@@ -1125,6 +1205,8 @@ namespace wxl_livingazeroth::lights
         }
         g_baseLum.clear();
         g_wantBake.clear();
+        g_isWindow.clear();
+        unsigned windowLights = 0;
         unsigned indoorCount = 0;
         g_indoorTests = 0;
         const float fadeStart = range * (2.0f / 3.0f);
@@ -1147,12 +1229,19 @@ namespace wxl_livingazeroth::lights
             l.cosOuter = c.cosOuter; l.spotScale = c.spotScale;
             l.dip = 1.0f - flicker;
             l.model = c.model;
+            l.window = c.window;
             l.indoor = g_settings.indoorSkipsTerrain && IsIndoor(l.pos);
             indoorCount += l.indoor ? 1 : 0;
+            windowLights += c.window ? 1 : 0;
             g_active.push_back(l);
-            g_baseLum.push_back((c.color[0] + c.color[1] + c.color[2]) * g_settings.brightness);
+            // A window ranks below a torch of the same brightness (full cells keep the torch). A night-only light ranks by
+            // its colour at full night, so the choice doesn't change while the night fades in.
+            const float lum = (c.color[0] + c.color[1] + c.color[2]) * g_settings.brightness / std::max(c.night, kNightOff);
+            g_baseLum.push_back(c.window ? lum * windows::kWindowRank : lum);
             g_wantBake.push_back(!c.moving && (c.bake || g_settings.bakeAll) ? 1 : 0);
+            g_isWindow.push_back(c.window ? 1 : 0);
         }
+        windows::GetStats().lights = windowLights;
         // This frame's transient lights (strikes), after the scene's, while the pool has room: outdoors, never
         // baked, and ranked first in every cell they reach.
         for (const ActiveLight& t : g_transient)
@@ -1163,6 +1252,7 @@ namespace wxl_livingazeroth::lights
             g_active.push_back(t);
             g_baseLum.push_back(1000.0f + t.color[0] + t.color[1] + t.color[2]);
             g_wantBake.push_back(0);
+            g_isWindow.push_back(0);
         }
         g_transient.clear();
         g_stats.active = static_cast<unsigned>(g_active.size());
