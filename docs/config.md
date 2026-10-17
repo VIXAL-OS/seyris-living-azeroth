@@ -2,8 +2,8 @@
 
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
-sub-sections `[LivingAzeroth.Fog]` and `[LivingAzeroth.FogWake]` (an ini has no real nesting; the
-dotted names keep them together). Missing keys are written with their default and a comment on
+sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]` and `[LivingAzeroth.Storm]` (an ini
+has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
 The ini sets what each launch starts with. The debug panels (F9) still change everything at
@@ -95,3 +95,29 @@ Where fog forms, and each kind's density, thickness, colour and so on, come from
 
 The grass distance itself is still the client's own setting (`groundEffectDist`, options or
 console); the cap only decides how high it may go.
+
+## `[LivingAzeroth.Storm]`: rain building up into thunder
+
+The server leads: rain grades below 0.40 are light rain (the build-up), below 0.70 medium, from
+0.70 heavy (AzerothCore's cut-offs). Light and medium rain darken the sky and the light, bring
+gusts and haze and the odd flash in the clouds, more the heavier the rain; heavy rain brings
+strikes.
+
+| Key | Default | Meaning |
+|---|---|---|
+| Enabled | 1 | Rain builds up into storms. |
+| Darkness | 0.35 | How much darker the sky and the light get in full storm, 0..1 (less in lighter rain). |
+| Flashes | 1 | Flashes in the clouds (the sky brightens, no bolt), from light rain on. |
+| FlashStrength | 1 | Your multiplier on every flash's brightness. |
+| Frequency | 1 | Your multiplier on how often flashes and strikes come (1 = about one a minute in light rain, every 10-20 s in heavy rain). |
+| Thunder | 1 | Heavy rain: lightning strikes, lighting the sky and (near ones) the ground. |
+| ThunderSounds | 1 | A strike's crack, after the sound's travel time (about 3 s per km), quieter the farther. |
+| ThunderSoundDistance | 1600 | Strikes farther than this (yards) are silent. |
+| StrikeLight | 1 | Your multiplier on the point light at a strike within light range, 0 = none. |
+| Gusts | 1 | Your multiplier on the storm's extra gusts, 0 = none. |
+| Haze | 0.3 | Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none. |
+| Bolts | 0 | Experimental: a lightning bolt model at strikes (our own models in the client's scene). |
+| BoltSize | 6 | The bolt's size, x Call Lightning's (about 11.5 yards tall). |
+| BoltRange | 900 | Strikes farther than this (yards) get no bolt model. |
+| Scorch | 0 | Experimental: a scorch mark on the terrain where a near strike lands. |
+| ScorchSeconds | 45 | Seconds the scorch mark takes to fade. |

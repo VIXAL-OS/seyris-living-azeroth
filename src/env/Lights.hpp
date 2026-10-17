@@ -117,6 +117,11 @@ namespace wxl_livingazeroth::lights
     /// Every few frames: rescan the doodads (they don't move), refresh positions and colours.
     void Update(float dt, const world::Snapshot& snap);
 
+    /// A point light for the next Update only (a lightning strike, env/Storm): world position, colour
+    /// (already at this frame's brightness), radius (yd). Appended after the scene's lights while the
+    /// pool has room, outdoors, unbaked; at most 8 a frame. Call before Update each frame it should shine.
+    void AddTransient(const float pos[3], const float color[3], float radius);
+
     /// The lights to draw this frame (at most kMaxPool), in a stable order between scans (so the
     /// grid only changes when the scan or the camera's cell does).
     const std::vector<ActiveLight>& Active();

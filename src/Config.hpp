@@ -13,6 +13,7 @@ namespace wxl_livingazeroth::config
     // Sub-sections (an ini has no nesting; the dotted name keeps them together in the file).
     constexpr const char* kSectionFog = "LivingAzeroth.Fog";
     constexpr const char* kSectionFogWake = "LivingAzeroth.FogWake";
+    constexpr const char* kSectionStorm = "LivingAzeroth.Storm";
 
     /// Reads the runtime defaults into the features' tunables. Call once, after every extension
     /// has loaded (first OnFrame): the settings interface belongs to another extension.

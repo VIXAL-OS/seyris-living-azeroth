@@ -610,6 +610,9 @@ namespace wxl_livingazeroth::fog
             return g_areaInputs.emplace(area, a).first->second;
         }
 
+        // A storm's extra haze (env/Storm), where the player is: rain-borne, so the wind doesn't thin it.
+        float g_stormHaze = 0.0f;
+
         // --- each zone's typical fog (the memory; design doc "Phase 3 step 5") ---
         // Kinds that are zone-wide by nature; water fog and steam need water or heat detail.
         constexpr bool kZoneWide[kKindCount] = { true, false, false, true, true };
@@ -640,7 +643,7 @@ namespace wxl_livingazeroth::fog
             const float zoneFog = clouded ? 0.0f : a.fogginess;
             out[kMist] = clouded ? 0.0f : humid * still * Calm(kMist) * (0.4f + 0.6f * kAverageHollow) * (1.0f + 0.5f * zoneFog);
             out[kAreaFog] = zoneFog * (0.6f + 0.4f * in.night) * Calm(kAreaFog);
-            out[kHaze] = zone == regional::PlayerZone() ? (0.8f * in.rain + 0.4f * in.snow) * Calm(kHaze) : 0.0f; // others: weather unknown
+            out[kHaze] = zone == regional::PlayerZone() ? (0.8f * in.rain + 0.4f * in.snow) * Calm(kHaze) + g_stormHaze : 0.0f; // others: weather unknown
             for (int k = 0; k < kKindCount; ++k)
                 out[k] = g_settings[k].enabled && kZoneWide[k] ? Clamp01(out[k] * a.strength[k]) : 0.0f;
         }
@@ -823,10 +826,11 @@ namespace wxl_livingazeroth::fog
             note(kAreaFog, "time of day (night)", in.night, 0.6f + 0.4f * in.night);
             note(kAreaFog, "calm (wind)", in.wind, Calm(kAreaFog));
             // Haze: rain (snow less).
-            out[kHaze] = (0.8f * in.rain + 0.4f * in.snow) * Calm(kHaze);
+            out[kHaze] = (0.8f * in.rain + 0.4f * in.snow) * Calm(kHaze) + g_stormHaze;
             note(kHaze, "rain", in.rain, 0.8f * in.rain + 0.4f * in.snow);
             note(kHaze, "  ... snow", in.snow, -1.0f);
             note(kHaze, "calm (wind)", in.wind, Calm(kHaze));
+            if (g_stormHaze > 0.0f) note(kHaze, "+ storm (not thinned by its wind)", g_stormHaze, g_stormHaze, true);
 
             // Steep ground (SteepStart .. SteepFull): fog doesn't hang there, the ground-hugging kinds
             // don't form (water fog and steam hang at their source's height instead).
@@ -1432,6 +1436,8 @@ namespace wxl_livingazeroth::fog
     void SetPaused(bool paused) { g_paused = paused; }
     bool Paused() { return g_paused; }
     Stats GetStats() { return g_stats; }
+    void  SetStormHaze(float extra) { g_stormHaze = std::isfinite(extra) ? Clamp01(extra) : 0.0f; }
+    float StormHaze() { return g_stormHaze; }
 
     void Reset()
     {

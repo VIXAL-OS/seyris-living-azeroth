@@ -197,6 +197,11 @@ namespace wxl_livingazeroth::fog
     /// Once per frame, after fields::Update(). Steps the field a few times a second.
     void Update(float dt, const world::Snapshot& snap);
 
+    /// A storm's extra haze (env/Storm), added to the haze's target where the player is (0..1, before
+    /// the place's Strength); its wind doesn't thin it.
+    void  SetStormHaze(float extra);
+    float StormHaze();
+
     // --- testing (the fog panel; not saved) ---
     /// Adds fog of a kind around the player: `amount` at the centre, fading to 0 at `radius` yd
     /// (smooth), clamped to 1. It then burns off by the kind's own rate.

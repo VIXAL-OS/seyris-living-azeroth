@@ -74,4 +74,9 @@ namespace wxl_livingazeroth::wind
     /// Debug override: < 0 follows the live weather, 0..1 forces an intensity.
     void SetWeatherOverride(float intensity);
     float WeatherOverride();
+
+    /// Storms (env/Storm), on top of the weather's own push: gusts this much stronger (x the profile's
+    /// GustStrength; 0 = as authored) and the steady wind pushed this far further toward its max (0..1).
+    void  SetStorm(float gustBoost, float steadyBoost);
+    float StormGust();
 }

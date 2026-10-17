@@ -5,6 +5,7 @@
 #include "../render/MoistureTexture.hpp"
 #include "../render/ShaderPatch.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <regex>
 #include <string>
@@ -40,6 +41,10 @@ namespace wxl_livingazeroth::terrainwet
         // c202 is defined in the shader. Inside its last kEdgeFadeYards the grid fades into the one
         // regional value used beyond it, so its edge doesn't show.
         constexpr int kPsConstant = 200;
+        // A scorch mark (SetScorch): c223 = (x, y, 1 / radius, strength), the last constant ps_3_0 has (the
+        // light patch holds c206..c214, the ice c215..c222). Set at every terrain stage, zeros when none.
+        constexpr int kScorchConstant = 223;
+        float g_scorch[4] = {};
 
         bool  g_enabled = true;
         unsigned g_packed = 0; // vertex variants whose unread view-position output carries it (all 11 outputs in use)
@@ -161,7 +166,17 @@ namespace wxl_livingazeroth::terrainwet
             // Then the point lights (features/TerrainLights), on the wet colour.
             std::string lightDefs;
             const std::string lightBlock = terrainlights::PixelBlock(r, lightDefs);
-            src.insert(static_cast<size_t>(m.position(0)), block + lightBlock);
+            // Last, before the fog: a scorch mark (c223, SetScorch) darkens the lit colour in a soft disc,
+            // (1 - d^2)^2 of the way to strength at its centre; strength 0 leaves the colour exactly.
+            const std::string scorchBlock =
+                "\n    add r28.xy, v9.xy, -c223.xy"
+                "\n    mul r28.xy, r28.xy, c223.z"
+                "\n    dp2add r28.x, r28.xy, r28.xy, c202.y"
+                "\n    add_sat r28.x, c202.x, -r28.x"
+                "\n    mul r28.x, r28.x, r28.x"
+                "\n    mul r28.x, r28.x, c223.w"
+                "\n    mad " + r + ".xyz, " + r + ", -r28.x, " + r;
+            src.insert(static_cast<size_t>(m.position(0)), block + lightBlock + scorchBlock);
             src.insert(src.find('\n') + 1, "    def c202, 1, 0, 0.5, 0\n" + lightDefs + (withIce ? terrainice::Definitions() : std::string()) +
                                             "    dcl_texcoord7 v9.xyz\n    dcl_2d s11\n    dcl_2d s12\n");
             terrainice::NoteVariant(withIce, iceWhy);
@@ -222,6 +237,10 @@ namespace wxl_livingazeroth::terrainwet
         const bool farOn = on && !g_debug && moisturetex::FarMapping(farConstants[0], farConstants + 4, farSize, outside) && moisturetex::BindFarPixel(device, 12);
         farConstants[2] = farOn ? 1.0f : 0.0f;
         device->SetPixelShaderConstantF(kPsConstant + 4, farConstants, 2);
+
+        // The scorch mark, or none (a constant left over from anything else must not darken the ground).
+        const float none[4] = {};
+        device->SetPixelShaderConstantF(kScorchConstant, bound && g_scorch[3] > 0.0f ? g_scorch : none, 1);
     }
 
     bool  PatchActive()            { return PairOk(shaderpatch::Status()); }
@@ -231,6 +250,15 @@ namespace wxl_livingazeroth::terrainwet
     bool  Enabled()                { return g_enabled; }
     void  SetStrength(float s)     { g_strength = s < 0.0f ? 0.0f : (s > 1.0f ? 1.0f : s); }
     float Strength()               { return g_strength; }
+
+    void SetScorch(float x, float y, float radius, float strength)
+    {
+        const bool valid = std::isfinite(x) && std::isfinite(y) && radius > 0.01f && std::isfinite(strength) && strength > 0.0f;
+        g_scorch[0] = valid ? x : 0.0f;
+        g_scorch[1] = valid ? y : 0.0f;
+        g_scorch[2] = valid ? 1.0f / radius : 0.0f;
+        g_scorch[3] = valid ? (strength > 1.0f ? 1.0f : strength) : 0.0f;
+    }
 
     const char* StatusLine()
     {

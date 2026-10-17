@@ -182,6 +182,7 @@ namespace wxl_livingazeroth::lights
         };
         std::vector<Source>      g_sources;
         std::vector<ActiveLight> g_active;
+        std::vector<ActiveLight> g_transient; // this frame only (AddTransient: lightning strikes)
         Settings g_settings;
         Stats    g_stats;
         float    g_scanTime = kScanSeconds;
@@ -927,11 +928,21 @@ namespace wxl_livingazeroth::lights
     const Grid& CellGrid() { return g_grid; }
     Stats GetStats() { return g_stats; }
 
+    void AddTransient(const float pos[3], const float color[3], float radius)
+    {
+        if (!pos || !color || !(radius > 0.0f) || g_transient.size() >= 8) return;
+        ActiveLight l{};
+        for (int k = 0; k < 3; ++k) { l.pos[k] = pos[k]; l.color[k] = color[k] > 0.0f ? color[k] : 0.0f; }
+        l.radius = radius;
+        g_transient.push_back(l);
+    }
+
     void Update(float dt, const world::Snapshot& snap)
     {
         g_active.clear();
         if (!snap.inWorld || !g_settings.enabled)
         {
+            g_transient.clear();
             g_sources.clear();
             g_walk.Abandon();
             if (g_grid.cells) { g_grid = Grid{ 0.0f, 0.0f, 16.0f, 0, 0, {}, {}, g_grid.generation + 1 }; }
@@ -1142,6 +1153,18 @@ namespace wxl_livingazeroth::lights
             g_baseLum.push_back((c.color[0] + c.color[1] + c.color[2]) * g_settings.brightness);
             g_wantBake.push_back(!c.moving && (c.bake || g_settings.bakeAll) ? 1 : 0);
         }
+        // This frame's transient lights (strikes), after the scene's, while the pool has room: outdoors, never
+        // baked, and ranked first in every cell they reach.
+        for (const ActiveLight& t : g_transient)
+        {
+            if (g_active.size() >= static_cast<size_t>(kMaxPool)) break;
+            const float dx = t.pos[0] - eye[0], dy = t.pos[1] - eye[1];
+            if (std::sqrt(dx * dx + dy * dy) > range + t.radius) continue;
+            g_active.push_back(t);
+            g_baseLum.push_back(1000.0f + t.color[0] + t.color[1] + t.color[2]);
+            g_wantBake.push_back(0);
+        }
+        g_transient.clear();
         g_stats.active = static_cast<unsigned>(g_active.size());
         g_stats.indoor = indoorCount;
         g_stats.indoorTests = g_indoorTests;

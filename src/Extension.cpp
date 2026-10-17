@@ -19,6 +19,7 @@
 #include "debug/LightEditor.hpp"
 #include "debug/LightsView.hpp"
 #include "debug/Profiler.hpp"
+#include "debug/StormView.hpp"
 #include "debug/SurfaceView.hpp"
 #include "debug/WindView.hpp"
 #include "debug/WmoBindProbe.hpp"
@@ -36,6 +37,7 @@
 #include "env/Fields.hpp"
 #include "env/Lights.hpp"
 #include "env/Regional.hpp"
+#include "env/Storm.hpp"
 #include "env/Wind.hpp"
 #include "env/WorldQuery.hpp"
 #include "features/DoodadFade.hpp"
@@ -155,6 +157,7 @@ namespace
         {
             prof::Scope scope(prof::kOursEnv);
             wxl_livingazeroth::climate::Update(snap);
+            wxl_livingazeroth::storm::Update(dt, snap); // before the wind, the fog and the lights it feeds
             wxl_livingazeroth::regional::Update(dt, snap);
             wxl_livingazeroth::wind::Update(dt, snap);
             if (snap.inWorld)
@@ -182,6 +185,7 @@ namespace
     void __cdecl OnWorldLeave(void* /*user*/, const void* /*args*/)
     {
         wxl_livingazeroth::fields::OnWorldLeave();
+        wxl_livingazeroth::storm::OnWorldLeave(); // its bolt models go while the world's scene is still there
     }
 
     void __cdecl OnDeviceLost(void* /*user*/, const void* /*args*/)
@@ -244,6 +248,8 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::groundfog::Install(api);
     // Records the M2 shader effects as the client loads them (research: dumps; later M2 patches).
     wxl_livingazeroth::m2effects::Install(api);
+    // Storms: the day-night colours, shaded right before the client's sky, light and fog take them.
+    wxl_livingazeroth::storm::Install(api);
 
     // Surface cover spike: draws at the end of the world scene (before anti-aliasing's pass).
     wxl_livingazeroth::cover::Install(api);
@@ -259,6 +265,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::debug::RegisterWindPanel(api);
     wxl_livingazeroth::debug::RegisterSurfacePanel(api);
     wxl_livingazeroth::debug::RegisterClimatePanel(api);
+    wxl_livingazeroth::debug::RegisterStormPanel(api);
     wxl_livingazeroth::debug::RegisterFogPanel(api);
     wxl_livingazeroth::debug::RegisterLightsPanel(api);
     wxl_livingazeroth::debug::RegisterLightEditor(api);

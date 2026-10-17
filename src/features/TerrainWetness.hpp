@@ -3,8 +3,9 @@
 //
 // Every terrain vertex shader passes its world position on (texcoord7 .xyz); every terrain pixel
 // shader samples the shared moisture texture (render/MoistureTexture, sampler s11) there and darkens
-// its colour right before fog, then adds the point lights (features/TerrainLights). Only the inserted
-// lines are ours -- every layer count, shadow variant and output of the stock shaders stays as it was.
+// its colour right before fog, then adds the point lights (features/TerrainLights) and a lightning
+// strike's scorch mark (env/Storm). Only the inserted lines are ours -- every layer count, shadow
+// variant and output of the stock shaders stays as it was.
 #pragma once
 
 #include "wxl/PluginApi.h"
@@ -36,6 +37,11 @@ namespace wxl_livingazeroth::terrainwet
     /// How much darker fully soaked ground gets (0..1; 0.45 matches the cover).
     void  SetStrength(float strength);
     float Strength();
+
+    /// One scorch mark on the terrain (a lightning strike, env/Storm): a soft dark disc at world (x, y)
+    /// of `radius` yd, its centre darkened by `strength` (0..1; 0 = none). The terrain only (not the
+    /// surface cover, WMO floors or models). Pixel constant c223 = (x, y, 1 / radius, strength).
+    void  SetScorch(float x, float y, float radius, float strength);
 
     /// The pixel edit on its own, for offline tests (every stock variant must patch and assemble).
     bool EditPixelForTests(std::string& src, std::string& why);

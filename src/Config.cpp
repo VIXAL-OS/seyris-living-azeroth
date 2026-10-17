@@ -4,6 +4,7 @@
 #include "env/Fields.hpp"
 #include "env/Fog.hpp"
 #include "env/Shelter.hpp"
+#include "env/Storm.hpp"
 #include "features/DoodadFade.hpp"
 #include "features/FogWake.hpp"
 #include "features/GroundFog.hpp"
@@ -202,7 +203,28 @@ namespace wxl_livingazeroth::config
             w.rim = In(s, f, "Rim", "Fog piled up at the wake's edge, as a share of the push.", w.rim);
             w.swirl = In(s, f, "Swirl", "How far the fog's pattern is dragged and curled along the path.", w.swirl);
         }
+        // Storms: rain building up into thunder.
+        {
+            const char* f = kSectionStorm;
+            storm::Settings& t = storm::Config();
+            t.enabled = In(s, f, "Enabled", "Rain builds up into storms: light and medium rain darken the sky and bring gusts, haze and the odd flash in the clouds; heavy rain brings strikes with thunder.", t.enabled);
+            t.darkness = In(s, f, "Darkness", "How much darker the sky and the light get in full storm, 0..1 (less in lighter rain).", t.darkness);
+            t.flashes = In(s, f, "Flashes", "Flashes in the clouds (the sky brightens, no bolt), from light rain on.", t.flashes);
+            t.flashStrength = In(s, f, "FlashStrength", "Your multiplier on every flash's brightness.", t.flashStrength);
+            t.frequency = In(s, f, "Frequency", "Your multiplier on how often flashes and strikes come (1 = about one a minute in light rain, every 10-20 s in heavy rain).", t.frequency);
+            t.thunder = In(s, f, "Thunder", "Heavy rain: lightning strikes, lighting the sky and (near ones) the ground.", t.thunder);
+            t.sounds = In(s, f, "ThunderSounds", "A strike's crack, after the sound's travel time (about 3 s per km), quieter the farther.", t.sounds);
+            t.soundDistance = In(s, f, "ThunderSoundDistance", "Strikes farther than this (yards) are silent.", t.soundDistance);
+            t.strikeLight = In(s, f, "StrikeLight", "Your multiplier on the point light at a strike within light range, 0 = none.", t.strikeLight);
+            t.wind = In(s, f, "Gusts", "Your multiplier on the storm's extra gusts, 0 = none.", t.wind);
+            t.haze = In(s, f, "Haze", "Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none.", t.haze);
+            t.bolts = In(s, f, "Bolts", "Experimental: a lightning bolt model at strikes (our own models in the client's scene).", t.bolts);
+            t.boltSize = In(s, f, "BoltSize", "The bolt's size, x Call Lightning's (about 11.5 yards tall).", t.boltSize);
+            t.boltRange = In(s, f, "BoltRange", "Strikes farther than this (yards) get no bolt model.", t.boltRange);
+            t.scorch = In(s, f, "Scorch", "Experimental: a scorch mark on the terrain where a near strike lands.", t.scorch);
+            t.scorchSeconds = In(s, f, "ScorchSeconds", "Seconds the scorch mark takes to fade.", t.scorchSeconds);
+        }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake);
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm);
     }
 }

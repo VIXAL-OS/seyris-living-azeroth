@@ -72,6 +72,7 @@ namespace wxl_livingazeroth::wind
         float g_weatherUsed = 0.0f;
         float g_steadyGround = 0.0f, g_steadyAloft = 0.0f, g_bearing = 0.0f;
         int   g_mapId = -1;
+        float g_stormGust = 0.0f, g_stormSteady = 0.0f; // env/Storm
 
         float BitsToFloat(uint32_t bits) { float f; std::memcpy(&f, &bits, sizeof(f)); return f; }
         float Clamp01(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
@@ -238,6 +239,7 @@ namespace wxl_livingazeroth::wind
         g_weatherUsed = g_weatherOverride >= 0.0f ? g_weatherOverride : snap.weatherIntensity;
         float rangePos = 0.2f + 0.5f * Noise1(g_time / 40.0f + 17.3f);
         rangePos += (1.0f - rangePos) * Clamp01(g_weatherUsed * p[WeatherInfluence]);
+        rangePos += (1.0f - rangePos) * Clamp01(g_stormSteady); // a storm on top (env/Storm)
 
         g_steadyGround = Lerp(p[GroundMin], p[GroundMax], rangePos);
         g_steadyAloft  = Lerp(p[AloftMin],  p[AloftMax],  rangePos);
@@ -270,7 +272,9 @@ namespace wxl_livingazeroth::wind
         const float v = pos[0] * px + pos[1] * py;
         const float along = 50.0f / freq, across = 35.0f / freq;
         const float n = Fbm2((u - g_time * speed) / along, v / across);
-        s.gust = Clamp01((n - 0.5f) * 3.0f);
+        // A storm's gusts come more often (a wider share of the noise) and hit harder (below).
+        const float storm = g_stormGust;
+        s.gust = Clamp01((n - 0.5f + 0.06f * storm) * 3.0f);
 
         // Gusts veer the direction a little too.
         const float veer = (Noise2((u - g_time * speed) / 80.0f + 31.0f, v / 80.0f) - 0.5f)
@@ -281,7 +285,7 @@ namespace wxl_livingazeroth::wind
         // uses the steady direction, not the gust-veered one, so its cached rays stay valid.
         s.open = steady > 0.0f ? shelter::Openness(pos) : 1.0f;
         s.lee  = (steady > 0.0f && s.open > 0.0f) ? shelter::Lee(pos, dx, dy) : 1.0f;
-        s.strength = steady * (1.0f + p[GustStrength] * s.gust) * s.open * s.lee * g_strengthMultiplier;
+        s.strength = steady * (1.0f + p[GustStrength] * (1.0f + storm) * s.gust) * s.open * s.lee * g_strengthMultiplier;
         return s;
     }
 
@@ -300,4 +304,11 @@ namespace wxl_livingazeroth::wind
 
     void  SetWeatherOverride(float intensity) { g_weatherOverride = intensity; }
     float WeatherOverride()                   { return g_weatherOverride; }
+
+    void SetStorm(float gustBoost, float steadyBoost)
+    {
+        g_stormGust = std::isfinite(gustBoost) && gustBoost > 0.0f ? gustBoost : 0.0f;
+        g_stormSteady = std::isfinite(steadyBoost) ? Clamp01(steadyBoost) : 0.0f;
+    }
+    float StormGust() { return g_stormGust; }
 }
