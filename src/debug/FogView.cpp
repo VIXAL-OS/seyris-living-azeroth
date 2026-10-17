@@ -9,6 +9,7 @@
 #include "../env/Regional.hpp"
 #include "../features/DoodadFade.hpp"
 #include "../features/GroundFog.hpp"
+#include "../features/SunShafts.hpp"
 #include "../env/WorldQuery.hpp"
 
 #include <cstdio>
@@ -76,6 +77,7 @@ namespace wxl_livingazeroth::debug
                 if (g_api->UiCheckbox("pause (no build-up, burn-off, wind or flow)", &paused)) fog::SetPaused(paused != 0);
             }
             groundfog::DrawPanelSection();
+            sunshafts::DrawPanelSection(g_api);
             doodadfade::DrawPanelSection(g_api);
             if (g_api->UiCollapsingHeader("Zones (each zone's typical fog: the memory)##fogzones"))
             {

@@ -15,6 +15,7 @@
 #include "features/TerrainIce.hpp"
 #include "features/WmoIce.hpp"
 #include "features/TerrainWetness.hpp"
+#include "features/SunShafts.hpp"
 #include "features/Windows.hpp"
 #include "render/PostAA.hpp"
 #include "wxl_seyris/SettingsApi.hpp"
@@ -241,6 +242,19 @@ namespace wxl_livingazeroth::config
             w.withClientGlow = Whole(s, f, "WithClientGlow", "While the client's own Full Screen Glow (ffxGlow) is on: 0 = the window glow at full strength, 1 = half, 2 = off.", w.withClientGlow);
         }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows);
+        // Sun shafts: light through trees, fog and the cloud deck.
+        {
+            const char* f = kSectionShafts;
+            sunshafts::Settings& h = sunshafts::Config();
+            h.enabled = In(s, f, "Enabled", "Sun shafts: light shafts through trees, fog and the gaps of the cloud deck, strongest in fog and mist in the low sun of morning and evening, faint at a clear noon, none in heavy rain, storms or indoors.", h.enabled);
+            h.strength = In(s, f, "Strength", "Your multiplier on the sun shafts' brightness.", h.strength);
+            h.quality = Whole(s, f, "Quality", "0 = a quarter of the resolution, one blur pass; 1 = a quarter, smoothed by a second short pass; 2 = half the resolution, smoothed.", h.quality);
+            h.samples = Whole(s, f, "Samples", "Taps per pixel along the line toward the sun (8 .. 64): more = smoother, longer shafts, slower.", h.samples);
+            h.length = In(s, f, "Length", "How far the shafts reach: the share of the way to the sun each pixel looks (0.2 .. 1).", h.length);
+            h.throughDeck = In(s, f, "ThroughCloudDeck", "In mountain zones with a cloud deck: the shafts come through its gaps, and below it shafts fall from its gaps even with the sun off the screen.", h.throughDeck);
+            h.moon = In(s, f, "Moon", "Faint shafts from the night light at night: your multiplier, 0 = none.", h.moon);
+        }
+
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts);
     }
 }

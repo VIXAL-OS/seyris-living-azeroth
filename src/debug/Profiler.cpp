@@ -33,7 +33,7 @@ namespace wxl_livingazeroth::prof
             "ours: climate / wind / fields", "ours: lights (scan, grid, baking)", "ours: light textures",
             "ours: surface cover update", "ours: surface cover draw", "ours: anti-aliasing",
             "ours: fog field", "ours: fog draw",
-            "ours: fog uploads", "ours: fog lights", "ours: surface cover uploads",
+            "ours: fog uploads", "ours: fog lights", "ours: surface cover uploads", "ours: sun shafts",
             "grass: client re-bake", "ours: grass wind grid", "ours: grass chunk constants",
             "ours: grass layer prepare", "ours: grass layer bind", "ours: grass layer draws",
         };

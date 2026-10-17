@@ -73,6 +73,7 @@ namespace wxl_livingazeroth::groundfog
         float    g_tintColour[3] = {};   // ours this frame
         unsigned g_tinted = 0, g_tintOther = 0, g_tintedShown = 0, g_tintOtherShown = 0; // draws this frame / last frame
         bool     g_deckDrewInside = false; // set by Draw: the deck drawn this frame
+        DeckFrame g_deckFrame;             // the same for the sun shafts (DeckThisFrame)
         bool     g_hookedFrame = false;      // the world frame hook (closes the window); without it no tint
 
         int         g_liquidPass = -1;
@@ -885,6 +886,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_psDeckBlur) { g_psDeckBlur->Release(); g_psDeckBlur = nullptr; }
             if (g_deckTex) { g_deckTex->Release(); g_deckTex = nullptr; }
             g_deckTexFailed = false;
+            g_deckFrame = DeckFrame{};
             if (g_psGlow) { g_psGlow->Release(); g_psGlow = nullptr; }
             if (g_psBright) { g_psBright->Release(); g_psBright = nullptr; }
             if (g_brightTex) { g_brightTex->Release(); g_brightTex = nullptr; }
@@ -2223,6 +2225,19 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 if (deckSurface) deckSurface->Release();
                 if (screen) screen->Release();
             }
+            // The deck as drawn, for the sun shafts right after this pass.
+            if (deckOn)
+            {
+                DeckFrame& f = g_deckFrame;
+                f.drawn = true;
+                f.result = deckSmooth ? g_deckTex : nullptr;
+                f.resultW = g_deckW; f.resultH = g_deckH;
+                f.noise = g_noise;
+                f.base = c[84]; f.top = c[85]; f.density = c[86]; f.range = c[87];
+                f.invTile = c[91]; f.banks = c[92];
+                for (int i = 0; i < 3; ++i) f.drift[i] = g_noiseOffset[i];
+                f.cover = g_deck.cover;
+            }
             auto drawDeck = [&](IDirect3DPixelShader9* restore) {
                 if (deckSmooth)
                 {
@@ -2609,6 +2624,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             // Above water the order is: water -> weather -> see-through models; under water the weather
             // comes before the water, and the fog stays off there (Decide).
             g_deckDrewInside = false;
+            g_deckFrame.drawn = false;
             if (g_drawThisFrame || Decide())
                 if (auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice())) Draw(dev);
             g_drawThisFrame = false;
@@ -2635,6 +2651,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
     }
 
     Settings& Config() { return g_settings; }
+    const DeckFrame& DeckThisFrame() { return g_deckFrame; }
 
     void Install(const WXL_Api* api)
     {
@@ -2840,6 +2857,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         if (g_deckTex) { g_deckTex->Release(); g_deckTex = nullptr; }
         g_deckW = g_deckH = 0;
         g_deckTexFailed = false;
+        g_deckFrame = DeckFrame{};
         g_halfFailed = false;
         for (auto*& t : g_glowTex) if (t) { t->Release(); t = nullptr; }
         if (g_brightTex) { g_brightTex->Release(); g_brightTex = nullptr; }

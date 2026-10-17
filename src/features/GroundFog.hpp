@@ -77,5 +77,24 @@ namespace wxl_livingazeroth::groundfog
     void DrawPanelSection();
     void DrawDiagnostics();
 
+    /// The cloud deck as the fog pass drew it this frame, for the sun shafts (features/SunShafts), which run right
+    /// after it at the weather render's entry. `drawn` false: no deck this frame (none here, switched off, no fog pass).
+    struct DeckFrame
+    {
+        bool     drawn = false;
+        void*    result = nullptr;   // IDirect3DTexture9*: its half-resolution result (alpha = what the view through it
+                                     // lets pass), or null when it was drawn straight onto the screen (CloudDeckSmooth 0)
+        unsigned resultW = 0, resultH = 0;
+        void*    noise = nullptr;    // IDirect3DVolumeTexture9*: the noise its clouds are shaped by
+        float    base = 0.0f, top = 0.0f; // world z
+        float    density = 0.0f;     // per yd, as drawn (thinned indoors and with the camera inside it)
+        float    invTile = 0.0f;     // 1 / its noise tile (yd)
+        float    banks = 0.5f;       // the banks' threshold (0.2 overcast .. 0.8 clear)
+        float    drift[3] = {};      // the fog's noise drift (tiles), as it reads it
+        float    cover = 1.0f;       // the sky over it, 0 clear .. 1 overcast
+        float    range = 1200.0f;    // yd it's drawn to
+    };
+    const DeckFrame& DeckThisFrame();
+
     void OnDeviceLost();
 }

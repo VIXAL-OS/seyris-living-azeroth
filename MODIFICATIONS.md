@@ -28,6 +28,8 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
 - **Lit windows at night** (17 October 2026): warm light in front of the lit windows of towns and cities and a
   soft glow on the glass, following the client's own window fade (`WindowLights.cdbc`,
   `tools/gen_window_lights.py`, `[LivingAzeroth.Windows]`).
-- **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows.
+- **Sun shafts** (17 October 2026): light shafts through trees, fog and the cloud deck's gaps, by what's in the air,
+  the time of day and the weather (`env/ShaftModel`, `features/SunShafts`, `[LivingAzeroth.Shafts]`).
+- **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

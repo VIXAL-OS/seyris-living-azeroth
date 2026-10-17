@@ -2,8 +2,8 @@
 
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
-sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]` and `[LivingAzeroth.Windows]` (an ini
-has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
+sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]`, `[LivingAzeroth.Windows]` and
+`[LivingAzeroth.Shafts]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
 The ini sets what each launch starts with. The debug panels (F9) still change everything at
@@ -141,3 +141,30 @@ factor, the client's Full Screen Glow and what's drawn.
 | GlowStrength | 1 | Your multiplier on the window glow. |
 | GlowRange | 220 | Windows farther than this (yards) don't glow; the glow fades out over the last third. |
 | WithClientGlow | 1 | While the client's own Full Screen Glow (`ffxGlow`) is on: 0 = the window glow at full strength, 1 = half, 2 = off. |
+
+## `[LivingAzeroth.Shafts]`: sun shafts
+
+Light shafts through trees, fog and the gaps of the cloud deck: a post pass right after the ground fog (before rain,
+see-through models, name text and the UI, so those never take part), at a quarter of the resolution. Each pixel
+gathers the sunlit air along the line toward the sun's place on the screen: the sky and lit air far off are bright, a
+trunk or a wall near you shades the line behind it. Snow and other bright surfaces don't glow: what lights up comes
+from the scene's depth and the sun's direction, not from how bright the picture is.
+
+How strong they are follows what's in the air where you are (the place's fogginess, the ground fog's area fog, mist and
+haze) and the time of day: strongest in fog or mist in the low sun of morning and evening, about half that at noon,
+faint in clear air, fading with the sky in the evening (gone by about 22:00). Less in rain, none in heavy rain, a storm,
+under water or indoors. They fade as the sun leaves the screen. Under a cloud deck (mountain zones with an AreaClimate
+CloudBase) its gaps let the shafts through, and below it shafts fall from its gaps along your view, worked out from the
+deck's own density, with the sun off the screen too. The fog panel's **Sun shafts** section changes all of this at
+runtime and shows the strength's parts, the sun on the screen and the cost; the frame profiler has a row for their GPU
+time ("ours: sun shafts").
+
+| Key | Default | Meaning |
+|---|---|---|
+| Enabled | 1 | Sun shafts. |
+| Strength | 1 | Your multiplier on their brightness. |
+| Quality | 1 | 0 = a quarter of the resolution, one blur pass; 1 = a quarter, smoothed by a second short pass; 2 = half the resolution, smoothed (about four times the cost). |
+| Samples | 32 | Taps per pixel along the line toward the sun (8 .. 64): more = smoother, longer shafts, slower. |
+| Length | 0.85 | How far the shafts reach: the share of the way to the sun each pixel looks (0.2 .. 1). |
+| ThroughCloudDeck | 1 | Under a cloud deck: the shafts come through its gaps, and below it shafts fall from its gaps (a short march through its density toward the sun). Needs the deck's smooth mode (`[LivingAzeroth.Fog]` CloudDeckSmooth 1) for the gaps; without it the deck dims them evenly. |
+| Moon | 0 | Faint shafts from the night light at night: your multiplier, 0 = none. The client's night light doesn't always sit where the sky shows the moon, so it's off by default. |
