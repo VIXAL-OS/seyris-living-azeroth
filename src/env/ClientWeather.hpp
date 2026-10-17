@@ -24,7 +24,8 @@ namespace wxl_livingazeroth::clientweather
         kLightSand = 22, kMediumSand = 41, kHeavySand = 42,
     };
 
-    /// The state for one of our weather types (0 fine, 1 rain, 2 snow, 3 sand) at an intensity 0..1.
+    /// The state for one of our weather types (0 fine, 1 rain, 2 snow, 3 sand) at an intensity 0..1:
+    /// light below 0.40, medium below 0.70, heavy from there (the server's cut-offs).
     uint32_t StateFor(int type, float intensity);
 
     /// Queues the weather; applied on the next Apply() (main thread, outside rendering).

@@ -44,7 +44,9 @@ namespace wxl_livingazeroth::clientweather
 
     uint32_t StateFor(int type, float intensity)
     {
-        const int level = intensity < 0.34f ? 0 : (intensity < 0.67f ? 1 : 2);
+        // The server's own cut-offs (AzerothCore Weather::GetWeatherState), so a forced grade shows the rain
+        // the server would send with it, and env/Storm's phase agrees.
+        const int level = intensity < 0.40f ? 0 : (intensity < 0.70f ? 1 : 2);
         switch (type)
         {
             case 1: { const uint32_t s[] = { kLightRain, kMediumRain, kHeavyRain }; return s[level]; }
