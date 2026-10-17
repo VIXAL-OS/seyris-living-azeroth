@@ -15,10 +15,13 @@ ADTs; the 90th where a town sits high: Dun Morogh, Ironforge's gate at ~500; Win
 below (Everlook 722, Brunnhildar 822, Dun Niffelem 758, K3 403, Sun Rock 105, Sylvanaar 173). Tops: 50 yd above the
 zone's highest terrain, so the summits are in cloud too ("the tops of the mountains in storm peaks"; the Temple of
 Storms at 1888, Stormcrest 1207):
-    Storm Peaks 1040..1950    Icecrown 655..1200    Alterac Mountains 177..368    Dun Morogh 560..946
-    Winterspring 963..1472    Stonetalon Mountains 310..634    Blade's Edge Mountains 342..609
-Fogginess 0.8 (0.7 in Dun Morogh, Stonetalon and Blade's Edge), set only where the place's row doesn't set one
+    Storm Peaks 1040..1950    Icecrown 655..1200    Alterac Mountains 177..368
+    Stonetalon Mountains 310..634    Blade's Edge Mountains 342..609
+Fogginess 0.8 (0.7 in Stonetalon and Blade's Edge), set only where the place's row doesn't set one
 (upstream tunes many zones' Fogginess; theirs wins). CloudBase is always this tool's.
+REMOVED: Dun Morogh (560..946) and Winterspring (963..1472) had decks until 2026-10-17; they are misty ground now
+("both winterspring and dun morogh should be misty rather than foggy ... remove their cloud decks", the user), so
+their CloudBase/CloudTop are cleared and their FogSettings look rows deleted; add_foggy_zones.py gives their Fogginess.
 
 IDs: AreaClimate 350..356 (new rows; a place with a row already keeps it), FogSettings 330..336.
 Usage:  python add_mountain_clouds.py [dir]     (default: ../data; for the client: <client>/DBFilesClient)
@@ -41,11 +44,11 @@ ZONES = [
     ("Storm Peaks", 67, 1040.0, 1950.0, 0.8, 350, 330),
     ("Icecrown", 210, 655.0, 1200.0, 0.8, 351, 331),
     ("Alterac Mountains", 36, 177.0, 368.0, 0.8, 352, 332),
-    ("Dun Morogh", 1, 560.0, 946.0, 0.7, 353, 333),
-    ("Winterspring", 618, 963.0, 1472.0, 0.8, 354, 334),
     ("Stonetalon Mountains", 406, 310.0, 634.0, 0.7, 355, 335),
     ("Blade's Edge Mountains", 3522, 342.0, 609.0, 0.7, 356, 336),
 ]
+# Former mountain-cloud zones: (zone, AreaTable ID, FogSettings ID of the cloud look to delete).
+REMOVED = [("Dun Morogh", 1, 333), ("Winterspring", 618, 334)]
 # ID, ScopeType, ScopeID, Kind, Strength, Density, Thickness, BuildUp, BurnOff, WindThin, WindDrift, Patchiness, Weight,
 # ColorMode, ColorR, ColorG, ColorB, Saturation, Brightness, Flags, Comment
 CLOUD_LOOK = dict(density=0.03, thickness=30.0, build_up=30.0, burn_off=300.0, wind_thin=2.0, wind_drift=0.9,
@@ -95,6 +98,14 @@ def main() -> None:
             fog.append(look); changed += 1
         elif not same(old, look):
             fog[fog.index(old)] = look; changed += 1
+    for name, area, fog_id in REMOVED:
+        row = next((r for r in climate if r[1] == AREA and r[2] == area), None)
+        if row is not None and (row[CLOUD_BASE] != T or row[CLOUD_TOP] != T):
+            row[CLOUD_BASE] = row[CLOUD_TOP] = T
+            changed += 1
+        if any(r[0] == fog_id for r in fog):
+            fog = [r for r in fog if r[0] != fog_id]
+            changed += 1
     (folder / "AreaClimate.cdbc").write_bytes(io.build(io.AREA_CLIMATE, [tuple(r) for r in sorted(climate, key=lambda r: r[0])]))
     (folder / "FogSettings.cdbc").write_bytes(io.build(io.FOG_SETTINGS, [tuple(r) for r in sorted(fog, key=lambda r: r[0])]))
     print(f"{folder}: {changed} row(s) set ({len(climate)} AreaClimate, {len(fog)} FogSettings)")

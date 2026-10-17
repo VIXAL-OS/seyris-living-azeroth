@@ -8,7 +8,7 @@ The shipped table leaves Fogginess unset everywhere, so no zone had any area fog
   0.3   Tirisfal Glades, Silverpine Forest, Zul'Drak, Deadwind Pass
   0.15  MISTY: ordinary forests and jungles -- Elwynn, Ashenvale, Feralas, Teldrassil, Darkshore, Azshara, Moonglade,
         Un'Goro Crater, the Hinterlands, Terokkar, Crystalsong, Stranglethorn Vale, Grizzly Hills, Sholazar Basin,
-        Eversong Woods, Redridge Mountains. "Normal non-haunted forest zones should feel misty rather than foggy" (the
+        Eversong Woods, Redridge Mountains, and the snowy Winterspring and Dun Morogh. "Normal non-haunted forest zones should feel misty rather than foggy" (the
         user, 2026-10-17): little area fog (0.09 by day, 0.15 at night), so the ground mist, which comes with damp
         mornings, evenings and rain, carries the look. Haunted, blighted, marsh, smoke and sea-fog zones keep theirs.
 A zone with a row already keeps its other fields, and its Fogginess too where the row sets one: upstream's tables
@@ -63,6 +63,9 @@ ZONES = [
     ("Sholazar Basin", 3711, MISTY, 322),
     ("Eversong Woods", 3430, MISTY, 337),
     ("Redridge Mountains", 44, MISTY, 338),
+    # Snowy, but misty too (the user, 2026-10-17); upstream had Winterspring 0.8, Dun Morogh 0.7.
+    ("Winterspring", 618, MISTY, 339),
+    ("Dun Morogh", 1, MISTY, 340),
 ]
 # Zones whose value here wins even over a row of upstream's own: every misty forest (upstream has Elwynn 0.5, Redridge
 # 0.45, Stranglethorn 0.3), and Zangarmarsh, where upstream's row 109 has 1.0, the top of the scale ("very pretty but
