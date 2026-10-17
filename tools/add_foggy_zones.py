@@ -48,7 +48,7 @@ ZONES = [
     ("Feralas", 357, FOREST, 323),
     ("Teldrassil", 141, FOREST, 324),
     ("Darkshore", 148, FOREST, 325),
-    ("Ashenvale", 331, FOREST, 326),
+    ("Ashenvale", 331, 0.25, 326),  # less: its stock fog is already close and purple ("a bit thiq lol", the user, 2026-10-17)
     ("Azshara", 16, FOREST, 327),
     ("Moonglade", 493, FOREST, 328),
     ("Stranglethorn Vale", 33, FOREST, 329),
@@ -62,8 +62,9 @@ ZONES = [
     ("Eversong Woods", 3430, GENTLE, 337),
 ]
 # Zones whose value here wins even over a row of upstream's own. Zangarmarsh: upstream's row 109 has it at 1.0, the top
-# of the scale ("very pretty but possibly too foggy lol", the user, 2026-10-14, flying over Umbrafen).
-OVERRIDE = {3521}
+# of the scale ("very pretty but possibly too foggy lol", the user, 2026-10-14, flying over Umbrafen). Ashenvale: our own
+# row, lowered from the forest 0.4 once seen at dusk (2026-10-17).
+OVERRIDE = {3521, 331}
 FOGGINESS = 9  # column (ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment)
 
 
