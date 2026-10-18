@@ -54,6 +54,7 @@ namespace wxl_livingazeroth::prof
         kOursFogLights,   // this module: our lights in the fog (per-frame light pass), inside the fog pass
         kOursCoverUpload, // this module: surface cover textures (fold + upload), inside the cover draw
         kOursShafts,      // this module: sun shafts (features/SunShafts), at the weather render's entry
+        kOursGlassShafts, // this module: coloured shafts through window glass (features/GlassShafts), right after
         // Inside the grass pass, CPU only (see CpuOnly): their GPU time stays with the grass row.
         kDetailBake,      // the client's re-bake of a layer (stock path only)
         kOursGrassWind,   // this module: wind grid + actors, once per frame

@@ -12,6 +12,7 @@
 #include "env/GlassModel.hpp"
 #include "features/Glass.hpp"
 #include "features/GlassShader.hpp"
+#include "features/GlassShaftShaders.hpp"
 #include "features/ModelIce.hpp"
 #include "render/ShaderPatch.hpp"
 
@@ -244,6 +245,53 @@ namespace
         std::snprintf(line, sizeof(line), "largest WMO variant with the ice, the rims, the glass and the floor light: %d instruction slots (%s; %d before the glass), "
                       "under kGlassMinSlots %u and the ~3,500 the GTX 1660 SUPER takes", maxSlots, worst.c_str(), maxIceSlots, mi::kGlassMinSlots);
         Check(maxSlots > 0 && maxSlots <= static_cast<int>(mi::kGlassMinSlots) && maxSlots < 3500, line);
+
+        // The models' edit shares the code (and the fix to its matches read after the text moved): the M2 pixel
+        // shaders beside the WMO ones (m2shaders), if they're there, still take the ice and assemble.
+        const std::filesystem::path m2 = folder.parent_path() / "m2shaders";
+        if (!std::filesystem::exists(m2)) { std::printf("skip  M2 edit (no %s)\n", m2.string().c_str()); return; }
+        int m2Shadow = 0, m2Patched = 0, m2Assembled = 0;
+        for (const Blob& b : LoadBlobs(m2))
+        {
+            std::string src, why;
+            if (!sp::Disassemble(b.code.data(), b.code.size(), src, why)) continue;
+            m2Shadow += std::regex_search(src, position) && std::regex_search(src, normal) ? 1 : 0;
+            if (!mi::EditPixelForTests(src, why)) continue;
+            ++m2Patched;
+            std::vector<uint8_t> code;
+            m2Assembled += sp::Assemble(src, b.name.c_str(), code, why) ? 1 : 0;
+        }
+        Check(m2Patched == m2Shadow && m2Patched > 0 && m2Assembled == m2Patched,
+              "the M2 ice edit (same code): " + std::to_string(m2Patched) + " of " + std::to_string(m2Shadow) + " shadow variants patched, " +
+              std::to_string(m2Assembled) + " assemble");
+    }
+
+    // --- 3. the shafts' shaders ---------------------------------------------------------------------------------
+    std::vector<uint8_t> CompileHlsl(const char* source, std::string& error)
+    {
+        ID3DBlob* code = nullptr;
+        ID3DBlob* err = nullptr;
+        const HRESULT hr = D3DCompile(source, std::strlen(source), nullptr, nullptr, nullptr, "main", "ps_3_0", 0, 0, &code, &err);
+        if (err) { error = static_cast<const char*>(err->GetBufferPointer()); err->Release(); }
+        std::vector<uint8_t> out;
+        if (SUCCEEDED(hr) && code)
+        {
+            const auto* p = static_cast<const uint8_t*>(code->GetBufferPointer());
+            out.assign(p, p + code->GetBufferSize());
+            code->Release();
+        }
+        return out;
+    }
+
+    void ShaftShaderTests()
+    {
+        namespace gs = wxl_livingazeroth::glassshafts;
+        std::string e1, e2;
+        const std::vector<uint8_t> march = CompileHlsl(gs::kGlassShaftMarchHlsl, e1), composite = CompileHlsl(gs::kGlassShaftCompositeHlsl, e2);
+        char line[512];
+        std::snprintf(line, sizeof(line), "coloured shafts' shaders compile (ps_3_0): march %d, composite %d instruction slots%s%s",
+                      march.empty() ? -1 : Slots(march), composite.empty() ? -1 : Slots(composite), e1.empty() ? "" : " -- ", e1.substr(0, 300).c_str());
+        Check(!march.empty() && !composite.empty() && Slots(march) < 512, line);
     }
 
     // --- 4. on WARP -----------------------------------------------------------------------------------------------
@@ -466,6 +514,106 @@ namespace
         }
         ps->Release();
 
+        // The coloured shafts' march: in the wall window's room, the camera at (-5, 0, 1) looking along +x (at the
+        // window), the sun from +x at 45 degrees; no surfaces (the sky's depth). Along the middle ray the lit air is
+        // x -3.5 .. -0.5 (the ray toward the sun from (x, 0, 1) leaves at z = 1 - x): the march against the rules'
+        // integral of the same, in the pane's colour; a ray down into the floor's corner meets none of it.
+        {
+            namespace gs = wxl_livingazeroth::glassshafts;
+            std::string err;
+            const std::vector<uint8_t> marchCode = CompileHlsl(gs::kGlassShaftMarchHlsl, err);
+            IDirect3DPixelShader9* march = nullptr;
+            if (marchCode.empty() || FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(marchCode.data()), &march)))
+            { Check(false, "the march on WARP: " + err.substr(0, 200)); return; }
+            IDirect3DTexture9* depth = nullptr;
+            w.dev->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &depth, nullptr);
+            const gl::Pane pane = WallWindow();
+            float sun[3] = { 1, 0, 1 }; Norm(sun);
+            const float cam[3] = { -5, 0, 1 };
+            float rows[12];
+            gl::ProjectionRows(pane, sun, cam, 30, rows);
+            constexpr int kN = gs::kMaxPanes;
+            std::vector<float> panes(4 * gs::kPaneArrays * kN, 0.0f);
+            auto reg = [&](int array) { return panes.data() + 4 * (array * kN); };
+            std::memcpy(reg(0), rows, 16); std::memcpy(reg(1), rows + 4, 16); std::memcpy(reg(2), rows + 8, 16);
+            for (int k = 0; k < 3; ++k) { reg(3)[k] = pane.light[k]; reg(4)[k] = pane.roomMin[k] - cam[k]; reg(5)[k] = pane.roomMax[k] - cam[k]; }
+            reg(3)[3] = 1; reg(4)[3] = 5; reg(5)[3] = 4;
+            const float density = 0.03f, forward = 0.6f;
+            const float c[11 * 4] = {
+                0, 1, -1, 1,                                  // every pixel the sky: the march runs to its reach
+                1, 1, 0, 0,                                   // 90 degrees, centred
+                0.5f, 0.5f, 45, 32,                           // the reach (yd) and 32 steps
+                0, 0, 1, 1,
+                1.0f / kSide, 1.0f / kSide, density, 1,       // one pane
+                0, -1, 0, 0,                                  // view x -> world -y
+                0, 0, 1, 0,                                   // view y -> world z
+                1, 0, 0, 0,                                   // view z (ahead) -> world x
+                sun[0], sun[1], sun[2], forward,
+                reg(4)[0], reg(4)[1], reg(4)[2], 0,
+                reg(5)[0], reg(5)[1], reg(5)[2], 0,
+            };
+            IDirect3DDevice9* d = w.dev;
+            d->SetRenderTarget(0, w.target);
+            D3DVIEWPORT9 vp{ 0, 0, kSide, kSide, 0.0f, 1.0f };
+            d->SetViewport(&vp);
+            d->SetPixelShader(march);
+            d->SetPixelShaderConstantF(0, c, 11);
+            d->SetPixelShaderConstantF(gs::kFirstPaneConstant, panes.data(), gs::kPaneArrays * kN);
+            d->SetTexture(0, depth);
+            d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+            struct Q { float x, y, z, rhw, u, v; };
+            const Q q[4] = { { -0.5f, -0.5f, 0, 1, 0, 0 }, { e, -0.5f, 0, 1, 1, 0 }, { -0.5f, e, 0, 1, 0, 1 }, { e, e, 0, 1, 1, 1 } };
+            std::vector<float> out;
+            bool drew = SUCCEEDED(d->BeginScene());
+            if (drew)
+            {
+                d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(Q));
+                d->EndScene();
+                D3DLOCKED_RECT lr{};
+                drew = SUCCEEDED(d->GetRenderTargetData(w.target, w.readback)) && SUCCEEDED(w.readback->LockRect(&lr, nullptr, D3DLOCK_READONLY));
+                if (drew)
+                {
+                    out.resize(static_cast<size_t>(kSide) * kSide * 3);
+                    for (int row = 0; row < kSide; ++row)
+                        for (int col = 0; col < kSide; ++col)
+                            for (int k = 0; k < 3; ++k)
+                                out[(static_cast<size_t>(row) * kSide + col) * 3 + k] = reinterpret_cast<const float*>(static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch)[col * 4 + k];
+                    w.readback->UnlockRect();
+                }
+            }
+            // The rules' integral along a pixel's ray (fine steps), as the shader's phase and density weigh it.
+            auto integral = [&](int col, int row)
+            {
+                const float u = (col + 0.5f) / kSide, v = (row + 0.5f) / kSide;
+                float dir[3] = { 1, -(u * 2 - 1), (1 - v * 2) };
+                Norm(dir);
+                float sum = 0;
+                const int steps = 4000;
+                for (int i = 0; i < steps; ++i)
+                {
+                    const float s = 45.0f * (i + 0.5f) / steps;
+                    const float pnt[3] = { cam[0] + dir[0] * s, cam[1] + dir[1] * s, cam[2] + dir[2] * s };
+                    sum += gl::FloorWeightWorld(pane, sun, pnt, 30, 5, 4) * 45.0f / steps;
+                }
+                const float mu = std::clamp((dir[0] * sun[0] + dir[1] * sun[1] + dir[2] * sun[2]) * 0.5f + 0.5f, 0.0f, 1.0f);
+                return sum * density * ((1 - forward) + forward * 3.5f * std::pow(mu, 6.0f));
+            };
+            float got = 0, want = 0;
+            for (int row = 14; row < 18; ++row)
+                for (int col = 14; col < 18; ++col)
+                {
+                    if (drew) got += out[(static_cast<size_t>(row) * kSide + col) * 3] / 16;
+                    want += integral(col, row) / 16;
+                }
+            const float green = drew ? out[(static_cast<size_t>(16) * kSide + 16) * 3 + 1] / std::max(out[(static_cast<size_t>(16) * kSide + 16) * 3], 1e-6f) : 0;
+            const float corner = drew ? out[(static_cast<size_t>(kSide - 1) * kSide + kSide - 1) * 3] : -1;
+            char line[256];
+            std::snprintf(line, sizeof(line), "WARP, the coloured shafts' march: the middle rays %.3f against the rules' integral %.3f; green / red %.2f (the pane's 0.50); "
+                          "a ray into the floor's corner %.3f (rules %.3f)", got, want, green, corner, integral(kSide - 1, kSide - 1));
+            Check(drew && want > 0.03f && std::fabs(got - want) < 0.2f * want && std::fabs(green - 0.5f) < 0.02f && corner < 0.25f * got, line);
+            depth->Release();
+            march->Release();
+        }
     }
 
     // --- preview (GLASS_PREVIEW=<folder>: for each <name>.rgba there, 256 x 256 RGBA texels of a window texture, a
@@ -660,6 +808,7 @@ int main(int argc, char** argv)
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     RulesTests();
     EditTests(args[0]);
+    ShaftShaderTests();
     if (warp) WarpTests();
     else std::printf("skip  WARP checks (--no-warp)\n");
     TableTests(args[1]);

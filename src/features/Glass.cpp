@@ -6,6 +6,7 @@
 #include "../env/Storm.hpp"
 #include "../env/WorldQuery.hpp"
 #include "../wxl_seyris/CdbcApi.hpp"
+#include "GlassShafts.hpp"
 #include "SurfaceCover.hpp"
 #include "Windows.hpp"
 
@@ -536,6 +537,7 @@ namespace wxl_livingazeroth::glass
         api->UiSliderFloat("panes: range from the camera (yd)##glr", &s.range, 20.0f, 150.0f);
         api->UiText(g_status.c_str());
         api->UiText(StatusLine());
+        api->UiText(glassshafts::StatusLine());
         char line[256];
         std::snprintf(line, sizeof(line), "light: sun through %.2f, sky %.2f, day %.2f, dim %.2f; camera indoors %.2f",
                       g_light.sunGain, g_light.skyGain, g_light.day, g_light.dim, g_indoors);
