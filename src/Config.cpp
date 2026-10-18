@@ -15,6 +15,7 @@
 #include "features/TerrainIce.hpp"
 #include "features/WmoIce.hpp"
 #include "features/TerrainWetness.hpp"
+#include "features/Glass.hpp"
 #include "features/SunShafts.hpp"
 #include "features/Windows.hpp"
 #include "render/PostAA.hpp"
@@ -255,6 +256,24 @@ namespace wxl_livingazeroth::config
             h.moon = In(s, f, "Moon", "Faint shafts from the night light at night: your multiplier, 0 = none.", h.moon);
         }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts);
+        // Window glass: its look, the coloured shafts and the light on the floor.
+        {
+            const char* f = kSectionGlass;
+            glass::Settings& g = glass::Config();
+            g.enabled = In(s, f, "Enabled", "Window glass looks like glass: lit by the day seen from inside (stained glass glows in its colours), darker with the sky in it seen from outside, a room behind clear panes; at night the client's own lit windows (GlassMaterials.cdbc, GlassPanes.cdbc).", g.enabled);
+            g.insideGlow = In(s, f, "InsideGlow", "Seen from inside: the light coming through the glass, bright with the sun beyond it, dimmer under cloud, in rain and storms.", g.insideGlow);
+            g.outsideReflection = In(s, f, "OutsideReflection", "Seen from outside by day: darker glass with the sky in it at a slant, and the sun's glint.", g.outsideReflection);
+            g.fakeInteriors = In(s, f, "FakeInteriors", "Seen from outside: a room behind clear and leaded panes (with OutsideReflection).", g.fakeInteriors);
+            g.colouredShafts = In(s, f, "ColouredShafts", "Indoors: shafts of light in the room's air through sunlit windows, in the glass's colours.", g.colouredShafts);
+            g.floorLight = In(s, f, "FloorLight", "Indoors: the sunlit panes' light on the room's floor and walls, in the glass's colours.", g.floorLight);
+            g.insideStrength = In(s, f, "InsideStrength", "Your multiplier on the light coming through the glass.", g.insideStrength);
+            g.reflectionStrength = In(s, f, "ReflectionStrength", "Your multiplier on the reflection and the glint seen from outside.", g.reflectionStrength);
+            g.interiorStrength = In(s, f, "InteriorStrength", "Your multiplier on the light of the rooms behind clear glass.", g.interiorStrength);
+            g.shaftStrength = In(s, f, "ShaftStrength", "Your multiplier on the coloured shafts.", g.shaftStrength);
+            g.floorStrength = In(s, f, "FloorStrength", "Your multiplier on the light on the floor.", g.floorStrength);
+            g.range = In(s, f, "Range", "Panes farther than this from the camera (yards) give no floor light or shafts.", g.range);
+        }
+
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass);
     }
 }

@@ -2,8 +2,8 @@
 
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
-sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]`, `[LivingAzeroth.Windows]` and
-`[LivingAzeroth.Shafts]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
+sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]`, `[LivingAzeroth.Windows]`,
+`[LivingAzeroth.Shafts]` and `[LivingAzeroth.Glass]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
 The ini sets what each launch starts with. The debug panels (F9) still change everything at
@@ -168,3 +168,39 @@ time ("ours: sun shafts").
 | Length | 0.85 | How far the shafts reach: the share of the way to the sun each pixel looks (0.2 .. 1). |
 | ThroughCloudDeck | 1 | Under a cloud deck: the shafts come through its gaps, and below it shafts fall from its gaps (a short march through its density toward the sun). Needs the deck's smooth mode (`[LivingAzeroth.Fog]` CloudDeckSmooth 1) for the gaps; without it the deck dims them evenly. |
 | Moon | 0 | Faint shafts from the night light at night: your multiplier, 0 = none. The client's night light doesn't always sit where the sky shows the moon, so it's off by default. |
+
+## `[LivingAzeroth.Glass]`: window glass
+
+Window glass that looks like glass, every glass window and not only stained glass (`GlassMaterials.cdbc`, docs/cdbc-tables.md:
+109 textures by default, clear, stained, frosted and leaded; per texture, so dungeons and instances get it too). Only the
+glass texels of a window texture change, not its frame, lead or the wall painted round it; nothing else is touched (name
+text, the UI, characters).
+- **Seen from inside**: the day coming through the glass, the glass's own colour a little more saturated, brightest with
+  the sun beyond the pane (frosted glass spreads it), dimmer under cloud, in rain, in a storm's dark and at dusk. Never
+  darker than the client's own colour, so at night its lit windows stay as they are.
+- **Seen from outside by day**: darker glass with the sky in it at a slant (Fresnel) and the sun's glint; behind clear and
+  leaded panes a room (interior mapping: rooms a few yards wide and deep behind the glass, each lit a little differently).
+  At night the client's own lit windows.
+- **Indoors, with the sun on the windows**: the panes' light on the room's floor and walls (where the ray toward the sun
+  leaves through a pane, in the glass's colour; up to 12 panes, kept inside each pane's room) and **coloured shafts** in
+  the room's air (a short march along the view against up to 16 panes whose room you're in, at a quarter of the
+  resolution, added right after the sun shafts). Both use `GlassPanes.cdbc`.
+
+The lights panel's **Glass** section changes all of this at runtime and shows the light through the glass, how many
+shader variants carry the blocks, the panes in use and the shafts' cost; the frame profiler has a row for the shafts' GPU
+time ("ours: glass shafts"). The look itself is part of the buildings' own draws.
+
+| Key | Default | Meaning |
+|---|---|---|
+| Enabled | 1 | Window glass (everything below). |
+| InsideGlow | 1 | Seen from inside: the light coming through the glass. |
+| OutsideReflection | 1 | Seen from outside by day: darker glass, the sky in it, the sun's glint. |
+| FakeInteriors | 1 | Seen from outside: a room behind clear and leaded panes (with OutsideReflection). |
+| ColouredShafts | 1 | Indoors: shafts of light in the room's air through sunlit windows, in the glass's colours. |
+| FloorLight | 1 | Indoors: the sunlit panes' light on the room's floor and walls. |
+| InsideStrength | 1 | Your multiplier on the light coming through the glass. |
+| ReflectionStrength | 1 | Your multiplier on the reflection and the glint. |
+| InteriorStrength | 1 | Your multiplier on the light of the rooms behind clear glass. |
+| ShaftStrength | 1 | Your multiplier on the coloured shafts. |
+| FloorStrength | 1 | Your multiplier on the light on the floor. |
+| Range | 70 | Yards from the camera: panes farther away give no floor light or shafts. |

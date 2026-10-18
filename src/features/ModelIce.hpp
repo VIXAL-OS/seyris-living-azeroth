@@ -23,6 +23,10 @@
 // sun's world direction (x, y), the brightness gains of the rim's slope toward it and of its height. Ten rims were a
 // walking trail of about four seconds: "snow rims work but fade too fast imo" (the user, 2026-10-12).
 //
+// Behind b9 and b10, after the rims, on the buildings' variants only: the window glass and the light through sunlit
+// panes on a room's floor (features/GlassShader has their register map: c192..c201, c206..c210 defined, and the
+// rims' c101..c172 for the panes; features/Glass switches them per batch, from features/WmoIce's hooks).
+//
 // Frozen waterfalls get their own style: brighter, glassier ice whose detail is streaked along the
 // flow, at a scale that still reads from a distance (Bor's Fall in the Storm Peaks is 366 yd tall).
 // The ice models and buildings (features/WmoIce) get a lighter one: their textures are already bright,
@@ -44,9 +48,14 @@ namespace wxl_livingazeroth::modelice
     /// The pixel edit on its own (offline tests): the models' (the ice), the buildings' (the ice and the footprint rims).
     bool EditPixelForTests(std::string& src, std::string& why);
     bool EditPixelWmoForTests(std::string& src, std::string& why);
+    /// The buildings' variants with the rims and the glass blocks (features/GlassShader: b9 the glass, b10 the floor
+    /// light), as the runtime gives them to a device with kGlassMinSlots.
+    bool EditPixelWmoGlassForTests(std::string& src, std::string& why);
     /// The buildings' variants carry the rims only on a device with this many pixel shader slots (they come to ~830;
     /// ps_3_0 promises 512): without them the client would get no shader at all.
     constexpr unsigned kRingsMinSlots = 1024;
+    /// ... and the glass blocks as well only with this many (tests/glass reports the largest variant's slots).
+    constexpr unsigned kGlassMinSlots = 2048;
 
     enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3, Floe = 4, Glacier = 5, SeaIce = 6 };
     /// Which look a model path (stem or file name, any case or slashes) gets: none, light (the ice models),

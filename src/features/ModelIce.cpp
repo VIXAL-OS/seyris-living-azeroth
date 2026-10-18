@@ -1,5 +1,7 @@
 #include "ModelIce.hpp"
 #include "DoodadFade.hpp"
+#include "Glass.hpp"
+#include "GlassShader.hpp"
 
 #include "CoverRipples.hpp"
 
@@ -466,7 +468,7 @@ namespace wxl_livingazeroth::modelice
                 "\n    endif" + (rims ? RingBlock(vP) : std::string());
         }
 
-        bool EditPixel(std::string& src, std::string& why, bool rims)
+        bool EditPixel(std::string& src, std::string& why, bool rims, bool glassBlocks = false)
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
             static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
@@ -476,6 +478,13 @@ namespace wxl_livingazeroth::modelice
             static const std::regex position(R"(dp3 r\d+\.\w, (v\d+), c3\b)"), normal(R"(dp3 r\d+\.\w, c4, (v\d+))");
             std::smatch mp, mn;
             if (!std::regex_search(src, mp, position) || !std::regex_search(src, mn, normal)) { why = "no view position/normal inputs (shadow-less variant)"; return false; }
+            // Copied out now: the matches point into src, which the inserts below reallocate (reading them after an
+            // insert read freed memory, and only came out right while nothing had reused it yet).
+            const std::string vP = mp[1].str(), vN = mn[1].str();
+            static const std::regex texcoord(R"(texld r\d+, (v\d+), s0\b)");
+            std::smatch mt;
+            const bool glassHere = glassBlocks && std::regex_search(src, mt, texcoord);
+            const std::string vT = glassHere ? mt[1].str() : std::string();
             // The stock fog ending: the colour minus the fog colour (mad: a product minus it), then lerped
             // toward it by the fog factor. When the product already reads a constant, the fog colour is
             // moved into a register first (mov rK.xyz, c2 ... -rK): the WMO variants that write alpha. The
@@ -526,7 +535,11 @@ namespace wxl_livingazeroth::modelice
             const std::string base = (m[1].str() == "mad" ? "\n    mul r12.xyz, " : "\n    mov r12.xyz, ") + operands;
             const size_t subtraction = static_cast<size_t>(m.position(0)), afterSubtraction = static_cast<size_t>(m.position(7));
             src.insert(afterSubtraction, shifted ? "\n    add " + r + ".yzw, " + r + ", r31.xxyz" : "\n    add " + r + ".xyz, " + r + ", r31");
-            src.insert(subtraction, base + Block(mp[1].str(), mn[1].str(), rims));
+            // The buildings' glass and floor light (features/GlassShader) after the ice and the rims: they need the
+            // variant's first texture's coordinates (its stock `texld rK, vT, s0`) as well.
+            const std::string glassText = glassHere ? glass::GlassBlock(vP, vN, vT) + glass::FloorBlock(vP, vN, vT) : std::string();
+            src.insert(subtraction, base + Block(vP, vN, rims) + glassText);
+            if (glassHere) src.insert(src.find('\n') + 1, glass::ShaderDefs());
             src.insert(src.find('\n') + 1,
                        "    def c175, 1, 0, 0.5, 2\n"
                        "    def c176, 0.2126, 0.7152, 0.0722, 0.2\n"
@@ -550,13 +563,31 @@ namespace wxl_livingazeroth::modelice
             return fit == 1;
         }
 
-        bool EditPixelCountedWith(std::string& src, std::string& why, bool rims);
-        bool EditPixelCounted(std::string& src, std::string& why) { return EditPixelCountedWith(src, why, false); }
-        bool EditPixelWmoCounted(std::string& src, std::string& why) { return EditPixelCountedWith(src, why, RingsFit()); }
-
-        bool EditPixelCountedWith(std::string& src, std::string& why, bool rims)
+        // Whether the device takes the buildings' variants with the glass blocks too (kGlassMinSlots), asked once.
+        bool GlassFit()
         {
-            const bool ok = EditPixel(src, why, rims);
+            static int fit = -1;
+            if (fit < 0)
+            {
+                D3DCAPS9 caps = {};
+                auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+                fit = dev && SUCCEEDED(dev->GetDeviceCaps(&caps)) && caps.MaxPixelShader30InstructionSlots >= kGlassMinSlots ? 1 : 0;
+            }
+            return fit == 1;
+        }
+
+        bool EditPixelCountedWith(std::string& src, std::string& why, bool rims, bool glassBlocks = false);
+        bool EditPixelCounted(std::string& src, std::string& why) { return EditPixelCountedWith(src, why, false); }
+        bool EditPixelWmoCounted(std::string& src, std::string& why)
+        {
+            const bool rims = RingsFit();
+            return EditPixelCountedWith(src, why, rims, rims && GlassFit());
+        }
+
+        bool EditPixelCountedWith(std::string& src, std::string& why, bool rims, bool glassBlocks)
+        {
+            const bool ok = EditPixel(src, why, rims, glassBlocks);
+            if (ok && glassBlocks && src.find("if b9") != std::string::npos) glass::NotePatchedVariant();
             if (ok) ++g_patched;
             else
             {
@@ -702,6 +733,7 @@ namespace wxl_livingazeroth::modelice
 
     bool EditPixelForTests(std::string& src, std::string& why) { return EditPixel(src, why, false); }
     bool EditPixelWmoForTests(std::string& src, std::string& why) { return EditPixel(src, why, true); }
+    bool EditPixelWmoGlassForTests(std::string& src, std::string& why) { return EditPixel(src, why, true, true); }
 
     std::string RingBlockSelfTest(void* device)
     {

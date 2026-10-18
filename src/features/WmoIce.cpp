@@ -1,5 +1,6 @@
 #include "WmoIce.hpp"
 
+#include "Glass.hpp"
 #include "ModelIce.hpp"
 #include "SurfaceCover.hpp"
 #include "TerrainIce.hpp"
@@ -31,6 +32,7 @@ namespace wxl_livingazeroth::wmoice
         //  MOBA +0x17: the material index (u8). MOMT: 0x40-byte records at root+0x160 (count root+0x19C);
         //   texture_1 at +0x0C is a byte offset into MOTX (root+0x124, byte size root+0x164).
         constexpr size_t kGroupRoot = 0x18C;
+        constexpr size_t kGroupFlags = 0x30;   // MOGP flags, copied into the group object (offsets/game/WMO.hpp)
         constexpr size_t kRootMotx = 0x124, kRootMotxSize = 0x164, kRootMaterials = 0x160, kRootMaterialCount = 0x19C;
         constexpr size_t kMomtStride = 0x40, kMomtTexture1 = 0x0C, kMobaMaterial = 0x17;
         constexpr uint32_t kMaxMaterials = 4096, kMaxName = 260;
@@ -83,7 +85,9 @@ namespace wxl_livingazeroth::wmoice
             const void* materials = nullptr;
             std::vector<uint8_t> ice;     // per material: its modelice::Style (0 = not ice)
             std::vector<uint8_t> sand;    // per material: its texture is a floor with footprint rims (1 sand, 2 snow)
-            bool any = false, anySand = false;
+            std::vector<uint16_t> glass;  // per material: its row in the glass table + 1 (features/Glass), 0 = not glass
+            bool any = false, anySand = false, anyGlass = false;
+            uint32_t glassGeneration = 0; // the glass table these were looked up in
         };
         std::unordered_map<const void*, RootIce> g_cache;
         const RootIce* g_rootIce = nullptr;  // the current group's root, when it has ice materials
@@ -139,10 +143,11 @@ namespace wxl_livingazeroth::wmoice
             if (!root || !ReadRoot(root, v)) return nullptr;
             if (g_cache.size() > 4096 && g_depth == 0) g_cache.clear(); // not under a loop that holds an entry
             RootIce& r = g_cache[root];
-            if (r.motx != v.motx || r.materials != v.materials || r.ice.size() != v.count)
+            if (r.motx != v.motx || r.materials != v.materials || r.ice.size() != v.count || r.glassGeneration != glass::Generation())
             {
-                r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.sand.assign(v.count, 0);
-                r.any = r.anySand = false;
+                r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.sand.assign(v.count, 0); r.glass.assign(v.count, 0);
+                r.any = r.anySand = r.anyGlass = false;
+                r.glassGeneration = glass::Generation();
                 char name[kMaxName];
                 for (uint32_t i = 0; i < v.count; ++i)
                     if (ReadName(v, i, name))
@@ -151,6 +156,7 @@ namespace wxl_livingazeroth::wmoice
                         { r.ice[i] = static_cast<uint8_t>(style); r.any = true; }
                         if (IsSandTexture(name)) { r.sand[i] = 1; r.anySand = true; }
                         else if (IsSnowFloorTexture(name)) { r.sand[i] = 2; r.anySand = true; }
+                        if (const uint32_t g = glass::MaterialOf(name)) { r.glass[i] = static_cast<uint16_t>(g); r.anyGlass = true; }
                     }
                 ++g_roots;
                 g_iceRoots += r.any ? 1 : 0;
@@ -170,6 +176,7 @@ namespace wxl_livingazeroth::wmoice
             dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);
+            glass::ViewTaken();        // c180..c183 are the floor light's too
             dev->SetTexture(kSampler, detail);
             dev->SetSamplerState(kSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
             dev->SetSamplerState(kSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
@@ -233,11 +240,14 @@ namespace wxl_livingazeroth::wmoice
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kRingControl, control, 1);
             dev->SetPixelShaderConstantF(modelice::kRingConstant, rings, cover::kWmoRingRegisters * modelice::kWmoRings);
+            glass::PaneRangeTaken();   // the floor light's panes share c101..c172
             const BOOL on = TRUE;
             dev->SetPixelShaderConstantB(modelice::kRingSwitch, &on, 1);
             g_ringsOn = true;
             ++g_ringBatches;
         }
+
+        bool g_iceLoop = false;   // the ice and the rims are on for the current loop (else only the glass)
 
         char __cdecl hkCull(void* record)
         {
@@ -245,13 +255,19 @@ namespace wxl_livingazeroth::wmoice
             if (!g_depth || culled) return culled;
             modelice::Style style = modelice::Style::None;
             uint8_t floor = 0;   // 1 sand, 2 snow
-            if (const RootIce* r = g_rootIce)
+            uint16_t glassRow = 0;
+            const RootIce* r = g_rootIce;
+            if (r)
             {
                 uint8_t index = 0;
                 if (ReadMaterialIndex(record, index) && index < r->ice.size())
                 {
-                    style = static_cast<modelice::Style>(r->ice[index]);
-                    floor = r->sand[index];
+                    if (g_iceLoop)
+                    {
+                        style = static_cast<modelice::Style>(r->ice[index]);
+                        floor = r->sand[index];
+                    }
+                    glassRow = r->glass[index];
                 }
             }
             if (floor) RingsOn(floor == 2);
@@ -262,23 +278,40 @@ namespace wxl_livingazeroth::wmoice
                 g_iceBatches += g_on ? 1 : 0;
             }
             else SwitchOff();
+            // The window glass and the floor light (features/Glass): its material, and whether the rims hold c101..
+            if (r && r->anyGlass) glass::Batch(glassRow, g_ringsOn);
             return culled;
         }
 
-        // Around one group's batch loop: its root's ice materials, looked up once (null when none).
+        uint32_t ReadGroupFlags(const void* group)
+        {
+            __try { return group ? *reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(group) + kGroupFlags) : 0; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+        }
+
+        // Around one group's batch loop: its root's ice and glass materials, looked up once (null when none).
         template <RenderLeafFn* Orig>
         void __fastcall hkLoop(void* root, void* edx, void* group, int flag)
         {
             const RootIce* saved = g_rootIce;
+            const bool savedIce = g_iceLoop;
             g_rootIce = nullptr;
-            if (g_enabled && modelice::Enabled() && modelice::PatchedVariants() > 0)
-                if (const RootIce* r = IceOf(RootOf(group)); r && (r->any || r->anySand)) g_rootIce = r;
+            g_iceLoop = g_enabled && modelice::Enabled() && modelice::PatchedVariants() > 0;
+            const bool glassOn = glass::Config().enabled && glass::PatchedVariants() > 0;
+            if (g_iceLoop || glassOn)
+                if (const RootIce* r = IceOf(RootOf(group)); r && ((g_iceLoop && (r->any || r->anySand)) || (glassOn && r->anyGlass)))
+                {
+                    g_rootIce = r;
+                    if (glassOn && r->anyGlass) glass::BeginGroup(ReadGroupFlags(group), true);
+                }
             ++g_depth;
             (*Orig)(root, edx, group, flag);
             SwitchOff();
             RingsOff();
+            if (g_rootIce && g_rootIce->anyGlass) glass::EndGroup();
             --g_depth;
             g_rootIce = saved;
+            g_iceLoop = savedIce;
         }
     }
 
