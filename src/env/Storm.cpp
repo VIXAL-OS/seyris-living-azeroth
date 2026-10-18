@@ -69,6 +69,12 @@ namespace wxl_livingazeroth::storm
         char       g_bandStatus[200] = "not installed";
         Shade      g_shade;       // written by Update, read by the hook (both on the main thread)
         BandMemory g_bandMemory;
+        // Snow: its client reads and the fog distance (kSnowGuards). g_shade.snow is 1 while it snows (Update); the hook
+        // weighs it by the client's own share of its weather set this frame.
+        bool       g_snowHooked = false;
+        char       g_snowStatus[200] = "not installed";
+        float      g_snowDistance = 0.0f; // yd, 0 = the client's own (Update: SnowFogDistance while it snows)
+        FogDistanceMemory g_fogMemory;
 
         // --- bolts ---
         using CreateModelFn = void*(__fastcall*)(void* scene, void* edx, const char* path, uint32_t flags);
@@ -131,7 +137,28 @@ namespace wxl_livingazeroth::storm
         {
             __try
             {
-                ShadeBands(reinterpret_cast<uint32_t*>(kBands), g_shade, g_bandMemory);
+                Shade shade = g_shade;
+                // Snow: as much as the client shows its weather set this frame, and not with the camera in a liquid.
+                float snow = 0.0f;
+                if (g_snowHooked && shade.snow > 0.0f && *reinterpret_cast<const uint32_t*>(kCameraInLiquid) == 0)
+                {
+                    const float blend = *reinterpret_cast<const float*>(kStormBlend);
+                    snow = blend > 0.0f ? (blend < 1.0f ? blend : 1.0f) * shade.snow : 0.0f;
+                }
+                shade.snow = snow;
+                ShadeBands(reinterpret_cast<uint32_t*>(kBands), shade, g_bandMemory);
+                g_status.snow = snow;
+                if (g_snowHooked)
+                {
+                    float& end = *reinterpret_cast<float*>(kFogEnd);
+                    float& start = *reinterpret_cast<float*>(kFogStartMul);
+                    g_status.fogEndIn = end;
+                    g_status.fogStartIn = start;
+                    LiftFogDistance(end, start, snow, g_snowDistance, g_fogMemory);
+                    if (g_fogMemory.valid) { g_status.fogEndIn = g_fogMemory.in.end; g_status.fogStartIn = g_fogMemory.in.startMul; }
+                    g_status.fogEndOut = end;
+                    g_status.fogStartOut = start;
+                }
                 return true;
             }
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -411,6 +438,7 @@ namespace wxl_livingazeroth::storm
     Settings& Config() { return g_settings; }
     const Status& GetStatus() { return g_status; }
     const char* BandStatus() { return g_bandStatus; }
+    const char* SnowStatus() { return g_snowStatus; }
     const char* BoltStatus() { return g_boltStatus; }
     const char* SoundStatus()
     {
@@ -442,6 +470,19 @@ namespace wxl_livingazeroth::storm
         }
         if (!g_bandHooked) api->Log(WXL_LOG_WARN, kTag, "storm: no darker sky or flashes (%s).", g_bandStatus);
 
+        // Snow rides on the band hook: the weather set's share and the camera's liquid it reads, the fog distance it writes.
+        bad = nullptr;
+        detoured = 0;
+        switch (g_bandHooked ? Verify(kSnowGuards, bad, detoured) : -1)
+        {
+            case 0: g_snowHooked = true; std::snprintf(g_snowStatus, sizeof(g_snowStatus), "on"); break;
+            case 1: std::snprintf(g_snowStatus, sizeof(g_snowStatus), "off: not the 3.3.5a 12340 client"); break;
+            case 2: std::snprintf(g_snowStatus, sizeof(g_snowStatus), "off: the client's %s at 0x%08X differs", bad->what, static_cast<unsigned>(bad->address)); break;
+            case 3: std::snprintf(g_snowStatus, sizeof(g_snowStatus), "off: the client's code could not be read"); break;
+            default: std::snprintf(g_snowStatus, sizeof(g_snowStatus), "off: no band hook"); break;
+        }
+        if (!g_snowHooked) api->Log(WXL_LOG_WARN, kTag, "storm: snow keeps the client's grey weather fog (%s).", g_snowStatus);
+
         bad = nullptr;
         detoured = 0;
         switch (Verify(kModelGuards, bad, detoured))
@@ -467,7 +508,8 @@ namespace wxl_livingazeroth::storm
             case 2: std::snprintf(g_soundStatus, sizeof(g_soundStatus), "Lua PlaySound: the client's %s at 0x%08X differs", bad->what, static_cast<unsigned>(bad->address)); break;
             default: std::snprintf(g_soundStatus, sizeof(g_soundStatus), "Lua PlaySound: the client's sound code could not be read"); break;
         }
-        api->Log(WXL_LOG_INFO, kTag, "storm: day-night colours %s; bolt models %s; thunder through %s.", g_bandStatus, g_boltStatus, g_soundStatus);
+        api->Log(WXL_LOG_INFO, kTag, "storm: day-night colours %s; snow %s; bolt models %s; thunder through %s.", g_bandStatus, g_snowStatus,
+                 g_boltStatus, g_soundStatus);
     }
 
     void Update(float dt, const world::Snapshot& snap)
@@ -525,6 +567,13 @@ namespace wxl_livingazeroth::storm
         g_shade.fogBright = s.fogBrightness;
         g_shade.fogCool = s.fogCool;
         g_shade.day = std::isfinite(day) ? Clamp01(day) : 1.0f;
+        // Falling snow, as the client shows it (its own weather, not the climate panel's): the weather set's greys lifted
+        // and its fog kept back (the hook weighs this by the set's share this frame).
+        const bool snowing = active && snap.weatherType == 2;
+        g_shade.snow = snowing ? 1.0f : 0.0f;
+        g_shade.snowBright = s.snowBrightness;
+        g_shade.snowWhite = s.snowWhite;
+        g_snowDistance = snowing && std::isfinite(s.snowDistance) && s.snowDistance > 0.0f ? s.snowDistance : 0.0f;
         g_shade.sky = sky * s.flashStrength;
         g_shade.scene = scene * s.flashStrength * g_outdoors;
 

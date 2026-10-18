@@ -57,12 +57,18 @@ namespace wxl_livingazeroth::debug
             g_api->UiSliderFloat("storm haze##storm", &s.haze, 0.0f, 1.0f);
             g_api->UiSliderFloat("storm fog brightness by day (x the client's fog; 3/4 of it at night)##storm", &s.fogBrightness, 0.5f, 2.0f);
             g_api->UiSliderFloat("storm fog cool tint (a pale blue-grey)##storm", &s.fogCool, 0.0f, 1.0f);
+            g_api->UiSliderFloat("snow: grey fog, sky and clouds by day (x their brightness)##storm", &s.snowBrightness, 1.0f, 3.0f);
+            g_api->UiSliderFloat("snow: their grey to a pale blue-white##storm", &s.snowWhite, 0.0f, 1.0f);
+            g_api->UiSliderFloat("snow: the distance fog ends no nearer than (yd; 0 = the client's)##storm", &s.snowDistance, 0.0f, 800.0f);
             if (st.fogIn || st.fogOut)
             {
                 std::snprintf(line, sizeof(line), "the fog (the distance fog; the ground fog and haze take it): the client's #%06X -> ours #%06X, day %.2f",
                               static_cast<unsigned>(st.fogIn & 0xFFFFFF), static_cast<unsigned>(st.fogOut & 0xFFFFFF), st.day);
                 g_api->UiText(line);
             }
+            std::snprintf(line, sizeof(line), "snow (%s): the weather set's share %.2f; the distance fog ends %.0f -> %.0f yd, starts x%.2f -> x%.2f",
+                          storm::SnowStatus(), st.snow, st.fogEndIn, st.fogEndOut, st.fogStartIn, st.fogStartOut);
+            g_api->UiText(line);
             if (g_api->UiCollapsingHeader("Experimental##storm"))
             {
                 g_api->UiCheckbox("bolt models at strikes (our own models in the client's scene)##storm", &s.bolts);

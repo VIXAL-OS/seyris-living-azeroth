@@ -230,6 +230,9 @@ namespace wxl_livingazeroth::config
             t.haze = In(s, f, "Haze", "Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none.", t.haze);
             t.fogBrightness = In(s, f, "StormFogBrightness", "The fog in full storm by day (the distance fog; the ground fog and the haze take its colour), x the client's own fog colour's brightness: rain lights the air. At night 3/4 of this. The storm's darkening never takes the fog below it.", t.fogBrightness);
             t.fogCool = In(s, f, "StormFogCool", "How much of the storm fog's colour gives way to a pale blue-grey in full storm, 0..1 (0 = its own colour, as bright).", t.fogCool);
+            t.snowBrightness = In(s, f, "SnowFogBrightness", "Falling snow by day: the client's grey weather fog, sky and clouds, x their own brightness (up to a luminance of 0.75; at night as they are). A zone's own coloured weather light keeps its colour. 1 = the client's grey.", t.snowBrightness);
+            t.snowWhite = In(s, f, "SnowFogWhite", "How much of that grey gives way to a pale blue-white in snow, 0..1 (0 = its own grey, as bright).", t.snowWhite);
+            t.snowDistance = In(s, f, "SnowFogDistance", "In snow the client's distance fog ends no nearer than this (yards) and starts no nearer than the camera (its weather fog ends at 278 and starts 139 behind you). Kalimdor and the Eastern Kingdoms; 0 = the client's own.", t.snowDistance);
             t.bolts = In(s, f, "Bolts", "Experimental: a lightning bolt model at strikes (our own models in the client's scene).", t.bolts);
             t.boltSize = In(s, f, "BoltSize", "The bolt's size, x Call Lightning's (about 11.5 yards tall).", t.boltSize);
             t.boltRange = In(s, f, "BoltRange", "Strikes farther than this (yards) get no bolt model.", t.boltRange);

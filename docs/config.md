@@ -112,6 +112,16 @@ and cooler than the sky above, a pale blue-grey veil, bright by day and dim at n
 (`StormFogBrightness`, `StormFogCool`). The client's distance fog, the ground fog and the haze all
 take this one colour.
 
+Snow: the client shows the same weather light in snow as in rain. Where no zone light reaches (the
+west of Winterspring by Frostfire Hot Springs, parts of Dun Morogh) that is the continent's default
+one, a flat grey (fog #525452, the sky #6F6F6F to #525352) whose fog ends at 278 yards and starts 139
+yards behind you: half the view gone at 70 yards, a dark grey wall over the snow. In falling snow
+those greys turn a pale blue-white, bright by day (#B0B9C1 for the fog at the defaults) and as the
+client has them at night, the sky and its clouds with them (`SnowFogBrightness`, `SnowFogWhite`),
+and the fog starts at you and ends no nearer than `SnowFogDistance`. A zone's own coloured weather
+light keeps its colour (Winterspring's lilac, Dun Morogh's sky blue). The haze still thickens with
+heavier snow, in the same bright colour.
+
 Thunder: a near strike (under 250 yards) cracks like the Goblin weather machine's lightning half the
 time (else Shaman thunder or Call Lightning's impact; under 150 yards a second crack under it, as loud:
 one recording can't play above full volume, two together are louder), a farther one is the Blasted
@@ -139,6 +149,9 @@ says which). The storm panel auditions every recording.
 | Haze | 0.3 | Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none. |
 | StormFogBrightness | 1.3 | The fog in full storm by day (the distance fog; the ground fog and the haze take its colour), x the client's own fog colour's brightness: rain lights the air. At night 3/4 of this. The storm's darkening never takes the fog below it. |
 | StormFogCool | 0.6 | How much of the storm fog's colour gives way to a pale blue-grey in full storm, 0..1 (0 = its own colour, as bright). |
+| SnowFogBrightness | 2.2 | Falling snow by day: the client's grey weather fog, sky and clouds, x their own brightness (up to a luminance of 0.75; at night as they are). A zone's own coloured weather light keeps its colour. 1 = the client's grey. |
+| SnowFogWhite | 0.6 | How much of that grey gives way to a pale blue-white in snow, 0..1 (0 = its own grey, as bright). |
+| SnowFogDistance | 400 | In snow the client's distance fog ends no nearer than this (yards) and starts no nearer than the camera (its weather fog ends at 278 and starts 139 behind you). Kalimdor and the Eastern Kingdoms (Outland and Northrend fog by density); 0 = the client's own. |
 | Bolts | 0 | Experimental: a lightning bolt model at strikes (our own models in the client's scene). |
 | BoltSize | 6 | The bolt's size, x Call Lightning's (about 11.5 yards tall). |
 | BoltRange | 900 | Strikes farther than this (yards) get no bolt model. |
