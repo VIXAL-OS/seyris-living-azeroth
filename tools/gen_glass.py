@@ -37,15 +37,35 @@ GlassPanes (one row per window pane of every placed WMO with glass, all maps the
   light is its texture's x the share of the texture that is glass (at least 0.35). Windows painted into a wall texture
   have no panes (their triangles are the whole wall).
 
+RoomStyles and GlassBuildings: the rooms behind the glass differ by building. "Per building: pick the tint and
+brightness from the building's identity ... Room types that follow the building and the zone" (the user, 2026-10-17).
+- A placement's class (room_class) from its WMO's file name: inn, house, farm, shop (smithies, banks, labs), temple,
+  keep (barracks, towers, walls, town halls; dungeons), tower (mage towers: books), ship, other. A city's one big WMO
+  (CITY_WMOS: Stormwind, Dalaran, Silvermoon, Booty Bay...) is a city, and each of its groups with glass is a building
+  of its own, by the group's name (shopB18, interior_inn, bankinterior) or its district (DISTRICTS), else a city's.
+- Its palette (palette_of) from its culture (the path: vrykul, elven, Dalaran, goblin, Forsaken, orc...), else its
+  place: the area and its parents (Duskwood, the Scarlet Crusade's towns, Forsaken zones, goblin ports...), else the
+  continent (Northrend's humans colder, Outland's outposts ruddy), else human (warm).
+- A class (CLASSES: the layouts' weights, brightness, rooms dark by day, how late its lights stay on) and a palette
+  (PALETTES: two tints, the lamp, the curtains, brightness, weights x these) make a style, one row per pair in use.
+- Each placement (and city group) its style, a seed (a CRC of the map, its unique ID and group: steady across runs),
+  flags: a city (the shader's 14-yd blocks are its buildings), a dark place (gen_window_lights' DARK_AREAS or
+  DARK_PATHS: no lit rooms at night), empty (every room dark: a share of each class's buildings the client doesn't
+  light at night), self-lit (its WMO has windows the client lights at night). And one default per WMO and map for its
+  instances the table doesn't place (transports).
+- The night's schedule is the runtime's (env/GlassModel LightsOutShare; lights_out here is the same, for the report).
+
 Inputs (the map scan in waterfall-scan, see its README; nothing here opens an MPQ):
-  <scan>/adt_wmos.tsv, <scan>/maps.tsv
+  <scan>/adt_wmos.tsv, <scan>/maps.tsv, <scan>/AreaTable.dbc, <scan>/terrain-scan/ (areas)
   <scan>/wmo-windows/     WMO roots and groups (waterscan --extract-list <Data> <list> <scan>/wmo-windows)
   <textures>/             the candidate textures (waterscan --extract-list <Data> <this tool's --texture-list>)
 Usage:
   python gen_glass.py <scan> --texture-list <out.txt>       the candidate textures to extract
   python gen_glass.py <scan> --group-list <out.txt>         the group files of WMOs with glass not extracted yet
   python gen_glass.py <scan> <textures> [data dir] [--sheets <dir>]
-        writes GlassMaterials.cdbc and GlassPanes.cdbc (--sheets: contact sheets of each texture and its mask)
+        writes GlassMaterials.cdbc, GlassPanes.cdbc, RoomStyles.cdbc and GlassBuildings.cdbc (--sheets: contact sheets
+        of each texture and its mask)
+  python gen_glass.py <scan> --rooms [data dir]             only RoomStyles.cdbc and GlassBuildings.cdbc
 """
 import collections
 import csv
@@ -532,6 +552,414 @@ def wmo_panes(scan, wmo):
     return [p for p in kept if p.room is not None], ("%d groups missing" % missing if missing else "")
 
 
+# --- the rooms behind the glass: who lives there ----------------------------------------------------------------------
+# A building's class comes from its WMO's path (in a city's one big WMO, from each group's name or its district), its
+# palette from its culture (the path) and its place (the area, the continent). A class and a palette make a style
+# (RoomStyles.cdbc); every placement of a WMO with glass gets one and a seed (GlassBuildings.cdbc). features/Glass's
+# shader then picks, per window, the layout (by the style's weights), whether the room is dark, its light and the rest
+# from a hash of the window's cell and the seed.
+OTHER, HOUSE, FARM, INN, SHOP, TEMPLE, KEEP, TOWER, CITY, SHIP = range(10)
+CLASS_NAMES = ["other", "house", "farm", "inn", "shop", "temple", "keep", "tower", "city", "ship"]
+SHELVES, CURTAINS, DIVIDER, PLAIN = range(4)
+
+
+class Klass:
+    """weights (shelves, curtains, divider, plain), brightness, rooms dark by day, the share of such buildings nobody
+    lives in (only those the client doesn't light at night), late hours (its lights go out later; < 0 earlier), the
+    most of its rooms dark at night."""
+    def __init__(self, weights, brightness, dark, empty, late, cap):
+        self.weights, self.brightness, self.dark, self.empty, self.late, self.cap = weights, brightness, dark, empty, late, cap
+
+
+CLASSES = {
+    HOUSE: Klass((0.25, 0.35, 0.15, 0.25), 1.0, 0.10, 0.08, 0.0, 1.0),
+    FARM: Klass((0.15, 0.30, 0.10, 0.45), 0.95, 0.12, 0.10, -0.5, 1.0),   # early to bed
+    INN: Klass((0.20, 0.30, 0.25, 0.25), 1.15, 0.04, 0.0, 2.5, 0.55),     # lit late, never mostly dark
+    SHOP: Klass((0.55, 0.10, 0.15, 0.20), 1.1, 0.06, 0.03, -1.0, 1.0),    # shelves; closed early
+    TEMPLE: Klass((0.10, 0.10, 0.20, 0.60), 1.05, 0.05, 0.0, 1.0, 0.7),   # candles
+    KEEP: Klass((0.20, 0.10, 0.30, 0.40), 0.9, 0.12, 0.05, 1.5, 0.7),     # the watch
+    TOWER: Klass((0.60, 0.15, 0.10, 0.15), 1.0, 0.10, 0.05, 2.0, 0.6),    # books; mages read late
+    CITY: Klass((0.30, 0.30, 0.15, 0.25), 1.0, 0.08, 0.0, 0.5, 0.9),
+    SHIP: Klass((0.15, 0.35, 0.10, 0.40), 0.9, 0.10, 0.0, 1.0, 0.7),
+    OTHER: Klass((0.20, 0.20, 0.20, 0.40), 1.0, 0.10, 0.05, 0.0, 1.0),
+}
+
+
+class Palette:
+    """The rooms' tints by day (two ends: a building's hash picks between them), the lamp at night, the curtains'
+    cloth, a brightness, how far buildings differ, the layouts' weights x these, more rooms dark by day."""
+    def __init__(self, name, tint, tint2, lamp, curtain, brightness=1.0, spread=0.15, weights=(1, 1, 1, 1), dark=0.0):
+        self.name, self.tint, self.tint2, self.lamp, self.curtain = name, tint, tint2, lamp, curtain
+        self.brightness, self.spread, self.weights, self.dark = brightness, spread, weights, dark
+
+
+def kelvin_rgb(k):
+    """A lamp's colour at k kelvin (Tanner Helland's fit), full value 1."""
+    t = k / 100.0
+    r = 1.0 if t <= 66 else min(1.0, 1.29293618606 * (t - 60) ** -0.1332047592)
+    g = (0.39008157876 * math.log(t) - 0.63184144378) if t <= 66 else 1.12989086089 * (t - 60) ** -0.0755148492
+    b = 1.0 if t >= 66 else (0.0 if t <= 19 else 0.54320678911 * math.log(t - 10) - 1.19625408914)
+    c = [max(0.0, min(1.0, x)) for x in (r, g, b)]
+    m = max(c)
+    return tuple(round(x / m, 3) for x in c)
+
+
+HUMAN, DUSK, NORTHERN, SCARLET, ELVEN, DALARAN, NIGHTELF, DRAENEI, VRYKUL, GOBLIN, FORSAKEN, ORC, DWARF, HIDE, \
+    HELLFIRE, SPORE, ARCANE, CABIN = range(18)
+PALETTES = {
+    HUMAN: Palette("human: warm", (0.86, 0.71, 0.53), (0.78, 0.70, 0.60), kelvin_rgb(2700), (0.55, 0.20, 0.16)),
+    DUSK: Palette("Duskwood: dim, grey", (0.66, 0.60, 0.52), (0.58, 0.58, 0.60), kelvin_rgb(2400), (0.30, 0.28, 0.36),
+                  brightness=0.72, dark=0.10),
+    NORTHERN: Palette("Northrend human: colder daylight", (0.80, 0.78, 0.76), (0.70, 0.74, 0.82), kelvin_rgb(2800),
+                      (0.25, 0.32, 0.50), brightness=0.95),
+    SCARLET: Palette("Scarlet Crusade: stone, crimson", (0.84, 0.74, 0.62), (0.80, 0.78, 0.74), kelvin_rgb(2900),
+                     (0.62, 0.12, 0.10)),
+    ELVEN: Palette("blood elf: gold and crimson, drapes", (0.95, 0.78, 0.48), (0.86, 0.50, 0.42), (1.0, 0.78, 0.38),
+                   (0.70, 0.16, 0.14), brightness=1.1, weights=(1, 1.8, 1, 0.8)),
+    DALARAN: Palette("Dalaran: violet, drapes and books", (0.74, 0.62, 0.92), (0.88, 0.80, 0.96), (0.92, 0.80, 1.0),
+                     (0.42, 0.22, 0.62), brightness=1.1, weights=(1.3, 1.6, 1, 0.8)),
+    NIGHTELF: Palette("night elf: moonlit violet", (0.70, 0.70, 0.92), (0.62, 0.78, 0.80), (0.78, 0.90, 1.0),
+                      (0.36, 0.30, 0.56), weights=(1, 1.4, 1, 1)),
+    DRAENEI: Palette("draenei: rose white and blue", (0.86, 0.80, 0.92), (0.72, 0.82, 0.95), (1.0, 0.80, 0.76),
+                     (0.42, 0.34, 0.66)),
+    VRYKUL: Palette("vrykul: firelit wood and furs", (0.72, 0.50, 0.32), (0.62, 0.48, 0.38), kelvin_rgb(1900),
+                    (0.48, 0.38, 0.28), brightness=0.8, weights=(0.5, 1.6, 1, 1)),
+    GOBLIN: Palette("goblin: cluttered and warm", (0.92, 0.72, 0.44), (0.82, 0.76, 0.56), kelvin_rgb(2500),
+                    (0.30, 0.50, 0.30), brightness=1.1, weights=(2.2, 0.8, 1, 0.6)),
+    FORSAKEN: Palette("Forsaken: dim green", (0.55, 0.66, 0.50), (0.50, 0.56, 0.52), (0.62, 0.95, 0.55),
+                      (0.30, 0.28, 0.24), brightness=0.6, dark=0.15),
+    ORC: Palette("orc and troll: firelight, hides", (0.86, 0.60, 0.40), (0.74, 0.56, 0.44), kelvin_rgb(2300),
+                 (0.56, 0.42, 0.30), weights=(1, 1.3, 1, 1)),
+    DWARF: Palette("dwarf and gnome: forge-warm", (0.90, 0.66, 0.42), (0.80, 0.70, 0.58), kelvin_rgb(2400),
+                   (0.24, 0.30, 0.52), weights=(1.4, 1, 1, 1)),
+    HIDE: Palette("tauren, tuskarr, furbolg: hides and fire", (0.78, 0.60, 0.42), (0.70, 0.62, 0.50), kelvin_rgb(2100),
+                  (0.60, 0.48, 0.34), brightness=0.9, weights=(0.6, 1.5, 1, 1)),
+    HELLFIRE: Palette("Outland outposts: ruddy", (0.88, 0.64, 0.50), (0.80, 0.60, 0.56), kelvin_rgb(2600),
+                      (0.50, 0.22, 0.18), brightness=0.95),
+    SPORE: Palette("Zangarmarsh: glowing teal", (0.56, 0.80, 0.70), (0.62, 0.72, 0.86), (0.60, 1.0, 0.85),
+                   (0.40, 0.30, 0.50), brightness=0.9),
+    ARCANE: Palette("Netherstorm and the Lost Ones: arcane blue", (0.62, 0.64, 0.92), (0.80, 0.62, 0.92), (0.75, 0.80, 1.0),
+                    (0.30, 0.26, 0.56)),
+    CABIN: Palette("ships: cabins", (0.78, 0.58, 0.38), (0.70, 0.60, 0.48), kelvin_rgb(2400), (0.62, 0.56, 0.44),
+                   brightness=0.9),
+}
+
+# A city's one big WMO: its buildings are its groups (and the shader's 14-yd blocks within them).
+CITY_WMOS = {"stormwind.wmo", "ironforge.wmo", "darnassis.wmo", "ogrimmar.wmo", "silvermoon_city_01.wmo", "nd_dalaran.wmo",
+             "bootybay.wmo", "ol_draenei_city.wmo", "undercity.wmo", "shattrath.wmo"}
+# A city's districts (area names) -> the class of their buildings, for groups whose names don't say.
+DISTRICTS = {
+    "Trade District": SHOP, "Dwarven District": SHOP, "The Bazaar": SHOP, "The Royal Exchange": SHOP, "The Drag": SHOP,
+    "Magus Commerce Exchange": SHOP, "Runeweaver Square": SHOP, "Valley of Strength": SHOP, "The Commons": SHOP,
+    "Mage Quarter": TOWER, "The Violet Citadel": TOWER, "Cathedral Square": TEMPLE, "Court of the Sun": TEMPLE,
+    "Valley of Wisdom": TEMPLE, "Valley of Spirits": TEMPLE, "Old Town": HOUSE, "The Canals": HOUSE, "Murder Row": HOUSE,
+    "Walk of Elders": HOUSE, "The Eventide": HOUSE, "Stormwind Keep": KEEP, "Valley of Heroes": KEEP,
+    "Farstriders' Square": KEEP, "Valley of Honor": KEEP,
+}
+# Class by words in a path's file name (or a group's name), in this order. The first match wins.
+CLASS_WORDS = [
+    (SHIP, ("transport", "pirateship", "zeppelin", "_ship", "ship_")),
+    (INN, ()),   # INN_WORDS
+    (TEMPLE, ("chapel", "abbey", "cathedral", "cath", "temple", "church", "monast", "monest", "shrine", "sanctum", "naaru")),
+    (SHOP, ("blacksmith", "smith", "shop", "bank", "auction", "market", "apothecary", "lab", "trade", "merchant",
+            "financ", "jewel", "alchemy", "tailor", "enchant", "skinning", "exchange", "winecheese", "store", "medical",
+            "engineering")),
+    (TOWER, ("magetower", "mage", "library", "druidtower", "draenitower", "lo_tower", "spire", "citadel", "khzn", "karazhan",
+             "portalroom", "observatory")),
+    (KEEP, ("barracks", "guardtower", "snowtower", "keep", "fort", "castle", "garrison", "townhall", "hall", "prison",
+            "wall", "gate", "siege", "stronghold", "command", "si:7", "tower", "warrior")),
+    (FARM, ("farm", "barn", "silo", "mill")),
+    (HOUSE, ("house", "twostory", "hut", "dwelling", "hovel", "2story", "loghome", "loft", "longhouse", "cliffhang",
+             "home", "cottage", "trapper", "bedroom", "room", "medium", "lodge")),
+]
+# An inn: "inn" as a word of its own or at a word's end (goldshireinn, wet_inn, WallInn01, innbedroom), not inside one
+# (skinning, TowerInnards); a tavern, the Slaughtered Lamb, a pub.
+INN_WORDS = re.compile(r"(?<![a-z])inn|inn(?![a-z])|tavern|lamb|(?<![a-z])pub(?![a-z])")
+
+
+def words_class(name):
+    """The class a name's words say (CLASS_WORDS), or None."""
+    n = name.lower()
+    for cls, words in CLASS_WORDS:
+        if cls == INN:
+            if INN_WORDS.search(n):
+                return INN
+            continue
+        if any(w in n for w in words):
+            return cls
+    return None
+
+
+def room_class(wmo):
+    """A placement's class from its WMO's path."""
+    path = wmo.lower().replace("/", BS)
+    base = path.split(BS)[-1]
+    if base in CITY_WMOS:
+        return CITY
+    if BS + "transports" + BS in path:
+        return SHIP
+    c = words_class(base[:-4] if base.endswith(".wmo") else base)
+    if c is not None:
+        return c
+    return KEEP if BS + "dungeon" + BS in path else OTHER
+
+
+def group_class(name, district, city_default=CITY):
+    """A city group's class: its name's words, else its district's, else the city's."""
+    c = words_class(name or "")
+    if c is not None and c != SHIP:
+        return c
+    return DISTRICTS.get(district, city_default)
+
+
+ELVEN_ZONES = {"Eversong Woods", "Silvermoon City", "Ghostlands", "Isle of Quel'Danas", "Netherstorm"}
+NIGHTELF_ZONES = {"Teldrassil", "Darnassus", "Darkshore", "Ashenvale", "Feralas", "Moonglade", "Winterspring", "Felwood"}
+DRAENEI_ZONES = {"Azuremyst Isle", "Bloodmyst Isle", "The Exodar", "Shattrath City", "Telredor"}
+FORSAKEN_ZONES = {"Tirisfal Glades", "Silverpine Forest", "Undercity", "Tarren Mill", "Vengeance Landing", "New Agamand",
+                  "Venomspite", "Brill", "The Sepulcher"}
+GOBLIN_AREAS = {"Booty Bay", "Ratchet", "Gadgetzan", "Steamwheedle Port", "Mirage Raceway", "Everlook", "Venture Co. Base Camp",
+                "Venture Bay", "Mudsprocket", "Toshley's Station", "Area 52", "Lost Rigger Cove", "Bouldercrag's Refuge"}
+SCARLET_AREAS = {"Tyr's Hand", "Hearthglen", "New Hearthglen", "Scarlet Monastery", "Ruins of the Scarlet Enclave",
+                 "Scarlet Point", "Onslaught Harbor", "Onslaught Base Camp"}
+PALETTE_WORDS = [
+    (VRYKUL, ("vrykul",)), (DALARAN, ("dalaran",)), (ELVEN, ("bloodelf", "highelf", "silvermoon", "sunwell", "bldelf")),
+    (NIGHTELF, ("nightelf", "darnassis", "darnassus")), (DRAENEI, ("draenei", "draeni", "shattrath")),
+    (GOBLIN, ("goblin", "bootybay", "venture", "gnome")), (FORSAKEN, ("forsaken", "undercity")),
+    (SCARLET, ("scarlet", "newhearthglen", "onslaught")),
+    (ORC, ("orc", "ogrimmar", "troll")), (HIDE, ("tauren", "tuskarr", "furbolg")),
+    (DWARF, ("dwarf", "dwarven", "khazmodan", "ironforge")), (SPORE, ("spore", "zangarmushroom")),
+    (ARCANE, ("nethercollector", "manaforge", "lostones")), (CABIN, ("transports", "pirateship")),
+]
+
+
+def palette_of(wmo, map_id, area_names=()):
+    """A placement's palette: its culture by its WMO's path, else by its place (the area and its parents, the map)."""
+    path = wmo.lower().replace("/", BS)
+    for pal, words in PALETTE_WORDS:
+        if any(w in path for w in words):
+            return pal
+    names = set(area_names)
+    if names & GOBLIN_AREAS:
+        return GOBLIN
+    if names & SCARLET_AREAS:
+        return SCARLET
+    if "Duskwood" in names:
+        return DUSK
+    if names & FORSAKEN_ZONES:
+        return FORSAKEN
+    if names & ELVEN_ZONES:
+        return ELVEN
+    if names & NIGHTELF_ZONES:
+        return NIGHTELF
+    if names & DRAENEI_ZONES:
+        return DRAENEI
+    if map_id == 571:
+        return NORTHERN
+    if map_id == 530:
+        return HELLFIRE
+    return HUMAN
+
+
+def style_values(cls, pal):
+    """A style's columns (RoomStyles after ID, Class, Palette; without the Comment)."""
+    k, p = CLASSES[cls], PALETTES[pal]
+    weights = [round(w * m, 4) for w, m in zip(k.weights, p.weights)]
+    return (*p.tint, *p.tint2, *p.lamp, *p.curtain, round(k.brightness * p.brightness, 4), p.spread,
+            round(min(1.0, k.dark + p.dark), 4), *weights, k.late, k.cap)
+
+
+def layout_thresholds(weights):
+    """The cumulative thresholds the runtime makes of a style's weights (env/GlassModel LayoutThresholds)."""
+    total = sum(max(0.0, w) for w in weights)
+    out, run = [], 0.0
+    for w in weights[:3]:
+        run += max(0.0, w) / total if total > 0 else 0.0
+        out.append(min(1.0, run))
+    return out
+
+
+LIGHTS_OUT = [(21.0, 0.08), (24.0, 0.5), (26.0, 0.72), (28.5, 0.78), (30.0, 0.6)]
+
+
+def lights_out(hour, late=0.0, cap=1.0):
+    """The share of rooms dark at night by the hour, as env/GlassModel's LightsOutShare (the runtime's)."""
+    hour = hour % 24.0
+    t = (hour + 24.0 if hour < 12.0 else hour) - late
+    share = LIGHTS_OUT[0][1]
+    if t >= LIGHTS_OUT[-1][0]:
+        share = LIGHTS_OUT[-1][1]
+    else:
+        for (t0, s0), (t1, s1) in zip(LIGHTS_OUT, LIGHTS_OUT[1:]):
+            if t0 <= t < t1:
+                share = s0 + (s1 - s0) * (t - t0) / (t1 - t0)
+                break
+    return min(share, max(0.0, min(1.0, cap)))
+
+
+def seed_of(map_id, uid, group=None):
+    """A placement's (or a city group's) seed: steady across runs."""
+    import zlib
+    return zlib.crc32(("%d:%d" % (map_id, uid) + ("" if group is None else ":%d" % group)).encode("ascii")) & 0xFFFFFFFF
+
+
+def dark_place(area_names, wmo):
+    """Ruined, abandoned, haunted (gen_window_lights' DARK_PATHS / DARK_AREAS, as it reads them): no lit rooms."""
+    path = wmo.lower()
+    if any(w in path for w in wl.DARK_PATHS):
+        return True
+    names = list(area_names)
+    return bool(names) and (names[0] in wl.DARK_AREAS or (names[0] not in wl.TOWNS and any(n in wl.DARK_AREAS for n in names)))
+
+
+def empty_building(seed, cls, lived_in, dark):
+    """Nobody lives here (every room dark): never where the client lights the windows at night, an inn, a temple or a
+    city; else the class's share of its buildings (three times as many in a dark place)."""
+    if lived_in or cls in (INN, TEMPLE, CITY, SHIP):
+        return False
+    share = CLASSES[cls].empty * (3.0 if dark else 1.0)
+    return (seed % 1000) < share * 1000.0
+
+
+# Flags (GlassBuildings.Flags)
+B_CITY, B_DARK_PLACE, B_EMPTY, B_SELF_LIT = 0x1, 0x2, 0x4, 0x8
+WHOLE = 0xFFFFFFFF
+
+
+def group_infos(b):
+    """MOGI: per group (flags, box min, box max, name) of a root's bytes."""
+    mogn, mogi = b"", []
+    for tag, p, size in wl.chunks(b):
+        if tag == "MOGN":
+            mogn = b[p:p + size]
+        elif tag == "MOGI":
+            for i in range(size // 32):
+                fl = struct.unpack_from("<I", b, p + 32 * i)[0]
+                box = struct.unpack_from("<6f", b, p + 32 * i + 4)
+                nm = struct.unpack_from("<i", b, p + 32 * i + 28)[0]
+                mogi.append((fl, box[:3], box[3:], nm))
+    out = []
+    for fl, lo, hi, nm in mogi:
+        name = mogn[nm:mogn.index(b"\0", nm)].decode("latin1") if 0 <= nm < len(mogn) and b"\0" in mogn[nm:] else ""
+        out.append((fl, lo, hi, name))
+    return out
+
+
+def area_chain(areas, area):
+    names, a = [], area
+    while a and a in areas and len(names) < 6:
+        names.append(areas[a][0])
+        a = areas[a][1]
+    return names
+
+
+def buildings_table(scan, areas=None, amap=None):
+    """(styles, buildings, report): RoomStyles rows and GlassBuildings rows over every placement of a WMO with glass,
+    a city WMO's groups with glass, and one default per WMO and map."""
+    if areas is None:
+        p = scan / "AreaTable.dbc"
+        areas = wl.read_areas(p) if p.exists() else {}
+    if amap is None and (scan / "terrain-scan").exists():
+        amap = wl.AreaMap(scan)
+    styles, rows = {}, []
+    report = collections.Counter()
+    per_wmo = {}
+
+    def style_id(cls, pal):
+        if (cls, pal) not in styles:
+            styles[(cls, pal)] = len(styles) + 1
+        return styles[(cls, pal)]
+
+    def wmo_info(wmo):
+        if wmo not in per_wmo:
+            rp = flat(scan, wmo)
+            info, glass_groups, groups, lit = None, set(), [], False
+            if rp.exists():
+                b = rp.read_bytes()
+                info = parse_root_all(b)
+                mats = glass_materials(info)
+                if mats:
+                    lit = bool(wl.window_materials(info))
+                    groups = group_infos(b)
+                    if wmo.split(BS)[-1] in CITY_WMOS:
+                        for gi in range(info["groups"]):
+                            gp = flat(scan, "%s_%03d.wmo" % (wmo[:-4], gi))
+                            if gp.exists() and any(bt[5] in mats for bt in wl.parse_group(gp.read_bytes())["batches"]):
+                                glass_groups.add(gi)
+                else:
+                    info = None
+            per_wmo[wmo] = (info, sorted(glass_groups), groups, lit)
+        return per_wmo[wmo]
+
+    town_area = {}
+    for wmo, (town, mid) in wl.WMO_TOWNS.items():
+        town_area[wmo] = next((a for a, v in areas.items() if v[0] == town and v[3] == mid), 0)
+    defaults = set()
+    for (mapdir, uid_s), (map_id, md, wmo, pos, rot) in sorted(placements(scan).items(), key=lambda kv: (kv[1][0], int(kv[0][1]))):
+        info, glass_groups, groups, lit = wmo_info(wmo)
+        if info is None:
+            continue
+        uid = int(uid_s)
+        point, _direction = wl.placement(pos, rot)
+        o = point((0.0, 0.0, 0.0))
+        base = wmo.split(BS)[-1]
+
+        def area_at(x, y):
+            if base in town_area and town_area[base]:
+                return town_area[base]
+            return amap.at(md, x, y) if amap is not None and map_id in (0, 1, 530, 571) else 0
+        area = area_at(o[0], o[1])
+        names = area_chain(areas, area)
+        cls, pal = room_class(wmo), palette_of(wmo, map_id, names)
+        dark = dark_place(names, wmo)
+        seed = seed_of(map_id, uid)
+        flags = (B_CITY if cls == CITY else 0) | (B_DARK_PLACE if dark else 0) | (B_SELF_LIT if lit else 0)
+        if empty_building(seed, cls, lit, dark):
+            flags |= B_EMPTY
+        rows.append([0, map_id, uid, *o, WHOLE, style_id(cls, pal), seed, flags, area, wmo,
+                     "%s (%s, %s): %s" % (base[:-4], CLASS_NAMES[cls], PALETTES[pal].name.split(":")[0], names[0] if names else "?")])
+        report[("placement", cls)] += 1
+        report[("palette", pal)] += 1
+        if flags & B_EMPTY:
+            report["empty"] += 1
+        if dark:
+            report["dark place"] += 1
+        # A city's groups with glass: each its own building, by its name or its district.
+        for gi in glass_groups:
+            fl, lo, hi, gname = groups[gi] if gi < len(groups) else (0, (0, 0, 0), (0, 0, 0), "")
+            c = point(tuple(0.5 * (a + b) for a, b in zip(lo, hi)))
+            garea = area_at(c[0], c[1])
+            gnames = area_chain(areas, garea)
+            gcls = group_class(gname, gnames[0] if gnames else "", CITY)
+            gpal = palette_of(wmo, map_id, gnames or names)
+            gdark = dark_place(gnames or names, wmo)
+            gseed = seed_of(map_id, uid, gi)
+            gflags = B_CITY | (B_DARK_PLACE if gdark else 0) | (B_SELF_LIT if lit else 0)
+            rows.append([0, map_id, uid, *o, gi, style_id(gcls, gpal), gseed, gflags, garea, wmo,
+                         "%s group %d %s (%s): %s" % (base[:-4], gi, gname or "-", CLASS_NAMES[gcls], gnames[0] if gnames else "?")])
+            report[("group", gcls)] += 1
+        # One default per WMO and map, for its instances not placed in the map (transports) or not found.
+        if (map_id, wmo) not in defaults:
+            defaults.add((map_id, wmo))
+            dpal = palette_of(wmo, map_id)
+            rows.append([0, map_id, 0, 0.0, 0.0, 0.0, WHOLE, style_id(cls, dpal), seed_of(map_id, 0, abs(hash_path(wmo)) % 100000),
+                         (B_CITY if cls == CITY else 0) | (B_SELF_LIT if lit else 0), 0, wmo, "%s: the default (%s)" % (base[:-4], CLASS_NAMES[cls])])
+    rows.sort(key=lambda r: (r[2] == 0, r[1], r[2], r[6] if r[6] != WHOLE else -1, r[11]))
+    for i, r in enumerate(rows):
+        r[0] = i + 1
+    style_rows = []
+    for (cls, pal), sid in sorted(styles.items(), key=lambda kv: kv[1]):
+        style_rows.append([sid, cls, pal, *style_values(cls, pal), "%s, %s" % (CLASS_NAMES[cls], PALETTES[pal].name)])
+    return style_rows, rows, report
+
+
+def hash_path(wmo):
+    """PathHash (env/GlassModel): FNV-1a of the lower-case backslashed path."""
+    h = 2166136261
+    for ch in wmo.lower().replace("/", BS).encode("latin1"):
+        h = ((h ^ ch) * 16777619) & 0xFFFFFFFF
+    return h if wmo else 0
+
+
 # --- the tables ----------------------------------------------------------------------------------------------------
 GLASS_MATERIALS = ["u", "s", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "s"]
 #  ID Texture Kind Flags ColorR ColorG ColorB LightR LightG LightB MaskR MaskG MaskB MaskBias Share Comment
@@ -539,6 +967,11 @@ GLASS_PANES = ["u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", 
                "f", "f", "f", "u", "f", "f", "f", "f", "f", "f", "u", "s"]
 #  ID MapID WmoID PosX PosY PosZ OutX OutY OutZ AlongX AlongY AlongZ HalfWidth HalfHeight
 #  LightR LightG LightB Kind RoomMinX RoomMinY RoomMinZ RoomMaxX RoomMaxY RoomMaxZ Flags Comment
+ROOM_STYLES = ["u", "u", "u"] + ["f"] * 21 + ["s"]
+#  ID Class Palette TintR TintG TintB Tint2R Tint2G Tint2B LampR LampG LampB CurtainR CurtainG CurtainB
+#  Brightness Spread DarkShare Shelves Curtains Divider Plain LateHours NightCap Comment
+GLASS_BUILDINGS = ["u", "u", "u", "f", "f", "f", "u", "u", "u", "u", "u", "s", "s"]
+#  ID MapID UniqueID PosX PosY PosZ Group Style Seed Flags AreaID Wmo Comment
 
 
 def flat(scan, name):
@@ -704,6 +1137,30 @@ def write(path, data):
     print(f"{path}: written")
 
 
+def write_rooms(scan, folder):
+    """RoomStyles.cdbc and GlassBuildings.cdbc, with a report: the placements per class and palette, the layouts'
+    shares per class, the night's schedule."""
+    srows, brows, report = buildings_table(scan)
+    placed = sum(n for k, n in report.items() if isinstance(k, tuple) and k[0] == "placement")
+    print(f"{len(srows)} room styles; {len(brows)} building rows: {placed} placements, "
+          f"{sum(n for k, n in report.items() if isinstance(k, tuple) and k[0] == 'group')} city groups, "
+          f"{sum(1 for r in brows if r[2] == 0)} WMO defaults; {report['empty']} empty, {report['dark place']} in dark places")
+    print("  placements by class: " + ", ".join(f"{CLASS_NAMES[c]} {report[('placement', c)]}" for c in range(len(CLASS_NAMES))
+                                                 if report[("placement", c)]))
+    print("  city groups by class: " + ", ".join(f"{CLASS_NAMES[c]} {report[('group', c)]}" for c in range(len(CLASS_NAMES))
+                                                 if report[("group", c)]))
+    print("  placements by palette: " + ", ".join(f"{PALETTES[p].name.split(':')[0]} {report[('palette', p)]}"
+                                                  for p in sorted(PALETTES) if report[("palette", p)]))
+    for c in sorted(CLASSES):
+        k = CLASSES[c]
+        total = sum(k.weights)
+        print("  %-6s layouts: shelves %2.0f%%, curtains %2.0f%%, divider %2.0f%%, plain %2.0f%%; dark at 22:00 %2.0f%%, "
+              "00:00 %2.0f%%, 03:00 %2.0f%%, 05:30 %2.0f%%" % (CLASS_NAMES[c], *(100 * w / total for w in k.weights),
+                                                              *(100 * lights_out(h, k.late, k.cap) for h in (22, 0, 3, 5.5))))
+    write(folder / "RoomStyles.cdbc", io.build(ROOM_STYLES, [tuple(r) for r in srows]))
+    write(folder / "GlassBuildings.cdbc", io.build(GLASS_BUILDINGS, [tuple(r) for r in brows]))
+
+
 def main():
     argv, options = [], {}
     rest = sys.argv[1:]
@@ -711,6 +1168,8 @@ def main():
         a = rest.pop(0)
         if a in ("--group-list", "--texture-list", "--sheets"):
             options[a] = rest.pop(0) if rest else sys.exit(f"{a} needs a path")
+        elif a == "--rooms":
+            options[a] = True
         else:
             argv.append(a)
     if not argv:
@@ -723,6 +1182,9 @@ def main():
             out.write_text("".join(n + "\r\n" for n in names), newline="")
             print(f"{out}: {len(names)} files")
             return
+    if "--rooms" in options:
+        write_rooms(scan, Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "data")
+        return
     if len(argv) < 2:
         sys.exit(__doc__)
     textures = Path(argv[1])
@@ -748,6 +1210,7 @@ def main():
         print("WMOs without panes: " + ", ".join(f"{n} {w}" for w, n in why_none.most_common()))
     write(folder / "GlassMaterials.cdbc", io.build(GLASS_MATERIALS, [tuple(r) for r in mrows]))
     write(folder / "GlassPanes.cdbc", io.build(GLASS_PANES, [tuple(r) for r in prows]))
+    write_rooms(scan, folder)
 
 
 if __name__ == "__main__":

@@ -183,5 +183,150 @@ class Panes(unittest.TestCase):
         self.assertAlmostEqual(w[2], 1.0, places=5)   # up it
 
 
+def root_with_groups(textures, names, lit=()):
+    """A root with MOGI and MOGN (the groups' names), its materials SIDN-lit where `lit` says."""
+    motx, offsets = b"", []
+    for t in textures:
+        offsets.append(len(motx))
+        motx += t.encode("latin1") + b"\0"
+    momt = b"".join(struct.pack("<16I", 0x10 if i in lit else 0, 0, 0, offsets[i], 0x00FFC080 if i in lit else 0, *([0] * 11))
+                    for i in range(len(textures)))
+    mohd = struct.pack("<16I", len(textures), len(names), *([0] * 14))
+    mogn, mogi = b"\0\0", b""
+    for n in names:
+        mogi += struct.pack("<I6fi", 0x8, -5, -5, 0, 5, 5, 5, len(mogn))
+        mogn += n.encode("latin1") + b"\0"
+    return (chunk("MVER", struct.pack("<I", 17)) + chunk("MOHD", mohd) + chunk("MOTX", motx) + chunk("MOMT", momt) +
+            chunk("MOGN", mogn) + chunk("MOGI", mogi))
+
+
+class Rooms(unittest.TestCase):
+    """Who lives behind the glass: the class and palette of a placement, its seed, the styles, the night's schedule, the
+    layouts' thresholds and the buildings table of a small scan."""
+
+    def test_classes_by_path(self):
+        B = "world\\wmo\\azeroth\\buildings\\"
+        cases = {
+            B + "goldshireinn\\goldshireinn.wmo": g.INN, B + "redridge_inn\\redridge_inn.wmo": g.INN,
+            B + "duskwood_blacksmith\\duskwood_blacksmith.wmo": g.SHOP, B + "humantwostory\\humantwostory.wmo": g.HOUSE,
+            B + "human_farm\\farm.wmo": g.FARM, B + "guardtower\\guardtower.wmo": g.KEEP, B + "magetower\\magetower.wmo": g.TOWER,
+            B + "chapel\\redridgechapel.wmo": g.TEMPLE, B + "stormwind\\stormwind.wmo": g.CITY,
+            "world\\wmo\\transports\\transport_ship\\transportship.wmo": g.SHIP,
+            "world\\wmo\\northrend\\buildings\\vrykul\\nd_vrykul_dwelling_03\\nd_vrykul_dwelling_03_a.wmo": g.HOUSE,
+            "world\\wmo\\dungeon\\md_ruinedkeep\\somewhere.wmo": g.KEEP, "world\\wmo\\x\\monsterlogmachine_01.wmo": g.OTHER,
+        }
+        for path, cls in cases.items():
+            self.assertEqual(g.room_class(path), cls, path)
+
+    def test_inn_is_a_word(self):
+        self.assertEqual(g.words_class("shop_skinning"), g.SHOP)      # skinning has "inn" inside it
+        self.assertEqual(g.words_class("TowerInnards"), g.KEEP)       # so do innards
+        self.assertEqual(g.words_class("innbedroom2"), g.INN)
+        self.assertEqual(g.words_class("WallInn01"), g.INN)
+        self.assertEqual(g.words_class("The Slaughtered Lamb"), g.INN)
+
+    def test_city_groups(self):
+        self.assertEqual(g.group_class("Trade District", "Stormwind City"), g.SHOP)
+        self.assertEqual(g.group_class("shopB18", ""), g.SHOP)
+        self.assertEqual(g.group_class("city01", "Mage Quarter"), g.TOWER)
+        self.assertEqual(g.group_class("HB02", "Stormwind City"), g.CITY)
+        self.assertEqual(g.group_class("interior_inn", ""), g.INN)
+
+    def test_palettes_by_culture_and_place(self):
+        H = "world\\wmo\\azeroth\\buildings\\humantwostory\\humantwostory.wmo"
+        self.assertEqual(g.palette_of("world\\wmo\\northrend\\buildings\\vrykul\\nd_vrykul_longhouse.wmo", 571), g.VRYKUL)
+        self.assertEqual(g.palette_of("world\\wmo\\lorderon\\buildings\\silvermoon\\bloodelf_smallhouse\\x.wmo", 530), g.ELVEN)
+        self.assertEqual(g.palette_of("world\\wmo\\northrend\\dalaran\\nd_dalaran.wmo", 571), g.DALARAN)
+        self.assertEqual(g.palette_of("world\\wmo\\azeroth\\buildings\\stranglethorn_bootybay\\bootybay.wmo", 0), g.GOBLIN)
+        self.assertEqual(g.palette_of("world\\wmo\\northrend\\buildings\\forsaken\\nd_forsaken_house.wmo", 571), g.FORSAKEN)
+        self.assertEqual(g.palette_of(H, 0, ["Darkshire", "Duskwood"]), g.DUSK)
+        self.assertEqual(g.palette_of(H, 0, ["Brill", "Tirisfal Glades"]), g.FORSAKEN)
+        self.assertEqual(g.palette_of(H, 0, ["Tyr's Hand", "Eastern Plaguelands"]), g.SCARLET)
+        self.assertEqual(g.palette_of(H, 1, ["Ratchet", "The Barrens"]), g.GOBLIN)
+        self.assertEqual(g.palette_of(H, 571, ["Valgarde", "Howling Fjord"]), g.NORTHERN)
+        self.assertEqual(g.palette_of(H, 530, ["Honor Hold", "Hellfire Peninsula"]), g.HELLFIRE)
+        self.assertEqual(g.palette_of(H, 0, ["Goldshire", "Elwynn Forest"]), g.HUMAN)
+
+    def test_seeds_are_steady_and_distinct(self):
+        self.assertEqual(g.seed_of(0, 10047), 3682108440)            # a CRC: the same on every run
+        self.assertEqual(g.seed_of(0, 10047, 93), 1961690026)
+        self.assertNotEqual(g.seed_of(0, 10047), g.seed_of(571, 10047))
+        # the runtime's PathHash (tests/glass GlassTests.cpp checks the same number)
+        self.assertEqual(g.hash_path("World/WMO/Azeroth/Buildings/Stormwind/Stormwind.wmo"), 4036435193)
+
+    def test_styles(self):
+        v = g.style_values(g.SHOP, g.GOBLIN)
+        self.assertEqual(len(v), 21)
+        weights = v[15:19]
+        self.assertAlmostEqual(weights[0], 0.55 * 2.2, places=4)      # a goblin shop: cluttered shelves
+        self.assertAlmostEqual(v[12], round(1.1 * 1.1, 4), places=4)  # brightness: class x palette
+        self.assertEqual(v[19:], (-1.0, 1.0))                          # shops close early
+        self.assertEqual(g.style_values(g.INN, g.HUMAN)[19:], (2.5, 0.55))
+
+    def test_layout_thresholds(self):
+        self.assertEqual([round(t, 6) for t in g.layout_thresholds((0.25, 0.35, 0.15, 0.25))], [0.25, 0.6, 0.75])
+        self.assertEqual(g.layout_thresholds((0, 0, 0, 0)), [0.0, 0.0, 0.0])
+        self.assertEqual([round(t, 6) for t in g.layout_thresholds((0, 1, 0, 0))], [0.0, 1.0, 1.0])
+
+    def test_lights_out(self):
+        # The same points as env/GlassModel's LightsOutShare (tests/glass GlassTests.cpp).
+        for hour, want in ((20, 0.08), (22.5, 0.29), (0, 0.5), (2, 0.72), (4.5, 0.78), (6, 0.6)):
+            self.assertAlmostEqual(g.lights_out(hour), want, places=5)
+        self.assertAlmostEqual(g.lights_out(0, 2.5, 0.55), 0.15, places=5)   # an inn stays lit late
+        self.assertAlmostEqual(g.lights_out(3, 2.5, 0.55), 0.55, places=5)
+        self.assertGreater(g.lights_out(22, -1.0), g.lights_out(22) + 0.1)  # a shop closes early
+
+    def test_dark_places_and_empty_buildings(self):
+        self.assertTrue(g.dark_place([], "world\\wmo\\x\\ruined_house.wmo"))
+        self.assertTrue(g.dark_place(["Pyrewood Village", "Silverpine Forest"], "world\\wmo\\x\\house.wmo"))
+        self.assertFalse(g.dark_place(["Goldshire", "Elwynn Forest"], "world\\wmo\\x\\house.wmo"))
+        self.assertFalse(g.empty_building(5, g.HOUSE, True, False))     # the client lights its windows: lived in
+        self.assertFalse(g.empty_building(5, g.INN, False, False))
+        self.assertTrue(g.empty_building(5, g.HOUSE, False, False))     # 5 < 80 of 1000
+        self.assertFalse(g.empty_building(500, g.HOUSE, False, False))
+
+    def test_buildings_table(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "wmo-windows").mkdir()
+        house = "world\\wmo\\test\\humantwostory.wmo"
+        city = "world\\wmo\\test\\stormwind.wmo"
+        files = {
+            house: root_with_groups([WINDOW], ["Room"], lit=(0,)),
+            city: root_with_groups([STONE, WINDOW], ["city01", "shopB18"]),
+            city[:-4] + "_000.wmo": group(0x8, ((-6, -4, 0), (0.5, 4, 5)), [(0, wall_x(0.0, -1, 1, 1, 3, out=True))]),
+            city[:-4] + "_001.wmo": group(0x8, ((-6, -4, 0), (0.5, 4, 5)), [(1, wall_x(0.0, -1, 1, 1, 3, out=True))]),
+        }
+        for name, data in files.items():
+            (d / "wmo-windows" / name.replace(BS, "#")).write_bytes(data)
+        (d / "maps.tsv").write_text("0\tAzeroth\n", newline="")
+        rows = ["source\twmo\tuniqueId\tpx\tpy\tpz\trx\try\trz"]
+        for uid, wmo, pos in ((1, house, (17000.0, 50.0, 17100.0)), (2, house, (17040.0, 50.0, 17100.0)), (3, city, (16000.0, 60.0, 16000.0))):
+            rows.append("world\\maps\\azeroth\\azeroth_32_32.adt\t%s\t%d\t%.1f\t%.1f\t%.1f\t0\t0\t0" % (wmo, uid, *pos))
+        (d / "adt_wmos.tsv").write_text("\n".join(rows) + "\n", newline="")
+        styles, buildings, report = g.buildings_table(d)
+        placed = [r for r in buildings if r[2] != 0 and r[6] == g.WHOLE]
+        groups = [r for r in buildings if r[2] != 0 and r[6] != g.WHOLE]
+        defaults = [r for r in buildings if r[2] == 0]
+        self.assertEqual(len(placed), 3)
+        self.assertEqual(len(groups), 1)                        # only the city's group with glass
+        self.assertEqual(groups[0][6], 1)
+        self.assertEqual(len(defaults), 2)                      # one per WMO and map
+        by_uid = {r[2]: r for r in placed}
+        # the placement's origin, as gen_window_lights places it (MAX - z, MAX - x, y)
+        self.assertAlmostEqual(by_uid[1][3], 32.0 * 1600.0 / 3.0 - 17100.0, places=3)
+        self.assertAlmostEqual(by_uid[1][4], 32.0 * 1600.0 / 3.0 - 17000.0, places=3)
+        self.assertAlmostEqual(by_uid[1][5], 50.0, places=3)
+        style_class = {s[0]: s[1] for s in styles}
+        self.assertEqual(style_class[by_uid[1][7]], g.HOUSE)
+        self.assertEqual(style_class[by_uid[3][7]], g.CITY)
+        self.assertEqual(style_class[groups[0][7]], g.SHOP)    # shopB18
+        self.assertTrue(by_uid[3][9] & g.B_CITY and groups[0][9] & g.B_CITY)
+        self.assertTrue(by_uid[1][9] & g.B_SELF_LIT)           # its window material is SIDN-lit
+        self.assertFalse(by_uid[1][9] & g.B_EMPTY)             # ... so somebody lives there
+        self.assertNotEqual(by_uid[1][8], by_uid[2][8])         # two houses, two seeds
+        self.assertEqual(by_uid[1][11], house)
+        self.assertEqual(sorted({r[0] for r in buildings}), list(range(1, len(buildings) + 1)))
+
+
 if __name__ == "__main__":
     unittest.main()

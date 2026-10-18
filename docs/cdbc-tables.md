@@ -357,15 +357,17 @@ grid they rank below torches and lanterns (×0.35), and at most `LightsPerCell` 
 so the cells already full in Stormwind, Booty Bay and the Undercity keep their lights. After editing,
 press "Reload light tables from disk" in the lights panel.
 
-## Window glass: two tables
+## Window glass: four tables
 
 Window glass that looks like glass (features/Glass, `[LivingAzeroth.Glass]` in config.md): seen from
 inside, the day coming through it (stained glass glowing in its own colours, brightest with the sun
 beyond it); seen from outside by day, darker glass with the sky in it and, behind clear panes, a room;
-at night the client's own lit windows. Sunlit panes also cast their light on the room's floor and
-walls and through its air (coloured shafts). Both tables come from `tools/gen_glass.py` (its header
-says how glass is found) and can be edited by hand. Without them there's no glass look, floor light
-or shafts. After editing, press "Reload light tables from disk" in the lights panel.
+at night the client's own lit windows, or a lamp-lit room behind them. Sunlit panes also cast their
+light on the room's floor and walls and through its air (coloured shafts). All four tables come from
+`tools/gen_glass.py` (its header says how glass is found and how buildings are classed) and can be
+edited by hand. Without GlassMaterials and GlassPanes there's no glass look, floor light or shafts;
+without RoomStyles and GlassBuildings every room is the same plain warm one (and lamp-lit at night).
+After editing, press "Reload light tables from disk" in the lights panel.
 
 ### GlassMaterials.cdbc — `GlassMaterials.xml`
 
@@ -413,6 +415,71 @@ box. **Leaks:** the room's box is a box, so in an L-shaped or many-storey group 
 floor that a real wall or ceiling would shade (a storey below a high window, the far side of an
 arch); a building's other groups get none of a pane's light (the cathedral's side aisles when the
 window is in the nave). The coloured shafts use the panes whose room holds the camera (up to 16).
+
+### RoomStyles.cdbc — `RoomStyles.xml`
+
+How the rooms behind clear and leaded glass look, one row per pair of a building's **class** and its
+place's **palette** in use (about 100). The class (from the WMO's file name, or a city group's name
+or district) sets the layouts' weights, the brightness, the rooms dark by day and how late the lights
+stay on; the palette (the culture by the path: vrykul, blood elf, Dalaran, goblin, Forsaken, orc...,
+else the place: Duskwood, the Scarlet Crusade's towns, Forsaken zones, goblin ports, Northrend's and
+Outland's humans) the colours, x the layouts' weights. Per window the shader hashes the window's cell
+with the building's seed to pick the layout, dark or lit, its light, the lamp's place, the curtains'
+gap and the things on the shelves.
+
+| Field | Meaning |
+|---|---|
+| ID | row id (GlassBuildings.Style) |
+| Class | 0 other, 1 house, 2 farm, 3 inn, 4 shop (smithy, bank, lab, trade), 5 temple, 6 keep (barracks, towers, walls, town halls, dungeons), 7 tower (mage towers: books), 8 city (a city's mixed buildings), 9 ship. For the editor; the columns below are what's read |
+| Palette | the generator's palette (PALETTES in gen_glass.py); for the editor |
+| TintR/G/B, Tint2R/G/B | the rooms' colour by day at the two ends of a building's range: each building (in a city, each 14-yd block) picks a point between them by its hash |
+| LampR/G/B | the lamp at night (any brightness: the runtime makes a lit room as bright as the client's lit window) |
+| CurtainR/G/B | the curtains' cloth |
+| Brightness | x the rooms' light by day |
+| Spread | buildings are brighter or dimmer by up to this share |
+| DarkShare | the share of rooms dark by day (0..1) |
+| Shelves, Curtains, Divider, Plain | the layouts' weights (any scale): a back wall with shelves and things on them; curtains half drawn (cloth just behind the glass at the sides, folded, a gap between); a dividing wall half way back with a doorway to a second, dimmer room; plain |
+| LateHours | the night's lights go out this many hours later (an inn 2.5, a tower 2, a keep 1.5), earlier when negative (a shop -1, a farm -0.5) |
+| NightCap | at most this share of its rooms dark at night (an inn 0.55, a tower 0.6) |
+| Comment | the class and palette; never read |
+
+**The night** (env/GlassModel `LightsOutShare`, by the client's clock or the climate panel's time):
+behind the windows the client lights at night (their material is SIDN, self-lit), a room is lamp-lit
+unless it's one of the dark ones. 8% are dark through the evening; from 21:00 the share rises to half
+at midnight, 72% at 02:00 and 78% at 04:30; early risers bring it back to 60% by 06:00, when the
+day takes over. LateHours shifts the evening's rise, NightCap caps it. Windows the client doesn't
+light have dark rooms at night. In a dark place every room is dark at night.
+
+| Hour | house | farm | inn | shop | temple | keep | tower | city |
+|---|---|---|---|---|---|---|---|---|
+| 22:00 | 22% | 29% | 8% | 36% | 8% | 8% | 8% | 15% |
+| 00:00 | 50% | 55% | 15% | 61% | 36% | 29% | 22% | 43% |
+| 03:00 | 74% | 76% | 55% | 77% | 70% | 66% | 60% | 73% |
+| 05:30 | 66% | 60% | 55% | 60% | 70% | 70% | 60% | 72% |
+
+### GlassBuildings.cdbc — `GlassBuildings.xml`
+
+Every placement of a WMO with glass (all maps the scan has), each with its style and seed; a city's
+one big WMO (Stormwind, Dalaran, Silvermoon, Booty Bay, Orgrimmar, Darnassus, Ironforge, the Exodar)
+also has a row per group with glass (its own building: `shopB18`, `interior_inn`, `bankinterior`);
+and one default per WMO and map for instances not in the table (transports, a placement the scan
+missed). At run time features/WmoIce's group hook (`Wmo.RenderGroup`) gives each placed instance's
+origin, its WMO's path and the group; the building is the row whose origin is within 1.5 yd and whose
+WMO is the same, then its group's row if it has one, else the WMO's default, else a built-in house.
+
+| Field | Meaning |
+|---|---|
+| ID | row id (placements by map and unique ID, their city groups after them, the defaults last) |
+| MapID | Map.dbc ID |
+| UniqueID | the placement's unique ID (MODF); 0 for a WMO's default |
+| PosX/Y/Z | the placement's origin (its WMO's 0, 0, 0) in world coordinates |
+| Group | the WMO group's index for a city's group, else 4294967295 (the whole placement) |
+| Style | its RoomStyles row |
+| Seed | its hash seed (a CRC of the map, the unique ID and the group): two numbers 0..1023 (bits 0..9, 10..19) offset the windows' cells |
+| Flags | 0x1 a city (the shader's 14-yd blocks are its buildings: each its own tint and brightness); 0x2 a dark place (gen_window_lights' DARK_AREAS or DARK_PATHS: ruined, abandoned, haunted, dungeons, ships): no lit rooms at night; 0x4 empty: every room dark (a share of each class's buildings whose windows the client doesn't light); 0x8 its WMO has windows the client lights at night (for the editor) |
+| AreaID | AreaTable ID at its origin (a city group's: at its middle), for the editor |
+| Wmo | the WMO's path (case and slashes don't matter): the instance must be of this WMO |
+| Comment | the WMO, its class and palette, the area; never read |
 
 ## AreaClimate.cdbc — `AreaClimate.xml`
 

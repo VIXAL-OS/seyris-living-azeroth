@@ -1,0 +1,15 @@
+  <Table Name="GlassBuildings" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="MapID" Type="int" />
+    <Field Name="UniqueID" Type="int" />
+    <Field Name="PosX" Type="float" />
+    <Field Name="PosY" Type="float" />
+    <Field Name="PosZ" Type="float" />
+    <Field Name="Group" Type="int" />
+    <Field Name="Style" Type="int" />
+    <Field Name="Seed" Type="int" />
+    <Field Name="Flags" Type="int" />
+    <Field Name="AreaID" Type="int" />
+    <Field Name="Wmo" Type="string" />
+    <Field Name="Comment" Type="string" />
+  </Table>

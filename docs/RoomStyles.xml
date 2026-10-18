@@ -1,0 +1,27 @@
+  <Table Name="RoomStyles" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="Class" Type="int" />
+    <Field Name="Palette" Type="int" />
+    <Field Name="TintR" Type="float" />
+    <Field Name="TintG" Type="float" />
+    <Field Name="TintB" Type="float" />
+    <Field Name="Tint2R" Type="float" />
+    <Field Name="Tint2G" Type="float" />
+    <Field Name="Tint2B" Type="float" />
+    <Field Name="LampR" Type="float" />
+    <Field Name="LampG" Type="float" />
+    <Field Name="LampB" Type="float" />
+    <Field Name="CurtainR" Type="float" />
+    <Field Name="CurtainG" Type="float" />
+    <Field Name="CurtainB" Type="float" />
+    <Field Name="Brightness" Type="float" />
+    <Field Name="Spread" Type="float" />
+    <Field Name="DarkShare" Type="float" />
+    <Field Name="Shelves" Type="float" />
+    <Field Name="Curtains" Type="float" />
+    <Field Name="Divider" Type="float" />
+    <Field Name="Plain" Type="float" />
+    <Field Name="LateHours" Type="float" />
+    <Field Name="NightCap" Type="float" />
+    <Field Name="Comment" Type="string" />
+  </Table>
