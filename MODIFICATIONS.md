@@ -49,7 +49,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   mud ruts on Elwynn's dirt that fill in faster in rain; trench walls and rims no narrower than the near grid can draw,
   and feet flattening the rims of earlier steps; thunder through the client's own sound kits (a loudness by distance,
   from the strike's direction; Lua PlaySound as the fallback) with new recordings (`env/StormModel`). In a storm the
-  fog stays lighter than the darkened sky and turns a pale blue-grey (18 October 2026).
+  fog stays lighter than the darkened sky and turns a pale blue-grey (18 October 2026). In falling snow the client's
+  grey weather fog, sky and clouds turn a bright pale blue-white by day, and its fog no longer starts behind the camera
+  or ends nearer than 400 yards (18 October 2026).
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

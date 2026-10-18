@@ -1,7 +1,8 @@
 // Offline tests for env/StormModel (storms: the rules env/Storm applies to the client): grade to phase,
 // storminess, when flashes come, what a flash looks like over time, where strikes land, thunder's delay
-// and loudness by distance, the day-night colour shading (and that it never builds up), the bolt's
-// matrix, and -- given the client executable -- every guard against its bytes. No game.
+// and loudness by distance, the day-night colour shading (and that it never builds up), falling snow's
+// fog, sky and fog distance, the bolt's matrix, and -- given the client executable -- every guard against
+// its bytes. No game.
 // Also what the rain does elsewhere: the fog wake's weather scaling (features/FogWakeWeather.hpp).
 //
 // Usage:  storm_tests [<Wow.exe>] [<SoundEntries.dbc>]
@@ -89,6 +90,26 @@ namespace
         s.fogCool = 0.6f;
         s.day = day;
         return s;
+    }
+
+    // Falling snow with the settings' defaults (Storm.cpp: SnowFogBrightness 2.2, SnowFogWhite 0.6), all of the client's
+    // weather set showing, at a time of day (0 night .. 1 day).
+    st::Shade Snow(float day, float share = 1.0f)
+    {
+        st::Shade s;
+        s.snow = share;
+        s.snowBright = 2.2f;
+        s.snowWhite = 0.6f;
+        s.day = day;
+        return s;
+    }
+
+    // The client's linear zone fog (fog mode 0): how much of a thing at `d` yd is fog.
+    float FogShare(const st::FogDistance& f, float d)
+    {
+        const float start = f.end * f.startMul;
+        const float t = (d - start) / (f.end - start);
+        return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
     }
 
     // --- the client's file: virtual addresses to bytes through its section table ---
@@ -716,6 +737,158 @@ int main(int argc, char** argv)
             CHECK(!memory.valid && bands[2] == st::ShadeBand(Argb(0xFF, 10, 20, 30), 2, s));
         });
 
+        // Winterspring at Frostfire Hot Springs (map 28.1, 34.8), 15:20, snowing: 1006 yd from the centre of Winterspring's
+        // lilac light (Light.dbc 260, falloff 711..941 yd), so the client shows Kalimdor's default light (191). Its clear
+        // set (192) at 15:20: fog #526275, the sky #112744 to #BBA181, the fog from 122 to 490 yd. Its weather set
+        // (LightParams 10, the same as the Eastern Kingdoms' default): fog #525452, the sky #6F6F6F, #6D6D6D, #6F6F6F,
+        // #676767, #525352 (LightIntBand 2..6 = bands 3..7), clouds #3D3F3E, the light #4E4E5F / #656565, the fog from
+        // -139 to 278 yd. Two minutes later at 30.2, 42.6, inside the lilac light, its weather set: fog #784E9A, the sky
+        // from #FB9FFF, the fog from 0 to 381 yd.
+        Test("snow: the weather set's grey fog turns a bright pale blue-white by day, stays the client's at night, never darker", []
+        {
+            const uint32_t grey = Argb(0xFF, 0x52, 0x54, 0x52);
+            const uint32_t day = st::ShadeBand(grey, st::kFogBand, Snow(1.0f)), dusk = st::ShadeBand(grey, st::kFogBand, Snow(0.5f)),
+                           night = st::ShadeBand(grey, st::kFogBand, Snow(0.0f));
+            std::printf("     the weather fog #525452 (L %.0f) in snow: day #%06X (L %.0f), dusk #%06X (L %.0f), night #%06X (L %.0f)\n",
+                        Lum(grey), day & 0xFFFFFF, Lum(day), dusk & 0xFFFFFF, Lum(dusk), night & 0xFFFFFF, Lum(night));
+            CHECK(Lum(day) >= 2.1f * Lum(grey) && Lum(day) <= 255.0f * st::kSnowCeiling + 1.0f);  // bright by day
+            CHECK(B(day) > G(day) && G(day) > R(day) && B(day) >= R(day) + 10);                    // a pale blue-white
+            CHECK(Lum(dusk) > Lum(grey) + 20.0f && Lum(dusk) < Lum(day) - 20.0f);
+            CHECK(Near(Lum(night), Lum(grey), 1.0f) && B(night) > R(night));                       // the client's at night, cool
+            CHECK((day >> 24) == 0xFF);
+            CHECK(Lum(day) > Lum(Argb(0xFF, 0x52, 0x62, 0x75)) + 50.0f);                           // brighter than the clear day's fog
+
+            // Never darker than the client's own colour (by more than rounding), any band, any hour, any colour; the
+            // light, the sun, band 2 and the water exactly as the client made them.
+            const uint32_t inputs[] = { grey, Argb(0xFF, 0x00, 0x0E, 0x21), Argb(0xFF, 0x78, 0x4E, 0x9A), Argb(0xFF, 0x74, 0xA7, 0xC4),
+                                        Argb(0xFF, 0x3B, 0x3B, 0x3B), Argb(0xFF, 0x4F, 0x4F, 0x57), Argb(0xFF, 110, 95, 70),
+                                        Argb(0xFF, 0, 0, 0), Argb(0xFF, 255, 255, 255), Argb(0x80, 0xE0, 0xE0, 0xE0) };
+            for (float hour : { 0.0f, 0.25f, 0.5f, 1.0f })
+                for (int band = 0; band < st::kBandCount; ++band)
+                    for (uint32_t in : inputs)
+                    {
+                        const uint32_t out = st::ShadeBand(in, band, Snow(hour));
+                        CHECK(Lum(out) >= Lum(in) - 1.0f);
+                        CHECK((out >> 24) == (in >> 24));
+                        if (st::SnowWeight(band) <= 0.0f) CHECK(out == in);
+                    }
+            for (int band : { 0, 1, 2, 9, 10, 14, 15, 16, 17 }) CHECK(st::SnowWeight(band) == 0.0f);
+        });
+
+        Test("snow: the sky and clouds lift with the fog (the fogged distance meets a sky as bright); a zone's coloured light stays", []
+        {
+            const uint32_t fog = st::ShadeBand(Argb(0xFF, 0x52, 0x54, 0x52), st::kFogBand, Snow(1.0f));
+            const uint32_t top = st::ShadeBand(Argb(0xFF, 0x6F, 0x6F, 0x6F), 3, Snow(1.0f));
+            const uint32_t horizon = st::ShadeBand(Argb(0xFF, 0x52, 0x53, 0x52), 7, Snow(1.0f));
+            const uint32_t cloud = st::ShadeBand(Argb(0xFF, 0x3D, 0x3F, 0x3E), 11, Snow(1.0f));
+            std::printf("     the weather sky in snow by day: top #6F6F6F -> #%06X, horizon #525352 -> #%06X; clouds #3D3F3E -> #%06X\n",
+                        top & 0xFFFFFF, horizon & 0xFFFFFF, cloud & 0xFFFFFF);
+            CHECK(std::fabs(Lum(horizon) - Lum(fog)) <= 4.0f);   // the fog meets the horizon
+            CHECK(Lum(top) >= Lum(fog) - 1.0f && Lum(top) <= 255.0f * st::kSnowCeiling + 1.0f);
+            CHECK(Lum(cloud) >= 2.1f * Lum(Argb(0xFF, 0x3D, 0x3F, 0x3E)));
+            // Winterspring's own weather set (lilac fog, pink sky top) and Dun Morogh's sky-blue fog as the client has them;
+            // a slightly tinted grey (Winterspring's eastern #4F4F57) lifts like the grey.
+            const uint32_t lilac = Argb(0xFF, 0x78, 0x4E, 0x9A), pink = Argb(0xFF, 0xFB, 0x9F, 0xFF), blue = Argb(0xFF, 0x74, 0xA7, 0xC4);
+            CHECK(st::ShadeBand(lilac, st::kFogBand, Snow(1.0f)) == lilac);
+            CHECK(st::ShadeBand(pink, 3, Snow(1.0f)) == pink);
+            CHECK(st::ShadeBand(blue, st::kFogBand, Snow(1.0f)) == blue);
+            const uint32_t east = Argb(0xFF, 0x4F, 0x4F, 0x57);
+            CHECK(Lum(st::ShadeBand(east, st::kFogBand, Snow(1.0f))) >= 2.1f * Lum(east));
+        });
+
+        Test("snow: its share, its ceiling, its settings off, rain untouched, nonsense", []
+        {
+            const uint32_t grey = Argb(0xFF, 0x52, 0x54, 0x52);
+            // Half the weather set showing: half way.
+            const float half = Lum(st::ShadeBand(grey, st::kFogBand, Snow(1.0f, 0.5f)));
+            CHECK(half > Lum(grey) + 20.0f && half < Lum(st::ShadeBand(grey, st::kFogBand, Snow(1.0f))) - 20.0f);
+            // The lift stops at the ceiling; a band already brighter keeps its brightness.
+            CHECK(Near(Lum(st::ShadeBand(Argb(0xFF, 160, 160, 160), st::kFogBand, Snow(1.0f))), 255.0f * st::kSnowCeiling, 1.0f));
+            const uint32_t bright = st::ShadeBand(Argb(0xFF, 224, 224, 224), st::kFogBand, Snow(1.0f));
+            CHECK(Lum(bright) >= 223.0f && Lum(bright) <= 225.0f);
+            // Settings off (x1, no white): as the client made it, exactly.
+            st::Shade off = Snow(1.0f);
+            off.snowBright = 1.0f;
+            off.snowWhite = 0.0f;
+            for (int band = 0; band < st::kBandCount; ++band) CHECK(st::ShadeBand(grey, band, off) == grey);
+            // Snow alone is a shade; without it the snow settings change nothing, and the rain's shade is as before.
+            st::Shade only;
+            only.snow = 1.0f;
+            CHECK(!st::Identity(only));
+            for (int band = 0; band < st::kBandCount; ++band)
+            {
+                st::Shade rain = HeavyRain(1.0f), rainSettings = rain;
+                rainSettings.snowBright = 3.0f;
+                rainSettings.snowWhite = 1.0f;
+                CHECK(st::ShadeBand(grey, band, rain) == st::ShadeBand(grey, band, rainSettings));
+                CHECK(st::ShadeBand(grey, band, st::Shade{}) == grey);
+            }
+            // Nonsense in, sense out: never darker, never a NaN colour.
+            st::Shade bad = Snow(std::nanf(""));
+            bad.snowBright = std::nanf("");
+            bad.snowWhite = std::nanf("");
+            const uint32_t out = st::ShadeBand(grey, st::kFogBand, bad);
+            CHECK((out >> 24) == 0xFF && Lum(out) >= Lum(grey) - 1.0f && Lum(out) <= Lum(grey) + 1.0f);
+            st::Shade nanShare = Snow(1.0f);
+            nanShare.snow = std::nanf("");
+            CHECK(st::ShadeBand(grey, st::kFogBand, nanShare) == grey);
+            st::Shade dim = Snow(1.0f);
+            dim.snowBright = 0.2f; // below 1 doesn't darken
+            CHECK(Lum(st::ShadeBand(grey, st::kFogBand, dim)) >= Lum(grey) - 1.0f);
+        });
+
+        Test("snow: the weather fog starts at the camera, not 139 yd behind it, and ends no nearer than 400 yd", []
+        {
+            const st::FogDistance weather{ 278.0f, -0.5f }, clear{ 490.0f, 0.25f }, lilac{ 381.0f, 0.0f };
+            const st::FogDistance snow = st::SnowFogDistance(weather, 1.0f, 400.0f);
+            std::printf("     the weather fog in snow: %.0f..%.0f yd -> %.0f..%.0f yd; fogged at 70 yd %.2f -> %.2f, at 150 yd %.2f -> %.2f (clear %.2f, %.2f)\n",
+                        weather.end * weather.startMul, weather.end, snow.end * snow.startMul, snow.end, FogShare(weather, 70.0f),
+                        FogShare(snow, 70.0f), FogShare(weather, 150.0f), FogShare(snow, 150.0f), FogShare(clear, 70.0f), FogShare(clear, 150.0f));
+            CHECK(snow.end == 400.0f && snow.startMul == 0.0f);
+            CHECK(Near(FogShare(weather, 0.0f), 1.0f / 3.0f, 0.01f) && FogShare(snow, 0.0f) == 0.0f);
+            CHECK(FogShare(weather, 70.0f) >= 0.49f && FogShare(snow, 70.0f) <= 0.18f);
+            CHECK(FogShare(snow, 150.0f) > FogShare(clear, 150.0f));          // still shorter views than clear weather
+            // A zone's own longer or clearer fog stays (the clear set; Winterspring's lilac only to 400).
+            const st::FogDistance c = st::SnowFogDistance(clear, 1.0f, 400.0f), l = st::SnowFogDistance(lilac, 1.0f, 400.0f);
+            CHECK(c.end == 490.0f && c.startMul == 0.25f && l.end == 400.0f && l.startMul == 0.0f);
+            const st::FogDistance none{ 1.0e10f, 0.5f };
+            CHECK(st::SnowFogDistance(none, 1.0f, 400.0f).end == 1.0e10f);
+            // By the share; not without snow, with the setting off, or for nonsense.
+            const st::FogDistance halfway = st::SnowFogDistance(weather, 0.5f, 400.0f);
+            CHECK(Near(halfway.end, 339.0f, 0.01f) && Near(halfway.startMul, -0.25f, 1e-6f));
+            for (float share : { 0.0f, -1.0f, std::nanf("") })
+            {
+                const st::FogDistance same = st::SnowFogDistance(weather, share, 400.0f);
+                CHECK(same.end == weather.end && same.startMul == weather.startMul);
+            }
+            for (float floor : { 0.0f, -5.0f, std::nanf(""), INFINITY })
+            {
+                const st::FogDistance same = st::SnowFogDistance(weather, 1.0f, floor);
+                CHECK(same.end == weather.end && same.startMul == weather.startMul);
+            }
+            const st::FogDistance nanEnd = st::SnowFogDistance({ std::nanf(""), -0.5f }, 1.0f, 400.0f);
+            CHECK(std::isnan(nanEnd.end) && nanEnd.startMul == 0.0f);
+        });
+
+        Test("snow: lifting the fog distance twice (the client didn't recompute it) doesn't lift it further", []
+        {
+            st::FogDistanceMemory memory;
+            float end = 278.0f, start = -0.5f;
+            st::LiftFogDistance(end, start, 0.5f, 400.0f, memory);
+            const float onceEnd = end, onceStart = start;
+            st::LiftFogDistance(end, start, 0.5f, 400.0f, memory);       // stale: what we wrote
+            CHECK(end == onceEnd && start == onceStart);
+            end = 278.0f; start = -0.5f;                                  // the client recomputed it
+            st::LiftFogDistance(end, start, 0.5f, 400.0f, memory);
+            CHECK(end == onceEnd && start == onceStart);
+            end = 300.0f; start = -0.2f;                                  // a new value the client computed
+            st::LiftFogDistance(end, start, 0.5f, 400.0f, memory);
+            CHECK(Near(end, 350.0f, 0.01f) && Near(start, -0.1f, 1e-6f));
+            end = 278.0f; start = -0.5f;
+            st::LiftFogDistance(end, start, 0.0f, 400.0f, memory);       // no snow: nothing written, memory forgotten
+            CHECK(!memory.valid && end == 278.0f && start == -0.5f);
+        });
+
         Test("bolt matrix: scaled, turned about the vertical, standing at the strike", []
         {
             const float pos[3] = { 100.0f, -200.0f, 50.0f };
@@ -740,6 +913,7 @@ int main(int argc, char** argv)
                 CheckGuards(im, st::kBandGuards);
                 CheckGuards(im, st::kModelGuards);
                 CheckGuards(im, st::kSoundGuards);
+                CheckGuards(im, st::kSnowGuards);
                 // PlaySoundKit resets its own defaults with the same function (0x4C6ACD), and the listener getter we call
                 // is the one the sound interface's own (0x4C5B4B) calls.
                 auto callTarget = [&](uintptr_t at)
@@ -761,6 +935,15 @@ int main(int argc, char** argv)
                 int32_t rel = 0;
                 std::memcpy(&rel, call + 1, 4);
                 CHECK(static_cast<uintptr_t>(0x007F333B + 5 + rel) == st::kBandsToLight);
+                // Snow's reads and writes are the addresses the guarded instructions use: the stored weather set share, the
+                // camera's liquid (the colour resolve's call lands on the getter that returns it), the fog's end and start.
+                auto u32At = [&](uintptr_t at) { uint32_t v = 0; const void* b = im.At(at, 4); CHECK(b); std::memcpy(&v, b, 4); return v; };
+                CHECK(u32At(0x007F3995 + 2) == st::kStormBlend);
+                std::memcpy(&rel, static_cast<const uint8_t*>(im.At(0x007F3245, 5)) + 1, 4);
+                CHECK(static_cast<uintptr_t>(0x007F3245 + 5 + rel) == st::kCameraLiquid);
+                CHECK(u32At(0x00780632 + 1) == st::kCameraInLiquid);
+                CHECK(u32At(0x007F1705 + 2) == st::kFogEnd && st::kFogEnd == 0x00D38C1Cu);
+                CHECK(u32At(0x007F1725 + 2) == st::kFogStartMul && st::kFogStartMul == 0x00D38C20u);
                 // And the doodad spawn's scene global is the world scene.
                 const auto* spawn = static_cast<const uint8_t*>(im.At(0x007BEEC8, 11));
                 uint32_t scene = 0;
@@ -768,8 +951,8 @@ int main(int argc, char** argv)
                 CHECK(scene == st::kWorldScene);
                 std::memcpy(&rel, spawn + 7, 4);
                 CHECK(static_cast<uintptr_t>(0x007BEEC8 + 11 + rel) == st::kCreateModel);
-                std::printf("  %zu + %zu + %zu guards\n", sizeof(st::kBandGuards) / sizeof(st::kBandGuards[0]), sizeof(st::kModelGuards) / sizeof(st::kModelGuards[0]),
-                            sizeof(st::kSoundGuards) / sizeof(st::kSoundGuards[0]));
+                std::printf("  %zu + %zu + %zu + %zu guards\n", sizeof(st::kBandGuards) / sizeof(st::kBandGuards[0]), sizeof(st::kModelGuards) / sizeof(st::kModelGuards[0]),
+                            sizeof(st::kSoundGuards) / sizeof(st::kSoundGuards[0]), sizeof(st::kSnowGuards) / sizeof(st::kSnowGuards[0]));
             });
         }
         else std::printf("SKIP guards (no Wow.exe given)\n");

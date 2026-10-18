@@ -288,9 +288,17 @@ namespace wxl_livingazeroth::storm
         }
     }
 
+    float SnowWeight(int band)
+    {
+        if (band >= 3 && band <= 7) return 1.0f;   // the sky, top to horizon
+        if (band == kFogBand) return 1.0f;
+        if (band >= 11 && band <= 13) return 1.0f; // the clouds in it
+        return 0.0f;
+    }
+
     bool Identity(const Shade& s)
     {
-        return s.dark <= 0.0f && s.desat <= 0.0f && s.sky <= 0.0f && s.scene <= 0.0f && !(s.fog > 0.0f);
+        return s.dark <= 0.0f && s.desat <= 0.0f && s.sky <= 0.0f && s.scene <= 0.0f && !(s.fog > 0.0f) && !(s.snow > 0.0f);
     }
 
     namespace
@@ -325,6 +333,43 @@ namespace wxl_livingazeroth::storm
                 out[k] = kept + (kFogCool[k] * hue - kept) * cool;
             }
         }
+
+        float Saturation(const float c[3])
+        {
+            const float hi = std::fmax(c[0], std::fmax(c[1], c[2])), lo = std::fmin(c[0], std::fmin(c[1], c[2]));
+            return hi > 1.0f ? (hi - lo) / hi : 0.0f;
+        }
+
+        // A band in falling snow, on top of the storm's shade (`io`) and before a flash: the weather set's flat greys
+        // lifted and whitened, as falling snow lights the air by day. Off the client's own colour `own`:
+        //  - its share: the snow's, the band's weight, and how grey it is (a zone's own coloured light keeps its colour);
+        //  - a floor: its luminance x snowBright by day, x 1 at night (dusk between, the sky's), up to kSnowCeiling;
+        //    never darker than it came;
+        //  - its hue giving way to a pale blue-white (kSnowWhite, at its luminance) by snowWhite, no further than its
+        //    channels fit (a near-white band would lose brightness to the clamp).
+        // The continent default's weather fog #525452 (luminance 83) by day: #B0B9C1 (183) at the defaults (2.2, 0.6).
+        void SnowLift(const float own[3], float weight, const Shade& s, float io[3])
+        {
+            const float grey = 1.0f - Smooth(kSnowGreyFull, kSnowGreyNone, Saturation(own));
+            const float k = Unit(s.snow) * Unit(weight) * grey;
+            if (!(k > 0.0f)) return;
+            const float bright = s.snowBright > 0.0f ? s.snowBright : 0.0f;
+            const float lift = 1.0f + (Lerp(1.0f, bright, Unit(s.day)) - 1.0f) * k;
+            const float lumOwn = Luma(own);
+            const float floor = std::fmin(lumOwn * lift, std::fmax(255.0f * kSnowCeiling, lumOwn));
+            const float lumIn = Luma(io);
+            const float lum = std::fmax(lumIn, floor);
+            const float scale = lumIn > 1.0e-3f ? lum / lumIn : 0.0f;
+            const float hue = lum / Luma(kSnowWhite);
+            float kept[3], white = Unit(s.snowWhite) * k;
+            for (int i = 0; i < 3; ++i)
+            {
+                kept[i] = io[i] * scale;
+                const float target = kSnowWhite[i] * hue;
+                if (target > 255.0f && target > kept[i]) white = std::fmin(white, std::fmax(0.0f, (255.0f - kept[i]) / (target - kept[i])));
+            }
+            for (int i = 0; i < 3; ++i) io[i] = kept[i] + (kSnowWhite[i] * hue - kept[i]) * white;
+        }
     }
 
     uint32_t ShadeBand(uint32_t argb, int band, const Shade& s)
@@ -341,6 +386,7 @@ namespace wxl_livingazeroth::storm
             const float luma = Luma(c);
             for (int k = 0; k < 3; ++k) base[k] = (c[k] + (luma - c[k]) * grey) * keep;
         }
+        if (s.snow > 0.0f) SnowLift(c, SnowWeight(band), s, base);
         const float add = 255.0f * kFlashGain * ((s.sky > 0.0f ? s.sky : 0.0f) * w.sky + (s.scene > 0.0f ? s.scene : 0.0f) * w.scene);
         uint32_t out = argb & 0xFF000000u;
         for (int k = 0; k < 3; ++k)
@@ -365,6 +411,30 @@ namespace wxl_livingazeroth::storm
             bands[i] = out;
         }
         last.valid = true;
+    }
+
+    FogDistance SnowFogDistance(FogDistance in, float share, float floorYards)
+    {
+        const float k = Unit(share);
+        if (!(k > 0.0f) || !(floorYards > 0.0f) || !std::isfinite(floorYards)) return in;
+        FogDistance out = in;
+        if (in.end < floorYards) out.end = in.end + (floorYards - in.end) * k;  // (a NaN end stays as it is)
+        if (in.startMul < 0.0f) out.startMul = in.startMul + (0.0f - in.startMul) * k;
+        return out;
+    }
+
+    void LiftFogDistance(float& end, float& startMul, float share, float floorYards, FogDistanceMemory& last)
+    {
+        if (!(Unit(share) > 0.0f) || !(floorYards > 0.0f)) { last.valid = false; return; }
+        FogDistance in{ end, startMul };
+        auto same = [](const FogDistance& a, const FogDistance& b) { return a.end == b.end && a.startMul == b.startMul; };
+        if (last.valid && same(in, last.out) && !same(in, last.in)) in = last.in;
+        const FogDistance out = SnowFogDistance(in, share, floorYards);
+        last.in = in;
+        last.out = out;
+        last.valid = true;
+        end = out.end;
+        startMul = out.startMul;
     }
 
     void BoltMatrix(const float pos[3], float yaw, float scale, float m[16])

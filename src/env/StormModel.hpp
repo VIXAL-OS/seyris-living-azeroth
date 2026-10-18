@@ -223,11 +223,34 @@ namespace wxl_livingazeroth::storm
                                 // kFogNightShare of that. A floor: the storm's darkening never takes it lower.
         float fogCool = 0.0f;   // 0..1: how much of its hue gives way to kFogCool in full storm (instead of grey)
         float day = 1.0f;       // 0 night .. 1 day, the sky's (env/Fog SkyNight)
+        // Falling snow. The client shows its weather light set (Light.dbc's LightParams[2]) in snow as in rain, all of it
+        // from a grade of 0.25 (kStormBlend). Where no zone light reaches, that is the continent default's set,
+        // LightParams 10: one flat grey for every hour, the fog #525452, the sky #6F6F6F to #525352, and a fog that ends
+        // at 278 yd and starts 139 yd behind the camera (SnowFogDistance). Over snow by day it read as a dark grey wall
+        // (Winterspring at Frostfire Hot Springs, 15:20, outside Winterspring's lilac light: "WINTERSPRING TOO DARK AND
+        // FOGGY AHHHHH", the user, 2026-10-18). Snow lifts and whitens those greys: the fog, the sky and the clouds
+        // (SnowWeight), so the fogged distance meets a sky as bright. A zone's own coloured weather light (Winterspring's
+        // lilac, Dun Morogh's sky blue) keeps its colour: the lift fades out with the band's saturation (kSnowGreyFull ..
+        // kSnowGreyNone).
+        float snow = 0.0f;       // 0..1: the weather set's share in this frame's colours while it snows (the client's
+                                 // storm blend; 0 in rain, with the camera in a liquid, or snow off)
+        float snowBright = 1.0f; // a grey band's luminance in snow by day, x the client's own (at night x 1), up to
+                                 // kSnowCeiling. A floor: snow never darkens a band.
+        float snowWhite = 0.0f;  // 0..1: how much of a grey band's hue gives way to kSnowWhite in snow
     };
     constexpr float kFlashGain = 0.55f;  // a full flash adds this much white (of 255) to a fully weighted band
     constexpr float kFogNightShare = 0.75f;
     constexpr float kFogCeiling = 0.70f; // luminance (0..1): fogBright lifts the fog no higher (a brighter fog keeps its own)
     inline constexpr float kFogCool[3] = { 0.76f, 0.87f, 1.0f }; // a pale blue-grey, at the fog's own luminance
+    constexpr float kSnowCeiling = 0.75f; // luminance (0..1): snowBright lifts a band no higher (a brighter one keeps its own)
+    inline constexpr float kSnowWhite[3] = { 0.86f, 0.92f, 1.0f }; // falling snow's pale blue-white, at the band's luminance
+    // A band's share of the snow treatment by its saturation ((max - min) / max): all of it up to kSnowGreyFull (the weather
+    // sets' greys: #525452 is 0.02, Winterspring's eastern #4F4F57 0.09), none from kSnowGreyNone (Winterspring's lilac
+    // storm fog #784E9A is 0.49 and its sky's top #FB9FFF 0.38, Dun Morogh's sky-blue fog #74A7C4 0.41).
+    constexpr float kSnowGreyFull = 0.12f, kSnowGreyNone = 0.35f;
+    /// How much snow lifts a band (0..1): the sky (3..7, LightIntBand 2..6), the fog (8) and the clouds (11..13); not the
+    /// light, the sun or the water.
+    float    SnowWeight(int band);
     bool     Identity(const Shade& s);
     uint32_t ShadeBand(uint32_t argb, int band, const Shade& s);
 
@@ -241,6 +264,26 @@ namespace wxl_livingazeroth::storm
         uint32_t out[kBandCount] = {};
     };
     void ShadeBands(uint32_t bands[kBandCount], const Shade& s, BandMemory& last);
+
+    // --- the zone fog's distance in snow ---------------------------------------------------------
+    // The two floats after the bands (CurrentLight +0x48 and +0x4C, kFogEnd and kFogStartMul): where the zone fog ends (yd)
+    // and where it starts, x the end (-1..1). Sky.FogUpdate (0x7F16F0) reads both after the band copy: the fog runs
+    // linearly from end x startMul to min(far clip, end) in fog mode 0, the client's mode below map 530 (Kalimdor and the
+    // Eastern Kingdoms); from 530 on the end is already the far clip and the start never negative, so this changes nothing
+    // there. The weather set's fog ends at 278 yd and starts at x -0.5: a third fogged at the camera, half at 70 yd. The
+    // clear default's ends at 490 and starts at x 0.25 (122 yd).
+    struct FogDistance { float end = 0.0f, startMul = 0.0f; };
+    /// In falling snow (`share`, as Shade::snow): the fog ends no nearer than `floorYards` and starts no nearer than the
+    /// camera, as much as it snows. A zone's own longer or clearer fog stays as it is. Share or floor 0 (or NaN): as it is.
+    FogDistance SnowFogDistance(FogDistance in, float share, float floorYards);
+    /// SnowFogDistance in place, remembering what it wrote like ShadeBands: values we wrote that the client didn't
+    /// recompute are lifted from their originals again, not lifted further every frame.
+    struct FogDistanceMemory
+    {
+        bool        valid = false;
+        FogDistance in, out;
+    };
+    void LiftFogDistance(float& end, float& startMul, float share, float floorYards, FogDistanceMemory& last);
 
     // --- the client code this relies on (checked byte for byte before any hook or call) ------------
     struct Guard
@@ -260,6 +303,26 @@ namespace wxl_livingazeroth::storm
         {"band copy: entry, and its read of the ambient band", 0x007EE750, 12,
          {0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x28, 0x8B, 0x15, 0xD8, 0x8B, 0xD3, 0x00}},
         {"colour resolve: its one call of the band copy", 0x007F333B, 5, {0xE8, 0x10, 0xB4, 0xFF, 0xFF}},
+    };
+
+    // Snow (Shade::snow, FogDistance), read and written inside the band hook, where the client has just resolved this
+    // frame's colours and distances:
+    //  - the weather set's share, DNInfo m_stormBlend: the day-night update (0x7F3920) stores min(1, 4 x the weather's fog
+    //    intensity) there at 0x7F3995, then calls the colour resolve, which blends LightParams[2] in by it;
+    //  - the camera in a liquid: the colour resolve asks 0x780620 (at 0x7F3245), which returns [0xCD8794]; in a liquid
+    //    the colours are the liquid's or the underwater set's, not the snowy air's;
+    //  - the zone fog's end and start (FogDistance), at the bands + 0x48 and + 0x4C, read by Sky.FogUpdate.
+    constexpr uintptr_t kStormBlend = 0x00D38B88;
+    constexpr uintptr_t kCameraLiquid = 0x00780620;
+    constexpr uintptr_t kCameraInLiquid = 0x00CD8794;
+    constexpr uintptr_t kFogEnd = kBands + 0x48;      // 0xD38C1C
+    constexpr uintptr_t kFogStartMul = kBands + 0x4C; // 0xD38C20
+    inline constexpr Guard kSnowGuards[] = {
+        {"day-night update: it stores the weather set's share", 0x007F3995, 6, {0xD9, 0x1D, 0x88, 0x8B, 0xD3, 0x00}},
+        {"colour resolve: it asks whether the camera is in a liquid", 0x007F3245, 5, {0xE8, 0xD6, 0xD3, 0xF8, 0xFF}},
+        {"camera liquid: the value it returns", 0x00780632, 5, {0xA1, 0x94, 0x87, 0xCD, 0x00}},
+        {"fog update: the zone fog's end", 0x007F1705, 6, {0xD9, 0x05, 0x1C, 0x8C, 0xD3, 0x00}},
+        {"fog update: its start, x the end", 0x007F1725, 6, {0xD8, 0x0D, 0x20, 0x8C, 0xD3, 0x00}},
     };
 
     // A model of our own in the world's M2 scene (bolts). The world scene is [0xCD754C] (env/Lights).
