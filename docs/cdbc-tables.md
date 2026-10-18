@@ -357,6 +357,63 @@ grid they rank below torches and lanterns (×0.35), and at most `LightsPerCell` 
 so the cells already full in Stormwind, Booty Bay and the Undercity keep their lights. After editing,
 press "Reload light tables from disk" in the lights panel.
 
+## Window glass: two tables
+
+Window glass that looks like glass (features/Glass, `[LivingAzeroth.Glass]` in config.md): seen from
+inside, the day coming through it (stained glass glowing in its own colours, brightest with the sun
+beyond it); seen from outside by day, darker glass with the sky in it and, behind clear panes, a room;
+at night the client's own lit windows. Sunlit panes also cast their light on the room's floor and
+walls and through its air (coloured shafts). Both tables come from `tools/gen_glass.py` (its header
+says how glass is found) and can be edited by hand. Without them there's no glass look, floor light
+or shafts. After editing, press "Reload light tables from disk" in the lights panel.
+
+### GlassMaterials.cdbc — `GlassMaterials.xml`
+
+Which WMO textures are glass, per texture (wherever it's used: dungeons and instances too). Nearly
+every window material is opaque, with the frame, the lead and sometimes a wall painted in, so each
+row also says which texels are glass.
+
+| Field | Meaning |
+|---|---|
+| ID | row id |
+| Texture | the texture's path as the WMO names it (case and `/` vs `\` don't matter) |
+| Kind | 1 clear, 2 stained, 3 frosted (translucent: icy panes, hide, parchment), 4 leaded (clear in a lead grid) |
+| Flags | 0x1 the texture is a window's **inside** face (`_int_`): the inside look wherever it is; 0x2 its **outside** face (`_ext_`); 0x4 **matte** (hide, parchment: no gloss or reflection); 0x8 painted into a wall (only the masked texels are glass) |
+| ColorR/G/B | the glass texels' average colour (0..1) |
+| LightR/G/B | the colour of the light it lets in, full value 1: stained glass its own colour, clear and leaded glass nearly white (a quarter of its tint), frosted half |
+| MaskR/G/B, MaskBias | which texels are glass: saturate(dot(texel.rgb, Mask) + MaskBias), 1 = glass. Mask 0 0 0 and bias 1: the whole texture |
+| Share | the share of the texture's texels that are glass (for review; not read) |
+| Comment | the texture's name, kind and a few WMOs it's in; never read |
+
+### GlassPanes.cdbc — `GlassPanes.xml`
+
+Every window pane of every placed WMO with glass (all four continents and the instance maps the map
+scan has; no lived-in filter: a hostile or empty village's glass is glass too), in world coordinates.
+Panes with no room behind them (a facade's painted windows) are left out.
+
+| Field | Meaning |
+|---|---|
+| ID | row id (sorted by map, then position) |
+| MapID | Map.dbc ID |
+| WmoID | the WMO placement's unique ID (for the editor) |
+| PosX/Y/Z | the glass's middle |
+| OutX/Y/Z | the way out of the building (unit) |
+| AlongX/Y/Z | along the pane (unit; horizontal for an upright window, along x for a skylight). Up the pane is Out × Along |
+| HalfWidth, HalfHeight | the glass's half extent along and up the pane (yd) |
+| LightR/G/B | the colour of the light it lets in (its texture's) |
+| Kind | its texture's kind (as GlassMaterials): how much sun gets through (clear 1, leaded 0.85, stained 0.8, frosted 0.55) |
+| RoomMinX/Y/Z, RoomMaxX/Y/Z | the room it lights: the interior group behind it, as a world box. Its light lands only inside (widened by 0.5 yd) |
+| Flags | reserved, 0 |
+| Comment | the WMO and the texture; never read |
+
+At run time the sunlit panes nearest the camera (within `Range`) light the floor: the panes whose
+room holds the camera first, then the nearest, up to 12. The light lands where the ray from a surface
+toward the sun leaves through a pane, only behind the pane, within 30 yd of it, and inside its room's
+box. **Leaks:** the room's box is a box, so in an L-shaped or many-storey group the light can reach a
+floor that a real wall or ceiling would shade (a storey below a high window, the far side of an
+arch); a building's other groups get none of a pane's light (the cathedral's side aisles when the
+window is in the nave). The coloured shafts use the panes whose room holds the camera (up to 16).
+
 ## AreaClimate.cdbc — `AreaClimate.xml`
 
 The air's baseline per place: temperature through the day and the year, and humidity. Read by the

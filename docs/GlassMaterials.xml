@@ -1,0 +1,18 @@
+  <Table Name="GlassMaterials" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="Texture" Type="string" />
+    <Field Name="Kind" Type="int" />
+    <Field Name="Flags" Type="int" />
+    <Field Name="ColorR" Type="float" />
+    <Field Name="ColorG" Type="float" />
+    <Field Name="ColorB" Type="float" />
+    <Field Name="LightR" Type="float" />
+    <Field Name="LightG" Type="float" />
+    <Field Name="LightB" Type="float" />
+    <Field Name="MaskR" Type="float" />
+    <Field Name="MaskG" Type="float" />
+    <Field Name="MaskB" Type="float" />
+    <Field Name="MaskBias" Type="float" />
+    <Field Name="Share" Type="float" />
+    <Field Name="Comment" Type="string" />
+  </Table>

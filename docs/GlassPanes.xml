@@ -1,0 +1,28 @@
+  <Table Name="GlassPanes" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="MapID" Type="int" />
+    <Field Name="WmoID" Type="int" />
+    <Field Name="PosX" Type="float" />
+    <Field Name="PosY" Type="float" />
+    <Field Name="PosZ" Type="float" />
+    <Field Name="OutX" Type="float" />
+    <Field Name="OutY" Type="float" />
+    <Field Name="OutZ" Type="float" />
+    <Field Name="AlongX" Type="float" />
+    <Field Name="AlongY" Type="float" />
+    <Field Name="AlongZ" Type="float" />
+    <Field Name="HalfWidth" Type="float" />
+    <Field Name="HalfHeight" Type="float" />
+    <Field Name="LightR" Type="float" />
+    <Field Name="LightG" Type="float" />
+    <Field Name="LightB" Type="float" />
+    <Field Name="Kind" Type="int" />
+    <Field Name="RoomMinX" Type="float" />
+    <Field Name="RoomMinY" Type="float" />
+    <Field Name="RoomMinZ" Type="float" />
+    <Field Name="RoomMaxX" Type="float" />
+    <Field Name="RoomMaxY" Type="float" />
+    <Field Name="RoomMaxZ" Type="float" />
+    <Field Name="Flags" Type="int" />
+    <Field Name="Comment" Type="string" />
+  </Table>
