@@ -231,17 +231,24 @@ text, the UI, characters).
 - **Seen from inside**: the day coming through the glass, the glass's own colour a little more saturated, brightest with
   the sun beyond the pane (frosted glass spreads it), dimmer under cloud, in rain, in a storm's dark and at dusk. Never
   darker than the client's own colour, so at night its lit windows stay as they are.
-- **Seen from outside by day**: the client's own window texture is the artist's painted glass, warm and bright, and it
-  stays mostly that: a little darker (clear glass 30%, leaded 18%, stained and frosted 6%: `OutsideDarkening`), with the
-  sky in it (its fog colour, deeper toward the zenith; 12% head on for clear glass, 10% leaded, 8% stained, rising toward
-  all of it at a grazing angle: `ReflectionF0`) and the sun's glint. Behind clear and leaded panes a hint of a room
-  (interior mapping: rooms a few yards wide and deep behind the glass, `RoomShareDay` of the glass): seen through the
-  glass in its colour and about as bright as it, only its soft gradients show (the corners darker, deeper darker); no
-  hard edges (the walls a gradient, the doorways', curtains' and shelves' edges soft, the things on the shelves at half
-  their contrast and only within 10 to 24 yards), and where one room meets the next on the glass (a cell's or its
-  anchor's edge) each eases to the same, so a mullion no longer splits a window into different blocks. The buildings
-  differ by a quarter as much as at night. Stormwind's leaded windows keep about 88% of the stock's light by day (clear
-  glass 79%, stained 98%), where they kept 48%. At night the client's own lit windows.
+- **Seen from outside by day**: the client's own window texture is the artist's painted glass, warm and bright, as if
+  lamplit; by day it moves part of the way to glass: darker (clear glass 45%, leaded 27%, stained and frosted 9%:
+  `OutsideDarkening`), cooler (`DayCoolness`: less saturated and toward the sky's hue at its own brightness, more toward
+  the top of the pane and at a slant; frosted 0.6 x, stained 0.25 x, so stained glass keeps its colours), with the sky in
+  it (its fog colour, deeper toward the zenith; 24% head on for clear glass, 20% leaded, 10% stained and frosted, rising
+  toward all of it at a grazing angle: `ReflectionF0`) and the sun's glint. Behind clear and leaded panes a room
+  (interior mapping: rooms a few yards wide and deep behind the glass, `RoomShareDay` of the glass) seen through the
+  glass in its own colours (the glass's cooling isn't on it), about half as bright as the glass's sunlit face so it
+  reads as depth: its walls shaded (the corners darker), the light coming in at the window (farther darker, the lower
+  walls lighter, a patch of sun on the floor by the window), the curtains half grey, the things on the shelves at three
+  quarters of their contrast within 15 to 40 yards; no hard edges (the walls and corners soft, the doorways', curtains'
+  and shelves' edges soft), and where one room meets the next on the glass (a cell's or its anchor's edge) each eases to
+  the same over a tenth of a cell and two pixels, so a mullion no longer splits a window into different blocks. The
+  buildings differ by a quarter as much as at night. On WARP Stormwind's leaded shop window keeps 82 to 86% of the
+  stock's light by day (its glass 75 to 79%), Westfall's clear farm window 80 to 83%.
+- **At dusk** (after the sun's day ends at 18:00, before the client lights its windows from 20:30) the painted glass's
+  warmth is back (no cooling or darkening), and the room behind it is still seen by the day's light (before, it was black
+  until the windows lit). At night the client's own lit windows.
 - **The rooms behind the glass differ by building** (`RoomStyles.cdbc`, `GlassBuildings.cdbc`, docs/cdbc-tables.md): each
   building's tint and brightness from its own seed and its style, the style from its kind (inn, house, farm, shop, temple,
   keep, mage tower, ship; in a city's one big WMO each group, and each 14-yd block, its own) and its place's palette
@@ -250,7 +257,7 @@ text, the UI, characters).
   outposts ruddy, Zangarmarsh teal...). A few rooms are dark, and nobody lives in a few buildings. Each window is a room
   with a layout picked by its hash, weighted by the building's kind and place: a back wall with shelves and things on
   them, curtains half drawn, a dividing wall with a doorway through to a second, dimmer room, or plain. The detail fades
-  from 30 to 70 yards (by day 10 to 24). Stained and frosted glass has no room, as before.
+  from 30 to 70 yards (by day 15 to 40). Stained and frosted glass has no room, as before.
 - **At night** the windows the client lights (self-lit materials) show a lamp-lit room, about as bright as the client's own
   lit window it replaces, the lamp's light falling off across the room and the curtains glowing with it behind them. More
   of them go dark as the night goes on: 8% in the evening, half at midnight, three quarters by 03:00, a few early risers
@@ -287,16 +294,17 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 |---|---|---|
 | Enabled | 1 | Window glass (everything below). |
 | InsideGlow | 1 | Seen from inside: the light coming through the glass. |
-| OutsideReflection | 1 | Seen from outside by day: the glass a little darker, the sky in it, the sun's glint. |
+| OutsideReflection | 1 | Seen from outside by day: the glass darker and cooler, the sky in it, the sun's glint. |
 | FakeInteriors | 1 | Seen from outside: a room behind clear and leaded panes (with OutsideReflection). |
 | ColouredShafts | 1 | Indoors: shafts of light in the room's air through sunlit windows, in the glass's colours. |
 | FloorLight | 1 | Indoors: the sunlit panes' light on the room's floor and walls. |
 | InsideStrength | 1 | Your multiplier on the light coming through the glass. |
 | ReflectionStrength | 1 | Your multiplier on the reflection and the glint. |
-| InteriorStrength | 1 | Your multiplier on the light of the rooms behind clear glass (1 = by day about as bright as the glass in front). |
-| OutsideDarkening | 0.3 | Seen from outside by day: how much darker clear glass is than the client's own painted window; leaded 0.6 x this, stained and frosted 0.2 x. 0 = the client's own brightness. |
-| ReflectionF0 | 0.1 | Seen from outside: the sky's share in the glass head on (clear 1.2 x this, leaded 1 x, stained 0.8 x, frosted 0.5 x), rising toward all of it at a grazing angle. Real glass's 0.04 beside a sunlit wall reads as no reflection. |
-| RoomShareDay | 0.3 | By day, how much of clear glass is the room behind it (leaded 0.77 x): a hint of depth. |
+| InteriorStrength | 1 | Your multiplier on the light of the rooms behind clear glass (1 = by day about half as bright as the glass's sunlit face). |
+| OutsideDarkening | 0.45 | Seen from outside by day: how much darker clear glass is than the client's own painted window; leaded 0.6 x this, stained and frosted 0.2 x. 0 = the client's own brightness. |
+| DayCoolness | 0.25 | Seen from outside by day: how far the warm painted glass moves toward cool glass (less saturated, toward the sky's hue; more toward the top of the pane and at a slant); frosted 0.6 x, stained 0.25 x. The warmth comes back over dusk. 0 = the painted colour. |
+| ReflectionF0 | 0.2 | Seen from outside by day: the sky's share in the glass head on (clear 1.2 x this, leaded 1 x, stained and frosted 0.5 x), rising toward all of it at a grazing angle; at night 0.1 x the kind's (clear 1.2, leaded 1, stained 0.8, frosted 0.5) whatever this is. Real glass's 0.04 beside a sunlit wall reads as no reflection. |
+| RoomShareDay | 0.6 | By day and at dusk, how much of clear glass is the room behind it (leaded 0.77 x). |
 | RoomShareNight | 0.65 | At night, how much of clear glass is the lamp-lit room behind it (leaded 0.77 x). |
 | ShaftStrength | 1 | Your multiplier on the coloured shafts. |
 | FloorStrength | 1 | Your multiplier on the light on the floor. |
@@ -308,7 +316,7 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | RoomVarietyStrength | 1 | Your multiplier on how far the buildings' tints and brightness differ and on the rooms dark by day. |
 | LitRoomStrength | 1 | Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window). |
 | LightsOutStrength | 1 | Your multiplier on the share of rooms dark at night. |
-| LayoutStrength | 1 | Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards at night, 10 to 24 by day). |
+| LayoutStrength | 1 | Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards at night, 15 to 40 by day). |
 | FrostedLightsOut | 1 | Lit frosted windows go dark through the night as rooms do (each building's hours; Ironforge's parts their own), fading over 1.5 s, the window lights with them. 0 = lit all night. |
 | HearthFlicker | 0.08 | How much a lit frosted window's glow (and its window light) dips at night: a hearth behind it, each window its own phase. 0 = steady. |
 | FlickerSpeed | 1 | Your multiplier on the hearths' pace (about 0.6 to 1.8 dips a second). |

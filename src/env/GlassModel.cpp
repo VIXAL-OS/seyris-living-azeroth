@@ -85,6 +85,9 @@ namespace wxl_livingazeroth::glass
         l.sunGain = up * l.day * (1.0f - 0.85f * Clamp01(in.overcast)) * (1.0f - 0.8f * Clamp01(in.precipitation)) * (1.0f - Clamp01(in.storm));
         l.skyGain = l.day * l.dim;
         for (int k = 0; k < 3; ++k) l.sky[k] = Clamp01(in.sky[k]) * l.skyGain;
+        // The room behind the glass keeps the day's light until the client lights its windows (dusk: the sun's day is
+        // over at 18:00, the windows light from 20:30): no black rooms between.
+        l.rooms = Clamp01(1.0f - in.night);
         return l;
     }
 
@@ -598,7 +601,7 @@ namespace wxl_livingazeroth::glass
         const float span = std::max(1.0f, f * f - n * n);
         out[4] = f * f / span;
         out[5] = -1.0f / span;
-        out[6] = 1.0f / kEdgeEase;
+        out[6] = kEdgeEase;
         out[7] = 1.0f - d;
     }
 
@@ -660,7 +663,7 @@ namespace wxl_livingazeroth::glass
             anchorEdge[i] = (-std::fabs(R[i]) + 0.5f * kAnchor) * (1.0f / std::sqrt(std::fabs(1.0f - N[i] * N[i]) + 1e-12f));
         const float toAnchor = std::min(std::min(anchorEdge[0], anchorEdge[1]), anchorEdge[2]) * k.c198[0];
         const float toEdge = std::min(std::min(std::min(1.0f - f[0], f[0]), std::min(1.0f - f[1], f[1])), toAnchor);
-        const float edge = Clamp01(toEdge * k.c219[2] + k.c219[3]);
+        const float edge = Clamp01(toEdge * (1.0f / (px * kEdgePixels + k.c219[2])) + k.c219[3]);
         // The dividing wall (where the ray would go deeper, soft) with its doorway (its edge soft): the point and the way
         // to it the wall's where it's in the way.
         const float td = kDividerDepth * tz;
@@ -684,7 +687,7 @@ namespace wxl_livingazeroth::glass
             g[i] = Lerp(smooth, 1.0f, kFace[i]);
         }
         float shade = g[0] * g[1] * g[2];
-        shade = shade * (1.0f / (depth * kFar + 1.0f));
+        shade = shade * (1.0f / ((depth * k.c86[1] + depth * kFar) + 1.0f));
         shade = shade * ((wall * kDividerShade - wall) + 1.0f);
         shade = shade * (1.0f - door * kDoorDim);
         // Curtains (their edges soft over the layouts' width, at least 1 / kClothEdge of the cell).
@@ -714,6 +717,13 @@ namespace wxl_livingazeroth::glass
         float shelf = Lerp(thingIn, Frac(q * kThingHash) * kThingSpan + kThingBase, kShelfBack);
         shelf = Lerp(inPlank, kPlankLight, shelf);
         shelf = (shelf + -1.0f) * region;
+        // By day the sun falling in: a patch on the floor by the window (across the middle, not deep, low; soft), x its
+        // cosine to the face, x c86.x (none at night).
+        float patch = Clamp01(Dot(N, k.sun));
+        patch = patch * Clamp01((-std::fabs(hit[0] + -0.5f) + kPatchAcross) * (1.0f / kPatchSoft));
+        patch = patch * Clamp01((-hit[2] + kPatchDeep) * (1.0f / kPatchDeepSoft));
+        patch = patch * Clamp01(-(hit[1] * (1.0f / kPatchHigh)) + 1.0f);
+        patch = patch * k.c86[0];
         // The lamp.
         const float ld[3] = { hit[0] - (h[2] * kLamp[1] + kLamp[0]), hit[1] - kLamp[2], hit[2] - kLamp[3] };
         const float falloff = (1.0f / ((ld[0] * ld[0] + ld[1] * ld[1] + ld[2] * ld[2]) + 1.0f / kLampK)) * (kLampGain / kLampK) + kLampBase;
@@ -724,11 +734,13 @@ namespace wxl_livingazeroth::glass
         const float clothFar = curtains * kClothFar * edge;
         cloth = (cloth - clothFar) * fade + clothFar;
         fold = (fold - kFoldMean) * fade + kFoldMean;
-        // The light: by day x the client's colour (the room seen through the painted glass; c198.w makes it about the
-        // glass's own brightness; the curtains in front x its luminance); near the cell's edge the room's light and
-        // its dark rooms' ease to their means.
+        // The light: by day its tint x the client's colour's luminance (the room seen through the glass; c198.w makes it
+        // about kDayRoom of the glass's brightness; the curtains in front too), the sun's patch on its floor; near the
+        // cell's edge the room's light and its dark rooms' ease to their means.
         const float lum = 0.2126f * r12[0] + 0.7152f * r12[1] + 0.0722f * r12[2];
         float roomLight = (h[2] * kCellLight[0] + kCellLight[1]) * shade * shelf;
+        roomLight = roomLight * ((-hit[1] + 0.5f) * k.c86[2]) + roomLight;   // by day lighter low, darker high
+        roomLight = roomLight + patch;
         roomLight = Lerp(edge, roomLight, kEdgeMean);
         const float darkDay = Lerp(edge, lit * (1.0f - kDarkDay) + kDarkDay, kDarkDayMean);
         const float day = bright * k.c198[3] * darkDay;
@@ -738,7 +750,7 @@ namespace wxl_livingazeroth::glass
         float room[3], cloth3[3];
         for (int i = 0; i < 3; ++i)
         {
-            room[i] = ((tint[i] * k.c203[i]) * (lamp * falloff) + (tint[i] * day) * r12[i]) * roomLight;
+            room[i] = ((tint[i] * k.c203[i]) * (lamp * falloff) + tint[i] * dayLum) * roomLight;
             cloth3[i] = (k.c203[i] * lamp + dayLum * kCurtainDay) * k.c205[i] * fold * kCurtainGain;
             room[i] = Lerp(cloth, cloth3[i], room[i]);
         }
@@ -758,6 +770,31 @@ namespace wxl_livingazeroth::glass
             sample->shade = shade; sample->building[0] = bh[0]; sample->building[1] = bh[1];
             sample->edge = edge; sample->light = roomLight;
             for (int i = 0; i < 3; ++i) { sample->hit[i] = hit[i]; sample->room[i] = room[i]; }
+        }
+    }
+
+    float SkyAlong(const float N[3], const float V[3], const float reflected[3], float out[3])
+    {
+        const float cosine = Clamp01(Dot(N, V));
+        const float height = Clamp01((cosine + cosine) * N[2] + -V[2]);
+        for (int i = 0; i < 3; ++i) out[i] = ((room::kZenith[i] + -1.0f) * height + 1.0f) * reflected[i];
+        return height;
+    }
+
+    void DayCool(const float outside[3], const float sky[3], float height, float cosine, const float c85[4], float out[3])
+    {
+        using namespace room;
+        const float skyLum = std::max(0.2126f * sky[0] + 0.7152f * sky[1] + 0.0722f * sky[2], 0.05f);
+        const float inv = 1.0f / skyLum;
+        const float lum = 0.2126f * outside[0] + 0.7152f * outside[1] + 0.0722f * outside[2];
+        float amount = height * c85[1];
+        amount = (1.0f + -cosine) * c85[2] + amount;
+        amount = Clamp01(amount * c85[0] + c85[0]);
+        for (int i = 0; i < 3; ++i)
+        {
+            float hue = std::min(std::max(sky[i] * inv, kSkyHue[0]), kSkyHue[1]);
+            hue = ((hue + -1.0f) * c85[3] + 1.0f) * lum;
+            out[i] = Lerp(amount, hue, outside[i]);
         }
     }
 }

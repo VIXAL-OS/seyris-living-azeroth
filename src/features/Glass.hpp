@@ -42,7 +42,7 @@ namespace wxl_livingazeroth::glass
         int   floorLight = 1;           // light through sunlit panes on the room's floor and walls
         float insideStrength = 1.0f;    // x the light coming through
         float reflectionStrength = 1.0f;// x the reflection and the glint
-        float interiorStrength = 1.0f;  // x the room's light
+        float interiorStrength = 1.0f;  // x the room's light (1: by day about room::kDayRoom of the glass)
         float shaftStrength = 1.0f;     // x the coloured shafts
         float floorStrength = 1.0f;     // x the floor light
         float range = 70.0f;            // yd from the camera: the panes the floor light and the shafts use
@@ -55,9 +55,10 @@ namespace wxl_livingazeroth::glass
         float lightsOutStrength = 1.0f; // x the share of rooms dark at night
         float layoutStrength = 1.0f;    // x the layouts' detail (the things on the shelves, the folds, the curtains)
         // Seen from outside (the kinds' shares of these: features/Glass's Look).
-        float outsideDarkening = 0.3f;  // by day clear glass this much darker than the client's own (leaded 0.6 x it, stained and frosted 0.2 x)
-        float reflectionF0 = 0.1f;      // the sky's share in the glass head on (clear 1.2 x it, leaded 1 x, stained 0.8 x, frosted 0.5 x; to 1 at grazing)
-        float roomShareDay = 0.3f;      // by day the room behind clear glass shows this much (leaded 0.77 x it): a hint
+        float outsideDarkening = 0.45f; // by day clear glass this much darker than the client's own (leaded 0.6 x it, stained and frosted 0.2 x)
+        float reflectionF0 = 0.2f;      // by day the sky's share in the glass head on (clear 1.2 x it, leaded 1 x, stained and frosted 0.5 x; to 1 at grazing; at night 0.1 x the kind's)
+        float dayCoolness = 0.25f;      // by day the painted glass this far toward cool glass (its luminance in the sky's hue; more up the pane and at a slant; frosted 0.6 x, stained 0.25 x)
+        float roomShareDay = 0.6f;      // by day (and at dusk) the room behind clear glass shows this much (leaded 0.77 x it)
         float roomShareNight = 0.65f;   // at night (the lamp-lit rooms) this much (leaded 0.77 x)
         // Frosted glass (no room behind it): the windows the client lights.
         int   frostedLightsOut = 1;     // they go dark through the night as rooms do (the building's hours; Ironforge's parts their own)
@@ -79,8 +80,12 @@ namespace wxl_livingazeroth::glass
     /// The room is the plain warm one (as before room variety); RoomBatchConstants makes it a building's.
     void BatchConstants(const Material& m, float inside, const Light& light, const float sun[3], const float sunColour[3], const float sky[3],
                         const Settings& s, float out[4 * kConstantCount]);
-    /// The room's look by day and night for a batch (c218, c219: env/GlassModel's RoomLook at the light's day).
+    /// The room's look by day and night for a batch (c218, c219: env/GlassModel's RoomLook at the light's rooms).
     void LookConstants(const Light& light, float out[4 * kLookRegisters]);
+    /// The day's look for a batch (c85, c86): the glass cooler (DayCoolness x the kind's x the day; none matte, underground
+    /// or without OutsideReflection) and the room by day (the sun's patch x the sun through, farther darker x the light's
+    /// rooms). c85.x and c86 are 0 at night (the night's look).
+    void DayConstants(const Material& m, const Light& light, const Settings& s, uint32_t buildingFlags, float out[4 * kDayRegisters]);
 
     /// The room for one glass batch: its building's style (a default house when `building` is null), the night
     /// (the client's window fade, 0..1), the hour (0..24), whether the client lights this material at night (SIDN).

@@ -10,10 +10,12 @@
 //  (a second texel deeper along the view, c193.w yd, through the uv's screen gradients); seen from inside, the light
 //  coming through it (the texel more saturated x (the sky + the sun beyond the pane), never below the stock colour:
 //  the client's own lit windows at night); seen from outside, the client's painted glass a little darker by day
-//  (c197.x: clear most, stained barely) with the sky in it (Schlick's Fresnel from F0 c197.z, x c196.w; the sky
-//  deeper toward the zenith along the reflected ray), the sun's glint, and behind clear glass a room (interior mapping
-//  in the pane's own frame: cells c198.xy wide and high, 1 / c198.z deep; by day seen through the glass, x the client's
-//  colour x c198.w, about as bright as the glass, c193.z of it); the two mixed by c193.x.
+//  (c197.x: clear most, stained barely), behind clear glass a room (interior mapping in the pane's own frame: cells
+//  c198.xy wide and high, 1 / c198.z deep; by day seen through the glass, its tint x the client's colour's luminance x
+//  c198.w, darker than the glass (room::kDayRoom), farther darker (c86.y), a patch of sun on its floor by the window
+//  (c86.x); c193.z of it), by day the two cooler (c85: toward the sky's hue at their luminance, more toward the top of
+//  the pane and at a slant, env/GlassModel's DayCool), with the sky in it (Schlick's Fresnel from F0 c197.z, x c196.w;
+//  the sky deeper toward the zenith along the reflected ray) and the sun's glint; inside and outside mixed by c193.x.
 //  The room's look (c218, c219: env/GlassModel's RoomLook, by day or night): its walls' shade is soft (how near the
 //  point the ray meets is to each wall, smoothstepped over the walls' width: by day a gradient, the corners darker; at
 //  night about a pixel there), the doorway's, the curtains' and the shelves' edges over the layouts' width; the detail
@@ -34,7 +36,7 @@
 //  vertex normal: smoothed glass doesn't bend the cells. At night the lit rooms behind the client's lit
 //  windows have a lamp (c203.rgb, as bright as the client's window: x its luminance); dark ones there hide most of its
 //  glow (c205.w) from the whole window, lead and frame too (the client lights all of it). The detail fades from 30 to
-//  70 yd at night, 10 to 24 by day (x c204.w), and where a pixel's footprint on the glass passes 0.05 .. 0.15 yd.
+//  70 yd at night, 15 to 40 by day (x c204.w), and where a pixel's footprint on the glass passes 0.05 .. 0.15 yd.
 //  Curtains c205.rgb.
 //  Lit frosted glass (c201.w: the client lights it, SIDN or unlit) has no room, but the same cell, lit hash and dark band
 //  run for it, and a dark one hides c205.w of the window's glow as a dark room does; a lit one (and, with LampFlicker,
@@ -59,9 +61,11 @@
 //  rooms hide); c212 (the building's seed xy, 1 / its block (0: one building), the dark band's slope); c213 (the
 //  building's origin, world xyz; the dark band's base); c218 (the walls' and the layouts' soft widths, the pixel's
 //  share of them, the things' contrast), c219 (the detail's fade over the distance squared, the ease at the cells'
-//  edges: 1 / its width, its base); c206..c211, c214 (the lit hash's numbers), c215..c217 (the
-//  anchors' step and keys), c220, c221 (the flicker's rates, weights and spread) and c87..c100 (the room's numbers,
-//  env/GlassModel's glass::room; c208 the footprint's fade) defined; the floor light's panes c101..c172 (six registers each; the rims' range: a
+//  edges: 1 / its width, its base); c85 (by day the glass cooler: how much, more up, more at a slant, the sky's hue's
+//  share), c86 (by day the room: the sun's patch's gain, farther darker; zeros: the night's look); c206..c211, c214 (the
+//  lit hash's numbers), c215..c217 (the anchors' step and keys), c220, c221 (the flicker's rates, weights and spread),
+//  c83, c84 (the sun's patch's shape, the sky's hue's bounds) and c87..c100 (the room's numbers, env/GlassModel's
+//  glass::room; c208 the footprint's fade) defined; the floor light's panes c101..c172 (six registers each; the rims' range: a
 //  batch has one or the other, features/Glass re-uploads when the rims took it). ps_3_0 has c0..c223, and an
 //  instruction reads at most one constant register.
 #pragma once
@@ -85,6 +89,8 @@ namespace wxl_livingazeroth::glass
     constexpr int kFloorPanes = 12;
     constexpr int kLookConstant = 218;   // c218, c219: the room's look by day and night (RoomLook)
     constexpr int kLookRegisters = 2;
+    constexpr int kDayConstant = 85;     // c85: the glass cooler by day (DayCool); c86: the room by day (the sun's patch, farther darker)
+    constexpr int kDayRegisters = 2;     // (zeros: neither, the night's look)
 
     inline std::string ShaderDefs()
     {
@@ -99,7 +105,9 @@ namespace wxl_livingazeroth::glass
                def(208, kFootprintB, kFootprintA, 1e-12f, 0.0f) +
                def(209, kFace[0], kFace[1], kFace[2], kFace[3]) +
                def(210, kCellLight[0], kCellLight[1], kEdgeMean, kSlotSoft) +
-               "    def c211, 0.7, 0.85, 1.25, 3\n" +
+               def(211, kZenith[0], kZenith[1], kZenith[2], 3.0f) +
+               def(83, kPatchDeep, 1.0f / kPatchDeepSoft, 1.0f / kPatchHigh, kEdgePixels) +
+               def(84, kSkyHue[0], kSkyHue[1], kPatchAcross, 1.0f / kPatchSoft) +
                def(87, 1.0f - kDarkDay, kDarkDay, kCurtainGain, kDarkDayMean) +
                def(88, kHashK[0], kHashK[1], kHashK[2], kHashK[3]) +
                def(89, kHashAdd, kDividerDepth, kDoorSpan, kDoorBase) +
@@ -138,6 +146,16 @@ namespace wxl_livingazeroth::glass
         const std::string permute =
             "\n        mul r22.z, r22.x, c214.w"
             "\n        mad r22.x, r22.z, r22.x, r22.x" + mod;
+        // The sky along the reflected ray (env/GlassModel's SkyAlong): c196 deeper toward the zenith (c211) by the ray's
+        // height, saturate(2 cos N.z - V.z): r24.xyz, its height r24.w.
+        const std::string sky =
+            "\n      add r24.w, r17.w, r17.w"
+            "\n      mul r24.w, r24.w, r18.z"
+            "\n      add_sat r24.w, r24.w, -r16.z"
+            "\n      mov r24.xyz, c211"
+            "\n      add r24.xyz, r24, -c175.x"
+            "\n      mad r24.xyz, r24, r24.w, c175.x"
+            "\n      mul r24.xyz, r24, c196";
         return
             "\n    if b9"
             // the texel, its glass mask
@@ -223,6 +241,28 @@ namespace wxl_livingazeroth::glass
             "\n      lrp r23.w, r22.y, c175.x, r22.z"
             "\n      mul r23.w, r23.w, c196.w"
             "\n      mad r23.xyz, r12, -c197.x, r12"
+            // by day the painted glass cooler (env/GlassModel's DayCool, op for op; not the room behind it: that keeps its
+            // own colours): toward its luminance x lerp(1, the sky's hue, c85.w) (the hue: the sky along the reflected
+            // ray over its luminance, within c84.xy), by saturate(c85.x (1 + c85.y height + c85.z (1 - cos))): more toward
+            // the top of the pane and at a slant; c85.x is 0 at night
+            + sky +
+            "\n      dp3 r25.w, r24, c176"
+            "\n      max r25.w, r25.w, c206.y"
+            "\n      rcp r25.w, r25.w"
+            "\n      mul r25.xyz, r24, r25.w"
+            "\n      max r25.xyz, r25, c84.x"
+            "\n      min r25.xyz, r25, c84.y"
+            "\n      add r25.xyz, r25, -c175.x"
+            "\n      mul r25.xyz, r25, c85.w"
+            "\n      add r25.xyz, r25, c175.x"
+            "\n      dp3 r26.w, r23, c176"
+            "\n      mul r25.xyz, r25, r26.w"
+            "\n      mul r26.x, r24.w, c85.y"
+            "\n      add r26.y, c175.x, -r17.w"
+            "\n      mad r26.x, r26.y, c85.z, r26.x"
+            "\n      mad_sat r26.x, r26.x, c85.x, c85.x"
+            "\n      lrp r27.xyz, r26.x, r25, r23"
+            "\n      mov r23.xyz, r27"
             // behind clear glass, a room: interior mapping in the pane's frame (along, up, deep), in cells; behind lit
             // frosted glass (c201.w) only the cell and its lit hash: the glass itself goes dark as a room would (r14.y: the
             // share of the client's glow hidden, none without the room or frosted glass)
@@ -383,13 +423,18 @@ namespace wxl_livingazeroth::glass
             "\n          rcp r26.w, r26.y"
             "\n          rcp r14.z, r26.z"
             // near the cell's edge on the glass, or its anchor's (by day, c219.zw; 1 at night) the room eases to its
-            // mean: r19.w
+            // mean, over c219.z cells plus c83.w of the pixel's footprint there (r26.x: wider seen at a slant, where the
+            // cells crowd on the screen): r19.w
             "\n          add r22.xy, c175.x, -r28.zwzw"
             "\n          min r22.xy, r22, r28.zwzw"
             "\n          min r22.x, r22.x, r22.y"
             "\n          mul r24.x, r24.x, c198.x"
             "\n          min r22.x, r22.x, r24.x"
-            "\n          mad_sat r19.w, r22.x, c219.z, c219.w"
+            "\n          mul r22.y, r26.x, c83.w"
+            "\n          add r22.y, r22.y, c219.z"
+            "\n          rcp r22.y, r22.y"
+            "\n          mul r22.x, r22.x, r22.y"
+            "\n          add_sat r19.w, r22.x, c219.w"
             // a dividing wall half way back (where the ray would go deeper: soft, so the side wall runs into it), a
             // doorway through it (its edge soft) to a second, dimmer room: the point and the way to it are the wall's
             // where it's in the way (r20.xyz, r24.w)
@@ -427,6 +472,7 @@ namespace wxl_livingazeroth::glass
             "\n          mul r22.x, r22.x, r22.y"
             "\n          mul r22.x, r22.x, r22.z"
             "\n          mul r22.y, r24.w, c207.z"
+            "\n          mad r22.y, r24.w, c86.y, r22.y"
             "\n          add r22.y, r22.y, c175.x"
             "\n          rcp r22.y, r22.y"
             "\n          mul r22.x, r22.x, r22.y"
@@ -494,6 +540,20 @@ namespace wxl_livingazeroth::glass
             "\n          lrp r27.w, r28.w, c99.w, r29.w"
             "\n          add r29.w, r27.w, -c175.x"
             "\n          mul r29.w, r29.w, r27.x"
+            // by day the sun falling in: a patch on the floor by the window (across the middle, not deep, low: soft over
+            // c83, c84.zw), x its cosine to the face, x c86.x (none at night): r27.y
+            "\n          dp3_sat r27.y, r18, c195"
+            "\n          add r27.z, r20.x, -c175.z"
+            "\n          add r27.z, -r27_abs.z, c84.z"
+            "\n          mul_sat r27.z, r27.z, c84.w"
+            "\n          mul r27.y, r27.y, r27.z"
+            "\n          add r27.z, -r20.z, c83.x"
+            "\n          mul_sat r27.z, r27.z, c83.y"
+            "\n          mul r27.y, r27.y, r27.z"
+            "\n          mul r27.z, r20.y, c83.z"
+            "\n          add_sat r27.z, -r27.z, c175.x"
+            "\n          mul r27.y, r27.y, r27.z"
+            "\n          mul r27.y, r27.y, c86.x"
             // the lamp: its light falls off from where it stands (across by the room's hash, up, toward the back)
             "\n          mad r22.x, r13.z, c94.y, c94.x"
             "\n          add r22.x, r20.x, -r22.x"
@@ -521,23 +581,27 @@ namespace wxl_livingazeroth::glass
             "\n          mad r26.z, r26.z, r28.x, r28.y"
             "\n          add r26.x, r26.x, -c97.z"
             "\n          mad r26.x, r26.x, r28.x, c97.z"
-            // the light: the day's (x the building's tint and brightness, x the client's colour: the room seen through
-            // the painted glass, c198.w makes it about the glass's own brightness; a dark room keeps some; the curtains
-            // in front of the glass x its luminance), and at night the lamp's in lit rooms behind the client's lit
-            // windows, as bright as the window (x its luminance); near the cell's edge by day the room's light and its
-            // dark rooms' ease to their means
+            // the light: the day's (x the building's tint and brightness, x the client's colour's luminance: the room
+            // seen through the glass, c198.w makes it about room::kDayRoom of the glass's brightness, darker than its
+            // sunlit face; lighter low and darker high (c86.z), the sun's patch on its floor; a dark room keeps some; the
+            // curtains in front of the glass too),
+            // and at night the lamp's in lit rooms behind the client's lit windows, as bright as the window (x its
+            // luminance); near the cell's edge by day the room's light and its dark rooms' ease to their means
             "\n          dp3 r22.x, r12, c176"
             "\n          mad r22.y, r13.z, c210.x, c210.y"
             "\n          mul r22.y, r22.y, r24.z"
             "\n          mul r22.y, r22.y, r29.w"
+            "\n          add r27.w, -r20.y, c175.z"
+            "\n          mul r27.w, r27.w, c86.z"
+            "\n          mad r22.y, r22.y, r27.w, r22.y"
+            "\n          add r22.y, r22.y, r27.y"
             "\n          lrp r22.y, r19.w, r22.y, c210.z"
             "\n          mul r22.z, r25.w, c198.w"
             "\n          mad r22.w, r20.w, c87.x, c87.y"
             "\n          lrp r22.w, r19.w, r22.w, c87.w"
             "\n          mul r22.z, r22.z, r22.w"
-            "\n          mul r30.xyz, r25, r22.z"
-            "\n          mul r30.xyz, r30, r12"
             "\n          mul r22.z, r22.z, r22.x"
+            "\n          mul r30.xyz, r25, r22.z"
             "\n          mul r22.w, r22.x, r20.w"
             "\n          mad r22.w, r22.w, -r21.w, r22.w"
             "\n          mul r29.xyz, r25, c203"
@@ -560,13 +624,7 @@ namespace wxl_livingazeroth::glass
             "\n      endif"
             // the sky in it (deeper toward the zenith: the reflected ray's height, 2 cos N.z - V.z) and the sun's
             // glint; then inside or outside, by c193.x
-            "\n      add r24.w, r17.w, r17.w"
-            "\n      mul r24.w, r24.w, r18.z"
-            "\n      add_sat r24.w, r24.w, -r16.z"
-            "\n      mov r24.xyz, c211"
-            "\n      add r24.xyz, r24, -c175.x"
-            "\n      mad r24.xyz, r24, r24.w, c175.x"
-            "\n      mul r24.xyz, r24, c196"
+            + sky +
             "\n      lrp r25.xyz, r23.w, r24, r23"
             "\n      add r26.xyz, r16, c195"
             "\n      nrm r27.xyz, r26"

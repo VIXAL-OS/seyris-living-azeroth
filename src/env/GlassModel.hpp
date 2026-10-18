@@ -6,10 +6,13 @@
 //  - Seen from inside, the light coming through: the texel's own colour (more saturated) x the sky's light, x the
 //    sun's when the sun is beyond the pane (frosted glass spreads it: less direction), dimmed by cloud, rain, storms
 //    and night. Never darker than the client's own colour, so its lit windows at night stay as they are.
-//  - Seen from outside by day, the client's own painted glass a little darker (clear most, stained barely) with the
-//    sky in it (Fresnel, more at a slant) and the sun's glint; behind clear and leaded glass a hint of a room
-//    (interior mapping in the pane's own frame: as bright as the glass on average, soft gradients, no edges); at
-//    night the client's own lit windows, lamp-lit rooms behind them.
+//  - Seen from outside by day, the client's own painted glass a little darker (clear most, stained barely) and cooler
+//    (DayCool: less saturated, toward the sky's hue, more toward the top of the pane and at a slant; stained barely)
+//    with the sky in it (Fresnel, more at a slant) and the sun's glint; behind clear and leaded glass a room
+//    (interior mapping in the pane's own frame: darker than the glass's sunlit face, its walls shaded softly, the
+//    corners darker, the back darker than the front, a patch of sun on the floor by the window, soft gradients, no
+//    edges); at dusk the painted glass's warmth again with the room still seen by the day's light; at night the
+//    client's own lit windows, lamp-lit rooms behind them.
 //  - Light through sunlit panes onto the floors and walls of the room behind them, and coloured shafts in the room's
 //    air (the panes' rectangles, GlassPanes.cdbc), kept inside that room.
 //  - The rooms behind the glass differ by building (RoomStyles.cdbc, GlassBuildings.cdbc): tint, brightness, a few
@@ -94,8 +97,11 @@ namespace wxl_livingazeroth::glass
         float sunGain = 0.0f;     // the direct sun through a pane, 0..1 (x its colour)
         float skyGain = 0.0f;     // the sky's light through a pane, any side
         float sky[3] = {};        // ... its colour x that
-        float day = 0.0f;         // 1 by day .. 0 at night (the outside look and the room behind the glass)
+        float day = 0.0f;         // 1 by day .. 0 at night (the outside look: darker, cooler, the sky in it)
         float dim = 1.0f;         // what cloud, rain and storms leave of the daylight
+        /// The room behind the glass: 1 while the client's windows are unlit (by day, and at dusk until they light up,
+        /// 20:30 .. 21:30) .. 0 at night: seen by the day's light, soft, its share by day; at night the lamp-lit rooms.
+        float rooms = 0.0f;
     };
     Light Evaluate(const Inputs& in);
 
@@ -249,18 +255,42 @@ namespace wxl_livingazeroth::glass
         constexpr float kBlock = 14.0f;                           // yd: a city's blocks (one building each)
         constexpr float kCellLight[2] = { 0.6f, 0.55f };          // each room's light: 0.55 .. 1.15 (hashed)
         constexpr float kFace[4] = { 0.7f, 0.55f, 0.4f, 1.0f };   // side wall, floor, ceiling, back wall
-        constexpr float kFar = 0.12f;                             // farther is darker: 1 / (1 + 0.12 t)
+        constexpr float kFar = 0.12f;                             // farther is darker: 1 / (1 + 0.12 t), t yd along the ray
+        /// By day the light comes in at the window: farther is darker still (kFar + kFarDay, x the rooms' day: c86.y), and
+        /// the sun falling in makes a patch on the floor (kPatch x the sun through x its cosine to the face: c86.x) by the
+        /// window: across kPatchAcross of the middle (soft over kPatchSoft), up to kPatchDeep deep (soft over the last
+        /// kPatchDeepSoft), fading over kPatchHigh up from the floor (cells; c83, c84.zw).
+        constexpr float kFarDay = 0.15f;
+        constexpr float kPatch = 0.9f;
+        /// ... and the light falls downward from the window: the lower walls lighter, the upper darker, x (1 + kFallDay (0.5 -
+        /// up)) (c86.z), and the curtains kCurtainDayGrey of the way to their grey (seen through the cooler glass, a red
+        /// cloth reads pink otherwise).
+        constexpr float kFallDay = 0.8f, kCurtainDayGrey = 0.5f;
+        constexpr float kPatchAcross = 0.36f, kPatchSoft = 0.14f, kPatchDeep = 0.62f, kPatchDeepSoft = 0.38f, kPatchHigh = 0.16f;
         /// The lamp-lit room's mean light (cell light x face x falloff over many rooms and views), measured with
         /// RoomOutside: the lamp's colour is divided by it so a lit room is about as bright as the client's window.
         constexpr float kNightMean = 0.32f;
-        /// By day the room is the glass's own (the client's painted glass, its luminance after the darkening) behind
-        /// it: its light (cell light x the walls' shade x the shelves, as bright as a dark room keeps, over many rooms
-        /// and views, measured with RoomOutside) over kDayMean, x kDayRoom, so the room is about kDayRoom of the glass's
-        /// brightness and only its gradients show. Near a cell's edge on the glass the room's light eases to kEdgeMean
-        /// (about its mean there: the side walls'), so neighbouring rooms meet without a step.
-        constexpr float kDayMean = 0.45f;
-        constexpr float kDayRoom = 0.9f;
-        constexpr float kEdgeMean = 0.6f;
+        /// By day the room is seen through the glass: its own tint x the glass's luminance (after the darkening), its
+        /// light (cell light x the walls' shade x the shelves, plus the sun's patch, as bright as a dark room keeps,
+        /// over many rooms and views, measured with RoomOutside) over kDayMean, x kDayRoom, so the room is about kDayRoom
+        /// of the glass's brightness: darker than the glass's sunlit face, which makes it read as depth. Near a cell's
+        /// edge on the glass the room's light eases to kEdgeMean (about its mean there), so neighbouring rooms meet
+        /// without a step.
+        constexpr float kDayMean = 0.334f;
+        constexpr float kDayRoom = 0.5f;
+        constexpr float kEdgeMean = 0.35f;
+        /// By day seen from outside the painted glass is cooler (DayCool, c85; the room behind it keeps its colours, which
+        /// makes it stand out): the share of the way to the sky's hue at its
+        /// luminance, DayCoolness x the kind's (Look.cool) x the day, x (1 + kCoolUp x the reflected ray's height + kCoolGraze
+        /// x (1 - cos)): more toward the top of the pane and at a slant; kCoolTint of it the sky's hue, the rest grey (less
+        /// saturated). The sky's hue: its colour over its luminance, each channel within kSkyHue (a green or red fog
+        /// doesn't paint the glass).
+        constexpr float kCoolUp = 0.8f, kCoolGraze = 0.6f, kCoolTint = 0.6f;
+        constexpr float kSkyHue[2] = { 0.6f, 1.5f };
+        constexpr float kZenith[3] = { 0.7f, 0.85f, 1.25f };      // the reflected sky toward the zenith: x this (c211)
+        /// At night the glass reflects the dark sky with F0 kNightF0 x the kind's, as before glass-day2 (ReflectionF0 is the
+        /// day's; between them by the day).
+        constexpr float kNightF0 = 0.1f;
         constexpr float kDayVariety = 0.25f;   // by day the buildings' tints and brightness spread this share of the night's
         /// The shelves' edges soften over the layouts' width in the shelves' own units (a slot 1/9 of the cell across,
         /// a shelf 1/4 up): about 6 a cell.
@@ -268,10 +298,14 @@ namespace wxl_livingazeroth::glass
         /// The look's day and night (RoomLook): the walls' and the layouts' soft widths (cells), the detail's distances
         /// (yd: all of it nearer, none farther), the things on the shelves' contrast, how far from a cell's edge on the
         /// glass the room eases to its mean (cells). Night: the edges a pixel soft (as sharp as before), the detail to
-        /// 30 .. 70 yd; day: soft gradients, the detail to 10 .. 24 yd, half the contrast, the cells' edges eased.
-        constexpr float kWallSoftDay = 0.35f, kLayoutSoftDay = 0.08f, kPixelSoft = 1.0f;
-        constexpr float kDetailNear[2] = { 30.0f, 10.0f }, kDetailFar[2] = { 70.0f, 24.0f };
-        constexpr float kThingContrastDay = 0.5f, kEdgeEase = 0.18f;
+        /// 30 .. 70 yd; day: soft gradients, the detail to 15 .. 40 yd, three quarters of the contrast, the cells' edges
+        /// eased.
+        constexpr float kWallSoftDay = 0.14f, kLayoutSoftDay = 0.08f, kPixelSoft = 1.0f;
+        constexpr float kDetailNear[2] = { 30.0f, 15.0f }, kDetailFar[2] = { 70.0f, 40.0f };
+        constexpr float kThingContrastDay = 0.75f, kEdgeEase = 0.1f;
+        /// ... the ease's width at least this many of the pixel's footprint more (c83.w): seen at a slant the cells crowd
+        /// on the screen.
+        constexpr float kEdgePixels = 2.0f;
         /// Lit or dark: an exact hash (LitHash) of the cell and the seed, mod 289 (every step a whole number below
         /// 2^22, so any GPU, WARP and the CPU give the same bits), against the dark band (DarkBand).
         constexpr float kLitMod = 289.0f, kLitInv = 1.0f / 289.0f, kLitPoly = 34.0f;
@@ -417,7 +451,8 @@ namespace wxl_livingazeroth::glass
 
     /// The room's look by day and night (c218, c219: GlassShader.hpp), `day` 0 night .. 1 day: c218 the walls' soft
     /// width, the layouts', the pixel's share of them (cells), the things on the shelves' contrast; c219 the detail's
-    /// fade over the distance squared (base, slope), and the ease to the mean near a cell's edge (1 / its width, base).
+    /// fade over the distance squared (base, slope), and the ease to the mean near a cell's edge (its width in cells, plus
+    /// room::kEdgePixels of the pixel's footprint; base).
     void RoomLook(float day, float out[8]);
 
     /// The room's constants for one glass batch (c193.z, c198, c199, c202..c205, c212, c213, c218, c219:
@@ -436,9 +471,11 @@ namespace wxl_livingazeroth::glass
         float c218[4] = { 0, 0, room::kPixelSoft, 1 };// the soft widths, the pixel's share, the things' contrast
         float c219[4] = { room::kDetailFar[0] * room::kDetailFar[0] / (room::kDetailFar[0] * room::kDetailFar[0] - room::kDetailNear[0] * room::kDetailNear[0]),
                           -1.0f / (room::kDetailFar[0] * room::kDetailFar[0] - room::kDetailNear[0] * room::kDetailNear[0]),
-                          1.0f / room::kEdgeEase, 1 };    // the detail's fade (30 .. 70 yd), the cells' edges (none)
+                          room::kEdgeEase, 1 };           // the detail's fade (30 .. 70 yd), the cells' edges (none)
         float c201[4] = { 0, 0, 0, 0 };               // .y the hearth clock, .z the flicker's amplitude, .w frosted (no room)
         float c200w = 0;                              // the dark band's hi
+        float c86[4] = { 0, 0, 0, 0 };                // by day: the sun's patch on the floor (x its cosine), farther darker, the light falling (none: night)
+        float sun[3] = { 0, 0, 1 };                   // toward the sun (c195)
         float cam[3] = { 0, 0, 0 };
         float footprint2 = 0.0f;                      // the pixel's footprint on the glass, squared (yd^2; the shader's)
     };
@@ -462,8 +499,9 @@ namespace wxl_livingazeroth::glass
 
     /// The room seen through clear glass from outside as the shader works it (GlassShader's room part, op for op):
     /// the point P (world), toward the eye V, the normal N facing the eye (world, unit), the client's colour r12 and
-    /// the outside colour so far (r23): the outside colour after the room. By day the room's light is x the client's
-    /// colour (the room seen through the painted glass; c198.w carries the rest: about as bright as the glass); its
+    /// the outside colour so far (r23): the outside colour after the room. By day the room is its tint x the client's
+    /// colour's luminance (the room seen through the glass; c198.w carries the rest: about kDayRoom of the glass), farther
+    /// darker (c86.y) and with the sun's patch on the floor by the window (c86.x x the cosine of k.sun to the face); its
     /// walls, doorway, curtains and shelves soft over c218's widths (the walls' by day a gradient, at night about a
     /// pixel at the point the ray meets: the footprint on the glass x (1 + its depth over the eye's distance)); by day
     /// near a cell's edge on the glass, or its anchor's, the room eases to its mean (c219.zw). `sample` may be null. A
@@ -473,4 +511,14 @@ namespace wxl_livingazeroth::glass
     /// c201.w) only that: the outside colour x (1 - hide).
     void RoomOutside(const float P[3], const float V[3], const float N[3], const RoomConstants& k, const float r12[3],
                      const float outside[3], float out[3], RoomSample* sample);
+
+    /// The sky along the ray reflected off the glass as the shader has it: `reflected` (c196) x lerp(1, kZenith, its
+    /// height), the height saturate(2 cos N.z - V.z) (N facing the eye V, world, unit). Returns the height.
+    float SkyAlong(const float N[3], const float V[3], const float reflected[3], float out[3]);
+    /// By day seen from outside, the painted glass cooler (GlassShader, op for op, after its darkening and before the room
+    /// and the sky's reflection: the room keeps its own colours): the outside colour toward its own luminance x lerp(1,
+    /// the sky's hue, c85.w), the sky's hue `sky`'s
+    /// colour over its luminance (at least 0.05) within kSkyHue; by saturate(c85.x (1 + c85.y height + c85.z (1 - cos)))
+    /// (c85.x 0: none, at night).
+    void DayCool(const float outside[3], const float sky[3], float height, float cosine, const float c85[4], float out[3]);
 }

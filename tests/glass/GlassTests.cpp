@@ -6,22 +6,28 @@
 //     each, finding a building (by place and WMO, a city's groups, a WMO's default), a building's room constants
 //     (variety, lamp, dark places, empty buildings, cities, everything off), the layouts' geometry (dividing wall and
 //     doorway, curtains and gap, planks and things, the detail fading), a lit room as bright as the client's window, and
-//     by day a room about kDayRoom of the glass in front, with no step anywhere along the glass (the night's crisp
-//     look has its edges).
+//     by day a room about kDayRoom of the glass in front (darker), easing to its own mean near the cells' edges, with
+//     no step anywhere along the glass (the night's crisp look has its edges). 1b': the day's look (c85, c86) by kind,
+//     at dusk and at night (none), the day's knobs changing no register at night, F0 by day and night, the room at
+//     dusk seen by the day's light, DayCool (cooler, more up the pane and at a slant, the luminance kept, a fog's hue
+//     bounded).
 //  2. The WMO pixel edit with the glass blocks on every stock WMO pixel shader (the client's ps_MapObj*.bls, argv
 //     folder): every shadow variant takes them, assembles, and stays within the slots (reported).
 //  3. The coloured shafts' shaders compile (slots reported).
 //  4. On WARP (the CPU rasterizer behind D3D9On12; no GPU), the blocks drawn: the inside colour, Fresnel outside and
-//     the floor light against the rules above; the rooms behind the glass pixel by pixel against RoomOutside (each
+//     the floor light against the rules above, the glass cooler by day against DayCool; the rooms behind the glass
+//     pixel by pixel against RoomOutside (each
 //     layout, a city's blocks, lamp-lit at night, a dark place); degenerate rays (along the normal, toward the sun,
 //     edge-on, no gradients) give no NaN or Inf. --no-warp skips it (and 6).
 //  5. The shipped tables (argv data folder): GlassMaterials.cdbc, GlassPanes.cdbc, RoomStyles.cdbc and
 //     GlassBuildings.cdbc read back sane.
 //  6. On WARP, Stormwind's leaded windows at night (rooms lit, dark, all shelves) and by day (outside, inside; outside
 //     as clear and as stained glass too) from 5 to 50 yd, head on to grazing: no NaN or Inf, the glass's speckle and
-//     shimmer against the stock colour's bounded; by day outside the glass keeps at least 75% of the stock's light
-//     (leaded, stained), 60% (clear). 6b: a facade of clear glass by day, 5 to 20 yd: no step between neighbouring
-//     pixels above 4% of the glass's mean (the rooms' walls, doorways, shelves and cells' edges all soft).
+//     shimmer against the stock colour's bounded; by day outside the glass keeps at least 70% of the stock's light
+//     (leaded), 60% (clear), 75% (stained) and is cooler than the stock (leaded, clear; stained barely moved by the
+//     cooling); at dusk (19:00) at least 75%, the warmth back. 6b: a facade of clear glass by day, 5 to 20 yd: no step
+//     between neighbouring pixels above 4% of the glass's mean (the rooms' walls, doorways, shelves and cells' edges
+//     all soft), and the room's contrast in the glass above a floor (visible).
 //  7. Lit or dark, shared with the window lights (features/Windows): the exact hash against whole-number arithmetic,
 //     the cells about the building's origin and its anchors, the dark band (the clock running, a jump's cross-fade),
 //     a batch's band, origin and fallback seed (1c); and on WARP 96 windows (the origin, Goldshire, Stormwind,
@@ -196,7 +202,11 @@ namespace
         ri.kind = kind; ri.hearthClock = clock;
         gl::RoomBatchConstants(style, b, light, ri, s, c, sd);
         gl::LookConstants(light, look);
+        float day[4 * gl::kDayRegisters];
+        gl::DayConstants(m, light, s, b ? b->flags : 0, day);
         gl::RoomConstants k;
+        for (int i = 0; i < 4; ++i) k.c86[i] = day[4 + i];
+        for (int i = 0; i < 3; ++i) k.sun[i] = in.sun[i];
         k.share = c[6];
         for (int i = 0; i < 4; ++i)
         {
@@ -443,9 +453,11 @@ namespace
         Check(std::fabs(sumRoom / lit / lum12 - 1.0) < 0.15 && worst < 0.12f && darkRooms > 0, line);
 
         // By day the room is about kDayRoom of the glass in front of it (the client's colour after the darkening) over
-        // many rooms, buildings and views from 4 to 30 yd; and it has no edges: along rows of glass 2 mm apart (a pixel
-        // 2 yd away) the largest change of the room (over its mean), where the night's crisp look has its walls',
-        // doorways', shelves' and the cells' own.
+        // many rooms, buildings and views from 4 to 30 yd, darker than the glass; near the cells' edges it eases to its
+        // own mean there (kEdgeMean: no lighter or darker frame round each room); and it has no edges: along rows of
+        // glass 2 mm apart (a pixel 2 yd away) the largest change of the room (over its mean) under 2.5% (1.36% before
+        // glass-day2, with 0.6 x its contrast), where the night's crisp look has its walls', doorways', shelves' and the
+        // cells' own.
         {
             gl::Material clear;
             clear.kind = gl::kClear;
@@ -461,8 +473,8 @@ namespace
             const float lumGlass = 0.2126f * outside[0] + 0.7152f * outside[1] + 0.0722f * outside[2];
             auto lum = [](const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
             const float N[3] = { -1, 0, 0 };
-            double sum = 0;
-            int count = 0;
+            double sum = 0, band = 0;
+            int count = 0, inBand = 0;
             float stepDay = 0, stepNight = 0;
             for (int st = 0; st < 2; ++st)
                 for (uint32_t seed = 1; seed < 33; ++seed)
@@ -481,6 +493,12 @@ namespace
                                 gl::RoomOutside(P, V, N, k, glass12, outside, o, &sm);
                                 sum += lum(sm.room) / lumGlass;
                                 ++count;
+                                // the room's light before the ease where it eases (near a cell's edge on the glass)
+                                if (sm.edge > 0.05f && sm.edge < 0.999f)
+                                {
+                                    band += (sm.light - (1.0f - sm.edge) * gl::room::kEdgeMean) / sm.edge;
+                                    ++inBand;
+                                }
                             }
                     if (seed > 8) continue;
                     for (int look = 0; look < 2; ++look)
@@ -507,11 +525,124 @@ namespace
                         }
                     }
                 }
-            std::snprintf(line, sizeof(line), "by day the room is %.2f of the glass in front (kDayRoom %.2f; %d points 4..30 yd, 64 buildings); along rows of glass "
-                          "2 mm apart its largest step %.2f%% of its mean (the night's crisp look %.0f%%)",
-                          sum / count, gl::room::kDayRoom, count, stepDay * 100, stepNight * 100);
-            Check(std::fabs(sum / count / gl::room::kDayRoom - 1.0) < 0.12 && stepDay < 0.015f && stepNight > 0.2f, line);
+            const double bandMean = inBand ? band / inBand : 0.0;
+            std::snprintf(line, sizeof(line), "by day the room is %.2f of the glass in front (kDayRoom %.2f: darker than the glass; %d points 4..30 yd, 64 "
+                          "buildings); near the cells' edges its light %.3f before it eases to kEdgeMean %.3f (%d points); along rows of glass 2 mm apart its "
+                          "largest step %.2f%% of its mean (the night's crisp look %.0f%%)",
+                          sum / count, gl::room::kDayRoom, count, bandMean, gl::room::kEdgeMean, inBand, stepDay * 100, stepNight * 100);
+            Check(std::fabs(sum / count / gl::room::kDayRoom - 1.0) < 0.12 && gl::room::kDayRoom < 0.75f && inBand > 1000 &&
+                  std::fabs(gl::room::kEdgeMean / bandMean - 1.0) < 0.15 && stepDay < 0.025f && stepNight > 0.2f, line);
         }
+    }
+
+    // --- 1b'. by day, at dusk and at night: the glass's day look (c85, c86), its F0, the room at dusk ---------------
+    // "they read as lamplit at noon ... I also feel like the inside faint rooms are only barely visible" (the user,
+    // Theramore at 16:01, 2026-10-18): by day the painted glass cooler (DayCool), more of the sky in it, the room behind
+    // more of the window and darker than the glass; the warmth back at dusk; the night as it was.
+    void DayRulesTests()
+    {
+        char line[480];
+        gl::Settings s;
+        gl::Inputs noon;
+        noon.sun[0] = -0.3f; noon.sun[1] = 0.2f; noon.sun[2] = 0.9f; Norm(noon.sun);
+        noon.daylight = 1; noon.night = 0;
+        gl::Inputs dusk = noon;           // 19:00: the sun's day over (18:00), the client's windows not lit yet (20:30)
+        dusk.daylight = 0; dusk.sun[2] = -0.1f; Norm(dusk.sun);
+        gl::Inputs night = dusk;          // 22:40
+        night.night = 1;
+        const gl::Light ln = gl::Evaluate(noon), ld = gl::Evaluate(dusk), lt = gl::Evaluate(night);
+        auto day = [&](uint32_t kind, uint32_t flags, const gl::Light& l, const gl::Settings& st, float out[8]) {
+            gl::Material m; m.kind = kind; m.flags = flags & 0xFF;
+            gl::DayConstants(m, l, st, flags >> 8, out);
+        };
+        float clear[8], leaded[8], stained[8], frosted[8], under[8], matte[8], atNight[8], atDusk[8];
+        day(gl::kClear, 0, ln, s, clear); day(gl::kLeaded, 0, ln, s, leaded); day(gl::kStained, 0, ln, s, stained); day(gl::kFrosted, 0, ln, s, frosted);
+        day(gl::kClear, gl::kBuildingUnderground << 8, ln, s, under); day(gl::kClear, gl::kMatte, ln, s, matte);
+        day(gl::kLeaded, 0, lt, s, atNight); day(gl::kLeaded, 0, ld, s, atDusk);
+        std::snprintf(line, sizeof(line), "the day's look (c85.x cooler; c86 the sun's patch, farther darker, the light falling): noon clear %.2f %.2f %.2f %.2f, leaded "
+                      "%.2f, stained %.3f, frosted %.2f; underground %.2f %.2f, matte %.2f; dusk %.2f %.2f %.2f %.2f; night %.2f %.2f %.2f %.2f",
+                      clear[0], clear[4], clear[5], clear[6], leaded[0], stained[0], frosted[0], under[0], under[4], matte[0], atDusk[0], atDusk[4], atDusk[5],
+                      atDusk[6], atNight[0], atNight[4], atNight[5], atNight[6]);
+        Check(Near(clear[0], s.dayCoolness, 1e-6f) && Near(leaded[0], s.dayCoolness, 1e-6f) && Near(stained[0], 0.25f * s.dayCoolness, 1e-6f) &&
+              Near(frosted[0], 0.6f * s.dayCoolness, 1e-6f) && clear[4] > 0.5f * gl::room::kPatch && Near(clear[5], gl::room::kFarDay, 1e-6f) &&
+              Near(clear[6], gl::room::kFallDay, 1e-6f) && under[0] == 0 && under[4] == 0 && matte[0] == 0 && atDusk[0] == 0 && atDusk[4] == 0 &&
+              Near(atDusk[5], gl::room::kFarDay, 1e-6f) && Near(atDusk[6], gl::room::kFallDay, 1e-6f) &&
+              atNight[0] == 0 && atNight[4] == 0 && atNight[5] == 0 && atNight[6] == 0, line);
+
+        // At night none of the day's knobs changes a register: the batch's constants (c192..c205, c212, c213, c218, c219,
+        // c85, c86) with the defaults and with DayCoolness, ReflectionF0, RoomShareDay and OutsideDarkening all changed are
+        // the same bits; F0 at night is room::kNightF0 x the kind's, as before.
+        gl::Settings other = s;
+        other.dayCoolness = 1.0f; other.reflectionF0 = 0.4f; other.roomShareDay = 0.95f; other.outsideDarkening = 0.6f;
+        gl::RoomStyle style;
+        gl::Building b;
+        b.seed = 977;
+        bool same = true;
+        float nightF0[2] = {};
+        for (uint32_t kind : { gl::kClear, gl::kLeaded, gl::kStained, gl::kFrosted })
+        {
+            float regs[2][4 * gl::kConstantCount + 4 * gl::kSeedRegisters + 4 * gl::kLookRegisters + 4 * gl::kDayRegisters];
+            for (int v = 0; v < 2; ++v)
+            {
+                const gl::Settings& st = v ? other : s;
+                gl::Material m; m.kind = kind;
+                float* c = regs[v];
+                float* sd = c + 4 * gl::kConstantCount;
+                float* look = sd + 4 * gl::kSeedRegisters;
+                float* dy = look + 4 * gl::kLookRegisters;
+                gl::BatchConstants(m, 0.0f, lt, night.sun, night.sunColour, night.sky, st, c);
+                gl::RoomInputs ri; ri.night = 1; ri.hour = 22.67f; ri.selfLit = true; ri.kind = kind;
+                gl::RoomBatchConstants(style, &b, lt, ri, st, c, sd);
+                gl::LookConstants(lt, look);
+                gl::DayConstants(m, lt, st, 0, dy);
+                if (kind == gl::kClear) nightF0[0] = c[22] * 1.0f;   // clear: F0 / Fresnel's strength 1
+            }
+            same = same && std::memcmp(regs[0], regs[1], sizeof(regs[0])) == 0;
+        }
+        nightF0[1] = gl::room::kNightF0 * 1.2f;
+        // By day F0 is the setting's x the kind's: clear 1.2, leaded 1, stained and frosted 0.5.
+        float noonC[4 * gl::kConstantCount], noonS[4 * gl::kConstantCount];
+        gl::Material mc; mc.kind = gl::kClear;
+        gl::Material ms; ms.kind = gl::kStained;
+        gl::BatchConstants(mc, 0.0f, ln, noon.sun, noon.sunColour, noon.sky, s, noonC);
+        gl::BatchConstants(ms, 0.0f, ln, noon.sun, noon.sunColour, noon.sky, s, noonS);
+        std::snprintf(line, sizeof(line), "at night the day's knobs (DayCoolness, ReflectionF0, RoomShareDay, OutsideDarkening) change no register: %s; F0 at night "
+                      "%.3f (kNightF0 x 1.2: %.3f), by day clear %.3f, stained %.3f (x its Fresnel 0.6)",
+                      same ? "the same bits" : "DIFFERENT", nightF0[0], nightF0[1], noonC[22], noonS[22] * 0.6f);
+        Check(same && Near(nightF0[0], nightF0[1], 1e-6f) && Near(noonC[22], s.reflectionF0 * 1.2f, 1e-6f) && Near(noonS[22] * 0.6f, s.reflectionF0 * 0.5f, 1e-6f), line);
+
+        // Dusk (19:00): no cooling or darkening (the painted glass's warmth again), the room still seen by the day's light
+        // (not black: before, between 18:00 and the client's lit windows at 20:30 the room had no light at all), its day share.
+        float duskC[4 * gl::kConstantCount], duskSeed[4 * gl::kSeedRegisters];
+        gl::Material ml; ml.kind = gl::kLeaded;
+        gl::BatchConstants(ml, 0.0f, ld, dusk.sun, dusk.sunColour, dusk.sky, s, duskC);
+        gl::RoomInputs rd; rd.night = 0; rd.hour = 19; rd.selfLit = true; rd.kind = gl::kLeaded;
+        gl::RoomBatchConstants(style, &b, ld, rd, s, duskC, duskSeed);
+        float duskLook[8];
+        gl::LookConstants(ld, duskLook);
+        std::snprintf(line, sizeof(line), "dusk (day %.2f, rooms %.2f): darkening %.2f, the room's day light c198.w %.2f, share %.3f (RoomShareDay x 0.77 %.3f), "
+                      "its soft walls %.2f (the day's)", ld.day, ld.rooms, duskC[20], duskC[27], duskC[6], s.roomShareDay * 0.5f / 0.65f, duskLook[0]);
+        Check(ld.day == 0 && ld.rooms == 1 && duskC[20] == 0 && duskC[27] > 0.5f && Near(duskC[6], s.roomShareDay * 0.5f / 0.65f, 1e-5f) &&
+              Near(duskLook[0], gl::room::kWallSoftDay, 1e-6f), line);
+
+        // DayCool: warm painted glass under a blue sky keeps its luminance and goes cooler, more up the pane and at a slant;
+        // a green fog's hue stays within kSkyHue.
+        const float glassWarm[3] = { 0.6f, 0.45f, 0.2f }, blue[3] = { 0.5f, 0.6f, 0.8f }, green[3] = { 0.15f, 0.9f, 0.15f };
+        const float c85[4] = { 0.5f, gl::room::kCoolUp, gl::room::kCoolGraze, gl::room::kCoolTint };
+        float level[3], up[3], slant[3], fog[3];
+        gl::DayCool(glassWarm, blue, 0.0f, 1.0f, c85, level);
+        gl::DayCool(glassWarm, blue, 0.4f, 1.0f, c85, up);
+        gl::DayCool(glassWarm, blue, 0.0f, 0.3f, c85, slant);
+        gl::DayCool(glassWarm, green, 0.0f, 1.0f, c85, fog);
+        auto warmth = [](const float* q) { return (q[0] - q[2]) / (q[0] + q[1] + q[2]); };
+        auto lum = [](const float* q) { return 0.2126f * q[0] + 0.7152f * q[1] + 0.0722f * q[2]; };
+        float fogHue = 0;
+        for (int k = 0; k < 3; ++k) fogHue = std::max(fogHue, fog[k] / lum(glassWarm));
+        std::snprintf(line, sizeof(line), "DayCool: warmth %.3f -> %.3f head on, %.3f up the pane, %.3f at a slant; luminance %.3f -> %.3f; a green fog's channel at most "
+                      "%.2f x the luminance (kSkyHue %.1f)", warmth(glassWarm), warmth(level), warmth(up), warmth(slant), lum(glassWarm), lum(level), fogHue,
+                      gl::room::kSkyHue[1]);
+        Check(warmth(level) < warmth(glassWarm) - 0.08f && warmth(up) < warmth(level) && warmth(slant) < warmth(level) &&
+              std::fabs(lum(level) / lum(glassWarm) - 1.0f) < 0.03f && fogHue < gl::room::kSkyHue[1], line);
     }
 
     // --- 1c. lit or dark: the exact hash, the cells, the dark band (shared with the window lights) -----------------
@@ -954,6 +1085,45 @@ namespace
                               ok ? rgb[mid] : -1, want, f);
                 Check(ok && Near(rgb[mid], want, 0.003f), line);
             }
+            // By day cooler (c85): warm painted glass under a blue sky (its hue; no reflection), face on and at a slant, against
+            // the rules (SkyAlong, DayCool); cooler than without, more so at the slant.
+            {
+                float cc[4 * gl::kConstantCount];
+                std::memcpy(cc, c, sizeof(cc));
+                cc[16] = 0.45f; cc[17] = 0.55f; cc[18] = 0.8f;
+                cc[19] = 0;   // no reflection: the cooling alone (more at a slant)
+                const float warm[3] = { 0.6f, 0.45f, 0.2f };
+                const float c85[4] = { 0.5f, gl::room::kCoolUp, gl::room::kCoolGraze, gl::room::kCoolTint };
+                const float noCool[8] = {}, cool[8] = { c85[0], c85[1], c85[2], c85[3], 0, 0, 0, 0 };
+                float shift[2] = {}, err = 0;
+                bool ok = true;
+                for (int pass = 0; pass < 2; ++pass)
+                {
+                    const float* nn = pass ? tilted : n;
+                    quad(p, nn, warm, v);
+                    std::vector<float> plain, cooled;
+                    w.dev->SetPixelShaderConstantF(gl::kDayConstant, noCool, gl::kDayRegisters);
+                    ok = ok && Draw(w, ps, v, cc, gl::kFirstConstant, gl::kConstantCount, true, false, plain);
+                    w.dev->SetPixelShaderConstantF(gl::kDayConstant, cool, gl::kDayRegisters);
+                    ok = ok && Draw(w, ps, v, cc, gl::kFirstConstant, gl::kConstantCount, true, false, cooled);
+                    if (!ok) break;
+                    const float N[3] = { nn[0], nn[1], nn[2] }, V[3] = { -1, 0, 0 };
+                    const float cosine = std::max(0.0f, N[0] * V[0] + N[1] * V[1] + N[2] * V[2]);
+                    float sky[3], glass[3], cooledGlass[3], want[3];
+                    const float height = gl::SkyAlong(N, V, cc + 16, sky);
+                    for (int k = 0; k < 3; ++k) glass[k] = warm[k] * (1 - cc[20]);
+                    gl::DayCool(glass, sky, height, cosine, c85, cooledGlass);
+                    const float f = gl::Fresnel(cosine, cc[22]) * cc[19];
+                    for (int k = 0; k < 3; ++k) { want[k] = sky[k] * f + cooledGlass[k] * (1 - f); err = std::max(err, std::fabs(cooled[mid + k] - want[k])); }
+                    auto warmth = [](const float* q) { return (q[0] - q[2]) / (q[0] + q[1] + q[2]); };
+                    shift[pass] = warmth(&plain[mid]) - warmth(&cooled[mid]);
+                }
+                w.dev->SetPixelShaderConstantF(gl::kDayConstant, noCool, gl::kDayRegisters);
+                char cl[256];
+                std::snprintf(cl, sizeof(cl), "WARP, outside by day cooler (c85.x 0.5): off from the rules by %.5f; warmth (R - B) / (R + G + B) down by %.3f face on, "
+                              "%.3f at a slant", err, shift[0], shift[1]);
+                Check(ok && err < 0.003f && shift[0] > 0.03f && shift[1] > shift[0], cl);
+            }
             // The room behind clear glass changes it, stays finite and in range.
             c[6] = 0.75f;
             quad(p, tilted, base, v);
@@ -1070,6 +1240,10 @@ namespace
                     c[37] = k.c201[1]; c[38] = k.c201[2]; c[39] = k.c201[3];
                     w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
                     UploadLook(w.dev, k);
+                    // the room by day (the sun's patch, farther darker), not the glass's cooling (RoomOutside is the room's)
+                    float dayRegs[4 * gl::kDayRegisters] = {};
+                    for (int i = 0; i < 4; ++i) dayRegs[4 + i] = k.c86[i];
+                    w.dev->SetPixelShaderConstantF(gl::kDayConstant, dayRegs, gl::kDayRegisters);
                     V v[4];
                     quad(p, n, cs.r12, v);
                     std::vector<float> rgb;
@@ -1105,6 +1279,8 @@ namespace
                 Check(drewAll && total > 0 && off <= total / 25 && median < 0.001f && (spread > 0.005f || (cs.flags & gl::kBuildingDarkPlace)), line);
             }
             w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
+            const float noDay[4 * gl::kDayRegisters] = {};
+            w.dev->SetPixelShaderConstantF(gl::kDayConstant, noDay, gl::kDayRegisters);
         }
 
         // Degenerate rays, the runtime's constants for leaded glass at night (rooms dark) and by day, the glint on:
@@ -1799,6 +1975,11 @@ namespace
         dayIn.sun[0] = -0.4f; dayIn.sun[1] = 0.3f; dayIn.sun[2] = 0.86f; Norm(dayIn.sun);
         dayIn.daylight = 1; dayIn.night = 0;
         dayIn.sky[0] = 0.55f; dayIn.sky[1] = 0.65f; dayIn.sky[2] = 0.8f;
+        // 19:00: the sun's day over, the client's windows not lit yet, an orange sky.
+        gl::Inputs duskIn = dayIn;
+        duskIn.sun[2] = -0.05f; Norm(duskIn.sun);
+        duskIn.daylight = 0;
+        duskIn.sky[0] = 0.66f; duskIn.sky[1] = 0.5f; duskIn.sky[2] = 0.42f;
         // The cases: the stock lighting (texel x this: the client's lit window at night, a sunlit wall by day, a dim
         // room inside), rooms all lit (0), all dark (1) or the hour's (-1), a forced layout (-1: the style's); the
         // bounds: speckle and shimmer over the views (mean), speckle at the worst view. Before the fix the dark rooms'
@@ -1807,17 +1988,24 @@ namespace
         // lit rooms' worst is the room itself 5 yd away (its shelves); seen from inside by day the glass is twice as
         // bright as the stock against the same dark lead, so its edges change more.
         // By day seen from outside the glass keeps most of the client's painted window: at least `light` of the stock's
-        // light in the glass (leaded and stained 75%, clear 60%: "is all of the glass supposed to look dark in the
-        // daytime lol", the user, 2026-10-18; before, 48% for leaded), the same views.
-        struct NightCase { const char* name; bool night; int dark; float inside; int layout; float lit[3]; float speckle, shimmer, worst; uint32_t kind = gl::kLeaded; float light = 0; };
+        // light in the glass (leaded 70%, clear 60%, stained 75%: "is all of the glass supposed to look dark in the
+        // daytime lol", the user, 2026-10-18; before c83b430, 48% for leaded), the same views; and it no longer reads as
+        // lamplit ("they read as lamplit at noon", the user, Theramore at 16:01, 2026-10-18): the glass's mean colour at
+        // least `cooler` less warm than the stock's (warmth (R - B) / (R + G + B)); stained glass keeps its colours (the
+        // day's cooling moves its warmth by at most `keep`). At dusk (19:00) the warmth is back (within `keep` of the
+        // stock's) and the room behind is seen by the day's light: no darker than `light` (before, its rooms were black from
+        // 18:00 until the client lit its windows at 20:30).
+        struct NightCase { const char* name; bool night; int dark; float inside; int layout; float lit[3]; float speckle, shimmer, worst; uint32_t kind = gl::kLeaded;
+                           float light = 0; float cooler = 0; float keep = -1; bool dusk = false; };
         const NightCase cases[] = {
             { "night, rooms lit", true, 0, 0, -1, { 1.05f, 1.0f, 0.75f }, 1.4f, 1.2f, 2.5f },
             { "night, rooms dark", true, 1, 0, -1, { 1.05f, 1.0f, 0.75f }, 1.3f, 1.2f, 1.5f },
             { "night, rooms lit, all shelves", true, 0, 0, gl::kLayoutShelves, { 1.05f, 1.0f, 0.75f }, 1.5f, 1.2f, 3.2f },
-            { "day, outside", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kLeaded, 0.75f },
+            { "day, outside", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kLeaded, 0.70f, 0.08f },
             { "day, from inside", false, -1, 1, -1, { 0.5f, 0.48f, 0.45f }, 1.8f, 2.0f, 2.2f },
-            { "day, outside, as clear glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kClear, 0.6f },
-            { "day, outside, as stained glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kStained, 0.75f },
+            { "day, outside, as clear glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kClear, 0.6f, 0.08f },
+            { "day, outside, as stained glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kStained, 0.75f, 0.0f, 0.04f },
+            { "dusk (19:00), outside", false, -1, 0, -1, { 0.62f, 0.5f, 0.45f }, 1.2f, 1.2f, 1.5f, gl::kLeaded, 0.75f, 0.0f, 0.08f, true },
         };
         const float cam0[3] = { -8838.6f, 627.4f, 99.3f };
         const float heading = 0.37f;
@@ -1849,21 +2037,24 @@ namespace
                 NightResult res;
                 double speckleSum = 0, shimmerSum = 0;
                 int speckleViews = 0, shimmerViews = 0;
-                float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters];
+                float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters], day[4 * gl::kDayRegisters];
                 gl::Settings s;
-                const gl::Inputs& in = cs.night ? nightIn : dayIn;
+                const gl::Inputs& in = cs.night ? nightIn : (cs.dusk ? duskIn : dayIn);
                 const gl::Light light = gl::Evaluate(in);
                 const float* lit = cs.lit;
                 gl::Material cm = mat;
                 cm.kind = cs.kind;
                 gl::BatchConstants(cm, cs.inside, light, in.sun, in.sunColour, in.sky, s, c);
                 gl::RoomInputs ri;
-                ri.night = cs.night ? 1.0f : 0.0f; ri.hour = cs.night ? 22.67f : 14.0f; ri.selfLit = true;
+                ri.night = cs.night ? 1.0f : 0.0f; ri.hour = cs.night ? 22.67f : (cs.dusk ? 19.0f : 14.0f); ri.selfLit = true;
                 gl::RoomStyle st = style;
                 if (cs.layout >= 0) for (int k = 0; k < 4; ++k) st.weights[k] = k == cs.layout ? 1.0f : 0.0f;
                 gl::RoomBatchConstants(st, &building, light, ri, s, c, seed);
                 if (cs.dark >= 0) c[47] = c[35] = cs.dark ? 1.0f : 0.0f;   // c203.w, c200.w: every room dark, or every room lit
                 UploadLook(w.dev, light);
+                gl::DayConstants(cm, light, s, building.flags, day);
+                w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+                double hue[3][3] = {};   // the glass's mean colour inside the glass: stock, glass, glass without the day's cooling
                 for (float dist : dists)
                     for (float yawDeg : yaws)
                         for (float height : heights)
@@ -1874,11 +2065,19 @@ namespace
                             const float N[3] = { back[0] * std::cos(yaw) - back[1] * std::sin(yaw), back[0] * std::sin(yaw) + back[1] * std::cos(yaw), 0 };
                             const float A[3] = { -N[1], N[0], 0 };
                             // renders [stock, glass] x [camera, camera a third of a pixel to the right], then the uv
-                            std::vector<float> img[5];
+                            std::vector<float> img[6];
                             bool ok = true;
-                            for (int pass = 0; pass < 5 && ok; ++pass)
+                            const int passes = cs.keep >= 0 && !cs.dusk ? 6 : 5;   // 5: the glass without the day's cooling
+                            for (int pass = 0; pass < passes && ok; ++pass)
                             {
-                                const bool glass = pass == 1 || pass == 3, shifted = pass == 2 || pass == 3;
+                                const bool glass = pass == 1 || pass == 3 || pass == 5, shifted = pass == 2 || pass == 3;
+                                if (pass == 5)
+                                {
+                                    float warm[4 * gl::kDayRegisters];
+                                    std::memcpy(warm, day, sizeof(warm));
+                                    warm[0] = 0;
+                                    w.dev->SetPixelShaderConstantF(gl::kDayConstant, warm, gl::kDayRegisters);
+                                }
                                 float F3[3] = { C[0] - cam0[0], C[1] - cam0[1], C[2] - cam0[2] }; Norm(F3);
                                 float R[3] = { F3[1], -F3[0], 0 }; Norm(R);
                                 const float U[3] = { R[1] * F3[2] - R[2] * F3[1], R[2] * F3[0] - R[0] * F3[2], R[0] * F3[1] - R[1] * F3[0] };
@@ -1929,6 +2128,7 @@ namespace
                                 for (int y = 0; y < kS; ++y)
                                     std::memcpy(&img[pass][static_cast<size_t>(y) * kS * 4], static_cast<const uint8_t*>(rr.pBits) + y * rr.Pitch, kS * 16);
                                 readback->UnlockRect();
+                                if (pass == 5) w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
                             }
                             if (!ok) { Check(false, "night windows: drawing on WARP"); break; }
                             auto L = [&](int i, size_t p) { const float* q = &img[i][p * 4]; return 0.2126f * q[0] + 0.7152f * q[1] + 0.0722f * q[2]; };
@@ -1956,6 +2156,9 @@ namespace
                                     const int tu = std::clamp(static_cast<int>(uv[0] * 256), 0, 255), tv = std::clamp(static_cast<int>(uv[1] * 256), 0, 255);
                                     if (!interior[static_cast<size_t>(tv) * 256 + tu]) continue;
                                     ++inside;
+                                    for (int g = 0; g < 3; ++g)
+                                        for (int k = 0; k < 3; ++k)
+                                            if (!img[g == 2 ? 5 : g].empty() && std::isfinite(img[g == 2 ? 5 : g][p * 4 + k])) hue[g][k] += img[g == 2 ? 5 : g][p * 4 + k];
                                     for (int g = 0; g < 2; ++g)
                                     {
                                         const int i = g ? 1 : 0;
@@ -2016,14 +2219,22 @@ namespace
                         }
                 res.speckle = speckleViews ? static_cast<float>(speckleSum / speckleViews) : 0;
                 res.shimmer = shimmerViews ? static_cast<float>(shimmerSum / shimmerViews) : 0;
-                char line[400];
+                char line[560];
                 const double glassLight = res.lightViews ? res.light / res.lightViews : 0.0;
+                auto warmth = [](const double* q) { const double t = q[0] + q[1] + q[2]; return t > 0 ? (q[0] - q[2]) / t : 0.0; };
+                const double warmStock = warmth(hue[0]), warmGlass = warmth(hue[1]), warmUncooled = warmth(hue[2]);
+                // keep: by day the cooling's own shift (against the same glass without it), at dusk against the stock
+                const double kept = cs.dusk ? warmStock : warmUncooled;
+                const bool hueOk = (cs.cooler <= 0 || warmGlass <= warmStock - cs.cooler) && (cs.keep < 0 || std::fabs(warmGlass - kept) <= cs.keep);
                 std::snprintf(line, sizeof(line), "WARP, Stormwind's windows (%s; %s; %d views 5..50 yd, 0..84 deg): NaN/Inf %d; speckle in the glass x %.2f the "
-                              "stock's (mean; worst %.2f at %s), shimmer x %.2f (worst %.2f); the glass at %.2f of the stock's light%s",
+                              "stock's (mean; worst %.2f at %s), shimmer x %.2f (worst %.2f); the glass at %.2f of the stock's light%s; warmth %.3f against the "
+                              "stock's %.3f%s%s",
                               tx.name.c_str(), cs.name, res.views, res.nonfinite, res.speckle, res.worstSpeckle, res.worstAt.c_str(), res.shimmer,
-                              res.worstShimmer, glassLight, cs.light > 0 ? (glassLight >= cs.light ? " (at least the bound)" : " (BELOW the bound)") : "");
+                              res.worstShimmer, glassLight, cs.light > 0 ? (glassLight >= cs.light ? " (at least the bound)" : " (BELOW the bound)") : "",
+                              warmGlass, warmStock, cs.keep >= 0 && !cs.dusk ? (", without the day's cooling " + std::to_string(warmUncooled).substr(0, 5)).c_str() : "",
+                              cs.cooler > 0 ? (hueOk ? " (cooler)" : " (NOT cooler enough)") : (cs.keep >= 0 ? (hueOk ? " (kept)" : " (NOT kept)") : ""));
                 Check(res.views == 50 && res.nonfinite == 0 && speckleViews >= 10 && shimmerViews >= 30 && res.speckle <= cs.speckle &&
-                      res.shimmer <= cs.shimmer && res.worstSpeckle <= cs.worst && (cs.light <= 0 || glassLight >= cs.light), line);
+                      res.shimmer <= cs.shimmer && res.worstSpeckle <= cs.worst && (cs.light <= 0 || glassLight >= cs.light) && hueOk, line);
             }
             tex->Release();
         }
@@ -2054,10 +2265,14 @@ namespace
     // seen from 5, 10 and 20 yd, head on, at 45 and 70 degrees, level and from below. Per view: no NaN or Inf, and the
     // largest change between neighbouring pixels in the glass over the glass's mean (an edge: a step from one pixel to
     // the next) below kDayEdge; the night's crisp look on the same rooms for comparison (its walls', doorways',
-    // shelves' and cells' edges).
+    // shelves' and cells' edges). And the room visible ("I also feel like the inside faint rooms are only barely
+    // visible", the user, Theramore, 2026-10-18): with the sky's reflection off, its contrast in the glass ((p90 - p10)
+    // over the mean) at least kDayContrast over the views and kDayContrastLeast in each (2e61b4d's measured the same on
+    // the contact sheet's facade: 0.165, least 0.100).
     void DayRoomTests(const std::filesystem::path& data)
     {
         constexpr float kDayEdge = 0.04f;
+        constexpr float kDayContrast = 0.2f, kDayContrastLeast = 0.1f;
         Warp w;
         std::string why;
         if (!InitWarp(w, why)) { std::printf("skip  rooms by day: %s\n", why.c_str()); return; }
@@ -2088,17 +2303,26 @@ namespace
         gl::RoomInputs ri;
         ri.night = 0; ri.hour = 13; ri.selfLit = true;
         gl::RoomBatchConstants(style, &building, light, ri, s, c, seed);
+        float day[4 * gl::kDayRegisters];
+        gl::DayConstants(m, light, s, building.flags, day);
+        w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+        // (pass 2: the same day look without the sky's reflection and glint, so only the room changes the flat glass)
+        float noSky[4 * gl::kConstantCount];
+        std::memcpy(noSky, c, sizeof(noSky));
+        noSky[19] = 0; noSky[21] = 0;
         const float lit[3] = { 0.62f, 0.5f, 0.3f };   // the client's painted glass in the sun
         const float cam0[3] = { -8838.6f, 627.4f, 99.3f }, heading = 0.37f;
         const float dists[] = { 5, 10, 20 }, yaws[] = { 0, 45, 70 }, heights[] = { 0, 2.5f };
         const float hw = 4.0f, hh = 2.7f;
-        float worst[2] = {}, meanLight = 0;
-        std::string worstAt[2];
+        float worst[2] = {}, meanLight = 0, leastContrast = 1e9f;
+        double contrastSum = 0;
+        int contrastViews = 0;
+        std::string worstAt[2], leastAt;
         int bad = 0, views = 0;
         bool drewAll = true;
-        for (int look = 0; look < 2; ++look)
+        for (int look = 0; look < 3; ++look)
         {
-            if (look) UploadLook(w.dev, gl::RoomConstants{});
+            if (look == 1) UploadLook(w.dev, gl::RoomConstants{});
             else UploadLook(w.dev, light);
             for (float dist : dists)
                 for (float yawDeg : yaws)
@@ -2136,7 +2360,7 @@ namespace
                         d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
                         d->SetTexture(0, w.texel);
                         d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
-                        d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+                        d->SetPixelShaderConstantF(gl::kFirstConstant, look == 2 ? noSky : c, gl::kConstantCount);
                         d->SetPixelShaderConstantF(gl::kSeedConstant, seed, gl::kSeedRegisters);
                         const BOOL on = TRUE, off = FALSE;
                         d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
@@ -2170,7 +2394,7 @@ namespace
                         if (const char* dump = std::getenv("GLASS_DAY_DUMP"))
                         {
                             char name[128];
-                            std::snprintf(name, sizeof(name), "day_%s_%02.0f_%02.0f_%.0f.ppm", look ? "crisp" : "day", dist, yawDeg, height);
+                            std::snprintf(name, sizeof(name), "day_%s_%02.0f_%02.0f_%.0f.ppm", look == 2 ? "room" : look ? "crisp" : "day", dist, yawDeg, height);
                             std::ofstream f(std::filesystem::path(dump) / name, std::ios::binary);
                             f << "P6\n" << kS << " " << kS << "\n255\n";
                             for (size_t p = 0; p < static_cast<size_t>(kS) * kS; ++p)
@@ -2182,22 +2406,43 @@ namespace
                             std::printf("      %s: the step %.4f at (%d, %d), the mean %.4f\n", name, step, stepX, stepY, n ? sum / n : 0.0);
                         }
                         if (n < 400) continue;
+                        char at[96];
+                        std::snprintf(at, sizeof(at), "%.0f yd, %.0f deg%s", dist, yawDeg, height > 0 ? ", from below" : "");
+                        if (look == 2)
+                        {
+                            // the room's contrast in the glass: (p90 - p10) / the mean (no sky: only the room changes it)
+                            std::vector<float> ls;
+                            ls.reserve(static_cast<size_t>(n));
+                            for (int y = 1; y < kS - 1; ++y)
+                                for (int x = 1; x < kS - 1; ++x)
+                                {
+                                    const size_t p = static_cast<size_t>(y) * kS + x;
+                                    if (drawn(p) && drawn(p - 1) && drawn(p + 1) && drawn(p - kS) && drawn(p + kS)) ls.push_back(L(p));
+                                }
+                            std::sort(ls.begin(), ls.end());
+                            const float contrast = static_cast<float>((ls[ls.size() * 9 / 10] - ls[ls.size() / 10]) / (sum / n));
+                            contrastSum += contrast; ++contrastViews;
+                            if (contrast < leastContrast) { leastContrast = contrast; leastAt = at; }
+                            continue;
+                        }
                         const float rel = static_cast<float>(step / (sum / n));
                         if (!look) { meanLight += static_cast<float>(sum / n); ++views; }
-                        if (rel > worst[look])
-                        {
-                            char at[96];
-                            std::snprintf(at, sizeof(at), "%.0f yd, %.0f deg%s", dist, yawDeg, height > 0 ? ", from below" : "");
-                            worst[look] = rel; worstAt[look] = at;
-                        }
+                        if (rel > worst[look]) { worst[look] = rel; worstAt[look] = at; }
                     }
         }
-        char line[400];
+        char line[600];
         std::snprintf(line, sizeof(line), "WARP, rooms by day (Stormwind, clear glass, %d views 5..20 yd, 0..70 deg): NaN/Inf %d; the largest step between "
                       "neighbouring pixels %.1f%% of the glass's mean (at %s; bound %.0f%%), with the night's crisp look %.1f%% (at %s); the glass's mean %.3f "
                       "against the client's %.3f", views, bad, worst[0] * 100, worstAt[0].c_str(), kDayEdge * 100, worst[1] * 100, worstAt[1].c_str(),
                       views ? meanLight / views : 0.0f, 0.2126f * lit[0] + 0.7152f * lit[1] + 0.0722f * lit[2]);
         Check(drewAll && views == 18 && bad == 0 && worst[0] < kDayEdge && worst[1] > 2 * worst[0], line);
+        // The room visible: its contrast in the glass (p90 - p10 over the mean, the sky's reflection off so only the room
+        // changes the flat glass) at least kDayContrast on average and kDayContrastLeast in every view ("the inside faint
+        // rooms are only barely visible", the user, 2026-10-18), with the edges above under kDayEdge.
+        const float meanContrast = contrastViews ? static_cast<float>(contrastSum / contrastViews) : 0.0f;
+        std::snprintf(line, sizeof(line), "WARP, rooms by day visible: the room's contrast in the glass (p90 - p10) / mean %.3f over %d views (bound %.2f), the least "
+                      "%.3f (at %s; bound %.2f)", meanContrast, contrastViews, kDayContrast, leastContrast, leastAt.c_str(), kDayContrastLeast);
+        Check(contrastViews == 18 && meanContrast >= kDayContrast && leastContrast >= kDayContrastLeast, line);
         UploadLook(w.dev, gl::RoomConstants{});
         w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
         readback->Release();
@@ -3033,6 +3278,7 @@ int main(int argc, char** argv)
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     RulesTests();
     RoomRulesTests();
+    DayRulesTests();
     LitRulesTests();
     EditTests(args[0]);
     ShaftShaderTests();
