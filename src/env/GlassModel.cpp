@@ -623,11 +623,11 @@ namespace wxl_livingazeroth::glass
         const float invWall = 1.0f / std::max(px * k.c218[2] + k.c218[0], 0.0001f);
         const float invLayout = 1.0f / std::max(px * k.c218[2] + k.c218[1], 0.0001f);
         // Near the cell's edge on the glass, or its anchor's (where the cells are cut: how far along the glass the
-        // nearest anchor plane crossing it is, each axis's over sqrt(1 - N_i^2)), the room eases to its mean (by day;
+        // nearest anchor plane crossing it is, each axis's over sqrt(|1 - N_i^2|)), the room eases to its mean (by day;
         // 1 at night).
         float anchorEdge[3];
         for (int i = 0; i < 3; ++i)
-            anchorEdge[i] = (-std::fabs(R[i]) + 0.5f * kAnchor) * (1.0f / std::sqrt(std::fabs((1.0f - N[i] * N[i]) + 1e-12f)));
+            anchorEdge[i] = (-std::fabs(R[i]) + 0.5f * kAnchor) * (1.0f / std::sqrt(std::fabs(1.0f - N[i] * N[i]) + 1e-12f));
         const float toAnchor = std::min(std::min(anchorEdge[0], anchorEdge[1]), anchorEdge[2]) * k.c198[0];
         const float toEdge = std::min(std::min(std::min(1.0f - f[0], f[0]), std::min(1.0f - f[1], f[1])), toAnchor);
         const float edge = Clamp01(toEdge * k.c219[2] + k.c219[3]);

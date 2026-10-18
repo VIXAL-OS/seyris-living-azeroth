@@ -247,10 +247,11 @@ namespace wxl_livingazeroth::glass
             "\n        dp3 r30.x, r28, c216"
             "\n        dp3 r30.y, r28, c217"
             // (how far along the glass the nearest anchor's edge is, yd: where the cells are cut, as at a cell's edge;
-            // each axis's plane over sqrt(1 - N_i^2), none parallel to the glass): r24.x
+            // each axis's plane over sqrt(|1 - N_i^2|), none parallel to the glass; a unit N's rounding never gives a
+            // negative root): r24.x
             "\n        mul r24.xyz, r22, r22"
             "\n        add r24.xyz, -r24, c175.x"
-            "\n        add r24.xyz, r24, c208.z"
+            "\n        add r24.xyz, r24_abs, c208.z"
             "\n        rsq r24.x, r24.x"
             "\n        rsq r24.y, r24.y"
             "\n        rsq r24.z, r24.z"
