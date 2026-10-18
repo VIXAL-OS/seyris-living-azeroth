@@ -193,16 +193,29 @@ namespace wxl_livingazeroth::storm
     // The client's 18 interpolated band colours (0xAARRGGBB at 0xD38BD4, core Liquid.hpp kDnBandColors):
     // 0 direct light, 1 ambient, 2..7 the sky from the top to the horizon, 8 the fog (what the terrain
     // and the ground fog take, debug/FogProbe), 9..10 the sun, 11..13 the clouds, 14..17 the water.
+    // (The fill at 0x7EBFF0 puts LightIntBand's fog, its 8th colour, in band 8, which Sky.FogUpdate reads at 0x7F171A;
+    // band 2 holds LightIntBand's 9th, a grey, not the sky.)
     constexpr int kBandCount = 18;
+    constexpr int kFogBand = 8;
     struct Shade
     {
-        float dark = 0.0f;     // 0..1: the storm's darkening (sky fully, light and fog less)
-        float desat = 0.0f;    // 0..1: toward grey
+        float dark = 0.0f;     // 0..1: the storm's darkening (sky fully, light less, the fog least)
+        float desat = 0.0f;    // 0..1: toward grey (not the fog: it cools instead)
         float sky = 0.0f;      // a flash in the sky and the clouds
         float scene = 0.0f;    // a flash lighting the ground (the ambient and direct light)
         float tint[3] = { 0.80f, 0.86f, 1.0f }; // the flash's colour
+        // The fog band, its own storm: rain and mist scatter light, so the near air in a storm is lighter and cooler
+        // than the dark sky above. The client's distance fog takes this band, and our ground fog and haze its colour.
+        float fog = 0.0f;       // 0..1: how stormy, for the fog
+        float fogBright = 1.0f; // its luminance in full storm by day, x the client's own fog colour's; at night
+                                // kFogNightShare of that. A floor: the storm's darkening never takes it lower.
+        float fogCool = 0.0f;   // 0..1: how much of its hue gives way to kFogCool in full storm (instead of grey)
+        float day = 1.0f;       // 0 night .. 1 day, the sky's (env/Fog SkyNight)
     };
     constexpr float kFlashGain = 0.55f;  // a full flash adds this much white (of 255) to a fully weighted band
+    constexpr float kFogNightShare = 0.75f;
+    constexpr float kFogCeiling = 0.70f; // luminance (0..1): fogBright lifts the fog no higher (a brighter fog keeps its own)
+    inline constexpr float kFogCool[3] = { 0.76f, 0.87f, 1.0f }; // a pale blue-grey, at the fog's own luminance
     bool     Identity(const Shade& s);
     uint32_t ShadeBand(uint32_t argb, int band, const Shade& s);
 

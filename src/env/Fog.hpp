@@ -202,6 +202,10 @@ namespace wxl_livingazeroth::fog
     void  SetStormHaze(float extra);
     float StormHaze();
 
+    /// Night as the fog sees it, 0..1 at a time of day (0 = midnight .. 1): the sky's (the client's default
+    /// lights), into the night 18:00 to 22:00 and out of it 03:00 to 06:00. The storm's fog takes it too.
+    float SkyNight(float dayFraction);
+
     // --- testing (the fog panel; not saved) ---
     /// Adds fog of a kind around the player: `amount` at the centre, fading to 0 at `radius` yd
     /// (smooth), clamped to 1. It then burns off by the kind's own rate.

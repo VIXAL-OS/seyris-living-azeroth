@@ -107,6 +107,11 @@ The server leads: rain grades below 0.40 are light rain (the build-up), below 0.
 gusts and haze and the odd flash in the clouds, more the heavier the rain; heavy rain brings
 strikes.
 
+The fog doesn't darken with the sky: rain and mist scatter light, so the air near you stays lighter
+and cooler than the sky above, a pale blue-grey veil, bright by day and dim at night
+(`StormFogBrightness`, `StormFogCool`). The client's distance fog, the ground fog and the haze all
+take this one colour.
+
 Thunder: a near strike (under 250 yards) cracks like the Goblin weather machine's lightning half the
 time (else Shaman thunder or Call Lightning's impact), a farther one is the Blasted Lands bolt, the
 farthest (from 1200 yards) only a deep rumble, which also rolls after the nearer ones. Through the
@@ -130,6 +135,8 @@ says which). The storm panel auditions every recording.
 | StrikeLight | 1 | Your multiplier on the point light at a strike within light range, 0 = none. |
 | Gusts | 1 | Your multiplier on the storm's extra gusts, 0 = none. |
 | Haze | 0.3 | Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none. |
+| StormFogBrightness | 1.3 | The fog in full storm by day (the distance fog; the ground fog and the haze take its colour), x the client's own fog colour's brightness: rain lights the air. At night 3/4 of this. The storm's darkening never takes the fog below it. |
+| StormFogCool | 0.6 | How much of the storm fog's colour gives way to a pale blue-grey in full storm, 0..1 (0 = its own colour, as bright). |
 | Bolts | 0 | Experimental: a lightning bolt model at strikes (our own models in the client's scene). |
 | BoltSize | 6 | The bolt's size, x Call Lightning's (about 11.5 yards tall). |
 | BoltRange | 900 | Strikes farther than this (yards) get no bolt model. |

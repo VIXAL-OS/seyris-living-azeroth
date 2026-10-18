@@ -55,6 +55,14 @@ namespace wxl_livingazeroth::debug
             g_api->UiSliderFloat("strike light##storm", &s.strikeLight, 0.0f, 3.0f);
             g_api->UiSliderFloat("storm gusts##storm", &s.wind, 0.0f, 2.0f);
             g_api->UiSliderFloat("storm haze##storm", &s.haze, 0.0f, 1.0f);
+            g_api->UiSliderFloat("storm fog brightness by day (x the client's fog; 3/4 of it at night)##storm", &s.fogBrightness, 0.5f, 2.0f);
+            g_api->UiSliderFloat("storm fog cool tint (a pale blue-grey)##storm", &s.fogCool, 0.0f, 1.0f);
+            if (st.fogIn || st.fogOut)
+            {
+                std::snprintf(line, sizeof(line), "the fog (the distance fog; the ground fog and haze take it): the client's #%06X -> ours #%06X, day %.2f",
+                              static_cast<unsigned>(st.fogIn & 0xFFFFFF), static_cast<unsigned>(st.fogOut & 0xFFFFFF), st.day);
+                g_api->UiText(line);
+            }
             if (g_api->UiCollapsingHeader("Experimental##storm"))
             {
                 g_api->UiCheckbox("bolt models at strikes (our own models in the client's scene)##storm", &s.bolts);

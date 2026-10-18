@@ -228,6 +228,8 @@ namespace wxl_livingazeroth::config
             t.strikeLight = In(s, f, "StrikeLight", "Your multiplier on the point light at a strike within light range, 0 = none.", t.strikeLight);
             t.wind = In(s, f, "Gusts", "Your multiplier on the storm's extra gusts, 0 = none.", t.wind);
             t.haze = In(s, f, "Haze", "Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none.", t.haze);
+            t.fogBrightness = In(s, f, "StormFogBrightness", "The fog in full storm by day (the distance fog; the ground fog and the haze take its colour), x the client's own fog colour's brightness: rain lights the air. At night 3/4 of this. The storm's darkening never takes the fog below it.", t.fogBrightness);
+            t.fogCool = In(s, f, "StormFogCool", "How much of the storm fog's colour gives way to a pale blue-grey in full storm, 0..1 (0 = its own colour, as bright).", t.fogCool);
             t.bolts = In(s, f, "Bolts", "Experimental: a lightning bolt model at strikes (our own models in the client's scene).", t.bolts);
             t.boltSize = In(s, f, "BoltSize", "The bolt's size, x Call Lightning's (about 11.5 yards tall).", t.boltSize);
             t.boltRange = In(s, f, "BoltRange", "Strikes farther than this (yards) get no bolt model.", t.boltRange);

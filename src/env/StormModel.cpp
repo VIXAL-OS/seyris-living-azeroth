@@ -22,7 +22,8 @@ namespace wxl_livingazeroth::storm
             { 1.00f, 1.00f, 0.30f }, //  5
             { 0.90f, 1.00f, 0.30f }, //  6
             { 0.80f, 0.80f, 0.30f }, //  7 horizon
-            { 0.70f, 0.70f, 0.40f }, //  8 fog
+            { 0.30f, 0.70f, 0.40f }, //  8 fog: lit by the rain (StormFog); at 0.70 it went a dirty grey
+                                     //    (Elwynn: the client's storm fog #525452 -> #3E3F3E, day and night alike)
             { 0.90f, 0.00f, 0.00f }, //  9 sun
             { 0.90f, 0.00f, 0.00f }, // 10 sun halo
             { 0.80f, 1.00f, 0.30f }, // 11 clouds
@@ -281,7 +282,41 @@ namespace wxl_livingazeroth::storm
 
     bool Identity(const Shade& s)
     {
-        return s.dark <= 0.0f && s.desat <= 0.0f && s.sky <= 0.0f && s.scene <= 0.0f;
+        return s.dark <= 0.0f && s.desat <= 0.0f && s.sky <= 0.0f && s.scene <= 0.0f && !(s.fog > 0.0f);
+    }
+
+    namespace
+    {
+        float Luma(const float c[3]) { return 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]; }
+        float Unit(float v) { return v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f; } // 0..1, NaN -> 0
+
+        // The fog band in a storm (before a flash adds to it). Elwynn's light (Light.dbc 1, the Eastern Kingdoms
+        // default) swaps in its storm set in rain: one fog colour, #525452, for every hour. Darkened at 0.70 of the
+        // sky's rate and greyed it was #3E3F3E day and night: under the rain, over green and brown ground, it read
+        // as dirt. Now:
+        //  - darkened less than the sky (its weight, 0.30);
+        //  - never below its floor: the client's own fog colour's luminance x fogBright by day, x kFogNightShare of
+        //    that at night, as much as it storms (a lift stops at kFogCeiling);
+        //  - its hue giving way to a pale blue-grey (kFogCool, at its luminance) instead of grey.
+        void StormFog(const float c[3], float weight, const Shade& s, float out[3])
+        {
+            const float storm = Unit(s.fog);
+            const float own = Luma(c);
+            const float darkened = own * (1.0f - Unit(s.dark * weight));
+            const float bright = s.fogBright > 0.0f ? s.fogBright : 0.0f;
+            const float share = bright * Lerp(kFogNightShare, 1.0f, Unit(s.day));
+            const float floor = own * (1.0f + (share - 1.0f) * storm);
+            float lum = darkened;
+            if (floor > darkened) lum = std::fmax(darkened, std::fmin(floor, std::fmax(255.0f * kFogCeiling, own)));
+            const float scale = own > 1.0e-3f ? lum / own : 0.0f;
+            const float cool = Unit(s.fogCool) * storm;
+            const float hue = lum / Luma(kFogCool);
+            for (int k = 0; k < 3; ++k)
+            {
+                const float kept = c[k] * scale;
+                out[k] = kept + (kFogCool[k] * hue - kept) * cool;
+            }
+        }
     }
 
     uint32_t ShadeBand(uint32_t argb, int band, const Shade& s)
@@ -289,14 +324,20 @@ namespace wxl_livingazeroth::storm
         if (band < 0 || band >= kBandCount) return argb;
         const Weights& w = kWeights[band];
         float c[3] = { static_cast<float>((argb >> 16) & 0xFF), static_cast<float>((argb >> 8) & 0xFF), static_cast<float>(argb & 0xFF) };
-        const float keep = 1.0f - Clamp01(s.dark * w.dark);
-        const float grey = Clamp01(s.desat * w.dark);
-        const float luma = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2];
+        float base[3];
+        if (band == kFogBand) StormFog(c, w.dark, s, base);
+        else
+        {
+            const float keep = 1.0f - Clamp01(s.dark * w.dark);
+            const float grey = Clamp01(s.desat * w.dark);
+            const float luma = Luma(c);
+            for (int k = 0; k < 3; ++k) base[k] = (c[k] + (luma - c[k]) * grey) * keep;
+        }
         const float add = 255.0f * kFlashGain * ((s.sky > 0.0f ? s.sky : 0.0f) * w.sky + (s.scene > 0.0f ? s.scene : 0.0f) * w.scene);
         uint32_t out = argb & 0xFF000000u;
         for (int k = 0; k < 3; ++k)
         {
-            float v = (c[k] + (luma - c[k]) * grey) * keep + add * s.tint[k];
+            float v = base[k] + add * s.tint[k];
             v = v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v);
             out |= static_cast<uint32_t>(v + 0.5f) << (16 - 8 * k);
         }
