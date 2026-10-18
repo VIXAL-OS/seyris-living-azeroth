@@ -1,6 +1,9 @@
 #include "FogWake.hpp"
+#include "FogWakeWeather.hpp"
 
 #include "../env/Actors.hpp"
+#include "../env/Storm.hpp"
+#include "../env/Wind.hpp"
 #include "GrassPerf.hpp"
 
 #include <windows.h>
@@ -47,6 +50,19 @@ namespace wxl_livingazeroth::fogwake
         IDirect3DTexture9* g_tex = nullptr;
         IDirect3DDevice9*  g_texDevice = nullptr;
 
+        // The weather's mixing (FogWakeWeather.hpp), smoothed over a couple of seconds (gusts), and what it does now.
+        float     g_mixing = 0.0f;
+        WakeScale g_scale;
+        float     g_rainNow = 0.0f, g_stormNow = 0.0f, g_windNow = 0.0f; // for the panel
+        constexpr float kMixingSmooth = 2.0f; // s
+
+        // The trail's life now: the setting, shortened by the weather.
+        float Life()
+        {
+            const float life = g_settings.trailSeconds * g_scale.fill;
+            return life > 0.1f ? life : 0.1f;
+        }
+
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
         float Smooth(float a, float b, float v) { const float t = Clamp01((v - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
 
@@ -67,7 +83,7 @@ namespace wxl_livingazeroth::fogwake
         /// unit's own position (its push depends on how fast it moves; a trail only exists while moving).
         void Capsule(const Point& a, float ageA, const Point& b, float ageB, float r0, float height, float amp)
         {
-            const float life = g_settings.trailSeconds > 0.1f ? g_settings.trailSeconds : 0.1f;
+            const float life = Life();
             if (ageA >= life) return;
             const float rMax = r0 * (1.0f + g_settings.spread * Clamp01(ageB / life)) * 1.5f;
             // Texels touched (the map's border row stays empty, so the clamped edge reads nothing).
@@ -142,7 +158,7 @@ namespace wxl_livingazeroth::fogwake
                 float h = act.effectiveRadius * 5.0f;
                 h = (h < 1.5f ? 1.5f : (h > 6.0f ? 6.0f : h)) * g_settings.heightScale + (act.mounted ? 1.2f : 0.0f);
                 const float motion = Clamp01(tr.speed / 4.0f);
-                const float headAmp = g_settings.standing + (g_settings.strength - g_settings.standing) * motion;
+                const float headAmp = (g_settings.standing + (g_settings.strength - g_settings.standing) * motion) * g_scale.push;
 
                 const Point head = { act.pos[0], act.pos[1], act.pos[2], g_time };
                 const Point* prev = &head;
@@ -152,7 +168,7 @@ namespace wxl_livingazeroth::fogwake
                 {
                     const Point& p = tr.points[i];
                     const float age = g_time - p.time;
-                    Capsule(*prev, prevAge, p, age, r0, h, g_settings.strength);
+                    Capsule(*prev, prevAge, p, age, r0, h, g_settings.strength * g_scale.push);
                     prev = &p;
                     prevAge = age;
                 }
@@ -175,9 +191,19 @@ namespace wxl_livingazeroth::fogwake
         const double t0 = grassperf::Now();
         g_time += dt;
 
+        // The weather: rain (or the storm) and the wind at the player mix the fog back (env/Storm ran this frame
+        // already, and the wind).
+        const storm::Status& weather = storm::GetStatus();
+        g_rainNow = weather.rain;
+        g_stormNow = weather.storminess;
+        g_windNow = wind::At(snap.playerPos).strength;
+        const float mixing = WeatherMixing(g_rainNow, g_stormNow, g_windNow, g_settings.rainMixing, g_settings.windMixing);
+        g_mixing += (mixing - g_mixing) * (dt > 0.0f ? 1.0f - std::exp(-dt / kMixingSmooth) : 0.0f);
+        g_scale = ScaleFor(g_mixing);
+
         // Trails: a new point every kPointEvery s while a unit moves; points older than the trail's
         // life drop off; units out of sight for a while are forgotten.
-        const float life = g_settings.trailSeconds > 0.1f ? g_settings.trailSeconds : 0.1f;
+        const float life = Life();
         for (const actors::Actor& act : actors::Nearby())
         {
             Trail& tr = g_trails[act.guid];
@@ -275,6 +301,11 @@ namespace wxl_livingazeroth::fogwake
         api->UiSliderFloat("wake height (x the unit's)##fwheight", &g_settings.heightScale, 0.5f, 3.0f);
         api->UiSliderFloat("fog piled at the rim##fwrim", &g_settings.rim, 0.0f, 1.0f);
         api->UiSliderFloat("swirl##fwswirl", &g_settings.swirl, 0.0f, 3.0f);
+        api->UiSliderFloat("rain mixes the fog back (1 = heavy rain: almost no wake)##fwrain", &g_settings.rainMixing, 0.0f, 1.0f);
+        api->UiSliderFloat("wind mixes the fog back##fwwind", &g_settings.windMixing, 0.0f, 1.0f);
+        std::snprintf(line, sizeof(line), "weather: rain %.2f, storm %.2f, wind %.2f -> mixing %.2f: push x%.2f, fills in in %.1f s",
+                      g_rainNow, g_stormNow, g_windNow, g_mixing, g_scale.push, Life());
+        api->UiText(line);
         std::snprintf(line, sizeof(line), "wake: %u units, %u stretches, %.3f ms CPU; map %dx%d of %.0f yd (%u KB)",
                       g_units, g_segments, g_lastMs, N, N, kTexel, static_cast<unsigned>(N * N * 8 / 1024));
         api->UiText(line);

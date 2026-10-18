@@ -47,8 +47,20 @@ namespace wxl_livingazeroth::storm
         float     g_outdoors = 1.0f;  // smoothed: indoors, a flash doesn't light the scene around you
         std::vector<Flash> g_flashes;
 
-        struct PendingSound { float due; const char* name; };
+        // A layer of thunder on its way: when it arrives, which kit, its gain (x the kit's volume) and where the strike
+        // is from the player (a unit vector in world x, y).
+        struct PendingSound { float due; Kit kit; float gain; float dir[2]; };
         std::vector<PendingSound> g_sounds;
+
+        // --- thunder through the client's sound kits ---
+        using ResetSoundPropsFn = void(__fastcall*)(void* props, void* edx);
+        using PlaySoundKitFn = int(__cdecl*)(int32_t kitId, const float* position, void* object, void* props, uint32_t advancedId,
+                                             uint32_t* soundId, int32_t checkDistance, int32_t keepPlaying);
+        using ListenerPositionFn = bool(__cdecl*)(float* position);
+        bool  g_soundNative = false, g_soundBroken = false;
+        char  g_soundStatus[200] = "not checked";
+        bool  g_loggedNative = false, g_loggedLua = false;
+        int   g_loggedProblem = 0x7FFFFFFF; // the last kit result logged as a problem (each new one once)
 
         // --- the day-night bands ---
         using BandsFn = void(__cdecl*)();
@@ -248,13 +260,102 @@ namespace wxl_livingazeroth::storm
         }
 
         // --- thunder ---
-        void Play(const char* name)
+        bool PlayLua(const char* name)
         {
-            if (!name || !wxl::game::script::Context()) return;
+            if (!name || !wxl::game::script::Context()) return false;
             char source[96];
             std::snprintf(source, sizeof(source), "PlaySound(\"%s\")", name);
             wxl::game::script::Execute(source, "LivingAzerothStorm");
+            return true;
+        }
+
+        // The kit through the client's own call, as its object sounds do: properties at their defaults with the
+        // volume scale set, positional at `pos` (or not, null). Returns PlaySoundKit's result.
+        int PlayKitUnsafe(int32_t kitId, const float* pos, float scale)
+        {
+            alignas(16) uint8_t props[0x100] = {};
+            static_assert(sizeof(props) >= kSoundPropsSize, "room for SE2SoundKitProperties");
+            reinterpret_cast<ResetSoundPropsFn>(kResetSoundProps)(props, nullptr);
+            std::memcpy(props + kSoundPropsVolumeScale, &scale, sizeof(scale));
+            return reinterpret_cast<PlaySoundKitFn>(kPlaySoundKit)(kitId, pos, nullptr, props, 0, nullptr, 1, 0);
+        }
+        bool PlayKit(int32_t kitId, const float* pos, float scale, int& result)
+        {
+            __try { result = PlayKitUnsafe(kitId, pos, scale); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        bool ListenerUnsafe(float out[3]) { return reinterpret_cast<ListenerPositionFn>(kListenerPosition)(out); }
+        bool Listener(float out[3])
+        {
+            __try { return ListenerUnsafe(out); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        // One layer of thunder now: through the client's sound kits at its volume and from the strike's direction (a
+        // point PlacementDistance from the listener, inside the kit's MinDistance, so the client's rolloff leaves the
+        // volume alone), or through Lua PlaySound with the row nearest that volume.
+        void PlayLayer(Kit kit, float gain, const float dir[2])
+        {
+            const KitInfo& k = Info(kit);
+            float scale = gain * (g_settings.soundVolume > 0.0f ? g_settings.soundVolume : 0.0f);
+            if (scale * k.volume > 1.0f) scale = 1.0f / k.volume;
+            if (!(scale > 0.0f)) return;
+            const char* why = !g_settings.nativeSound ? "switched off in the panel or WarcraftXL.ini" : g_soundStatus;
+            if (g_settings.nativeSound && g_soundNative && !g_soundBroken)
+            {
+                float listener[3] = {};
+                const float place = PlacementDistance(kit);
+                float at[3] = {};
+                const bool positional = place > 0.0f && Listener(listener);
+                if (positional)
+                {
+                    at[0] = listener[0] + dir[0] * place;
+                    at[1] = listener[1] + dir[1] * place;
+                    at[2] = listener[2] + 0.25f * place; // a little from above
+                }
+                int result = -1;
+                if (!PlayKit(k.soundKitId, positional ? at : nullptr, scale, result))
+                {
+                    g_soundBroken = true;
+                    std::snprintf(g_soundStatus, sizeof(g_soundStatus), "Lua PlaySound: a fault in the client's sound kit call; stopped using it");
+                    if (g_api) g_api->Log(WXL_LOG_WARN, kTag, "storm: a fault while playing thunder through the client's sound kits; Lua PlaySound from now on.");
+                }
+                else
+                {
+                    g_status.lastKitResult = result;
+                    const SoundOutcome outcome = Outcome(result);
+                    if (outcome == SoundOutcome::Played)
+                    {
+                        ++g_status.nativeSounds;
+                        ++g_status.sounds;
+                        if (!g_loggedNative && g_api)
+                        {
+                            g_loggedNative = true;
+                            g_api->Log(WXL_LOG_INFO, kTag, "storm: thunder plays through the client's sound kits (%s, %s at %.2f).",
+                                       positional ? "positional" : "not positional", k.name, scale * k.volume);
+                        }
+                        return;
+                    }
+                    if (outcome == SoundOutcome::Declined) { ++g_status.declinedSounds; return; } // Lua would be declined too
+                    if (g_api && result != g_loggedProblem)
+                    {
+                        g_loggedProblem = result;
+                        g_api->Log(WXL_LOG_WARN, kTag, "storm: the client's sound kit %d (%s) didn't play (result %d); its Lua row instead.",
+                                   k.soundKitId, k.name, result);
+                    }
+                    why = "the kit didn't play (see the log)";
+                }
+            }
+            const char* row = LuaRowFor(kit, scale * k.volume);
+            if (!row) { ++g_status.droppedSounds; return; }
+            if (!PlayLua(row)) return;
+            ++g_status.luaSounds;
             ++g_status.sounds;
+            if (!g_loggedLua && g_api)
+            {
+                g_loggedLua = true;
+                g_api->Log(WXL_LOG_INFO, kTag, "storm: thunder plays through Lua PlaySound (%s).", why);
+            }
         }
 
         // --- strikes ---
@@ -273,7 +374,12 @@ namespace wxl_livingazeroth::storm
             std::memcpy(f.pos, pos, sizeof(f.pos));
             g_flashes.push_back(f);
             if (s.sounds)
-                if (const char* name = ThunderSound(d, s.soundDistance)) g_sounds.push_back({ g_clock + delay + ThunderDelay(d), name });
+            {
+                const ThunderPlan plan = PlanThunder(d, s.soundDistance, g_rng.Uniform(), s.rumble != 0);
+                for (int i = 0; i < plan.count; ++i)
+                    g_sounds.push_back({ g_clock + delay + ThunderDelay(d) + plan.layer[i].after, plan.layer[i].kit, plan.layer[i].gain,
+                                         { std::cos(bearing), std::sin(bearing) } });
+            }
             if (s.scorch && known && d <= kScorchRange)
             {
                 float water = 0.0f;
@@ -304,6 +410,11 @@ namespace wxl_livingazeroth::storm
     const Status& GetStatus() { return g_status; }
     const char* BandStatus() { return g_bandStatus; }
     const char* BoltStatus() { return g_boltStatus; }
+    const char* SoundStatus()
+    {
+        if (!g_settings.nativeSound) return "Lua PlaySound (the client's sound kits are switched off here)";
+        return g_soundStatus;
+    }
 
     void Install(const WXL_Api* api)
     {
@@ -341,7 +452,20 @@ namespace wxl_livingazeroth::storm
             case 2: std::snprintf(g_boltStatus, sizeof(g_boltStatus), "off: the client's %s at 0x%08X differs", bad->what, static_cast<unsigned>(bad->address)); break;
             default: std::snprintf(g_boltStatus, sizeof(g_boltStatus), "off: the client's code could not be read"); break;
         }
-        api->Log(WXL_LOG_INFO, kTag, "storm: day-night colours %s; bolt models %s.", g_bandStatus, g_boltStatus);
+        bad = nullptr;
+        detoured = 0;
+        switch (Verify(kSoundGuards, bad, detoured))
+        {
+            case 0:
+                g_soundNative = true;
+                std::snprintf(g_soundStatus, sizeof(g_soundStatus), "the client's sound kits: a volume per distance, from the strike's direction%s",
+                              detoured ? " (play call detoured by another party)" : "");
+                break;
+            case 1: std::snprintf(g_soundStatus, sizeof(g_soundStatus), "Lua PlaySound: not the 3.3.5a 12340 client"); break;
+            case 2: std::snprintf(g_soundStatus, sizeof(g_soundStatus), "Lua PlaySound: the client's %s at 0x%08X differs", bad->what, static_cast<unsigned>(bad->address)); break;
+            default: std::snprintf(g_soundStatus, sizeof(g_soundStatus), "Lua PlaySound: the client's sound code could not be read"); break;
+        }
+        api->Log(WXL_LOG_INFO, kTag, "storm: day-night colours %s; bolt models %s; thunder through %s.", g_bandStatus, g_boltStatus, g_soundStatus);
     }
 
     void Update(float dt, const world::Snapshot& snap)
@@ -395,12 +519,13 @@ namespace wxl_livingazeroth::storm
         g_shade.sky = sky * s.flashStrength;
         g_shade.scene = scene * s.flashStrength * g_outdoors;
 
-        // The cracks, after the sound's travel time (one a frame; dropped if long overdue: a loading screen).
+        // The cracks and rumbles, after the sound's travel time (one a frame; dropped if long overdue: a loading screen).
         for (size_t i = 0; i < g_sounds.size(); ++i)
         {
             if (g_clock < g_sounds[i].due) continue;
-            if (g_clock - g_sounds[i].due < 1.5f && snap.inWorld && s.sounds) Play(g_sounds[i].name);
+            const PendingSound p = g_sounds[i];
             g_sounds.erase(g_sounds.begin() + static_cast<std::ptrdiff_t>(i));
+            if (g_clock - p.due < 1.5f && snap.inWorld && s.sounds) PlayLayer(p.kit, p.gain, p.dir);
             break;
         }
 
@@ -416,6 +541,7 @@ namespace wxl_livingazeroth::storm
         if (g_scheduler.wait >= 0.0f) next = g_scheduler.wait;
         g_status.phase = static_cast<int>(phase);
         g_status.grade = grade;
+        g_status.rain = snap.inWorld ? RainLevel(type, grade) : 0.0f;
         g_status.overridden = overridden;
         g_status.storminess = g_storm;
         g_status.darkness = g_shade.dark;
@@ -453,6 +579,21 @@ namespace wxl_livingazeroth::storm
 
     void TestSound(float distance)
     {
-        Play(ThunderSound(distance, 1.0e9f));
+        const float bearing = g_rng.Range(0.0f, kTwoPi);
+        const ThunderPlan plan = PlanThunder(distance, 1.0e9f, g_rng.Uniform(), g_settings.rumble != 0);
+        const float dir[2] = { std::cos(bearing), std::sin(bearing) };
+        for (int i = 0; i < plan.count; ++i)
+        {
+            if (plan.layer[i].after <= 0.0f) PlayLayer(plan.layer[i].kit, plan.layer[i].gain, dir); // the crack: now
+            else g_sounds.push_back({ g_clock + plan.layer[i].after, plan.layer[i].kit, plan.layer[i].gain, { dir[0], dir[1] } });
+        }
+    }
+
+    void TestKit(int kit, float distance)
+    {
+        if (kit < 0 || kit >= static_cast<int>(Kit::Count)) return;
+        const float bearing = g_rng.Range(0.0f, kTwoPi);
+        const float dir[2] = { std::cos(bearing), std::sin(bearing) };
+        PlayLayer(static_cast<Kit>(kit), ThunderGain(distance, 1.0e9f), dir);
     }
 }

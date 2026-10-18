@@ -103,6 +103,12 @@ namespace wxl_livingazeroth::cover::detail
         float rippleSlope = 0.9f;
         float rippleBright = 0.18f;
         int   slither = 1;              // bodies without legs (snakes, naga, worms) leave a weaving groove, not prints
+        // The trench edge filter (blend::TrenchProfile): no trench wall or rim narrower than this many level-0 cells
+        // (0.25 yd), or the grid draws a walked trench's edge as a staircase. 0 = the original widths.
+        float trenchSoftness = 1.5f;
+        // Mud ruts (moisture-gated covers) fill in this much faster in heavy rain: 0.75 = in a quarter of their relax
+        // time (blend::RainRelaxShare). 0 = rain changes nothing.
+        float rainFill = 0.75f;
     };
 
     struct Level
@@ -224,6 +230,9 @@ namespace wxl_livingazeroth::cover::detail
     void ClearCellCache();
     void ClearLayerValues();
     void SampleRect(Level& L, bool isLevel0, int i0, int i1, int j0, int j1, bool fresh); // inclusive
+    /// The ground at a world position, as the fill reads it (panel): the share painted with sealed ground
+    /// (GroundMaterial kFlagSealed) and how much of a mud cover may form there (blend::MudAllowed). False: no terrain.
+    bool SealedAt(float x, float y, float& sealedShare, float& mudAllowed);
 
     // What a sample changed, for Level::dirtyRow/dirtyCol.
     constexpr uint8_t kDirtyBase = 1, kDirtyCover = 2, kDirtyLook = 4;
@@ -250,9 +259,11 @@ namespace wxl_livingazeroth::cover::detail
     // Level 0's rim share and relax time per slot, from the rows of the cell's materials.
     extern std::vector<float> g_rimCell, g_relaxCell;
     extern unsigned           g_stamps;           // units stamping this frame
+    extern float              g_rainNow;          // the rain the ruts last filled in with (StormModel RainLevel)
     // Trench radius per yard of footprint (its longer side): a human's 0.33 yd print gives 0.4 yd.
     constexpr float kFootprintToTrench = 1.2f;
-    void Simulate(float dt);
+    /// rain: StormModel RainLevel (0..1), mud ruts fill in faster with it.
+    void Simulate(float dt, float rain);
 
     // --- cover textures and uploads (SurfaceCoverUpload.cpp) -----------------------------------
     extern IDirect3DTexture9* g_coverTextures[covertable::kMaxCoverTextures]; // per slot (owned by the cache)

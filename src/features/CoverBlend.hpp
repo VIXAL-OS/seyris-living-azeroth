@@ -66,6 +66,94 @@ namespace wxl_livingazeroth::cover::blend
         return cover + (deformed - cover) * k;
     }
 
+    // --- mud and trenches (ChromieCraft fork, 2026-10-17: Elwynn's road in a thunderstorm grew a dark, jagged, raised
+    // trail behind every walker -- "it also looks like it's trying to draw mud trenches???") ---
+
+    /// How much of a moisture-gated cover (mud) may form where `sealedShare` (0..1) of the ground is painted with sealed
+    /// ground (GroundMaterial kFlagSealed: cobbles, paving). Elwynn's road is cobblestones over its dirt texture, the
+    /// dirt showing at 7..67% between them (alpha maps), and that dirt grew mud. All of it on open ground (up to
+    /// kSealedFrom paved: a stone or two in a verge), none from kSealedFull (a road), smooth between: mud on the
+    /// dirt verges, none on the road.
+    constexpr float kSealedFrom = 0.05f, kSealedFull = 0.30f;
+    inline float MudAllowed(float sealedShare)
+    {
+        if (!(sealedShare > kSealedFrom)) return 1.0f;
+        if (sealedShare >= kSealedFull) return 0.0f;
+        const float t = (sealedShare - kSealedFrom) / (kSealedFull - kSealedFrom);
+        return 1.0f - t * t * (3.0f - 2.0f * t);
+    }
+
+    /// One stamp of a trench at a grid vertex `d` yd from where the unit stands: how far it presses (0..1) and its rim
+    /// (0..1), for a trench of `radius` yd on a grid of `cell` yd.
+    ///
+    /// The original: pressed flat inside 0.7 r, its wall to r, a rim from 0.9 r up to 1.25 r and down by 1.6 r. A
+    /// human's 0.4 yd trench gave a wall 0.12 yd wide and a rim 0.28 yd wide on level 0's 0.25 yd grid: steps the grid
+    /// can't draw, so a walked trench came out as a staircase along the grid's lines -- the jagged edge. The edge
+    /// filter: no wall or rim flank narrower than `softness` cells (0 = the original widths), smoothstep-shaped, the
+    /// wall around the same middle (0.85 r) and the rim's crest at the wall's top at least. A trench too small for a
+    /// wall that wide around its middle (r under ~0.22 yd at 1.5 cells: cats, critters) becomes a dimple one wall wide,
+    /// as much shallower as its middle is short of half the wall -- the grid can't draw it smaller, so less of it. From
+    /// a trench of about 1.25 yd (0.3 r = 1.5 cells) up the widths are the original ones.
+    struct TrenchStamp { float press = 0.0f, rim = 0.0f; };
+    struct TrenchShape { float pressIn, pressOut, rimPeak, rimHalf, amplitude; };
+    inline TrenchShape TrenchShapeFor(float radius, float cell, float softness)
+    {
+        const float minWidth = (softness > 0.0f ? softness : 0.0f) * (cell > 0.0f ? cell : 0.0f);
+        const float wall = 0.3f * radius > minWidth ? 0.3f * radius : minWidth;
+        const float mid = 0.85f * radius;
+        TrenchShape s;
+        s.amplitude = 1.0f;
+        if (mid >= 0.5f * wall) { s.pressIn = mid - 0.5f * wall; s.pressOut = mid + 0.5f * wall; }
+        else
+        {
+            s.pressIn = 0.0f;
+            s.pressOut = wall;
+            s.amplitude = wall > 0.0f ? mid / (0.5f * wall) : 1.0f;
+        }
+        s.rimPeak = 1.25f * radius > s.pressOut ? 1.25f * radius : s.pressOut;
+        s.rimHalf = 0.35f * radius > minWidth ? 0.35f * radius : minWidth;
+        return s;
+    }
+    inline float SmoothStep(float a, float b, float v)
+    {
+        if (!(b > a)) return v < a ? 0.0f : 1.0f;
+        float t = (v - a) / (b - a);
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        return t * t * (3.0f - 2.0f * t);
+    }
+    inline TrenchStamp TrenchProfile(float d, const TrenchShape& s)
+    {
+        TrenchStamp out;
+        out.press = s.amplitude * (1.0f - SmoothStep(s.pressIn, s.pressOut, d));
+        const float off = d > s.rimPeak ? d - s.rimPeak : s.rimPeak - d;
+        out.rim = s.amplitude * (1.0f - SmoothStep(0.0f, s.rimHalf, off));
+        return out;
+    }
+    /// How far out a stamp reaches (its rim's outer foot), for the loop over the grid.
+    inline float TrenchReach(const TrenchShape& s) { return s.rimPeak + s.rimHalf; }
+
+    /// A rim at a vertex under a new stamp: the foot presses the rim already there down by its press -- a later step
+    /// flattens what an earlier one pushed up -- and the new stamp's rim rises only as far as the ground there isn't
+    /// already trodden down (`pressedBefore`, the vertex's press before this stamp): a walker leaves no rim behind itself
+    /// in its own trench. Before, every step's whole ring stayed (the larger of the two), so a walked path became one
+    /// raised band 3.2 r wide -- for stiff mud the whole trail stood up, a dark strip -- instead of a trench between two
+    /// rims.
+    inline float StampedRim(float before, float press, float ring, float pressedBefore)
+    {
+        auto c = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+        const float kept = before * (1.0f - c(press));
+        const float raised = ring * (1.0f - c(pressedBefore));
+        return kept > raised ? kept : raised;
+    }
+
+    /// Mud ruts fill in with rain: the share of their relax time left at this rain (StormModel RainLevel 0..1), for a
+    /// cell `gated` (0..1) moisture-gated, `fill` (0..1) how much heavy rain shortens it. 1 = as the table says.
+    inline float RainRelaxShare(float rain, float gated, float fill)
+    {
+        auto c = [](float v) { return v < 0.0f || !(v == v) ? 0.0f : (v > 1.0f ? 1.0f : v); };
+        return 1.0f - c(fill) * c(rain) * c(gated);
+    }
+
     /// The two strongest of `count` cover textures by share (indices, -1 = none, the stronger
     /// first) and the shares they draw with. The cover draws two textures per spot; with more than
     /// two, those two take the others' share in proportion, so it doesn't fall to the plain cover

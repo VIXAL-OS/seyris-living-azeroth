@@ -32,6 +32,10 @@ namespace wxl_livingazeroth::storm
     /// 0..1, how stormy: 0 below kRainFrom, rising through light and medium rain, 1 from kFullStorm.
     float Storminess(int weatherType, float grade);
 
+    /// 0..1, how hard it rains: 0 below kRainFrom (and in any weather but rain), 1 from kHeavyFrom. Unsmoothed:
+    /// the client walks the grade toward the server's slowly by itself. What the fog wake and mud ruts follow.
+    float RainLevel(int weatherType, float grade);
+
     // --- random numbers (deterministic, so the tests can replay them) ----------------------------
     struct Rng
     {
@@ -105,10 +109,85 @@ namespace wxl_livingazeroth::storm
     /// Seconds from a strike's flash to its sound reaching the player.
     float ThunderDelay(float distanceYards);
 
-    /// The client's sound for a crack heard at this distance (SoundEntries names; Lua PlaySound takes
-    /// no volume, so farther cracks use quieter entries of the same recordings: Netherstorm's crack at
-    /// 0.5, 0.4 and 0.1 volume), or null beyond maxDistance (silent).
-    const char* ThunderSound(float distanceYards, float maxDistance);
+    // The recordings thunder plays (SoundEntries.dbc rows of the 12340 client; a row's ID is its sound kit ID). The
+    // user's picks from the candidates, 2026-10-17: "The Blasted Lands one in particular could be good for distant
+    // lightning and Machine Lightning for close lightning"; never Saurfang's bolt (17203), never Netherstorm's electrical
+    // crack ("wrong for thunder": NetherstormLightningStrikes, and TK_Lightning_Slow and UL_lightning, its recordings
+    // at lower volumes). Zul'Gurub's bolt row plays the Blasted Lands takes plus one more, and unlike the Blasted Lands
+    // row (Flags 0x20, a "suppressor": one at a time) it can overlap itself in a busy storm.
+    enum class Kit : int { Machine = 0, ShamanThunder, CallLightning, Bolt, BlastedLandsBolt, Rumble, Count };
+    struct KitInfo
+    {
+        const char* label;        // for the panel
+        int32_t     soundKitId;   // SoundEntries ID = the client's sound kit ID
+        const char* name;         // its Name as the DBC stores it (cut to 31 characters): what Lua PlaySound looks up
+        float       volume;       // its Volume (the native path scales this)
+        float       minDistance;  // its MinDistance: nearer than this the client plays it at full volume (ClientRolloff)
+        float       cutoff;       // its DistanceCutoff
+        bool        positional;   // played at a point toward the strike (it pans); else straight (a deep rumble barely
+                                  // has a direction, and lasts long enough for a running player to leave its MinDistance)
+    };
+    inline constexpr KitInfo kKits[static_cast<int>(Kit::Count)] = {
+        { "Machine lightning (Goblin weather machine, 12321)", 12321, "Goblin_Weather_Machine_Lightnin", 0.8f, 18.0f, 45.0f, true },
+        { "Shaman thunder (13006)",                            13006, "Shaman_Thunder",                  0.8f,  8.0f, 45.0f, true },
+        { "Call Lightning impact (30)",                        30,    "Call Lightning Impact",           0.8f,  8.0f, 45.0f, true },
+        { "Blasted Lands bolt, Zul'Gurub's row (8439)",        8439,  "LightningBolt - ZulGurub",        1.0f, 50.0f, 100.0f, true },
+        { "Blasted Lands bolt, its own row (4936)",            4936,  "BlastedLandsLightningbolt01Stan", 1.0f, 50.0f, 100.0f, true },
+        { "Rolling rumble (EarthquakeCameraShake, 12549)",     12549, "EarthquakeCameraShake (High Vol", 1.0f,  8.0f, 45.0f, false },
+    };
+    const KitInfo& Info(Kit kit);
+
+    /// The Lua fallback: Lua PlaySound has no volume, so each kit lists the rows that play its recordings at other
+    /// volumes, and the one nearest the wanted volume plays.
+    struct LuaRow { Kit kit; const char* name; float volume; int32_t soundEntryId; };
+    inline constexpr LuaRow kLuaRows[] = {
+        { Kit::Machine,          "Goblin_Weather_Machine_Lightnin", 0.8f, 12321 },
+        { Kit::ShamanThunder,    "Shaman_Thunder",                  0.8f, 13006 },
+        { Kit::CallLightning,    "Call Lightning Impact",           0.8f, 30 },
+        { Kit::Bolt,             "LightningBolt - ZulGurub",        1.0f, 8439 },
+        { Kit::Bolt,             "ChainHeal",                       0.8f, 5635 },  // Sound\Doodad: the same four takes
+        { Kit::BlastedLandsBolt, "BlastedLandsLightningbolt01Stan", 1.0f, 4936 },
+        { Kit::BlastedLandsBolt, "ChainHeal",                       0.8f, 5635 },
+        { Kit::Rumble,           "EarthquakeCameraShake (High Vol", 1.0f, 12549 },
+        { Kit::Rumble,           "EarthquakeCameraShake",           0.4f, 1485 },
+        { Kit::Rumble,           "EarthquakeCameraShake low volum", 0.2f, 9947 },
+    };
+    /// A row further than this above the wanted volume isn't played: that layer is left out (a distant bolt with only
+    /// loud rows to play it is heard as its rumble alone).
+    constexpr float kLuaTooLoud = 2.5f;
+    /// The Lua row for a kit at a volume (absolute, 0..1): the nearest on a log scale, or null when even the quietest
+    /// is more than kLuaTooLoud x the volume (or the volume is 0).
+    const char* LuaRowFor(Kit kit, float volume);
+
+    // The loudness by distance: (kThunderRef / d)^kThunderFalloff, 1 up to kThunderRef -- a near strike at full
+    // volume, 0.42 at 250 yd, 0.19 at 1000, 0.14 at 1600 -- fading to nothing over the last 15% before the silent
+    // distance. A gain on the kit's own volume.
+    constexpr float kThunderRef = kNearestStrike;
+    constexpr float kThunderFalloff = 0.6f;
+    constexpr float kThunderFadeShare = 0.15f;
+    float ThunderGain(float distanceYards, float maxDistance);
+
+    // What a strike sounds like by its distance:
+    //  - nearer than kNearCrack: a crack (the machine's lightning half the time, Shaman thunder or Call Lightning's
+    //    impact a quarter each), then the rumble rolling after it at half its gain;
+    //  - nearer than kRumbleOnly: the Blasted Lands bolt, the rumble after it at 0.7;
+    //  - farther: the rumble alone (x1.3), or the bolt when the rumble is off.
+    constexpr float kNearCrack = 250.0f;
+    constexpr float kRumbleOnly = 1200.0f;
+    constexpr float kRumbleAfterNear = 0.25f, kRumbleAfterMid = 0.5f; // seconds after the crack
+    struct ThunderLayer { Kit kit = Kit::Rumble; float gain = 0.0f; float after = 0.0f; }; // after: s after the crack's arrival
+    struct ThunderPlan  { int count = 0; ThunderLayer layer[2]; };
+    /// pick: 0..1 (random), which crack a near strike gets. Nothing (count 0) beyond maxDistance.
+    ThunderPlan PlanThunder(float distanceYards, float maxDistance, float pick, bool rumble);
+
+    /// The native path's point for a positional kit: this far from the listener toward the strike -- a quarter of its
+    /// MinDistance, at most 6 yd -- so the client's rolloff leaves the volume as we set it, with room for the
+    /// listener to move during the sound. 0 = not positional.
+    float PlacementDistance(Kit kit);
+
+    /// The client's 3D rolloff (its sound engine's ComputeRolloff, 0x8782B0, set as FMOD's rolloff callback): 1 up to
+    /// minDistance, then min / ((d - min) x 4 + min), fading to 0 over the last tenth before maxDistance.
+    float ClientRolloff(float minDistance, float maxDistance, float distance);
 
     // --- the day-night colours -------------------------------------------------------------------
     // The client's 18 interpolated band colours (0xAARRGGBB at 0xD38BD4, core Liquid.hpp kDnBandColors):
@@ -187,6 +266,45 @@ namespace wxl_livingazeroth::storm
         {"world effects: a model put on the animate list each frame", 0x007FB370, 10,
          {0x8B, 0x4B, 0x14, 0x6A, 0x01, 0xE8, 0x96, 0x8B, 0x02, 0x00}},
     };
+
+    // Thunder through the client's own sound kits (the native path; Lua PlaySound is the fallback), called on the main
+    // thread like the client's own object sounds (GameObject_C's one-shot positional sounds call it the same way):
+    //  - SI2::PlaySoundKit 0x4C6A40, __cdecl int(int kitId, const C3Vector* position (null: not positional),
+    //    SE2SoundKitObject* object (null: a one-shot), SE2SoundKitProperties* props, uint32 advancedId = 0,
+    //    uint32* soundId = null, int checkDistance = 1, int keepPlaying = 0). 0 = playing, else why not (SoundOutcome).
+    //  - SE2SoundKitProperties::ResetToDefaults 0x4C5990, __thiscall: 0xE8 bytes; m_volume (+4) = -1 means "the kit's
+    //    Volume x m_volumeScale (+8)" (PlaySoundKit at 0x4C6FD1 / 0x4C6FEE), m_volumeScale 1, group 0 (SFX).
+    //  - SE2::GetListenerPosition 0x879350, __cdecl bool(C3Vector*): where FMOD's listener is (the character, or the
+    //    camera with Sound_ListenerAtCharacter 0), in world coordinates like every sound's position.
+    //  - Positional sounds roll off with ComputeRolloff 0x8782B0 (ClientRolloff above).
+    constexpr uintptr_t kPlaySoundKit = 0x004C6A40;
+    constexpr uintptr_t kResetSoundProps = 0x004C5990;
+    constexpr uintptr_t kListenerPosition = 0x00879350;
+    constexpr uintptr_t kSoundRolloff = 0x008782B0;
+    constexpr size_t    kSoundPropsSize = 0xE8;
+    constexpr size_t    kSoundPropsVolume = 0x04, kSoundPropsVolumeScale = 0x08;
+    inline constexpr Guard kSoundGuards[] = {
+        {"sound kits: play one (SI2::PlaySoundKit)", 0x004C6A40, 16,
+         {0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x08, 0x81, 0xEC, 0x00, 0x01, 0x00, 0x00, 0x85, 0xC0, 0x7F, 0x09}},
+        {"sound kits: a set volume (+4) is used only within 0..1", 0x004C6FD1, 16,
+         {0xD9, 0xEE, 0xD8, 0x5B, 0x04, 0xDF, 0xE0, 0xF6, 0xC4, 0x41, 0x7A, 0x11, 0xD9, 0xE8, 0xD8, 0x5B}},
+        {"sound kits: else the kit's volume x the scale (+8)", 0x004C6FEE, 13,
+         {0xF7, 0x46, 0x3C, 0x00, 0x08, 0x00, 0x00, 0xD9, 0x46, 0x34, 0xD8, 0x4B, 0x08}},
+        {"sound kit properties: their defaults (volume -1 at +4)", 0x004C5990, 16,
+         {0xD9, 0x05, 0xF4, 0x2E, 0x9E, 0x00, 0x53, 0x56, 0x8B, 0xF1, 0xD9, 0x56, 0x04, 0x33, 0xDB, 0xD9}},
+        {"sound kit properties: the scale 1 at +8", 0x004C599F, 8, {0xD9, 0xE8, 0x83, 0xC8, 0xFF, 0xD9, 0x56, 0x08}},
+        {"sound engine: the listener's position", 0x00879350, 16,
+         {0x55, 0x8B, 0xEC, 0x83, 0x3D, 0x14, 0x38, 0xD4, 0x00, 0x00, 0x75, 0x04, 0x32, 0xC0, 0x5D, 0xC3}},
+        {"sound engine: the 3D rolloff", 0x008782B0, 16,
+         {0x55, 0x8B, 0xEC, 0xD9, 0x45, 0x0C, 0xD9, 0x45, 0x10, 0xD8, 0xD1, 0xDF, 0xE0, 0xF6, 0xC4, 0x01}},
+    };
+
+    /// What PlaySoundKit's result means for the fallback: Played (0); Declined by the client on purpose (9 SFX off,
+    /// 10 music off, 11 ambience off, 14 too many sounds at once, 15 a suppressor kit already playing, 17 sound off or
+    /// in a movie: Lua would be declined the same way, so nothing else plays); else a Problem with the kit (5 no such
+    /// kit, 6 no files, 8 bad group, 16 its file failed, 20 not downloaded yet, anything else): Lua's row is tried.
+    enum class SoundOutcome { Played, Declined, Problem };
+    SoundOutcome Outcome(int playSoundKitResult);
 
     /// The first guard of `guards` whose bytes differ (read through `read(address, size)`, which returns a
     /// pointer to that many bytes or null), or null when all match.

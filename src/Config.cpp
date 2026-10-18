@@ -133,6 +133,8 @@ namespace wxl_livingazeroth::config
             Float(s, "SurfaceCoverDepth", "Your multiplier on the cover depth from SurfaceCover.cdbc (1 = as the table says).", cover::DepthMultiplier()),
             Float(s, "SurfaceCoverFillBudgetMs", "Milliseconds per frame spent filling the cover around you (on login, teleports, moving). Lower = smoother, slower to appear.", cover::FillBudgetMs()));
         cover::SetLiftBaseEffects(Bool(s, "SurfaceCoverLiftEffects", "Effects at units' feet (auras and other spell effects on the Base attachment) sit on top of the cover instead of under it (within 40 yards of you).", cover::LiftBaseEffects()));
+        cover::SetTrenchSoftness(Float(s, "SurfaceCoverTrenchSoftness", "No trench wall or rim narrower than this many 0.25-yard cells, or walked trenches get jagged, stair-stepped edges (0 = the original widths, 0..4).", cover::TrenchSoftness()));
+        cover::SetRainFillsRuts(Float(s, "SurfaceCoverRainFillsRuts", "How much faster mud ruts fill in in heavy rain, 0..1 (0.75 = in a quarter of their time; 0 = rain changes nothing).", cover::RainFillsRuts()));
 
         terrainwet::SetEnabled(Bool(s, "TerrainWetness", "The terrain itself looks darker where the ground is wet (rain, water nearby).", terrainwet::Enabled()));
         terrainwet::SetStrength(Float(s, "TerrainWetnessStrength", "How much darker soaked ground gets, 0..1: the terrain and the surface cover alike.", terrainwet::Strength()));
@@ -205,6 +207,8 @@ namespace wxl_livingazeroth::config
             w.heightScale = In(s, f, "Height", "How high the push reaches, as a multiple of the unit's height.", w.heightScale);
             w.rim = In(s, f, "Rim", "Fog piled up at the wake's edge, as a share of the push.", w.rim);
             w.swirl = In(s, f, "Swirl", "How far the fog's pattern is dragged and curled along the path.", w.swirl);
+            w.rainMixing = In(s, f, "RainMixing", "Rain mixes the fog back into a wake, 0..1: at 1 heavy rain leaves almost no wake (light rain a little less of one), 0 = rain changes nothing. Calm, dry fog is unaffected.", w.rainMixing);
+            w.windMixing = In(s, f, "WindMixing", "A fresh to strong wind at the ground mixes the fog back too, 0..1 (calm and light winds change nothing).", w.windMixing);
         }
         // Storms: rain building up into thunder.
         {
@@ -218,6 +222,9 @@ namespace wxl_livingazeroth::config
             t.thunder = In(s, f, "Thunder", "Heavy rain: lightning strikes, lighting the sky and (near ones) the ground.", t.thunder);
             t.sounds = In(s, f, "ThunderSounds", "A strike's crack, after the sound's travel time (about 3 s per km), quieter the farther.", t.sounds);
             t.soundDistance = In(s, f, "ThunderSoundDistance", "Strikes farther than this (yards) are silent.", t.soundDistance);
+            t.soundVolume = In(s, f, "ThunderVolume", "Your multiplier on the thunder's loudness (a near strike at 1 plays its recording at full volume).", t.soundVolume);
+            t.rumble = In(s, f, "ThunderRumble", "A deep rumble rolls after near and mid cracks, and is all you hear of very far strikes.", t.rumble);
+            t.nativeSound = In(s, f, "ThunderNative", "Play thunder through the client's sound kits: a loudness per distance, from the strike's direction. 0 = Lua PlaySound (fixed volumes, no direction).", t.nativeSound);
             t.strikeLight = In(s, f, "StrikeLight", "Your multiplier on the point light at a strike within light range, 0 = none.", t.strikeLight);
             t.wind = In(s, f, "Gusts", "Your multiplier on the storm's extra gusts, 0 = none.", t.wind);
             t.haze = In(s, f, "Haze", "Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none.", t.haze);

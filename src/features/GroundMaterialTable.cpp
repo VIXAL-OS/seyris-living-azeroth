@@ -281,6 +281,18 @@ namespace wxl_livingazeroth::materials
         return false;
     }
 
+    bool Sealed(uint32_t materialId)
+    {
+        bool sealed = false;
+        ForChain(materialId, [&](uint32_t id)
+        {
+            const Material* m = Find(id);
+            if (m && (m->flags & kFlagSealed)) sealed = true;
+            return m && !sealed;
+        });
+        return sealed;
+    }
+
     bool        Exists(uint32_t materialId) { return Find(materialId) != nullptr; }
     const char* Name(uint32_t materialId)   { const Material* m = Find(materialId); return m ? m->name.c_str() : ""; }
     unsigned    MaterialCount()             { return static_cast<unsigned>(g_materials.size()); }

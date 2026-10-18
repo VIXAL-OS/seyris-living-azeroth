@@ -3,6 +3,8 @@
 // stand-in for wxl-seyris-tools' cdbc reader, and resolve for sample (area, texture) pairs the way the
 // terrain asks; the snow and every other row stay exactly as they were; and the two look rules of
 // features/CoverBlend.hpp leave snow's numbers bit-identical. No game, no WXL core.
+// Also mud (2026-10-17): no mud on paved ground (GroundMaterial kFlagSealed, blend::MudAllowed), Elwynn's shallow ruts,
+// the trench edge filter (blend::TrenchProfile), feet flattening earlier rims (blend::StampedRim) and rain filling ruts.
 //
 // Usage:  cover_table_tests <data dir> [<data dir before the change>]
 //   (the repo's data/; the second one, e.g. the files from git HEAD, adds the unchanged-rows checks)
@@ -217,6 +219,10 @@ namespace
     const Spot kTirisfalShore { "Tirisfal pebble shore",  85,   0,   "tileset\\tirisfall\\tirisfallshore.blp", 0, 7 };
     const Spot kSwampMuck    { "Swamp of Sorrows muck (wet ground)", 8, 0, "tileset\\swamp of sorrows\\swampsorrowsmuckdark01.blp", 0, 8 };
     const Spot kElwynnDirt   { "Elwynn dirt (footprint outlines)", 12, 0, "tileset\\elwynn\\elwynndirtbase2.blp", 0, 0 };
+    // Elwynn's road at Goldshire (Azeroth_31_49): ElwynnCobblestoneBase (effect 513) over ElwynnDirtBase2 (1106).
+    const Spot kElwynnCobble { "Elwynn cobblestone road", 87,   0,   "tileset\\elwynn\\elwynncobblestonebase.blp", 513, -1 };
+    const Spot kElwynnRoadDirt { "Elwynn road's dirt (between the cobbles)", 87, 0, "tileset\\elwynn\\elwynndirtbase2.blp", 1106, 0 };
+    const Spot kDuskwoodCobble { "Duskwood cobblestones",  10,   0,   "tileset\\duskwood\\duskwoodcobblestone.blp", 521, -1 };
     const Spot kStormIce     { "Storm Peaks clear ice",   67,   571, "tileset\\expansion02\\stormpeaks\\sp_icea.blp", 0, -1 };
 
     // Everything a row decides, with the cover texture as its path (IDs can move when rows are added).
@@ -288,7 +294,7 @@ int main(int argc, char** argv)
     if (argc < 2) { std::printf("usage: cover_table_tests <data dir> [<data dir before the change>]\n"); return 2; }
     const std::string now = argv[1], before = argc > 2 ? argv[2] : "";
     const Spot* const kUnchanged[] = { &kDunMorogh, &kNorthSnow, &kWinterspring, &kWestfallWet, &kFjordShore, &kTirisfalShore,
-                                       &kSwampMuck, &kElwynnDirt, &kStormIce, &kElwynnGrass,
+                                       &kSwampMuck, &kStormIce, &kElwynnGrass,
                                        &kSteppesRock, &kSteppesLava, &kSilithusRock, &kTanarisCrack, &kBlasted, &kHellfire, &kBoneRock, &kBoneTiles,
                                        &kTanarisBurn, &kTanarisRock, &kDarkshoreWaves };
     try
@@ -307,7 +313,7 @@ int main(int argc, char** argv)
                                &kBoneRock, &kTanarisSand, &kTanarisStone, &kSilithusHi, &kSilithus01, &kSilithusDet, &kSilithusRock,
                                &kCavernsBurn, &kCavernsRock, &kTanarisBurn, &kTanarisRock,
                                &kAzuremystSand, &kAzuremystRocks, &kDarkshoreSand, &kDarkshoreWaves,
-                               &kBlasted, &kHellfire, &kElwynnGrass, &kDunMorogh, &kNorthSnow })
+                               &kBlasted, &kHellfire, &kElwynnGrass, &kElwynnDirt, &kElwynnCobble, &kDunMorogh, &kNorthSnow })
             PrintSpot(*s);
 
         Test("Searing Gorge and Burning Steppes ash: the ash cover, thin, soft, its own texture, not under water", []
@@ -618,6 +624,178 @@ int main(int argc, char** argv)
             file[0] = 'X';
             CHECK(!blp::AverageColour(file.data(), file.size(), average));                   // not BLP2
         });
+        Test("paved ground: Elwynn's cobbles (and the old world's other paved roads) are sealed; its dirt, grass and the rest aren't", []
+        {
+            const ct::Values cobble = At(kElwynnCobble);
+            CHECK(cobble.material == 80 && std::string(mat::Name(80)) == "Paved" && mat::Sealed(80) && cobble.depth == 0.0f);
+            CHECK(mat::Sealed(At(kDuskwoodCobble).material));
+            for (const char* t : { "Tileset/Stranglethorn/StranglethornCobblestoneRoad.blp", "TILESET\\TIRISFALL\\TirisfallStoneRoad01.blp",
+                                   "tileset\\burningstepps\\burningsteppsbrick01.blp" })
+                CHECK(mat::Sealed(mat::Select(1, 0, t, 0, -1)));
+            // Sealed reads like no material for everything else: moisture, stiffness, heat (the flag only).
+            const mat::Values none = mat::Get(0), paved = mat::Get(80);
+            CHECK(paved.restMoisture == none.restMoisture && paved.absorbency == none.absorbency && paved.stiffness == none.stiffness &&
+                  !paved.hasTemperature && !paved.restMoistureSet && paved.flags == mat::kFlagSealed);
+            CHECK(!ct::IsSnow(cobble.coverMaterial, 87, 0));
+            // Not sealed: Elwynn's dirt (the road's and elsewhere), grass, mud, sand, snow, ice, no material.
+            for (const Spot* sp : { &kElwynnDirt, &kElwynnRoadDirt, &kElwynnGrass, &kSwampMuck, &kDesolaceMud, &kTanarisSand, &kDunMorogh,
+                                    &kNorthSnow, &kStormIce, &kBoneTiles, &kHellfire })
+                if (mat::Sealed(At(*sp).material)) throw std::runtime_error(std::string("sealed: ") + sp->what);
+            CHECK(!mat::Sealed(0) && !mat::Sealed(9999));
+            // A child of a sealed material is sealed; the flag comes along the chain.
+            CHECK(mat::Parent(80) == 0);
+        });
+
+        Test("mud on stone: none where a third is cobbled, all of it on open dirt, smooth between", []
+        {
+            CHECK(blend::MudAllowed(0.0f) == 1.0f && blend::MudAllowed(blend::kSealedFrom) == 1.0f);
+            CHECK(blend::MudAllowed(blend::kSealedFull) == 0.0f && blend::MudAllowed(1.0f) == 0.0f);
+            float last = 1.0f;
+            for (float t = 0.0f; t <= 1.0f; t += 0.01f) { const float m = blend::MudAllowed(t); CHECK(m <= last + 1e-6f && m >= 0.0f); last = m; }
+            CHECK(blend::MudAllowed(std::nanf("")) == 1.0f && blend::MudAllowed(-1.0f) == 1.0f);
+            // Goldshire's road, sampled every yard (tools: adt_spot.py on Azeroth_31_49): the cobbles' painted share. Every
+            // spot of the road holds its mud back; the verge (no cobbles, or one stone in 15) keeps it.
+            for (float cobbles : { 1.0f, 0.93f, 0.87f, 0.8f, 0.73f, 0.67f, 0.6f, 0.53f, 0.47f, 0.4f, 0.33f })
+                CHECK(blend::MudAllowed(cobbles) == 0.0f);
+            for (float verge : { 0.0f, 0.05f }) CHECK(blend::MudAllowed(verge) == 1.0f);
+            CHECK(blend::MudAllowed(0.13f) > 0.5f);
+        });
+
+        Test("Elwynn's mud: still on wet dirt only, hidden under the grass until feet push a rim up, then 3 cm proud, not 24", []
+        {
+            const ct::Values v = At(kElwynnDirt);
+            CHECK(v.material == 12 && ct::MoistureGated(v.moistureMin) && Near(v.moistureMin, 0.6f) && Near(v.relaxSeconds, 22.0f));
+            CHECK(Near(v.depth, 0.02f) && Near(v.zOffset, -0.025f) && Near(v.rim, 1.75f) && std::fabs(v.stiffness - 0.8f) < 1e-5f);
+            CHECK(At(kElwynnRoadDirt).material == 12);
+            auto top = [&](float depth, float zOffset, float rimShare, float rim, float press)
+            { return zOffset + blend::DeformedDepth(depth, rimShare, rim, press, v.stiffness, 1.0f); };
+            const float untouched = top(v.depth, v.zOffset, v.rim, 0.0f, 0.0f), ridge = top(v.depth, v.zOffset, v.rim, 1.0f, 0.0f);
+            const float pressed = top(v.depth, v.zOffset, v.rim, 0.0f, 1.0f);
+            std::printf("  mud above the grass: untouched %+.3f, a rim %+.3f, the trench floor %+.3f yd (before: rim %+.3f)\n", untouched, ridge, pressed,
+                        top(0.04f, -0.08f, 7.0f, 1.0f, 0.0f));
+            CHECK(untouched < 0.0f && untouched > -0.01f && pressed < 0.0f);
+            CHECK(ridge > 0.02f && ridge < 0.035f);
+            CHECK(top(0.04f, -0.08f, 7.0f, 1.0f, 0.0f) > 0.2f); // what it was
+            // A rim only shows where the dirt is painted at about half or more (Shape smoothsteps the coverage).
+            auto shape = [](float c) { return c * c * (3.0f - 2.0f * c); };
+            CHECK(top(v.depth * shape(0.3f), v.zOffset, v.rim, 1.0f, 0.0f) < 0.0f && top(v.depth * shape(0.6f), v.zOffset, v.rim, 1.0f, 0.0f) > 0.0f);
+            // The Swamp of Sorrows' muck as it was.
+            const ct::Values m = At(kSwampMuck);
+            CHECK(Near(m.depth, 0.02f) && Near(m.zOffset, -0.08f) && Near(m.rim, 6.0f));
+        });
+
+        Test("trench edge filter: no wall or rim narrower than its cells (the grid's staircase), the original widths for big trenches", []
+        {
+            const float cell = 0.25f;
+            // Softness 0: exactly the original supports, for any size.
+            for (float r : { 0.1f, 0.4f, 1.0f, 2.5f })
+            {
+                const blend::TrenchShape s = blend::TrenchShapeFor(r, cell, 0.0f);
+                CHECK(Near(s.pressIn, 0.7f * r) && Near(s.pressOut, r) && Near(s.rimPeak, 1.25f * r) && Near(s.rimHalf, 0.35f * r));
+                CHECK(blend::TrenchProfile(0.0f, s).press == 1.0f && blend::TrenchProfile(0.69f * r, s).press == 1.0f);
+                CHECK(blend::TrenchProfile(r, s).press == 0.0f && blend::TrenchProfile(1.25f * r, s).rim == 1.0f);
+                CHECK(blend::TrenchProfile(0.89f * r, s).rim == 0.0f && blend::TrenchProfile(1.61f * r, s).rim == 0.0f);
+                CHECK(Near(blend::TrenchReach(s), 1.6f * r));
+            }
+            // From 1.25 yd up the filter changes nothing.
+            for (float r : { 1.25f, 1.8f, 2.5f })
+            {
+                const blend::TrenchShape a = blend::TrenchShapeFor(r, cell, 0.0f), b = blend::TrenchShapeFor(r, cell, 1.5f);
+                CHECK(Near(a.pressIn, b.pressIn) && Near(a.pressOut, b.pressOut) && Near(a.rimPeak, b.rimPeak) && Near(a.rimHalf, b.rimHalf));
+            }
+            // Small trenches (a human's 0.4 yd, a cat's 0.15): every wall and rim flank at least the filter's width; the
+            // largest step between two vertices a cell apart, before and after.
+            auto widest = [&](const blend::TrenchShape& s, bool rim)
+            {
+                float most = 0.0f;
+                for (float d = 0.0f; d < 3.0f; d += 0.005f)
+                {
+                    const float a = rim ? blend::TrenchProfile(d, s).rim : blend::TrenchProfile(d, s).press;
+                    const float b = rim ? blend::TrenchProfile(d + cell, s).rim : blend::TrenchProfile(d + cell, s).press;
+                    most = std::fmax(most, std::fabs(a - b));
+                }
+                return most;
+            };
+            for (float r : { 0.15f, 0.4f, 0.8f })
+            {
+                const blend::TrenchShape before = blend::TrenchShapeFor(r, cell, 0.0f), after = blend::TrenchShapeFor(r, cell, 1.5f);
+                CHECK(after.pressOut - after.pressIn >= 1.5f * cell - 1e-5f && after.rimHalf >= 1.5f * cell - 1e-5f);
+                CHECK(after.amplitude > 0.0f && after.amplitude <= 1.0f && (r < 0.22f || after.amplitude == 1.0f));
+                CHECK(Near(0.5f * (after.pressIn + after.pressOut), 0.85f * r) || after.pressIn == 0.0f); // the wall around the same middle
+                CHECK(after.rimPeak >= after.pressOut - 1e-6f && after.rimPeak >= 1.25f * r - 1e-6f);
+                const float stepBefore = std::fmax(widest(before, false), widest(before, true)), stepAfter = std::fmax(widest(after, false), widest(after, true));
+                std::printf("  trench %.2f yd: largest step between neighbouring vertices %.2f -> %.2f\n", r, stepBefore, stepAfter);
+                CHECK(stepAfter <= 0.86f && stepAfter < stepBefore);
+                if (r < 0.5f) CHECK(stepBefore > 0.99f); // the original: all or nothing from one vertex to the next
+            }
+            // A critter's trench, too small for the filter: a dimple one wall wide, shallower; continuous in its size.
+            CHECK(Near(blend::TrenchShapeFor(0.15f, cell, 1.5f).amplitude, 0.68f) && blend::TrenchShapeFor(0.4f, cell, 1.5f).amplitude == 1.0f);
+            for (float r = 0.05f; r < 0.5f; r += 0.001f)
+            {
+                const blend::TrenchShape a = blend::TrenchShapeFor(r, cell, 1.5f), b = blend::TrenchShapeFor(r + 0.001f, cell, 1.5f);
+                CHECK(std::fabs(a.amplitude - b.amplitude) < 0.01f && std::fabs(a.pressOut - b.pressOut) < 0.01f && std::fabs(a.pressIn - b.pressIn) < 0.01f);
+            }
+            // Continuous: no jump anywhere along the profile.
+            const blend::TrenchShape h = blend::TrenchShapeFor(0.4f, cell, 1.5f);
+            for (float d = 0.0f; d < 1.5f; d += 0.001f)
+                CHECK(std::fabs(blend::TrenchProfile(d + 0.001f, h).press - blend::TrenchProfile(d, h).press) < 0.01f &&
+                      std::fabs(blend::TrenchProfile(d + 0.001f, h).rim - blend::TrenchProfile(d, h).rim) < 0.01f);
+        });
+
+        Test("feet flatten the rims of earlier steps: a walked path is a trench between two rims, not one raised band", []
+        {
+            // A unit 0.4 yd wide walks along x (a step every 0.05 yd, as at 60 fps); vertices across its path every cell.
+            const float cell = 0.25f, r = 0.4f;
+            const blend::TrenchShape s = blend::TrenchShapeFor(r, cell, 1.5f);
+            float pressNew[13] = {}, rimNew[13] = {}, pressOld[13] = {}, rimOld[13] = {};
+            for (float x = -3.0f; x <= 3.0f; x += 0.05f)
+                for (int k = 0; k < 13; ++k)
+                {
+                    const float y = (k - 6) * cell, d = std::sqrt(x * x + y * y);
+                    const blend::TrenchStamp st = blend::TrenchProfile(d, s);
+                    rimNew[k] = blend::StampedRim(rimNew[k], st.press, st.rim, pressNew[k]);
+                    pressNew[k] = std::fmax(pressNew[k], st.press);
+                    pressOld[k] = std::fmax(pressOld[k], st.press);
+                    rimOld[k] = std::fmax(rimOld[k], st.rim);
+                }
+            // Before: the rim stood over the whole path, the trench floor included. Now: none where feet pressed.
+            CHECK(rimOld[6] > 0.9f && pressOld[6] == 1.0f);
+            CHECK(rimNew[6] < 0.01f && pressNew[6] == 1.0f);
+            // The rims beside the path stay (the walker passes them by), and the path is symmetric.
+            CHECK(rimNew[4] > 0.5f && rimNew[8] > 0.5f && Near(rimNew[4], rimNew[8]) && rimNew[0] == 0.0f);
+            // Mud like Elwynn's: the walked path's middle stays under the grass, the rims beside it show.
+            const float depth = 0.02f, zOffset = -0.025f, rimShare = 1.75f, stiff = 0.8f;
+            const float middleNow = zOffset + blend::DeformedDepth(depth, rimShare, rimNew[6], pressNew[6], stiff, 1.0f);
+            const float middleOld = zOffset + blend::DeformedDepth(depth, rimShare, rimOld[6], pressOld[6], stiff, 1.0f);
+            const float side = zOffset + blend::DeformedDepth(depth, rimShare, rimNew[4], pressNew[4], stiff, 1.0f);
+            std::printf("  a walked path in mud: its middle %+.3f yd (was %+.3f), a rim beside it %+.3f\n", middleNow, middleOld, side);
+            CHECK(middleNow < 0.0f && middleOld > 0.0f && side > 0.0f);
+            // Standing still: the stamp settles at once and stays (a ring outside the press untouched, inside it lowered).
+            for (float d : { 0.3f, 0.5f, 0.7f })
+            {
+                const blend::TrenchStamp st = blend::TrenchProfile(d, s);
+                float rim = 0.0f, press = 0.0f, settled = -1.0f;
+                for (int i = 0; i < 10; ++i)
+                {
+                    rim = blend::StampedRim(rim, st.press, st.rim, press);
+                    press = std::fmax(press, st.press);
+                    if (i == 1) settled = rim;
+                }
+                CHECK(Near(rim, settled) && Near(rim, st.rim * (1.0f - st.press)));
+            }
+            CHECK(blend::StampedRim(0.8f, 0.0f, 0.3f, 0.0f) == 0.8f && blend::StampedRim(0.8f, 1.0f, 0.3f, 0.0f) == 0.3f);
+            CHECK(Near(blend::StampedRim(0.8f, 0.5f, 0.1f, 0.0f), 0.4f) && blend::StampedRim(0.0f, 0.0f, 1.0f, 1.0f) == 0.0f);
+        });
+
+        Test("rain fills mud ruts: a quarter of the time in heavy rain, as the table says in dry weather and off mud", []
+        {
+            CHECK(blend::RainRelaxShare(0.0f, 1.0f, 0.75f) == 1.0f && blend::RainRelaxShare(1.0f, 0.0f, 0.75f) == 1.0f);
+            CHECK(Near(blend::RainRelaxShare(1.0f, 1.0f, 0.75f), 0.25f) && Near(blend::RainRelaxShare(0.5f, 1.0f, 0.75f), 0.625f));
+            CHECK(blend::RainRelaxShare(1.0f, 1.0f, 0.0f) == 1.0f && blend::RainRelaxShare(std::nanf(""), 1.0f, 0.75f) == 1.0f);
+            CHECK(blend::RainRelaxShare(2.0f, 3.0f, 0.75f) == 0.25f);
+            std::printf("  Elwynn's ruts fill in in %.1f s dry, %.1f s in heavy rain\n", 22.0f, 22.0f * blend::RainRelaxShare(1.0f, 1.0f, 0.75f));
+        });
+
         Test("the tables reload: a second load gives the same answers", [&]
         {
             const ct::Values first = At(kSearingAsh);

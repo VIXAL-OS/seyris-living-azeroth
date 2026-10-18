@@ -50,19 +50,23 @@ namespace wxl_livingazeroth::cover::detail
     unsigned                           g_ripplesShaped = 0;   // of them, following their print's own outline
     std::vector<coverprints::NewPrint> g_newPrints;
 
+    float    g_rainNow = 0.0f; // the rain the ruts last filled in with (StormModel RainLevel; panel)
     unsigned g_drawPatches = 0, g_emptyLevels = 0;
     unsigned g_snowLookups = 0; // actual SnowAt calls in the last cover draw
     unsigned g_stamps = 0;
 
-    // A trench under one grounded unit: pressed flat inside r, a rim between r and 1.6 r. A groove (a slither
-    // trail) is carved in sand too, where feet only leave rings.
+    // A trench under one grounded unit: pressed flat in the middle, its wall around 0.85 r, a rim outside it
+    // (blend::TrenchProfile: no wall or rim narrower than the edge filter's cells, or the grid draws them as a
+    // staircase). The foot flattens rims earlier steps pushed up (blend::StampedRim). A groove (a slither trail) is
+    // carved in sand too, where feet only leave rings.
     void Stamp(const float pos[3], float radius, bool groove = false)
     {
         const Level& L = g_levels[0];
         float ground;
         if (!terrain::HeightAt(pos[0], pos[1], ground) || std::fabs(pos[2] - ground) > 0.35f) return; // airborne, swimming, on a WMO
         ++g_stamps;
-        const float outer = radius * 1.6f, rimPeak = radius * 1.25f, rimHalf = radius * 0.35f;
+        const blend::TrenchShape shape = blend::TrenchShapeFor(radius, L.cell, g_settings.trenchSoftness);
+        const float outer = blend::TrenchReach(shape);
         const int i0 = static_cast<int>(std::floor((pos[0] - outer) / L.cell)), i1 = static_cast<int>(std::ceil((pos[0] + outer) / L.cell));
         const int j0 = static_cast<int>(std::floor((pos[1] - outer) / L.cell)), j1 = static_cast<int>(std::ceil((pos[1] + outer) / L.cell));
         for (int j = j0; j <= j1; ++j)
@@ -75,13 +79,11 @@ namespace wxl_livingazeroth::cover::detail
                 const int s = SlotOf(i, j);
                 // Sand keeps no trench: its prints get rings instead (AddRipple).
                 const float keep = g_settings.ripples && !groove ? 1.0f - g_rippleCell[s] : 1.0f;
-                if (d < radius)
-                {
-                    const float t = (d < radius * 0.7f ? 1.0f : (radius - d) / (radius * 0.3f)) * keep;
-                    if (t > g_press[s]) { g_press[s] = t; MarkActive(s); }
-                }
-                const float r = (1.0f - std::fabs(d - rimPeak) / rimHalf) * keep;
-                if (r > g_rim[s]) { g_rim[s] = r; MarkActive(s); }
+                const blend::TrenchStamp st = blend::TrenchProfile(d, shape);
+                const float t = st.press * keep, pressedBefore = g_press[s];
+                if (t > g_press[s]) { g_press[s] = t; MarkActive(s); }
+                const float r = blend::StampedRim(g_rim[s], t, st.rim * keep, pressedBefore);
+                if (r != g_rim[s]) { g_rim[s] = r; MarkActive(s); }
             }
     }
 
@@ -181,8 +183,9 @@ namespace wxl_livingazeroth::cover::detail
         if (shaped) ++g_ripplesShaped;
     }
 
-    void Simulate(float dt)
+    void Simulate(float dt, float rain)
     {
+        g_rainNow = rain;
         g_rippleClock += dt;
         g_ripples.Expire(g_rippleClock);
         g_wmoRipples.Expire(g_rippleClock);
@@ -199,7 +202,9 @@ namespace wxl_livingazeroth::cover::detail
         for (size_t k = 0; k < g_active.size();)
         {
             const int s = g_active[k];
-            const float seconds = g_relaxCell[s] * g_settings.relaxMul;
+            // Mud ruts (moisture-gated cells) fill in faster in the rain.
+            const float wet = g_levels[0].wetGate[s] ? blend::RainRelaxShare(rain, g_levels[0].wetGate[s] / 255.0f, g_settings.rainFill) : 1.0f;
+            const float seconds = g_relaxCell[s] * g_settings.relaxMul * wet;
             const float relax = seconds > 0.1f ? dt / seconds : 1.0f;
             g_press[s] = g_press[s] > relax ? g_press[s] - relax : 0.0f;
             g_rim[s]   = g_rim[s] > relax ? g_rim[s] - relax : 0.0f;

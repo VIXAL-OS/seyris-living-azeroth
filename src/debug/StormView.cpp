@@ -6,6 +6,7 @@
 #include "../env/Storm.hpp"
 #include "../env/StormModel.hpp"
 
+#include <cmath>
 #include <cstdio>
 
 namespace wxl_livingazeroth::debug
@@ -16,6 +17,7 @@ namespace wxl_livingazeroth::debug
         const WXL_Api* g_api = nullptr;
         float g_grade = 0.8f;
         float g_distance = 400.0f;
+        int   g_kit = 0;            // the recording to audition (storm::Kit)
 
         void __cdecl Panel(void* /*user*/)
         {
@@ -23,9 +25,9 @@ namespace wxl_livingazeroth::debug
             const storm::Status& st = storm::GetStatus();
             char line[320];
 
-            std::snprintf(line, sizeof(line), "%s: rain grade %.2f%s, storminess %.2f",
+            std::snprintf(line, sizeof(line), "%s: rain grade %.2f%s (rain %.2f), storminess %.2f",
                           storm::PhaseName(static_cast<storm::Phase>(st.phase)), st.grade,
-                          st.overridden ? " (the climate panel's override)" : "", st.storminess);
+                          st.overridden ? " (the climate panel's override)" : "", st.rain, st.storminess);
             g_api->UiText(line);
             char next[32] = "none coming";
             if (st.nextFlash >= 0.0f) std::snprintf(next, sizeof(next), "in %.0f s", st.nextFlash);
@@ -47,6 +49,9 @@ namespace wxl_livingazeroth::debug
             g_api->UiCheckbox("heavy rain: strikes##storm", &s.thunder);
             g_api->UiCheckbox("thunder sounds##storm", &s.sounds);
             g_api->UiSliderFloat("strikes farther than this are silent (yd)##storm", &s.soundDistance, 0.0f, 2500.0f);
+            g_api->UiSliderFloat("thunder volume (x)##storm", &s.soundVolume, 0.0f, 2.0f);
+            g_api->UiCheckbox("rolling rumble after the cracks (alone for very far strikes)##storm", &s.rumble);
+            g_api->UiCheckbox("thunder through the client's sound kits (volume by distance, direction); off = Lua PlaySound##storm", &s.nativeSound);
             g_api->UiSliderFloat("strike light##storm", &s.strikeLight, 0.0f, 3.0f);
             g_api->UiSliderFloat("storm gusts##storm", &s.wind, 0.0f, 2.0f);
             g_api->UiSliderFloat("storm haze##storm", &s.haze, 0.0f, 1.0f);
@@ -86,9 +91,37 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiButton("Strike at this distance##stormtest")) storm::TestStrike(g_distance);
             g_api->UiSameLine();
             if (g_api->UiButton("Its crack, now##stormtest")) storm::TestSound(g_distance);
-            const char* sound = storm::ThunderSound(g_distance, s.soundDistance);
-            std::snprintf(line, sizeof(line), "at %.0f yd: the crack comes %.1f s after the flash, as %s", g_distance,
-                          storm::ThunderDelay(g_distance), sound ? sound : "nothing (beyond the silent distance)");
+            const storm::ThunderPlan plan = storm::PlanThunder(g_distance, s.soundDistance, 0.0f, s.rumble != 0);
+            char heard[200] = "nothing (beyond the silent distance)";
+            int at = 0;
+            for (int i = 0; i < plan.count && at >= 0 && at < static_cast<int>(sizeof(heard)); ++i)
+            {
+                const storm::KitInfo& k = storm::Info(plan.layer[i].kit);
+                at += std::snprintf(heard + at, sizeof(heard) - at, "%s%s at %.2f%s", i ? ", then " : "", k.label,
+                                    k.volume * plan.layer[i].gain * s.soundVolume, plan.layer[i].after > 0.0f ? " (rolling after it)" : "");
+            }
+            std::snprintf(line, sizeof(line), "at %.0f yd: the thunder comes %.1f s after the flash: %s%s", g_distance,
+                          storm::ThunderDelay(g_distance), heard,
+                          plan.count && g_distance < storm::kNearCrack ? " (near cracks vary: machine lightning half the time, Shaman thunder or Call Lightning)" : "");
+            g_api->UiText(line);
+
+            // Audition: each candidate recording at the slider's distance.
+            const char* kits[static_cast<int>(storm::Kit::Count)];
+            for (int i = 0; i < static_cast<int>(storm::Kit::Count); ++i) kits[i] = storm::kKits[i].label;
+            g_api->UiCombo("recording##stormkit", &g_kit, kits, static_cast<int>(storm::Kit::Count));
+            g_api->UiSameLine();
+            if (g_api->UiButton("Play it at this distance##stormkit")) storm::TestKit(g_kit, g_distance);
+            {
+                const storm::KitInfo& k = storm::kKits[g_kit >= 0 && g_kit < static_cast<int>(storm::Kit::Count) ? g_kit : 0];
+                const float volume = std::fmin(1.0f, k.volume * storm::ThunderGain(g_distance, 1.0e9f) * s.soundVolume);
+                const char* lua = storm::LuaRowFor(static_cast<storm::Kit>(g_kit), volume);
+                std::snprintf(line, sizeof(line), "  kit %d \"%s\": volume %.2f here (its own %.2f, min distance %.0f yd%s); Lua fallback: %s",
+                              k.soundKitId, k.name, volume, k.volume, k.minDistance, k.positional ? ", from the strike's direction" : ", not positional",
+                              lua ? lua : "none quiet enough (left out)");
+                g_api->UiText(line);
+            }
+            std::snprintf(line, sizeof(line), "thunder through %s; played %u through the kits, %u through Lua; declined by the client %u, left out %u; last kit result %d",
+                          storm::SoundStatus(), st.nativeSounds, st.luaSounds, st.declinedSounds, st.droppedSounds, st.lastKitResult);
             g_api->UiText(line);
         }
     }

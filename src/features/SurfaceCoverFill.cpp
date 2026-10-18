@@ -27,6 +27,7 @@ namespace wxl_livingazeroth::cover::detail
         bool paintedSnow = false;
         bool hasGround = false; // the layer's texture's average colour is known
         float ground[3] = {};   // (RGB 0..1): what a ground-like cover over it takes (blend::MatchGround)
+        bool sealed = false;    // paved or cobbled (GroundMaterial kFlagSealed): no mud forms on it
     };
 
     // Each terrain texture's average colour, read once per session from the client's archives (render/BlpColour.hpp;
@@ -55,6 +56,7 @@ namespace wxl_livingazeroth::cover::detail
         r.paintedSnow = r.painted.depth > 0.0f && covertable::IsSnow(r.painted.coverMaterial, area, map);
         r.look = covertable::SnowLook(area, map, texture, effect, terrainType);
         r.hasGround = GroundColour(texture, r.ground);
+        r.sealed = materials::Sealed(r.painted.material);
         return r;
     }
 
@@ -108,6 +110,7 @@ namespace wxl_livingazeroth::cover::detail
         float ripple = 0.0f;   // share of the look from rows with kFlagRipplePrints (sand)
         // The painted share that needs ground moisture (MoistureMin), its threshold and the ground's rest moisture.
         float wetGate = 0.0f, wetMin = 0.0f, wetRest = 0.0f;
+        float sealed = 0.0f;   // the share painted with sealed ground (cobbles, paving), which holds mud back
         bool  hasLook = false; // some row (painted or fallen snow's look) set the properties above
     };
 
@@ -244,13 +247,21 @@ namespace wxl_livingazeroth::cover::detail
         float gatedW = 0.0f, gatedMin = 0.0f, gatedRest = 0.0f;
         float bare[4] = {};
         float groundSum[3] = {}, groundW = 0.0f; // the bare layers' colours (those known), for MatchGround below
+        // Mud needs open ground: the share painted with cobbles or paving holds it back (blend::MudAllowed). Elwynn's
+        // road is cobblestones over its dirt texture, whose 7..67% between the stones grew mud on the road itself.
+        float sealedW = 0.0f, allW = 0.0f;
+        for (int k = 0; k < count; ++k)
+            if (parts[k].weight > 0.0f) { allW += parts[k].weight; if (parts[k].rows->sealed) sealedW += parts[k].weight; }
+        b.sealed = allW > 0.0f ? sealedW / allW : 0.0f;
+        const float mudAllowed = blend::MudAllowed(b.sealed);
         for (int k = 0; k < count; ++k)
         {
             const float wk = parts[k].weight;
             if (wk <= 0.0f) continue;
             total += wk;
             const covertable::Values& pv = parts[k].rows->painted;
-            const float pw = pv.depth > 0.0f ? wk * WaterFactor(pv.flags) : 0.0f;
+            const float gate = covertable::MoistureGated(pv.moistureMin) ? mudAllowed : 1.0f;
+            const float pw = pv.depth > 0.0f ? wk * WaterFactor(pv.flags) * gate : 0.0f;
             bare[k] = wk - pw;
             if (bare[k] > 0.0f && parts[k].rows->hasGround)
             {
@@ -555,4 +566,16 @@ namespace wxl_livingazeroth::cover::detail
     }
 
     void ClearLayerValues() { g_layerValues.clear(); }
+
+    bool SealedAt(float x, float y, float& sealedShare, float& mudAllowed)
+    {
+        float z;
+        g_probe = Probe{};
+        g_probe.x = x; g_probe.y = y; g_probe.valid = terrain::HeightAt(x, y, z); g_probe.z = z;
+        if (!g_probe.valid) return false;
+        const Blend b = BlendAt(x, y);
+        sealedShare = b.sealed;
+        mudAllowed = blend::MudAllowed(b.sealed);
+        return true;
+    }
 }
