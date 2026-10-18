@@ -1,8 +1,8 @@
 """Window detection and light placement (tools/gen_window_lights.py) on small WMOs built here, no map data:
 which materials are windows, panes and which way they face (exterior groups; interior-only WMOs by open rays),
 one light per facade, where the light stands, the placement transform, which places are lived in, the light
-budget per 16-yd cell, and the rooms behind each light's glass (WindowRooms.cdbc: the shader's cells, their shares,
-the buildings).
+budget per 16-yd cell, and the rooms behind each light's glass (WindowRooms.cdbc: the GlassWindows windows its
+triangles are in, their shares, the buildings).
 
 Run:  python -m unittest discover -s tests/windows -p "test_*.py"     (from the repository)
 """
@@ -237,143 +237,135 @@ class Budget(unittest.TestCase):
 
 
 class Rooms(unittest.TestCase):
-    """Which rooms' cells a light's glass covers (WindowRooms.cdbc): the shader's cells about the building's origin,
-    in each face's own frame, cut exactly; the shares of the light's glass, by building; the shader's fallback seed."""
-    SW = (-8913.2, 554.6, 93.1)   # Stormwind's WMO origin (GlassBuildings)
+    """Which windows a light's glass is in (WindowRooms.cdbc): GlassWindows' rectangles in WMO space, each triangle by its
+    middle; the shares of the light's glass, by building; frosted windows flagged; glass in no window not listed; the
+    shader's fallback seed."""
+    WMO = "World\\wmo\\X\\House.wmo"
 
     @staticmethod
     def quad(o, n, a0, a1, u0, u1):
-        """Two triangles of the rectangle a0..a1 along, u0..u1 up the face of normal n, about o (world)."""
-        a, u = g.cell_frame(n)
+        """Two triangles of the rectangle a0..a1 along, u0..u1 up the face of normal n, about o (WMO space)."""
+        a, u = g.window_frame(n)
         c = [g.add(o, g.add(g.mul(a, x), g.mul(u, y))) for x, y in ((a0, u0), (a1, u0), (a1, u1), (a0, u1))]
-        return [[c[0], c[1], c[2]], [c[0], c[2], c[3]]]
+        return [c[0], c[1], c[2], c[0], c[2], c[3]]
 
-    def test_the_frame_is_the_shaders(self):
-        # along (-n.y, n.x, 0), up n x along; a skylight along x (env/GlassModel RoomCell, the glass tests' vectors)
-        self.assertEqual(g.cell_frame((1.0, 0.0, 0.0)), ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
-        a, u = g.cell_frame((0.0, 1.0, 0.0))
-        self.assertEqual((a, tuple(abs(v) for v in u)), ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
-        self.assertEqual(g.cell_frame((0.0, 0.0, 1.0)), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
-        # the glass tests' hand points: facing +x 7.1 along and 3.3 up -> (2, 1); facing +y 4 yd west, 0.5 down -> (1, -1)
-        for n, p, want in (((1.0, 0.0, 0.0), (0.0, 7.1, 3.3), (2, 1)), ((0.0, 1.0, 0.0), (-4.0, 0.0, -0.5), (1, -1))):
-            a, u = g.cell_frame(n)
-            self.assertEqual((math.floor(g.dot(p, a) * g.INV_W), math.floor(g.dot(p, u) * g.INV_H)), want)
+    @staticmethod
+    def window(ordinal, kind, center, normal, hw, hh):
+        return (ordinal, kind, center, normal, hw, hh)
 
-    def test_a_cell_exactly(self):
-        cells = g.room_cells(self.quad((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 0.0, 3.4999, 0.0001, 3.1999), (1.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        self.assertEqual(list(cells), [(0, 0)])
-        self.assertAlmostEqual(cells[(0, 0)], 3.4999 * 3.1998, places=4)
+    def glass(self, buildings=None):
+        """The house's windows: group 3 a clear one (ordinal 4) and a leaded one (ordinal 7) on the wall facing +x, 1.5 yd
+        apart; group 9 a frosted one (ordinal 12) and a clear one behind it (ordinal 13, 0.2 yd further in)."""
+        x = (1.0, 0.0, 0.0)
+        return {"windows": {g.norm_path(self.WMO): {
+                    3: g.Windows([self.window(7, 4, (0.0, 4.5, 1.0), x, 1.0, 0.5), self.window(4, 1, (0.0, 1.0, 1.0), x, 1.0, 0.5)]),
+                    9: g.Windows([self.window(12, 3, (0.0, 1.0, 5.0), x, 1.0, 0.5), self.window(13, 1, (-0.2, 1.0, 5.0), x, 1.0, 0.5)])}},
+                "buildings": buildings if buildings is not None else {(0, 777, 3): 41, (0, 777, g.WHOLE): 40}}
 
-    def test_a_window_across_cells_is_cut_by_them(self):
-        # 2.5 .. 4.5 along, 2.7 .. 3.7 up: four cells, 1 x 0.5 yd each
-        cells = g.room_cells(self.quad((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 2.5, 4.5, 2.7, 3.7), (1.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        self.assertEqual(sorted(cells), [(0, 0), (0, 1), (1, 0), (1, 1)])
-        for k, want in (((0, 0), 0.5), ((1, 0), 0.5), ((0, 1), 0.5), ((1, 1), 0.5)):
-            self.assertAlmostEqual(cells[k], want, places=3)
-
-    def test_about_the_buildings_origin_stormwind_or_not(self):
-        here = g.room_cells(self.quad((10.0, 20.0, 5.0), (0.6, 0.8, 0.0), -1.0, 2.0, 0.5, 2.5), (0.6, 0.8, 0.0), (0.0, 0.0, 0.0))
-        o = g.add(self.SW, (10.0, 20.0, 5.0))
-        there = g.room_cells(self.quad(o, (0.6, 0.8, 0.0), -1.0, 2.0, 0.5, 2.5), (0.6, 0.8, 0.0), self.SW)
-        self.assertEqual(sorted(here), sorted(there))
-        for k in here:
-            self.assertAlmostEqual(here[k], there[k], places=3)
-
-    def test_far_from_the_origin_about_its_anchor(self):
-        # 40 yd east of the origin: about the anchor 64 yd east (k = 1, 0, 0): the cell (2, 1) + (211, 59), as the glass
-        # tests' hand point; a window across the anchors' edge (x = 32) is cut there, into both anchors' cells
-        n = (1.0, 0.0, 0.0)
-        a, u = g.cell_frame(n)
-        k = g.anchor_index((40.0, 7.1, 3.3))
-        self.assertEqual(k, (1, 0, 0))
-        r = g.sub((40.0, 7.1, 3.3), g.mul(k, g.ANCHOR))
-        self.assertEqual((math.floor(g.dot(r, a) * g.INV_W) + 211, math.floor(g.dot(r, u) * g.INV_H) + 59), (213, 60))
-        # a pane facing +y, 30..34 yd east, 1 yd tall: across x = 32
-        q = self.quad((32.0, 5.0, 0.5), (0.0, 1.0, 0.0), -2.0, 2.0, 0.2, 1.2)
-        cells = g.room_cells(q, (0.0, 1.0, 0.0), (0.0, 0.0, 0.0))
-        near = {c: v for c, v in cells.items() if abs(c[0]) < 100}
-        far = {c: v for c, v in cells.items() if abs(c[0]) >= 100}
-        self.assertAlmostEqual(sum(near.values()), 2.0, places=4)   # 30..32 east: about the origin
-        self.assertAlmostEqual(sum(far.values()), 2.0, places=4)    # 32..34: about the anchor at 64
-        self.assertTrue(all(c[0] > 100 for c in far))
-
-    def test_the_face_is_seen_from_outside(self):
-        # wound the other way (its normal in), the same cells: the frame turns to `out`
-        q = self.quad((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 0.3, 5.0, 0.2, 4.0)
-        flipped = [[t[0], t[2], t[1]] for t in q]
-        a = g.room_cells(q, (1.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        b = g.room_cells(flipped, (1.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        self.assertEqual(sorted(a), sorted(b))
-        self.assertAlmostEqual(sum(a.values()), 4.7 * 3.8, places=3)
-
-    def test_a_lights_shares_by_building(self):
-        # a light of three panes: clear glass in a city's group (its own row), leaded in another group (the
-        # placement's row), stained (no room); each 2 x 1 yd
-        clear, leaded, stained = "glass_clear.blp", "glass_leaded.blp", "glass_stained.blp"
-        glass = {"kinds": {clear: 1, leaded: 4, stained: 2},
-                 "buildings": {(0, 777, 3): (41, (0.0, 0.0, 0.0)), (0, 777, g.WHOLE): (40, (0.0, 0.0, 0.0))}}
-
+    def light(self, *panes):
         class P:
-            def __init__(self, texture, group, a0):
-                self.texture, self.group, self.normal = texture, group, (1.0, 0.0, 0.0)
-                self.points = [p for t in Rooms.quad((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), a0, a0 + 2.0, 0.5, 1.5) for p in t]
+            def __init__(self, group, points):
+                self.group, self.points, self.normal = group, points, (1.0, 0.0, 0.0)
 
         class C:
-            panes = [P(clear, 3, 0.2), P(leaded, 9, 7.2), P(stained, 3, 4.0)]
+            pass
+        C.panes = [P(gi, pts) for gi, pts in panes]
+        return C
 
-        same = lambda v: v
-        rows = g.light_rooms(C, same, same, 0, 777, "World\\wmo\\X\\House.wmo", glass)
-        by = {}
-        for b, x, y, share, seed, flags in rows:
-            by[b] = by.get(b, 0.0) + share
+    def test_the_frame_is_the_runtimes(self):
+        # along (-n.y, n.x, 0) made unit, up n x along; a skylight along x (as gen_glass's windows: the same function)
+        self.assertEqual(g.window_frame((1.0, 0.0, 0.0)), ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
+        a, u = g.window_frame((0.0, 1.0, 0.0))
+        self.assertEqual((a, u), ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+        self.assertEqual(g.window_frame((0.0, 0.0, 1.0)), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
+
+    def test_a_point_finds_the_window_holding_it(self):
+        ws = self.glass()["windows"][g.norm_path(self.WMO)]
+        # ordinals 4 and 7 (sorted by ordinal: indices 0 and 1)
+        # (within 0.03 yd of the rectangle, as the runtime; within 0.3 yd of the plane for a window with no thickness)
+        got = ws[3].at([(0.0, 1.0, 1.0), (0.0, 4.5, 1.4), (0.0, 2.02, 1.0), (0.0, 2.04, 1.0), (0.29, 1.0, 1.0), (0.31, 1.0, 1.0)])
+        self.assertEqual([ws[3].ordinal[k] if k >= 0 else None for k in got], [4, 7, 4, None, 4, None])
+        # two windows hold it: the lower ordinal (the shader's table lists a cell's windows so), whichever plane is nearer
+        got = ws[9].at([(0.0, 1.0, 5.0), (-0.15, 1.0, 5.0), (-0.45, 1.0, 5.0)])
+        self.assertEqual([ws[9].ordinal[k] for k in got], [12, 12, 13])
+
+    def test_a_lights_triangles_go_to_the_windows_holding_them(self):
+        # a light of five 2 x 1 yd panes: in the clear window, in the leaded one, in the frosted one; one beside them (stained,
+        # in no window); one in a group with no windows at all
+        x = (1.0, 0.0, 0.0)
+        c = self.light((3, self.quad((0.0, 1.0, 1.0), x, -1.0, 1.0, -0.5, 0.5)), (3, self.quad((0.0, 4.5, 1.0), x, -1.0, 1.0, -0.5, 0.5)),
+                       (9, self.quad((0.0, 1.0, 5.0), x, -1.0, 1.0, -0.5, 0.5)), (3, self.quad((0.0, 8.0, 1.0), x, -1.0, 1.0, -0.5, 0.5)),
+                       (5, self.quad((0.0, 1.0, 9.0), x, -1.0, 1.0, -0.5, 0.5)))
+        rows = g.light_rooms(c, 0, 777, self.WMO, self.glass())
+        self.assertEqual(sorted((b, x_, y, f) for b, x_, y, s, seed, f in rows),
+                         [(40, 12, 9, g.CELL_FROSTED), (41, 4, 3, 0), (41, 7, 3, 0)])   # CellX the ordinal, CellY the group
+        for b, x_, y, share, seed, flags in rows:
+            self.assertAlmostEqual(share, 0.2, places=6)                               # 2 of the light's 10 yd^2 each
             self.assertEqual(seed, g.path_hash("world/wmo/x/house.wmo"))
-            self.assertEqual(flags, 0)
-        self.assertEqual(sorted(by), [40, 41])
-        self.assertAlmostEqual(by[41], 1.0 / 3.0, places=5)   # the clear pane: its group's row
-        self.assertAlmostEqual(by[40], 1.0 / 3.0, places=5)   # the leaded one: the placement's
-        # no building at all: 0, about the placement's origin
-        rows = g.light_rooms(C, same, same, 0, 999, "World\\wmo\\X\\House.wmo", glass)
-        self.assertEqual({r[0] for r in rows}, {0})
+        # the room glass: 0.4 of the light's glass, in its windows' rows; the rest (frosted 0.2, stained and no window 0.4)
+        self.assertAlmostEqual(sum(r[3] for r in rows if not r[5] & g.CELL_FROSTED), 0.4, places=6)
 
-    def test_frosted_glass_cells_are_flagged(self):
-        # a light of two panes: frosted glass (a lit window's: no room, the glass itself goes dark and flickers) and clear
-        # glass in the same building; each 2 x 1 yd
-        frosted, clear = "glass_frosted.blp", "glass_clear.blp"
-        glass = {"kinds": {frosted: 3, clear: 1}, "buildings": {(0, 777, g.WHOLE): (40, (0.0, 0.0, 0.0))}}
+    def test_a_pane_across_two_windows_is_shared_by_its_triangles(self):
+        # one pane of four triangles: two in the clear window, two in the leaded one (ordinals 4 and 7)
+        x = (1.0, 0.0, 0.0)
+        pts = self.quad((0.0, 1.0, 1.0), x, -1.0, 1.0, -0.5, 0.5) + self.quad((0.0, 4.5, 1.0), x, -0.5, 0.5, -0.5, 0.5)
+        rows = g.light_rooms(self.light((3, pts)), 0, 777, self.WMO, self.glass())
+        self.assertEqual([(r[1], round(r[3], 5)) for r in rows], [(4, round(2.0 / 3.0, 5)), (7, round(1.0 / 3.0, 5))])
 
-        class P:
-            def __init__(self, texture, a0):
-                self.texture, self.group, self.normal = texture, 0, (1.0, 0.0, 0.0)
-                self.points = [p for t in Rooms.quad((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), a0, a0 + 2.0, 0.5, 1.5) for p in t]
+    def test_buildings_and_the_default(self):
+        x = (1.0, 0.0, 0.0)
+        c = self.light((3, self.quad((0.0, 1.0, 1.0), x, -1.0, 1.0, -0.5, 0.5)), (9, self.quad((0.0, 1.0, 5.0), x, -1.0, 1.0, -0.5, 0.5)))
+        rows = g.light_rooms(c, 0, 777, self.WMO, self.glass())
+        self.assertEqual(sorted((r[0], r[2]) for r in rows), [(40, 9), (41, 3)])   # a city's group row, else the placement's
+        rows = g.light_rooms(c, 0, 999, self.WMO, self.glass())
+        self.assertEqual({r[0] for r in rows}, {0})                                 # none: the built-in house
+        self.assertEqual(g.light_rooms(c, 0, 777, "world\\wmo\\x\\other.wmo", self.glass()), [])   # no windows in that WMO
 
-        class C:
-            panes = [P(frosted, 0.2), P(clear, 7.2)]
-
-        same = lambda v: v
-        rows = g.light_rooms(C, same, same, 0, 777, "World\\wmo\\X\\snow_inn.wmo", glass)
-        by = {}
-        for b, x, y, share, seed, flags in rows:
-            self.assertEqual(b, 40)
-            by[flags] = by.get(flags, 0.0) + share
-        self.assertEqual(sorted(by), [0, g.CELL_FROSTED])
-        self.assertAlmostEqual(by[g.CELL_FROSTED], 0.5, places=5)   # the frosted pane's cells, flagged
-        self.assertAlmostEqual(by[0], 0.5, places=5)                 # the clear pane's rooms
-        # the same cells as a room's would be: the frame and the cut are the shader's
-        frost_cells = sorted((x, y) for b, x, y, s, seed, f in rows if f)
-        room_like = sorted(g.room_cells([[q for q in C.panes[0].points[k:k + 3]] for k in range(0, 6, 3)], (1.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
-        self.assertEqual(frost_cells, room_like)
+    def test_a_sliver_is_folded_into_the_buildings_others(self):
+        # 2 yd^2 in the clear window, a 0.002 yd^2 sliver in the leaded one: folded (the rooms keep the glass's share)
+        x = (1.0, 0.0, 0.0)
+        c = self.light((3, self.quad((0.0, 1.0, 1.0), x, -1.0, 1.0, -0.5, 0.5) + self.quad((0.0, 4.5, 1.0), x, 0.0, 0.002, -0.5, 0.5)))
+        rows = g.light_rooms(c, 0, 777, self.WMO, self.glass())
+        self.assertEqual([(r[1], r[3]) for r in rows], [(4, 1.0)])
 
     def test_path_hash_is_the_runtimes(self):
         self.assertEqual(g.path_hash("World/WMO/Azeroth/Buildings/Stormwind/Stormwind.wmo"), 4036435193)
         self.assertEqual(g.path_hash(""), 0)
 
+    def test_read_glass(self):
+        import tempfile
+        from pathlib import Path
+        d = Path(tempfile.mkdtemp())
+        # GlassWindows (gen_glass.GLASS_WINDOWS) and GlassBuildings (gen_glass.GLASS_BUILDINGS)
+        windows = ["u", "s", "u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "u", "u", "s", "f"]
+        buildings = ["u", "u", "u", "f", "f", "f", "u", "u", "u", "u", "u", "s", "s"]
+        (d / "GlassWindows.cdbc").write_bytes(g.io.build(windows, [
+            (1, "world\\wmo\\x\\house.wmo", 3, 0, 4, 0.0, 4.5, 1.0, 1.0, 0.0, 0.0, 1.0, 0.5, 1, 1, "house: group 3 leaded 1 pane", 0.08),
+            (2, "world\\wmo\\x\\house.wmo", 3, 1, 1, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.5, 1, 1, "house: group 3 clear 1 pane", 0.08)]))
+        (d / "GlassBuildings.cdbc").write_bytes(g.io.build(buildings, [
+            (40, 0, 777, 0.0, 0.0, 0.0, g.WHOLE, 1, 5, 0, 12, "world\\wmo\\x\\house.wmo", ""),
+            (41, 0, 0, 0.0, 0.0, 0.0, g.WHOLE, 1, 5, 0, 0, "world\\wmo\\x\\house.wmo", "")]))
+        glass = g.read_glass(d)
+        self.assertEqual(glass["buildings"], {(0, 777, g.WHOLE): 40})    # a WMO's default names no placement
+        ws = glass["windows"]["world\\wmo\\x\\house.wmo"][3]
+        self.assertEqual((ws.ordinal, ws.kind), ([0, 1], [4, 1]))
+        self.assertEqual(ws.at([(0.0, 1.0, 1.2)]).tolist(), [1])
+        self.assertAlmostEqual(float(ws.thickness[0]), 0.08, places=6)
+        # the runtime's lookup: within 0.03 yd of the rectangle and the window's thickness of its plane
+        self.assertEqual(ws.at([(0.07, 1.0, 1.2), (0.09, 1.0, 1.2), (0.0, 2.02, 1.2), (0.0, 2.04, 1.2)]).tolist(), [1, -1, 1, -1])
+        # two windows holding a point: the lower ordinal, as the shader's table lists them, whichever plane is nearer
+        both = g.Windows([(5, 4, (0.0, 0.0, 1.0), (1.0, 0.0, 0.0), 1.0, 1.0, 0.3),
+                          (2, 4, (0.25, 0.0, 1.0), (0.0, 1.0, 0.0), 1.0, 1.0, 0.3)])
+        self.assertEqual([both.ordinal[k] for k in both.at([(0.0, 0.05, 1.0), (0.25, 0.01, 1.0)]).tolist()], [2, 2])
+
     def test_the_shipped_glass_tables_read(self):
         data = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
-        if not os.path.exists(os.path.join(data, "GlassBuildings.cdbc")):
+        if not all(os.path.exists(os.path.join(data, t)) for t in g.GLASS_TABLES):
             self.skipTest("no data folder")
         from pathlib import Path
         glass = g.read_glass(Path(data))
-        self.assertTrue(any(k in g.ROOM_KINDS for k in glass["kinds"].values()))
+        self.assertIn("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo", glass["windows"])
+        self.assertTrue(any(k in g.ROOM_KINDS for groups in glass["windows"].values() for ws in groups.values() for k in ws.kind))
         self.assertGreater(len(glass["buildings"]), 1000)
 
 

@@ -165,8 +165,8 @@ warm light on the ground and the walls in front of them, and their glass glows. 
 client's own lit windows: full from 21:30 to 06:00, fading over the hour before and after, off by
 day. And they follow the rooms behind the glass (`[LivingAzeroth.Glass]`): as those go dark through
 the night, a window whose rooms are dark stops lighting the street, and a light over a row of windows
-dims as its rooms go out one by one (`WindowRooms.cdbc`: which rooms each light's glass shows, worked
-out with the shader's own cells, hash and clock, so the light goes out with the room you see). A room
+dims as its rooms go out one by one (`WindowRooms.cdbc`: which windows each light's glass is in, found
+as the shader finds them, with its hash and clock, so the light goes out with the room you see). A room
 going dark or lit again fades over 1.5 s, the light and the glow with it; after a jump of the climate
 panel's time every room it crossed fades together, and while its slider is being dragged they wait
 for it to stop. Lit frosted glass goes dark the same way (`[LivingAzeroth.Glass]` FrostedLightsOut),
@@ -236,16 +236,21 @@ text, the UI, characters).
   `OutsideDarkening`), cooler (`DayCoolness`: less saturated and toward the sky's hue at its own brightness, more toward
   the top of the pane and at a slant; frosted 0.6 x, stained 0.25 x, so stained glass keeps its colours), with the sky in
   it (its fog colour, deeper toward the zenith; 24% head on for clear glass, 20% leaded, 10% stained and frosted, rising
-  toward all of it at a grazing angle: `ReflectionF0`) and the sun's glint. Behind clear and leaded panes a room
-  (interior mapping: rooms a few yards wide and deep behind the glass, `RoomShareDay` of the glass) seen through the
-  glass in its own colours (the glass's cooling isn't on it), about half as bright as the glass's sunlit face so it
-  reads as depth: its walls shaded (the corners darker), the light coming in at the window (farther darker, the lower
-  walls lighter, a patch of sun on the floor by the window), the curtains half grey, the things on the shelves at three
-  quarters of their contrast within 15 to 40 yards; no hard edges (the walls and corners soft, the doorways', curtains'
-  and shelves' edges soft), and where one room meets the next on the glass (a cell's or its anchor's edge) each eases to
-  the same over a tenth of a cell and two pixels, so a mullion no longer splits a window into different blocks. The
-  buildings differ by a quarter as much as at night. On WARP Stormwind's leaded shop window keeps 82 to 86% of the
-  stock's light by day (its glass 75 to 79%), Westfall's clear farm window 80 to 83%.
+  toward all of it at a grazing angle: `ReflectionF0`) and the sun's glint. Behind clear and leaded panes **one room per
+  window** (interior mapping, `RoomShareDay` of the glass): each window (`GlassWindows.cdbc`: a WMO's panes joined into
+  windows, per group) has a box behind its opening, about the window's width or a little wider and 3 to 5 yards deep by
+  the building's kind (a shop and a farm shallow, an inn and a temple deep), seen in depth as you move: its floor, side
+  walls, back wall and ceiling in the client's own interior textures by the building's people and place (`RoomTextures`:
+  Stormwind's plaster and timber, Westfall's planks, dwarven stone, orcish hides, goblin planks, vrykul timber and furs,
+  elven, night elf, Forsaken, draenei), at the world's scale and filtered (no shimmer), the floor darker and the ceiling
+  dimmest, the side walls lit from the window, the corners darker; furniture at its depth by the building's kind and the
+  window (`RoomDetail`: shelves, a hearth, a wardrobe, a painting, a weapon rack or a banner against the back wall; a
+  table and chairs, a bed, a counter, a desk, barrels, pews or a candle stand in the middle), its edges a pixel soft;
+  curtains half drawn in some. The room is seen in the day's light (the sky's and the sun's colour: orange at dusk) and
+  its own colours (the glass's cooling isn't on it), a patch of sun on its floor by the window; the painted glass in
+  front of it and its cooler hue keep it subdued. Its textures, furniture and corners fade to its plain shading from 45
+  to 90 yards. On WARP Stormwind's leaded shop window keeps 89 to 97% of the stock's light by day (its glass 84 to 93%),
+  Westfall's clear farm window 91 to 95%.
 - **At dusk** (after the sun's day ends at 18:00, before the client lights its windows from 20:30) the painted glass's
   warmth is back (no cooling or darkening), and the room behind it is still seen by the day's light (before, it was black
   until the windows lit). At night the client's own lit windows.
@@ -254,21 +259,22 @@ text, the UI, characters).
   keep, mage tower, ship; in a city's one big WMO each group, and each 14-yd block, its own) and its place's palette
   (human warm, Duskwood dim, Northrend's humans colder, elven gold and crimson, Dalaran violet, night elf moonlit, draenei,
   vrykul firelit wood and furs, goblin cluttered and warm, Forsaken dim green, orc firelight, dwarf forge-warm, Outland's
-  outposts ruddy, Zangarmarsh teal...). A few rooms are dark, and nobody lives in a few buildings. Each window is a room
-  with a layout picked by its hash, weighted by the building's kind and place: a back wall with shelves and things on
-  them, curtains half drawn, a dividing wall with a doorway through to a second, dimmer room, or plain. The detail fades
-  from 30 to 70 yards (by day 15 to 40). Stained and frosted glass has no room, as before.
+  outposts ruddy, Zangarmarsh teal...). A few rooms are dark, and nobody lives in a few buildings. Each window is its own
+  room: its depth, furniture, lamp and curtains picked by its hash, weighted by the building's kind and place (shops
+  shelves and a counter, inns tables and a bar, keeps racks and banners, homes beds, tables and wardrobes). Stained and
+  frosted glass has no room, as before.
 - **At night** the windows the client lights (self-lit materials) show a lamp-lit room, about as bright as the client's own
   lit window it replaces, the lamp's light falling off across the room and the curtains glowing with it behind them. More
   of them go dark as the night goes on: 8% in the evening, half at midnight, three quarters by 03:00, a few early risers
   before dawn; inns stay lit late, shops close early. Ruined, abandoned and haunted places (and ships and dungeons: the
   window lights' dark places) stay dark. A room going dark or lit again fades over 1.5 s (after a jump of the climate
   panel's time, every room it crossed together), and the window lights and their glow in front of it go with it
-  (`[LivingAzeroth.Windows]` LightsFollowRooms). A room's cell is its face's own: smoothed glass no longer bends the
-  rooms into a mosaic. The lamp-lit rooms take `RoomShareNight` of the glass, their edges about a pixel soft.
+  (`[LivingAzeroth.Windows]` LightsFollowRooms): each light dims with the windows its glass is in, the same windows the
+  glass finds. A dark room's whole window goes dark with it, its lead and frame as much as its glass (no glowing lattice).
+  The lamp-lit rooms take `RoomShareNight` of the glass, their edges about a pixel soft.
 - **Frosted glass** (the dwarves' glowing panes, the vrykul's icy ones, the draenei's, the winter orcs', the orcs' hide
   windows...) has no room behind it, but the windows the client lights (its self-lit materials, and the unlit ones drawn
-  at full day and night) go dark through the night the same way (`FrostedLightsOut`): the same cells, hash and fades, each
+  at full day and night) go dark through the night the same way (`FrostedLightsOut`): the same windows, hash and fades, each
   building's hours by its kind (inns late, shops early), the glass's own glow down to 15% when dark (a banked fire), and
   the window lights in front with it. A lit one flickers gently, a hearth behind it (`HearthFlicker`: by up to 8% at
   night, three slow waves at the torches' rates at half their pace, each window its own phase), its window light on the
@@ -300,23 +306,25 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | FloorLight | 1 | Indoors: the sunlit panes' light on the room's floor and walls. |
 | InsideStrength | 1 | Your multiplier on the light coming through the glass. |
 | ReflectionStrength | 1 | Your multiplier on the reflection and the glint. |
-| InteriorStrength | 1 | Your multiplier on the light of the rooms behind clear glass (1 = by day about half as bright as the glass's sunlit face). |
+| InteriorStrength | 1 | Your multiplier on the light of the rooms behind clear glass (1 = by day a little darker than the glass's sunlit face, near the window brighter, deeper in darker). |
 | OutsideDarkening | 0.45 | Seen from outside by day: how much darker clear glass is than the client's own painted window; leaded 0.6 x this, stained and frosted 0.2 x. 0 = the client's own brightness. |
 | DayCoolness | 0.25 | Seen from outside by day: how far the warm painted glass moves toward cool glass (less saturated, toward the sky's hue; more toward the top of the pane and at a slant); frosted 0.6 x, stained 0.25 x. The warmth comes back over dusk. 0 = the painted colour. |
 | ReflectionF0 | 0.2 | Seen from outside by day: the sky's share in the glass head on (clear 1.2 x this, leaded 1 x, stained and frosted 0.5 x), rising toward all of it at a grazing angle; at night 0.1 x the kind's (clear 1.2, leaded 1, stained 0.8, frosted 0.5) whatever this is. Real glass's 0.04 beside a sunlit wall reads as no reflection. |
-| RoomShareDay | 0.6 | By day and at dusk, how much of clear glass is the room behind it (leaded 0.77 x). |
-| RoomShareNight | 0.65 | At night, how much of clear glass is the lamp-lit room behind it (leaded 0.77 x). |
+| RoomShareDay | 0.65 | By day and at dusk, how much of clear glass is the room behind it (leaded 0.85 x): one room per window, its floor, walls and ceiling seen in depth, the light falling in at the window and on its floor. |
+| RoomShareNight | 0.75 | At night, how much of clear glass is the lamp-lit room behind it (leaded 0.85 x). |
+| RoomDetail | 1 | Furniture in the rooms, at its depth so it shifts against the back wall as you move: shelves, a hearth, a wardrobe or a painting at the back; a table and chairs, a bed or a counter in the middle; by the building's kind (shops shelves and a counter, inns tables and a bar, keeps racks and banners). 0 = empty rooms. |
+| RoomTextures | 1 | The rooms' floors, walls and ceilings in the client's own interior textures, by the building's people and place. 0 = plain shaded walls. |
 | ShaftStrength | 1 | Your multiplier on the coloured shafts. |
 | FloorStrength | 1 | Your multiplier on the light on the floor. |
 | Range | 70 | Yards from the camera: panes farther away give no floor light or shafts. |
 | RoomVariety | 1 | The rooms differ by building: tint, brightness, a few dark, by the building's kind and place. 0 = one warm room everywhere, lit all night (no lights out). |
 | LitRoomsAtNight | 1 | At night a lamp-lit room behind the windows the client lights. 0 = dark rooms at night. |
 | LightsOut | 1 | More of those rooms go dark as the night goes on (inns late, shops early; with RoomVariety), each fading over 1.5 s, the window lights in front with them. 0 = all lit all night. |
-| RoomLayouts | 1 | Shelves, curtains half drawn, a dividing wall with a doorway, or plain, per window. 0 = all plain. |
+| RoomLayouts | 1 | Curtains half drawn just behind the glass in some rooms, as often as the building's kind and place say (homes and elven halls more, shops fewer). 0 = none. |
 | RoomVarietyStrength | 1 | Your multiplier on how far the buildings' tints and brightness differ and on the rooms dark by day. |
 | LitRoomStrength | 1 | Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window). |
 | LightsOutStrength | 1 | Your multiplier on the share of rooms dark at night. |
-| LayoutStrength | 1 | Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards at night, 15 to 40 by day). |
+| LayoutStrength | 1 | Your multiplier on the furniture (at most 1: all of it) and the curtains' folds. The rooms' textures, furniture and corners fade to their plain shading from 45 to 90 yards. |
 | FrostedLightsOut | 1 | Lit frosted windows go dark through the night as rooms do (each building's hours; Ironforge's parts their own), fading over 1.5 s, the window lights with them. 0 = lit all night. |
 | HearthFlicker | 0.08 | How much a lit frosted window's glow (and its window light) dips at night: a hearth behind it, each window its own phase. 0 = steady. |
 | FlickerSpeed | 1 | Your multiplier on the hearths' pace (about 0.6 to 1.8 dips a second). |
