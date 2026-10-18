@@ -411,7 +411,7 @@ gen_window_lights.py (the building IDs and origins come from it).
 
 Window glass that looks like glass (features/Glass, `[LivingAzeroth.Glass]` in config.md): seen from
 inside, the day coming through it (stained glass glowing in its own colours, brightest with the sun
-beyond it); seen from outside by day, darker glass with the sky in it and, behind clear panes, a room;
+beyond it); seen from outside by day, the client's painted glass a little darker with the sky in it and, behind clear panes, a hint of a room;
 at night the client's own lit windows, or a lamp-lit room behind them. Sunlit panes also cast their
 light on the room's floor and walls and through its air (coloured shafts). All four tables come from
 `tools/gen_glass.py` (its header says how glass is found and how buildings are classed) and can be

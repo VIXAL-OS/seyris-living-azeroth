@@ -270,15 +270,19 @@ namespace wxl_livingazeroth::config
         {
             const char* f = kSectionGlass;
             glass::Settings& g = glass::Config();
-            g.enabled = In(s, f, "Enabled", "Window glass looks like glass: lit by the day seen from inside (stained glass glows in its colours), darker with the sky in it seen from outside, a room behind clear panes; at night the client's own lit windows (GlassMaterials.cdbc, GlassPanes.cdbc).", g.enabled);
+            g.enabled = In(s, f, "Enabled", "Window glass looks like glass: lit by the day seen from inside (stained glass glows in its colours), seen from outside the client's own painted glass with the sky in it and a hint of a room behind clear panes; at night the client's own lit windows (GlassMaterials.cdbc, GlassPanes.cdbc).", g.enabled);
             g.insideGlow = In(s, f, "InsideGlow", "Seen from inside: the light coming through the glass, bright with the sun beyond it, dimmer under cloud, in rain and storms.", g.insideGlow);
-            g.outsideReflection = In(s, f, "OutsideReflection", "Seen from outside by day: darker glass with the sky in it at a slant, and the sun's glint.", g.outsideReflection);
+            g.outsideReflection = In(s, f, "OutsideReflection", "Seen from outside by day: the glass a little darker, the sky in it (more at a slant), and the sun's glint.", g.outsideReflection);
             g.fakeInteriors = In(s, f, "FakeInteriors", "Seen from outside: a room behind clear and leaded panes (with OutsideReflection).", g.fakeInteriors);
             g.colouredShafts = In(s, f, "ColouredShafts", "Indoors: shafts of light in the room's air through sunlit windows, in the glass's colours.", g.colouredShafts);
             g.floorLight = In(s, f, "FloorLight", "Indoors: the sunlit panes' light on the room's floor and walls, in the glass's colours.", g.floorLight);
             g.insideStrength = In(s, f, "InsideStrength", "Your multiplier on the light coming through the glass.", g.insideStrength);
             g.reflectionStrength = In(s, f, "ReflectionStrength", "Your multiplier on the reflection and the glint seen from outside.", g.reflectionStrength);
-            g.interiorStrength = In(s, f, "InteriorStrength", "Your multiplier on the light of the rooms behind clear glass.", g.interiorStrength);
+            g.interiorStrength = In(s, f, "InteriorStrength", "Your multiplier on the light of the rooms behind clear glass (1 = by day about as bright as the glass in front).", g.interiorStrength);
+            g.outsideDarkening = In(s, f, "OutsideDarkening", "Seen from outside by day: how much darker clear glass is than the client's own painted window (0.3 = 30% darker); leaded glass 0.6 x this, stained and frosted 0.2 x. 0 = the client's own brightness.", g.outsideDarkening);
+            g.reflectionF0 = In(s, f, "ReflectionF0", "Seen from outside: the sky's share in the glass head on (0.1; clear glass 1.2 x this, leaded 1 x, stained 0.8 x, frosted 0.5 x), rising toward all of it at a grazing angle. Real glass is 0.04, which beside a sunlit wall reads as no reflection.", g.reflectionF0);
+            g.roomShareDay = In(s, f, "RoomShareDay", "By day, how much of clear glass is the room behind it (leaded 0.77 x this): a hint of depth behind the painted glass, as bright as the glass on average, soft gradients and no edges.", g.roomShareDay);
+            g.roomShareNight = In(s, f, "RoomShareNight", "At night, how much of clear glass is the room behind it (leaded 0.77 x this): the lamp-lit rooms behind the client's lit windows.", g.roomShareNight);
             g.shaftStrength = In(s, f, "ShaftStrength", "Your multiplier on the coloured shafts.", g.shaftStrength);
             g.floorStrength = In(s, f, "FloorStrength", "Your multiplier on the light on the floor.", g.floorStrength);
             g.range = In(s, f, "Range", "Panes farther than this from the camera (yards) give no floor light or shafts.", g.range);
@@ -289,7 +293,7 @@ namespace wxl_livingazeroth::config
             g.varietyStrength = In(s, f, "RoomVarietyStrength", "Your multiplier on how far the buildings' tints and brightness differ and on the share of dark rooms by day.", g.varietyStrength);
             g.litRoomStrength = In(s, f, "LitRoomStrength", "Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window).", g.litRoomStrength);
             g.lightsOutStrength = In(s, f, "LightsOutStrength", "Your multiplier on the share of rooms dark at night.", g.lightsOutStrength);
-            g.layoutStrength = In(s, f, "LayoutStrength", "Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards).", g.layoutStrength);
+            g.layoutStrength = In(s, f, "LayoutStrength", "Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards at night, 10 to 24 by day).", g.layoutStrength);
         }
 
         api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass);

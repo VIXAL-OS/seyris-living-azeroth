@@ -39,7 +39,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   place, per window a layout (shelves, curtains, a dividing wall with a doorway, plain), and at night lamp-lit rooms
   behind the client's lit windows that go dark as the night goes on (`RoomStyles.cdbc`, `GlassBuildings.cdbc`,
   `tools/gen_glass.py`, a hook on `Wmo.RenderGroup` in `features/WmoIce`). A dark room hides the client's glow from
-  the whole window, so lit leaded windows no longer sparkle at night.
+  the whole window, so lit leaded windows no longer sparkle at night. By day (18 October 2026) the glass seen from
+  outside keeps the client's painted glass (a little darker, the sky in it) and the room behind it is only a soft hint:
+  as bright as the glass, its walls a gradient, no hard edges, rooms meeting without a step.
 - **Rain and storms** (17 October 2026): rain and wind mix the ground fog back into the units' wakes (none to speak of in
   heavy rain); no mud on paved or cobbled ground (GroundMaterial Flags 0x2, `tools/add_paved_ground.py`) and shallow
   mud ruts on Elwynn's dirt that fill in faster in rain; trench walls and rims no narrower than the near grid can draw,

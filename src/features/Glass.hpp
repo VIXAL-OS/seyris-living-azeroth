@@ -30,7 +30,7 @@ namespace wxl_livingazeroth::glass
     {
         int   enabled = 1;              // everything below
         int   insideGlow = 1;           // seen from inside: the light coming through
-        int   outsideReflection = 1;    // seen from outside: darker glass, the sky in it, the sun's glint
+        int   outsideReflection = 1;    // seen from outside: the glass a little darker by day, the sky in it, the sun's glint
         int   fakeInteriors = 1;        // seen from outside: a room behind clear and leaded glass
         int   colouredShafts = 1;       // features/GlassShafts
         int   floorLight = 1;           // light through sunlit panes on the room's floor and walls
@@ -48,6 +48,11 @@ namespace wxl_livingazeroth::glass
         float litRoomStrength = 1.0f;   // x the lit rooms' brightness (1: about the client's own lit window)
         float lightsOutStrength = 1.0f; // x the share of rooms dark at night
         float layoutStrength = 1.0f;    // x the layouts' detail (the things on the shelves, the folds, the curtains)
+        // Seen from outside (the kinds' shares of these: features/Glass's Look).
+        float outsideDarkening = 0.3f;  // by day clear glass this much darker than the client's own (leaded 0.6 x it, stained and frosted 0.2 x)
+        float reflectionF0 = 0.1f;      // the sky's share in the glass head on (clear 1.2 x it, leaded 1 x, stained 0.8 x, frosted 0.5 x; to 1 at grazing)
+        float roomShareDay = 0.3f;      // by day the room behind clear glass shows this much (leaded 0.77 x it): a hint
+        float roomShareNight = 0.65f;   // at night (the lamp-lit rooms) this much (leaded 0.77 x)
     };
     Settings& Config();
 
@@ -62,6 +67,8 @@ namespace wxl_livingazeroth::glass
     /// The room is the plain warm one (as before room variety); RoomBatchConstants makes it a building's.
     void BatchConstants(const Material& m, float inside, const Light& light, const float sun[3], const float sunColour[3], const float sky[3],
                         const Settings& s, float out[4 * kConstantCount]);
+    /// The room's look by day and night for a batch (c218, c219: env/GlassModel's RoomLook at the light's day).
+    void LookConstants(const Light& light, float out[4 * kLookRegisters]);
 
     /// The room for one glass batch: its building's style (a default house when `building` is null), the night
     /// (the client's window fade, 0..1), the hour (0..24), whether the client lights this material at night (SIDN).
@@ -79,9 +86,10 @@ namespace wxl_livingazeroth::glass
     RoomToggles Toggles(const Settings& s);
     /// A building's dark band (BandOf the clock; without one, the share at `hour` and `night`, at rest).
     DarkBand RoomBand(const RoomStyle& style, uint32_t buildingFlags, const RoomInputs& in, const Settings& s);
-    /// Rewrites the room's part of `out` (c198.w, c199.rgb, c200.w, c202..c205) and fills `seed` (c212: the seed, the
-    /// block, the dark band's slope; c213: the origin the cells are about, the building's else the instance's, and
-    /// the band's base). The band: c203.w lo, c200.w hi.
+    /// Rewrites the room's part of `out` (c198.w, c199.rgb, c200.w, c202..c205; `out` as BatchConstants left it: the
+    /// day's room light goes by its darkening, c197.x) and fills `seed` (c212: the seed, the block, the dark band's
+    /// slope; c213: the origin the cells are about, the building's else the instance's, and the band's base). The band:
+    /// c203.w lo, c200.w hi.
     void RoomBatchConstants(const RoomStyle& style, const Building* building, const Light& light, const RoomInputs& in, const Settings& s,
                             float out[4 * kConstantCount], float seed[4 * kSeedRegisters]);
     /// The fallback seed of an instance the tables don't have: its WMO's PathHash when known (the same for every copy,

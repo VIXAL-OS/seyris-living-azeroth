@@ -84,15 +84,18 @@ namespace wxl_livingazeroth::glass
         };
         constexpr WXL_SeyrisCdbcDefinition kBuildingDef = { "GlassBuildings", kBuildingsFile, kBuildingFields, 13 };
 
-        // Each kind's look (features/GlassShader's constants): the room behind it (its share), the glass's thickness
-        // (yd), saturation seen from inside, Fresnel strength, darkening outside, glint, F0, diffusion (frosted: the
-        // sun's direction matters less), brightness seen from inside, and how much of the sun gets through to the floor.
+        // Each kind's look (features/GlassShader's constants): the room behind it (x the settings' shares by day and
+        // night), the glass's thickness (yd), saturation seen from inside, the reflection at grazing (Fresnel's
+        // strength), darkening outside by day and F0 (x the settings'), glint, diffusion (frosted: the sun's direction
+        // matters less), brightness seen from inside, and how much of the sun gets through to the floor.
+        // Seen from outside the client's own window texture is the artist's painted glass, warm and bright: by day it
+        // stays mostly that (clear glass darker than leaded, stained and frosted barely), with the sky in it.
         struct Look { float room, thickness, saturation, fresnel, darken, glint, f0, diffusion, inside, through; };
         // F0 is above real glass's 0.04: without the eye's range, the sky's 4% beside a sunlit wall reads as no reflection.
-        constexpr Look kClear = { 0.65f, 0.0f, 1.1f, 1.0f, 0.55f, 1.0f, 0.12f, 0.1f, 1.5f, 1.0f };
-        constexpr Look kLeadedLook = { 0.5f, 0.012f, 1.15f, 0.9f, 0.5f, 0.8f, 0.1f, 0.2f, 1.45f, 0.85f };
-        constexpr Look kStainedLook = { 0.0f, 0.035f, 1.35f, 0.6f, 0.45f, 0.6f, 0.08f, 0.3f, 1.9f, 0.8f };
-        constexpr Look kFrostedLook = { 0.0f, 0.0f, 1.0f, 0.35f, 0.15f, 0.25f, 0.05f, 0.85f, 1.05f, 0.55f };
+        constexpr Look kClear = { 1.0f, 0.0f, 1.1f, 1.0f, 1.0f, 1.0f, 1.2f, 0.1f, 1.5f, 1.0f };
+        constexpr Look kLeadedLook = { 0.5f / 0.65f, 0.012f, 1.15f, 0.9f, 0.6f, 0.8f, 1.0f, 0.2f, 1.45f, 0.85f };
+        constexpr Look kStainedLook = { 0.0f, 0.035f, 1.35f, 0.6f, 0.2f, 0.6f, 0.8f, 0.3f, 1.9f, 0.8f };
+        constexpr Look kFrostedLook = { 0.0f, 0.0f, 1.0f, 0.35f, 0.2f, 0.25f, 0.5f, 0.85f, 1.05f, 0.55f };
 
         const Look& LookOf(uint32_t kind)
         {
@@ -105,9 +108,10 @@ namespace wxl_livingazeroth::glass
             }
         }
 
-        // The room behind clear glass: cells 3.5 x 3.2 yd, 4 yd deep, a warm tint, lit by the day (a building's style
-        // changes the tint and the light: RoomBatchConstants).
-        constexpr float kCellWidth = 3.5f, kCellHeight = 3.2f, kRoomDepth = 4.0f, kRoomLight = 0.32f;
+        // The room behind clear glass: cells 3.5 x 3.2 yd (the window lights' too: WindowRooms.cdbc), 4 yd deep, a warm
+        // tint, by day about as bright as the glass in front (room::kDayRoom; a building's style changes the tint and
+        // the light: RoomBatchConstants).
+        constexpr float kCellWidth = 3.5f, kCellHeight = 3.2f, kRoomDepth = 4.0f;
         constexpr float kRoomTint[3] = { 0.85f, 0.72f, 0.55f };
         constexpr float kGlowHidden = 0.75f;   // at night a dark room hides this much of the client's lit window in front of it (all of the window)
         // The floor light: the reach along the sun's ray behind a pane, the soft edges (1 / the share of the half
@@ -156,6 +160,18 @@ namespace wxl_livingazeroth::glass
         std::string g_roomLine;
 
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : (v == v ? v : 0.0f)); }
+        float Lum(const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; }
+
+        // c198.w, the day's light in the room: the shader takes it x the client's colour (the room seen through the
+        // painted glass), so with the glass's own darkening (1 - darken), over the room's mean light (room::kDayMean)
+        // and its tints' luminance it makes the room about room::kDayRoom of the glass in front (x the style's
+        // brightness, the settings' strength), by day only.
+        float DayRoomLight(float day, float darken, const float tintA[3], const float tintB[3], float brightness, const Settings& s)
+        {
+            const float tintLum = std::max(0.05f, 0.5f * (Lum(tintA) + Lum(tintB)));
+            return room::kDayRoom / room::kDayMean * std::max(0.0f, s.interiorStrength) * Clamp01(day) * (1.0f - Clamp01(darken)) *
+                   std::max(0.0f, brightness) / tintLum;
+        }
 
         std::string Key(const char* path)
         {
@@ -277,16 +293,20 @@ namespace wxl_livingazeroth::glass
         const uint32_t flags = b ? b->flags : 0;
         const bool empty = variety && (flags & kBuildingEmpty);
         const bool darkPlace = (flags & kBuildingDarkPlace) != 0;
-        // c198.w the day's light in the room (x the style's brightness); c199.rgb and c202.rgb the building's tints
-        // (its hash picks between them), c202.w how far buildings differ in brightness.
+        // c198.w the day's light in the room (x the style's brightness; about the glass's own: DayRoomLight, with the
+        // darkening BatchConstants put in c197.x); c199.rgb and c202.rgb the building's tints (its hash picks between
+        // them), c202.w how far buildings differ in brightness.
+        // By day the buildings (in a city each 14-yd block) differ less (room::kDayVariety of it): the room is only a
+        // hint behind the glass, and a block's edge across a facade is no edge in it.
         const float* tint = variety ? style.tint : kRoomTint;
-        c[27] = kRoomLight * s.interiorStrength * light.day * light.dim * (variety ? std::max(0.0f, style.brightness) : 1.0f);
+        const float dayVariety = 1.0f + (room::kDayVariety - 1.0f) * Clamp01(light.day);
         for (int k = 0; k < 3; ++k)
         {
             c[28 + k] = tint[k];
-            c[40 + k] = variety ? tint[k] + (style.tint2[k] - tint[k]) * std::min(1.0f, v) : tint[k];
+            c[40 + k] = variety ? tint[k] + (style.tint2[k] - tint[k]) * std::min(1.0f, v) * dayVariety : tint[k];
         }
-        c[43] = variety ? Clamp01(style.spread * v) : 0.0f;
+        c[27] = DayRoomLight(light.day, c[20], c + 28, c + 40, variety ? style.brightness : 1.0f, s);
+        c[43] = variety ? Clamp01(style.spread * v * dayVariety) : 0.0f;
         // The dark band (c203.w lo, c200.w hi; c212.w its slope, c213.w its base): the share of rooms dark (DarkShare:
         // by day the style's few, at night by the hour, inns late, shops early; every room in an empty building, and at
         // night in a dark place) by the rooms' clock, so a room the threshold crosses, or a jump of the time, fades.
@@ -332,9 +352,11 @@ namespace wxl_livingazeroth::glass
         float* c = out;
         // c192 the mask
         for (int k = 0; k < 4; ++k) c[k] = m.mask[k];
-        // c193 inside weight, strength, the room's share, thickness
+        // c193 inside weight, strength, the room's share (by day a hint, at night the lamp-lit room: the settings'
+        // shares x the kind's), thickness
         c[4] = inside; c[5] = 1.0f;
-        c[6] = s.fakeInteriors && s.outsideReflection ? look.room : 0.0f;
+        const float share = s.roomShareNight + (s.roomShareDay - s.roomShareNight) * Clamp01(day);
+        c[6] = s.fakeInteriors && s.outsideReflection ? Clamp01(share * look.room) : 0.0f;
         c[7] = look.thickness;
         // c194 the sky through the glass, the sun's gain
         for (int k = 0; k < 3; ++k) c[8 + k] = light.sky[k];
@@ -342,18 +364,19 @@ namespace wxl_livingazeroth::glass
         // c195 toward the sun, saturation
         for (int k = 0; k < 3; ++k) c[12 + k] = sun[k];
         c[15] = look.saturation;
-        // c196 the reflected sky, Fresnel strength (a little at night: the lit windows stay lit)
+        // c196 the reflected sky, the reflection at grazing (a little at night: the lit windows stay lit)
         const float reflect = s.outsideReflection && !matte ? s.reflectionStrength : 0.0f;
         for (int k = 0; k < 3; ++k) c[16 + k] = sky[k] * (0.15f + 0.85f * day) * 1.1f;
         c[19] = look.fresnel * reflect * (0.3f + 0.7f * day);
-        // c197 darkening outside, glint, F0, diffusion
-        c[20] = s.outsideReflection ? look.darken * day * std::min(1.0f, s.reflectionStrength) : 0.0f;
+        // c197 darkening outside by day (the settings' x the kind's: a few tens of percent at most), glint, F0 (the
+        // shader's Schlick x c196.w: head on the settings' F0 x the kind's), diffusion
+        c[20] = s.outsideReflection ? std::min(0.9f, std::max(0.0f, s.outsideDarkening) * look.darken) * Clamp01(day) : 0.0f;
         c[21] = look.glint * reflect * light.sunGain * 3.0f;
-        c[22] = look.f0;
+        c[22] = Clamp01(std::max(0.0f, s.reflectionF0) * look.f0 / std::max(0.05f, look.fresnel));
         c[23] = look.diffusion;
         // c198 the room's cells and light; c199 its tint, the inside's brightness
         c[24] = 1.0f / kCellWidth; c[25] = 1.0f / kCellHeight; c[26] = 1.0f / kRoomDepth;
-        c[27] = kRoomLight * s.interiorStrength * day * light.dim;
+        c[27] = DayRoomLight(day, c[20], kRoomTint, kRoomTint, 1.0f, s);
         for (int k = 0; k < 3; ++k) c[28 + k] = kRoomTint[k];
         c[31] = s.insideGlow ? look.inside * s.insideStrength : 0.0f;
         // c200 the sun's colour; c201 the floor light's gain
@@ -365,6 +388,11 @@ namespace wxl_livingazeroth::glass
         c[43] = 0.0f;
         for (int k = 44; k < 52; ++k) c[k] = 0.0f;
         c[55] = 0.0f;
+    }
+
+    void LookConstants(const Light& light, float out[4 * kLookRegisters])
+    {
+        RoomLook(light.day, out);
     }
 
     namespace
@@ -729,11 +757,13 @@ namespace wxl_livingazeroth::glass
         if (m || g_loopFloor) RenderView();
         if (m)
         {
-            float c[4 * kConstantCount], seed[4 * kSeedRegisters];
+            float c[4 * kConstantCount], seed[4 * kSeedRegisters], look[4 * kLookRegisters];
             GlassConstants(*m, selfLit, c, seed);
+            LookConstants(g_light, look);
             UploadFrame(dev);
             dev->SetPixelShaderConstantF(kFirstConstant, c, kConstantCount);
             dev->SetPixelShaderConstantF(kSeedConstant, seed, kSeedRegisters);
+            dev->SetPixelShaderConstantF(kLookConstant, look, kLookRegisters);
             g_floorConstsUp = false;   // c192..c201 are this batch's now
             if (!g_glassOn) { SetBool(kSwitch, true); g_glassOn = true; }
             ++g_glassBatches;
@@ -803,10 +833,14 @@ namespace wxl_livingazeroth::glass
         api->UiCheckbox("glass##glon", &s.enabled);
         api->UiCheckbox("seen from inside: the light coming through##glin", &s.insideGlow);
         api->UiSliderFloat("inside: strength##glins", &s.insideStrength, 0.0f, 3.0f);
-        api->UiCheckbox("seen from outside: the sky in it, darker by day##glout", &s.outsideReflection);
+        api->UiCheckbox("seen from outside: the sky in it, a little darker by day##glout", &s.outsideReflection);
+        api->UiSliderFloat("outside: darker by day (clear; leaded 0.6x, stained 0.2x)##gldark", &s.outsideDarkening, 0.0f, 0.8f);
+        api->UiSliderFloat("outside: the sky in it head on, F0 (clear 1.2x; to 1 at grazing)##glf0", &s.reflectionF0, 0.0f, 0.4f);
         api->UiSliderFloat("outside: reflection strength##glouts", &s.reflectionStrength, 0.0f, 3.0f);
         api->UiCheckbox("fake rooms behind clear glass##glroom", &s.fakeInteriors);
-        api->UiSliderFloat("fake rooms: light##glrooms", &s.interiorStrength, 0.0f, 3.0f);
+        api->UiSliderFloat("fake rooms: share by day (clear; leaded 0.77x)##glshd", &s.roomShareDay, 0.0f, 1.0f);
+        api->UiSliderFloat("fake rooms: share at night##glshn", &s.roomShareNight, 0.0f, 1.0f);
+        api->UiSliderFloat("fake rooms: light (1 = about the glass by day)##glrooms", &s.interiorStrength, 0.0f, 3.0f);
         api->UiCheckbox("rooms: each building its own (tint, brightness, a few dark)##glvar", &s.roomVariety);
         api->UiSliderFloat("rooms: how far buildings differ##glvars", &s.varietyStrength, 0.0f, 2.0f);
         api->UiCheckbox("rooms: lamp-lit at night behind the lit windows##gllit", &s.litRooms);
