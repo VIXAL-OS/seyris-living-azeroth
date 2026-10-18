@@ -5,6 +5,7 @@
 #include "../env/Fog.hpp"
 #include "../env/Storm.hpp"
 #include "../env/WorldQuery.hpp"
+#include "../render/BlpTexture.hpp"
 #include "../wxl_seyris/CdbcApi.hpp"
 #include "GlassShafts.hpp"
 #include "SurfaceCover.hpp"
@@ -83,19 +84,32 @@ namespace wxl_livingazeroth::glass
             {"Comment", 12, WXL_CDBC_FIELD_STRING},
         };
         constexpr WXL_SeyrisCdbcDefinition kBuildingDef = { "GlassBuildings", kBuildingsFile, kBuildingFields, 13 };
+        // One room per window (tools/gen_glass.py GLASS_WINDOWS; env/GlassRooms' WindowTable).
+        constexpr const char* kWindowsFile = "DBFilesClient\\GlassWindows.cdbc";
+        constexpr WXL_SeyrisCdbcField kWindowFields[] = {
+            {"ID", 0, WXL_CDBC_FIELD_VALUE},         {"Wmo", 1, WXL_CDBC_FIELD_STRING},       {"Group", 2, WXL_CDBC_FIELD_VALUE},
+            {"Ordinal", 3, WXL_CDBC_FIELD_VALUE},    {"Kind", 4, WXL_CDBC_FIELD_VALUE},
+            {"CenterX", 5, WXL_CDBC_FIELD_VALUE},    {"CenterY", 6, WXL_CDBC_FIELD_VALUE},    {"CenterZ", 7, WXL_CDBC_FIELD_VALUE},
+            {"NormalX", 8, WXL_CDBC_FIELD_VALUE},    {"NormalY", 9, WXL_CDBC_FIELD_VALUE},    {"NormalZ", 10, WXL_CDBC_FIELD_VALUE},
+            {"HalfWidth", 11, WXL_CDBC_FIELD_VALUE}, {"HalfHeight", 12, WXL_CDBC_FIELD_VALUE}, {"Flags", 13, WXL_CDBC_FIELD_VALUE},
+            {"Panes", 14, WXL_CDBC_FIELD_VALUE},     {"Comment", 15, WXL_CDBC_FIELD_STRING},  {"Thickness", 16, WXL_CDBC_FIELD_VALUE},
+        };
+        constexpr WXL_SeyrisCdbcDefinition kWindowDef = { "GlassWindows", kWindowsFile, kWindowFields, 17 };
 
         // Each kind's look (features/GlassShader's constants): the room behind it (x the settings' shares by day and
         // night), the glass's thickness (yd), saturation seen from inside, the reflection at grazing (Fresnel's
         // strength), darkening outside by day and F0 (x the settings'), glint, diffusion (frosted: the sun's direction
         // matters less), brightness seen from inside, and how much of the sun gets through to the floor.
-        // Seen from outside the client's own window texture is the artist's painted glass, warm and bright: by day it
-        // stays mostly that (clear glass darker than leaded, stained and frosted barely), with the sky in it.
-        struct Look { float room, thickness, saturation, fresnel, darken, glint, f0, diffusion, inside, through; };
+        // Seen from outside the client's own window texture is the artist's painted glass, warm and bright, as if lamplit:
+        // by day it moves part of the way to glass (clear glass darker than leaded, stained and frosted barely; cooler,
+        // toward the sky's hue: `cool` x DayCoolness, stained barely), with the sky in it (F0: `f0` x room::kNightF0 at
+        // night, `dayF0` x ReflectionF0 by day); at dusk and night its warmth again.
+        struct Look { float room, thickness, saturation, fresnel, darken, glint, f0, diffusion, inside, through, dayF0, cool; };
         // F0 is above real glass's 0.04: without the eye's range, the sky's 4% beside a sunlit wall reads as no reflection.
-        constexpr Look kClear = { 1.0f, 0.0f, 1.1f, 1.0f, 1.0f, 1.0f, 1.2f, 0.1f, 1.5f, 1.0f };
-        constexpr Look kLeadedLook = { 0.5f / 0.65f, 0.012f, 1.15f, 0.9f, 0.6f, 0.8f, 1.0f, 0.2f, 1.45f, 0.85f };
-        constexpr Look kStainedLook = { 0.0f, 0.035f, 1.35f, 0.6f, 0.2f, 0.6f, 0.8f, 0.3f, 1.9f, 0.8f };
-        constexpr Look kFrostedLook = { 0.0f, 0.0f, 1.0f, 0.35f, 0.2f, 0.25f, 0.5f, 0.85f, 1.05f, 0.55f };
+        constexpr Look kClear = { 1.0f, 0.0f, 1.1f, 1.0f, 1.0f, 1.0f, 1.2f, 0.1f, 1.5f, 1.0f, 1.2f, 1.0f };
+        constexpr Look kLeadedLook = { kLeadedRoom, 0.012f, 1.15f, 0.9f, 0.6f, 0.8f, 1.0f, 0.2f, 1.45f, 0.85f, 1.0f, 1.0f };
+        constexpr Look kStainedLook = { 0.0f, 0.035f, 1.35f, 0.6f, 0.2f, 0.6f, 0.8f, 0.3f, 1.9f, 0.8f, 0.5f, 0.25f };
+        constexpr Look kFrostedLook = { 0.0f, 0.0f, 1.0f, 0.35f, 0.2f, 0.25f, 0.5f, 0.85f, 1.05f, 0.55f, 0.5f, 0.6f };
 
         const Look& LookOf(uint32_t kind)
         {
@@ -108,10 +122,8 @@ namespace wxl_livingazeroth::glass
             }
         }
 
-        // The room behind clear glass: cells 3.5 x 3.2 yd (the window lights' too: WindowRooms.cdbc), 4 yd deep, a warm
-        // tint, by day about as bright as the glass in front (room::kDayRoom; a building's style changes the tint and
-        // the light: RoomBatchConstants).
-        constexpr float kCellWidth = 3.5f, kCellHeight = 3.2f, kRoomDepth = 4.0f;
+        // The room behind clear glass: one per window (GlassWindows.cdbc), a warm tint, by day about half as bright as the
+        // glass in front (room::kDayRoom; a building's style changes the tint and the light: RoomBatchConstants).
         constexpr float kRoomTint[3] = { 0.85f, 0.72f, 0.55f };
         constexpr float kGlowHidden = 0.75f;   // at night a dark room hides this much of the client's lit window in front of it (all of the window)
         // The floor light: the reach along the sun's ray behind a pane, the soft edges (1 / the share of the half
@@ -163,13 +175,31 @@ namespace wxl_livingazeroth::glass
         unsigned g_frostBatches = 0, g_frostIronforge = 0, g_underground = 0;
         unsigned g_lastFrost = 0, g_lastIronforge = 0, g_lastUnderground = 0;
 
+        // One room per window: the table (GlassWindows.cdbc), the current instance's frame and group, the device's
+        // textures (the table, the furniture atlas, a white texel for RoomTextures off, each palette's set: loaded the
+        // first time a batch wants it, a set a frame, in Update).
+        WindowTable g_windows;
+        std::string g_windowStatus = "GlassWindows.cdbc: not loaded yet";
+        float g_axes[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        bool g_hasAxes = false;
+        uint32_t g_path = 0, g_group = 0;
+        IDirect3DTexture9* g_tableTex = nullptr;
+        IDirect3DTexture9* g_atlasTex = nullptr;
+        IDirect3DTexture9* g_whiteTex = nullptr;
+        bool g_tableDirty = true;
+        struct SetTextures { IDirect3DTexture9* tex[4] = {}; float gain[4] = { 1, 1, 1, 1 }; int state = 0; };   // 0 none, 1 wanted, 2 loaded, 3 failed
+        SetTextures g_sets[kTextureSets];
+        std::string g_textureError;
+        uint32_t g_samplerFrame = ~0u;
+        unsigned g_roomBatches = 0, g_lastRoomBatches = 0, g_noFrame = 0, g_lastNoFrame = 0, g_noGrid = 0, g_lastNoGrid = 0;
+
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : (v == v ? v : 0.0f)); }
         float Lum(const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; }
 
-        // c198.w, the day's light in the room: the shader takes it x the client's colour (the room seen through the
-        // painted glass), so with the glass's own darkening (1 - darken), over the room's mean light (room::kDayMean)
-        // and its tints' luminance it makes the room about room::kDayRoom of the glass in front (x the style's
-        // brightness, the settings' strength), by day only.
+        // c198.w, the day's light in the room: the shader takes it x its tint x the client's colour's luminance (the room
+        // seen through the glass), so with the glass's own darkening (1 - darken), over the room's mean light
+        // (room::kDayMean) and its tints' luminance it makes the room about room::kDayRoom of the glass in front (x the
+        // style's brightness, the settings' strength), while the client's windows are unlit (`day`: Light::rooms).
         float DayRoomLight(float day, float darken, const float tintA[3], const float tintB[3], float brightness, const Settings& s)
         {
             const float tintLum = std::max(0.05f, 0.5f * (Lum(tintA) + Lum(tintB)));
@@ -234,12 +264,15 @@ namespace wxl_livingazeroth::glass
             return in;
         }
 
-        // One glass batch's constants: its material's look, inside or outside, and the room of the building drawn.
-        void GlassConstants(const Material& m, bool selfLit, bool unlit, float out[4 * kConstantCount], float seed[4 * kSeedRegisters])
+        // One glass batch's constants: its material's look, inside or outside, and the room of the building drawn; its
+        // day look (c85, c86); the room's registers (c15..c25) and the texture set it wants (-1: none, white).
+        void GlassConstants(const Material& m, bool selfLit, bool unlit, float out[4 * kConstantCount], float seed[4 * kSeedRegisters],
+                            float day[4 * kDayRegisters], float rooms[4 * kRoomRegisters], int& set)
         {
             BatchConstants(m, InsideWeight(m.flags, g_groupFlags, g_indoors), g_light, g_sun, g_sunColour, g_sky, g_settings, out);
             const Building* b = g_inInstance ? g_building : nullptr;
             const RoomStyle* style = StyleOf(b);
+            DayConstants(m, g_light, g_settings, style && b ? b->flags : 0, day);
             RoomInputs in = FrameInputs();
             in.selfLit = selfLit; in.fallbackSeed = g_fallbackSeed;
             in.origin = g_inInstance && g_hasOrigin ? g_origin : nullptr;
@@ -247,6 +280,149 @@ namespace wxl_livingazeroth::glass
             RoomBatchConstants(style ? *style : DefaultStyle(), style ? b : nullptr, g_light, in, g_settings, out, seed);
             if (out[39] > 0.0f) { ++g_frostBatches; g_frostIronforge += IsIronforge(b) ? 1 : 0; }
             g_underground += b && (b->flags & kBuildingUnderground) ? 1 : 0;
+            // The room's: the group's grid and the instance's frame (none without either: no room, lit), the class, the
+            // palette's textures (with RoomTextures, once loaded; until then and without it white, a gain of 1).
+            const WindowTable::Grid* grid = g_inInstance && g_hasAxes && g_hasOrigin ? g_windows.Find(g_path, g_group) : nullptr;
+            const bool wanted = out[6] > 0.0f || out[39] > 0.0f;
+            if (wanted && !grid) { if (!g_hasAxes) ++g_noFrame; else ++g_noGrid; }
+            const uint32_t cls = style ? style->cls : DefaultStyle().cls;
+            set = g_settings.roomTextures && out[6] > 0.0f ? TextureSetOf(style ? style->palette : 0, cls) : -1;
+            float scales[4] = { 1, 1, 1, 1 }, gains[4] = { 1, 1, 1, 1 };
+            if (set >= 0)
+            {
+                const TextureSet& ts = TextureSetAt(set);
+                for (int k = 0; k < 4; ++k) scales[k] = ts.scale[k];
+                if (g_sets[set].state == 2) for (int k = 0; k < 4; ++k) gains[k] = g_sets[set].gain[k];
+                else { if (g_sets[set].state == 0) g_sets[set].state = 1; set = -1; }
+            }
+            RoomRegisters(g_axes, g_origin, g_view, grid, g_windows.Height(), cls, scales, gains, g_settings, rooms);
+            g_roomBatches += grid && out[6] > 0.0f ? 1 : 0;
+        }
+
+        // The room's samplers: the floor, walls, ceiling and wood (a set's, or white), the atlas, the table; their states
+        // once a frame (another pass may have used s8, s9: the fog's).
+        void BindRoomTextures(IDirect3DDevice9* dev, int set)
+        {
+            for (int k = 0; k < 4; ++k)
+                dev->SetTexture(kFirstSampler + k, set >= 0 && g_sets[set].state == 2 && g_sets[set].tex[k] ? g_sets[set].tex[k] : g_whiteTex);
+            dev->SetTexture(kFirstSampler + 4, g_atlasTex);
+            dev->SetTexture(kTableSampler, g_tableTex);
+            if (g_samplerFrame == g_frame) return;
+            g_samplerFrame = g_frame;
+            for (int k = 0; k < 6; ++k)
+            {
+                const DWORD s = static_cast<DWORD>(kFirstSampler + k);
+                const bool table = s == static_cast<DWORD>(kTableSampler);
+                dev->SetSamplerState(s, D3DSAMP_MINFILTER, table ? D3DTEXF_POINT : (k < 4 ? D3DTEXF_ANISOTROPIC : D3DTEXF_LINEAR));
+                dev->SetSamplerState(s, D3DSAMP_MAGFILTER, table ? D3DTEXF_POINT : D3DTEXF_LINEAR);
+                dev->SetSamplerState(s, D3DSAMP_MIPFILTER, table ? D3DTEXF_NONE : D3DTEXF_LINEAR);
+                dev->SetSamplerState(s, D3DSAMP_MAXANISOTROPY, 8);
+                const DWORD address = table || k == 4 ? D3DTADDRESS_CLAMP : D3DTADDRESS_WRAP;
+                dev->SetSamplerState(s, D3DSAMP_ADDRESSU, address);
+                dev->SetSamplerState(s, D3DSAMP_ADDRESSV, address);
+                dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, FALSE);
+                dev->SetSamplerState(s, D3DSAMP_MAXMIPLEVEL, 0);
+                dev->SetSamplerState(s, D3DSAMP_MIPMAPLODBIAS, 0);
+            }
+        }
+
+        // A texture of A8R8G8B8 texels (0xAARRGGBB) with its mips (box filtered), managed.
+        IDirect3DTexture9* TextureOf(IDirect3DDevice9* dev, const std::vector<uint32_t>& texels, int width, int height)
+        {
+            IDirect3DTexture9* tex = nullptr;
+            if (FAILED(dev->CreateTexture(width, height, 0, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex) return nullptr;
+            std::vector<uint32_t> level = texels;
+            int w = width, h = height;
+            for (DWORD m = 0; m < tex->GetLevelCount(); ++m)
+            {
+                if (m)
+                {
+                    const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+                    std::vector<uint32_t> next(static_cast<size_t>(nw) * nh);
+                    for (int y = 0; y < nh; ++y)
+                        for (int x = 0; x < nw; ++x)
+                        {
+                            uint32_t sum[4] = {};
+                            for (int dy = 0; dy < 2; ++dy)
+                                for (int dx = 0; dx < 2; ++dx)
+                                {
+                                    const uint32_t t = level[static_cast<size_t>(std::min(h - 1, y * 2 + dy)) * w + std::min(w - 1, x * 2 + dx)];
+                                    for (int c = 0; c < 4; ++c) sum[c] += (t >> (8 * c)) & 0xFF;
+                                }
+                            uint32_t v = 0;
+                            for (int c = 0; c < 4; ++c) v |= ((sum[c] + 2) / 4) << (8 * c);
+                            next[static_cast<size_t>(y) * nw + x] = v;
+                        }
+                    level.swap(next);
+                    w = nw; h = nh;
+                }
+                D3DLOCKED_RECT lr{};
+                if (FAILED(tex->LockRect(m, &lr, nullptr, 0))) { tex->Release(); return nullptr; }
+                for (int y = 0; y < h; ++y) std::memcpy(static_cast<uint8_t*>(lr.pBits) + y * lr.Pitch, &level[static_cast<size_t>(y) * w], w * 4);
+                tex->UnlockRect(m);
+            }
+            return tex;
+        }
+
+        void Release(IDirect3DTexture9*& t) { if (t) { t->Release(); t = nullptr; } }
+
+        // The device's textures, made on the main thread (Update): the table after a load, the atlas and the white texel
+        // once, a wanted texture set a frame.
+        void RoomTexturesUpdate()
+        {
+            auto* dev = Device();
+            if (!dev) return;
+            if (g_tableDirty)
+            {
+                g_tableDirty = false;
+                Release(g_tableTex);
+                if (g_windows.Windows())
+                {
+                    IDirect3DTexture9* tex = nullptr;
+                    const int h = g_windows.Height();
+                    if (SUCCEEDED(dev->CreateTexture(rooms::kWidth, h, 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &tex, nullptr)) && tex)
+                    {
+                        D3DLOCKED_RECT lr{};
+                        if (SUCCEEDED(tex->LockRect(0, &lr, nullptr, 0)))
+                        {
+                            const std::vector<float>& t = g_windows.Texels();
+                            for (int y = 0; y < h; ++y)
+                                std::memcpy(static_cast<uint8_t*>(lr.pBits) + y * lr.Pitch, &t[static_cast<size_t>(y) * rooms::kWidth * 4], rooms::kWidth * 16);
+                            tex->UnlockRect(0);
+                            g_tableTex = tex;
+                        }
+                        else tex->Release();
+                    }
+                    if (!g_tableTex) g_textureError = "the window table's texture (RGBA 32-bit floats) couldn't be made";
+                }
+            }
+            if (!g_atlasTex)
+            {
+                std::vector<uint32_t> atlas;
+                FurnitureAtlas(atlas);
+                g_atlasTex = TextureOf(dev, atlas, rooms::kAtlasWidth, rooms::kAtlasHeight);
+            }
+            if (!g_whiteTex) g_whiteTex = TextureOf(dev, std::vector<uint32_t>(16, 0xFFFFFFFFu), 4, 4);
+            for (int set = 0; set < kTextureSets; ++set)
+            {
+                SetTextures& st = g_sets[set];
+                if (st.state != 1) continue;
+                const TextureSet& ts = TextureSetAt(set);
+                const char* paths[4] = { ts.floor, ts.wall, ts.ceiling, ts.wood };
+                bool ok = true;
+                for (int k = 0; k < 4; ++k)
+                {
+                    std::string error;
+                    st.tex[k] = blp::Load(dev, paths[k], error);
+                    float rgb[3] = { 0.5f, 0.5f, 0.5f };
+                    const bool mean = blp::AverageColour(paths[k], rgb);
+                    st.gain[k] = 1.0f / std::max(0.05f, Lum(rgb));
+                    if (!st.tex[k] || !mean) { ok = false; g_textureError = std::string(paths[k]) + ": " + (error.empty() ? "no average colour" : error); }
+                }
+                st.state = ok ? 2 : 3;
+                if (!ok) for (IDirect3DTexture9*& t : st.tex) Release(t);
+                break;   // one set a frame
+            }
         }
     }
 
@@ -341,13 +517,20 @@ namespace wxl_livingazeroth::glass
         // By day the buildings (in a city each 14-yd block) differ less (room::kDayVariety of it): the room is only a
         // hint behind the glass, and a block's edge across a facade is no edge in it.
         const float* tint = variety ? style.tint : kRoomTint;
-        const float dayVariety = 1.0f + (room::kDayVariety - 1.0f) * Clamp01(light.day);
+        const float dayVariety = 1.0f + (room::kDayVariety - 1.0f) * Clamp01(light.rooms);
         for (int k = 0; k < 3; ++k)
         {
             c[28 + k] = tint[k];
             c[40 + k] = variety ? tint[k] + (style.tint2[k] - tint[k]) * std::min(1.0f, v) * dayVariety : tint[k];
         }
-        c[27] = DayRoomLight(light.day, c[20], c + 28, c + 40, variety ? style.brightness : 1.0f, s);
+        // (with the rooms' textures, the tints only part of the way from their grey: the textures keep their own colours)
+        if (s.roomTextures)
+            for (int base : { 28, 40 })
+            {
+                const float l = Lum(c + base);
+                for (int k = 0; k < 3; ++k) c[base + k] = l + (c[base + k] - l) * rooms::kTintWithTextures;
+            }
+        c[27] = DayRoomLight(light.rooms, c[20], c + 28, c + 40, variety ? style.brightness : 1.0f, s);
         c[43] = variety ? Clamp01(style.spread * v * dayVariety) : 0.0f;
         // The dark band (c203.w lo, c200.w hi; c212.w its slope, c213.w its base): the share of rooms dark (DarkShare:
         // by day the style's few, at night by the hour, inns late, shops early; every room in an empty building, and at
@@ -363,16 +546,19 @@ namespace wxl_livingazeroth::glass
         float lampN[3];
         const float ll = std::max(1e-3f, 0.2126f * style.lamp[0] + 0.7152f * style.lamp[1] + 0.0722f * style.lamp[2]);
         for (int k = 0; k < 3; ++k) lampN[k] = std::max(0.0f, style.lamp[k]) / ll;
-        const float lit = std::max(1e-3f, 0.2126f * tint[0] * lampN[0] + 0.7152f * tint[1] * lampN[1] + 0.0722f * tint[2] * lampN[2]);
+        const float lit = std::max(1e-3f, 0.2126f * c[28] * lampN[0] + 0.7152f * c[29] * lampN[1] + 0.0722f * c[30] * lampN[2]);
         const float gain = lamp ? night * std::max(0.0f, s.litRoomStrength) / (lit * room::kNightMean) : 0.0f;
         for (int k = 0; k < 3; ++k) c[44 + k] = lampN[k] * gain;
-        // c204 the layouts' thresholds and the detail's strength; c205 the curtains, and how much of the client's lit
-        // window a dark room hides at night.
+        // c204 the curtains' band in the room's hash (the style's shelves' weight .. + its curtains': the layouts' thresholds)
+        // and the detail's strength; c205 the curtains, and how much of the client's lit window a dark room hides at night.
         float t[3] = { 0, 0, 0 };
         if (s.roomLayouts) LayoutThresholds(style.weights, t);
         for (int k = 0; k < 3; ++k) c[48 + k] = t[k];
         c[51] = s.roomLayouts ? std::max(0.0f, s.layoutStrength) : 0.0f;
-        for (int k = 0; k < 3; ++k) c[52 + k] = style.curtain[k];
+        // (by day the curtains part of the way to their grey: seen through the cooler glass a red cloth reads pink)
+        const float clothGrey = room::kCurtainDayGrey * Clamp01(light.rooms);
+        const float clothLum = Lum(style.curtain);
+        for (int k = 0; k < 3; ++k) c[52 + k] = style.curtain[k] + (clothLum - style.curtain[k]) * clothGrey;
         c[55] = s.litRooms && in.selfLit ? kGlowHidden * night : 0.0f;
         // c201: the hearth clock (.y), the flicker's amplitude at night (.z: a lit frosted window's hearth, HearthFlicker;
         // a lamp-lit room's lamp, LampFlicker), lit frosted glass (.w). A dark frosted window hides kFrostedHidden of its
@@ -390,9 +576,9 @@ namespace wxl_livingazeroth::glass
         // Underground (Ironforge's streets are its interior groups: what's behind its glass is more of the city, not the
         // sky): the street's look whatever the camera's indoors blend, with no sky, darkening or glint in it.
         if (flags & kBuildingUnderground) { c[4] = 0.0f; c[19] = 0.0f; c[20] = 0.0f; c[21] = 0.0f; }
-        // c212 the seed (two numbers 0..1023), the block (a city's buildings), the band's slope; c213 the origin the
-        // cells are about: a placement's from the table (features/Windows' cells are about the same numbers), else the
-        // instance's (a WMO's default row has none), else the world's; the band's base.
+        // c212 the seed (two numbers 0..1023), the block (a city's buildings), the band's slope; c213 the building's
+        // origin: a placement's from the table, else the instance's (a WMO's default row has none), else the world's;
+        // the band's base.
         const uint32_t sd = b ? b->seed : in.fallbackSeed;
         seed[0] = static_cast<float>(sd & 1023u);
         seed[1] = static_cast<float>((sd >> 10) & 1023u);
@@ -412,10 +598,10 @@ namespace wxl_livingazeroth::glass
         float* c = out;
         // c192 the mask
         for (int k = 0; k < 4; ++k) c[k] = m.mask[k];
-        // c193 inside weight, strength, the room's share (by day a hint, at night the lamp-lit room: the settings'
-        // shares x the kind's), thickness
+        // c193 inside weight, strength, the room's share (by day and at dusk the day's, at night the lamp-lit room's:
+        // the settings' shares x the kind's), thickness
         c[4] = inside; c[5] = 1.0f;
-        const float share = s.roomShareNight + (s.roomShareDay - s.roomShareNight) * Clamp01(day);
+        const float share = s.roomShareNight + (s.roomShareDay - s.roomShareNight) * Clamp01(light.rooms);
         c[6] = s.fakeInteriors && s.outsideReflection ? Clamp01(share * look.room) : 0.0f;
         c[7] = look.thickness;
         // c194 the sky through the glass, the sun's gain
@@ -429,14 +615,24 @@ namespace wxl_livingazeroth::glass
         for (int k = 0; k < 3; ++k) c[16 + k] = sky[k] * (0.15f + 0.85f * day) * 1.1f;
         c[19] = look.fresnel * reflect * (0.3f + 0.7f * day);
         // c197 darkening outside by day (the settings' x the kind's: a few tens of percent at most), glint, F0 (the
-        // shader's Schlick x c196.w: head on the settings' F0 x the kind's), diffusion
+        // shader's Schlick x c196.w: head on by day the settings' F0 x the kind's, at night room::kNightF0 x the kind's
+        // as before), diffusion
         c[20] = s.outsideReflection ? std::min(0.9f, std::max(0.0f, s.outsideDarkening) * look.darken) * Clamp01(day) : 0.0f;
         c[21] = look.glint * reflect * light.sunGain * 3.0f;
-        c[22] = Clamp01(std::max(0.0f, s.reflectionF0) * look.f0 / std::max(0.05f, look.fresnel));
+        const float nightF0 = room::kNightF0 * look.f0;
+        const float f0 = nightF0 + (std::max(0.0f, s.reflectionF0) * look.dayF0 - nightF0) * Clamp01(day);
+        c[22] = Clamp01(f0 / std::max(0.05f, look.fresnel));
         c[23] = look.diffusion;
-        // c198 the room's cells and light; c199 its tint, the inside's brightness
-        c[24] = 1.0f / kCellWidth; c[25] = 1.0f / kCellHeight; c[26] = 1.0f / kRoomDepth;
-        c[27] = DayRoomLight(day, c[20], kRoomTint, kRoomTint, 1.0f, s);
+        // c198 the day's light in the room: its colour at luminance 1 (the sky's and the sun's through a pane, room::kDayHue
+        // of the way from white; white with neither), its strength (DayRoomLight); c199 its tint, the inside's brightness
+        {
+            float dl[3];
+            for (int k = 0; k < 3; ++k) dl[k] = std::max(0.0f, sky[k]) + std::max(0.0f, sunColour[k]) * std::max(0.0f, light.sunGain);
+            const float dlum = Lum(dl);
+            for (int k = 0; k < 3; ++k)
+                c[24 + k] = dlum > 1e-3f && std::isfinite(dlum) ? 1.0f + (std::min(3.0f, dl[k] / dlum) - 1.0f) * room::kDayHue : 1.0f;
+        }
+        c[27] = DayRoomLight(light.rooms, c[20], kRoomTint, kRoomTint, 1.0f, s);
         for (int k = 0; k < 3; ++k) c[28 + k] = kRoomTint[k];
         c[31] = s.insideGlow ? look.inside * s.insideStrength : 0.0f;
         // c200 the sun's colour; c201 the floor light's gain
@@ -452,8 +648,84 @@ namespace wxl_livingazeroth::glass
 
     void LookConstants(const Light& light, float out[4 * kLookRegisters])
     {
-        RoomLook(light.day, out);
+        (void)light;
+        RoomLook(out);
     }
+
+    void DayConstants(const Material& m, const Light& light, const Settings& s, uint32_t buildingFlags, float out[4 * kDayRegisters])
+    {
+        const Look& look = LookOf(m.kind);
+        // c85: the glass cooler by day (DayCoolness x the kind's x the day; none matte, underground or without the outside
+        // look), more toward the top of the pane and at a slant, the sky's hue's share (the rest grey).
+        const bool sky = s.outsideReflection && !(m.flags & kMatte) && !(buildingFlags & kBuildingUnderground);
+        out[0] = sky && std::isfinite(s.dayCoolness) ? Clamp01(s.dayCoolness * look.cool * Clamp01(light.day)) : 0.0f;
+        out[1] = room::kCoolUp; out[2] = room::kCoolGraze; out[3] = room::kCoolTint;
+        // c86: the room by day: the sun's patch on its floor (x the sun through: none at dusk, in cloud, underground), and
+        // while the client's windows are unlit farther darker and lighter low (the light comes in at the window and falls).
+        out[4] = buildingFlags & kBuildingUnderground ? 0.0f : room::kPatch * Clamp01(light.sunGain);
+        out[5] = room::kFarDay * Clamp01(light.rooms);
+        out[6] = room::kFallDay * Clamp01(light.rooms);
+        out[7] = 0.0f;
+    }
+
+    void RoomRegisters(const float axes[9], const float origin[3], const float camera[3], const WindowTable::Grid* grid, int tableHeight,
+                       uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters])
+    {
+        std::memset(out, 0, sizeof(float) * 4 * kRoomRegisters);
+        // c15..c17: the point in its WMO's space = the rows . (P about the camera, 1): row i its axis i in the world, the
+        // offset that axis . (the camera - the origin), in doubles (a city's -8800 yd never reach the result)
+        for (int i = 0; i < 3; ++i)
+        {
+            double w = 0.0;
+            for (int k = 0; k < 3; ++k)
+            {
+                out[4 * i + k] = axes[3 * i + k];
+                w += static_cast<double>(axes[3 * i + k]) * (static_cast<double>(camera[k]) - static_cast<double>(origin[k]));
+            }
+            out[4 * i + 3] = static_cast<float>(w);
+        }
+        // c18..c20: the group's grid (its corner, its first cell's texel; 1 / a cell, x, x y cells, 1 / the table's height;
+        // the last cell; 1: a grid)
+        if (grid && tableHeight > 0)
+        {
+            for (int k = 0; k < 3; ++k) { out[12 + k] = grid->min[k]; out[20 + k] = static_cast<float>(grid->n[k] - 1); }
+            out[15] = static_cast<float>(grid->base);
+            out[16] = 1.0f / grid->cell;
+            out[17] = static_cast<float>(grid->n[0]);
+            out[18] = static_cast<float>(grid->n[0] * grid->n[1]);
+            out[19] = 1.0f / static_cast<float>(tableHeight);
+            out[23] = 1.0f;
+        }
+        // c21: the room's depth (the class's), its spread, the furniture (RoomDetail x LayoutStrength, at most 1)
+        const RoomKind& kind = RoomKindOf(cls);
+        out[24] = kind.depth;
+        out[25] = kDepthSpread;
+        out[26] = s.roomDetail && std::isfinite(s.layoutStrength) ? std::min(1.0f, std::max(0.0f, s.layoutStrength)) : 0.0f;
+        // c22, c23: the textures (floor, walls, ceiling, wood): 1 / the yards each repeats over, each one's gain to a mean of 1
+        for (int k = 0; k < 4; ++k)
+        {
+            out[28 + k] = 1.0f / std::max(0.1f, scales[k]);
+            out[32 + k] = std::isfinite(gains[k]) ? std::min(8.0f, std::max(0.0f, gains[k])) : 1.0f;
+        }
+        // c24, c25: the furniture's tiles, the middle's and the back's
+        for (int k = 0; k < 4; ++k) { out[36 + k] = static_cast<float>(kind.mid[k]); out[40 + k] = static_cast<float>(kind.back[k]); }
+    }
+
+    bool IsRotation(const float a[9])
+    {
+        if (!a) return false;
+        for (int i = 0; i < 9; ++i)
+            if (!std::isfinite(a[i])) return false;
+        for (int i = 0; i < 3; ++i)
+            for (int j = i; j < 3; ++j)
+            {
+                const float d = a[3 * i] * a[3 * j] + a[3 * i + 1] * a[3 * j + 1] + a[3 * i + 2] * a[3 * j + 2];
+                if (std::fabs(d - (i == j ? 1.0f : 0.0f)) > 0.02f) return false;
+            }
+        return true;
+    }
+
+    const WindowTable& Windows() { return g_windows; }
 
     namespace
     {
@@ -494,7 +766,7 @@ namespace wxl_livingazeroth::glass
         g_styles.clear();
         g_styleById.clear();
         g_building = nullptr;
-        if (!cdbc || !cdbc->HasFeature("cdbc-load")) { g_status = "wxl-seyris-tools (cdbc) not available"; g_panes.Build({}); g_buildings.Build({}); return; }
+        if (!cdbc || !cdbc->HasFeature("cdbc-load")) { g_status = "wxl-seyris-tools (cdbc) not available"; g_panes.Build({}); g_buildings.Build({}); g_windows.Build({}); g_tableDirty = true; return; }
         char err[256] = {};
         std::string status;
         if (void* t = cdbcload::LoadAppendOnly(cdbc, kMaterialDef, err, sizeof(err)))
@@ -637,6 +909,46 @@ namespace wxl_livingazeroth::glass
         else if (!g_styles.empty()) status += std::string("; GlassBuildings.cdbc: ") + (err[0] ? err : "not found") + " (every building the default house)";
         g_buildings.Build(std::move(buildings));
         g_building = nullptr;
+
+        // One room per window: the windows (their WMO's space), the lookup table the shader reads.
+        std::vector<Window> windows;
+        err[0] = 0;
+        if (void* t = cdbcload::LoadAppendOnly(cdbc, kWindowDef, err, sizeof(err)))
+        {
+            auto F = [&](const void* row, const char* f, float missing) { return cdbcload::Float(cdbc, t, row, f, missing); };
+            for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
+            {
+                const void* row = cdbc->RowAt(t, i);
+                if (!row) continue;
+                Window w;
+                w.path = PathHash(cdbc->GetString(t, row, "Wmo"));
+                w.group = cdbc->Value(t, row, "Group", 0);
+                w.ordinal = cdbc->Value(t, row, "Ordinal", 0);
+                w.kind = cdbc->Value(t, row, "Kind", Kind::kClear);
+                w.flags = cdbc->Value(t, row, "Flags", 0);
+                const char* c[3] = { "CenterX", "CenterY", "CenterZ" };
+                const char* nn[3] = { "NormalX", "NormalY", "NormalZ" };
+                for (int k = 0; k < 3; ++k) { w.center[k] = F(row, c[k], 0.0f); w.normal[k] = F(row, nn[k], 0.0f); }
+                w.halfWidth = F(row, "HalfWidth", 0.0f);
+                w.halfHeight = F(row, "HalfHeight", 0.0f);
+                w.thickness = F(row, "Thickness", 0.0f);
+                if (w.path && (w.kind == Kind::kClear || w.kind == kLeaded || w.kind == kFrosted)) windows.push_back(w);
+            }
+            cdbc->Release(t);
+        }
+        const bool haveWindows = !windows.empty();
+        g_windows.Build(std::move(windows));
+        g_tableDirty = true;
+        {
+            char line[200];
+            if (haveWindows)
+                std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %u windows in %u WMO groups (a table of %d x %d)",
+                              static_cast<unsigned>(g_windows.Windows()), static_cast<unsigned>(g_windows.Grids()), rooms::kWidth, g_windows.Height());
+            else
+                std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %s (no rooms behind the glass)", err[0] ? err : "not found");
+            g_windowStatus = line;
+            status += std::string("; ") + line;
+        }
         g_status = status;
         g_panes.Build(std::move(panes));
         g_near.clear();
@@ -667,6 +979,9 @@ namespace wxl_livingazeroth::glass
         g_night = Clamp01(windows::Night());
         g_lastFrost = g_frostBatches; g_lastIronforge = g_frostIronforge; g_lastUnderground = g_underground;
         g_frostBatches = g_frostIronforge = g_underground = 0;
+        g_lastRoomBatches = g_roomBatches; g_lastNoFrame = g_noFrame; g_lastNoGrid = g_noGrid;
+        g_roomBatches = g_noFrame = g_noGrid = 0;
+        if (g_settings.enabled && g_patched > 0) RoomTexturesUpdate();
         if (g_inWorld)
         {
             const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -780,9 +1095,13 @@ namespace wxl_livingazeroth::glass
         g_loopFloor = g_settings.enabled && g_settings.floorLight && g_patched > 0 && g_floorPanes > 0 && interior && rootHasGlass;
     }
 
-    void BeginInstance(const float pos[3], uint32_t path, uint32_t group, uint32_t fallbackSeed)
+    void BeginInstance(const float pos[3], const float axes[9], uint32_t path, uint32_t group, uint32_t fallbackSeed)
     {
         g_inInstance = true;
+        g_hasAxes = IsRotation(axes);
+        for (int k = 0; k < 9; ++k) g_axes[k] = g_hasAxes ? axes[k] : (k % 4 == 0 ? 1.0f : 0.0f);
+        g_path = path;
+        g_group = group;
         g_fallbackSeed = FallbackSeed(path, fallbackSeed);
         g_hasOrigin = pos && std::isfinite(pos[0]) && std::isfinite(pos[1]) && std::isfinite(pos[2]);
         for (int k = 0; k < 3; ++k) g_origin[k] = g_hasOrigin ? pos[k] : 0.0f;
@@ -798,6 +1117,7 @@ namespace wxl_livingazeroth::glass
     {
         g_inInstance = false;
         g_hasOrigin = false;
+        g_hasAxes = false;
         g_building = nullptr;
     }
 
@@ -846,13 +1166,19 @@ namespace wxl_livingazeroth::glass
         if (m || g_loopFloor) RenderView();
         if (m)
         {
-            float c[4 * kConstantCount], seed[4 * kSeedRegisters], look[4 * kLookRegisters];
-            GlassConstants(*m, selfLit, unlit, c, seed);
+            float c[4 * kConstantCount], seed[4 * kSeedRegisters], look[4 * kLookRegisters], day[4 * kDayRegisters], rooms[4 * kRoomRegisters];
+            int set = -1;
+            GlassConstants(*m, selfLit, unlit, c, seed, day, rooms, set);
             LookConstants(g_light, look);
             UploadFrame(dev);
             dev->SetPixelShaderConstantF(kFirstConstant, c, kConstantCount);
             dev->SetPixelShaderConstantF(kSeedConstant, seed, kSeedRegisters);
             dev->SetPixelShaderConstantF(kLookConstant, look, kLookRegisters);
+            dev->SetPixelShaderConstantF(kDayConstant, day, kDayRegisters);
+            // (no table or atlas on the device yet: no window found, so no room and every one lit)
+            if (!g_tableTex || !g_atlasTex || !g_whiteTex) rooms[23] = 0.0f;
+            dev->SetPixelShaderConstantF(kRoomConstant, rooms, kRoomRegisters);
+            BindRoomTextures(dev, set);
             g_floorConstsUp = false;   // c192..c201 are this batch's now
             if (!g_glassOn) { SetBool(kSwitch, true); g_glassOn = true; }
             ++g_glassBatches;
@@ -922,14 +1248,15 @@ namespace wxl_livingazeroth::glass
         api->UiCheckbox("glass##glon", &s.enabled);
         api->UiCheckbox("seen from inside: the light coming through##glin", &s.insideGlow);
         api->UiSliderFloat("inside: strength##glins", &s.insideStrength, 0.0f, 3.0f);
-        api->UiCheckbox("seen from outside: the sky in it, a little darker by day##glout", &s.outsideReflection);
+        api->UiCheckbox("seen from outside: the sky in it, darker and cooler by day##glout", &s.outsideReflection);
         api->UiSliderFloat("outside: darker by day (clear; leaded 0.6x, stained 0.2x)##gldark", &s.outsideDarkening, 0.0f, 0.8f);
-        api->UiSliderFloat("outside: the sky in it head on, F0 (clear 1.2x; to 1 at grazing)##glf0", &s.reflectionF0, 0.0f, 0.4f);
+        api->UiSliderFloat("outside: cooler by day, toward the sky's hue (stained 0.25x)##glcool", &s.dayCoolness, 0.0f, 1.0f);
+        api->UiSliderFloat("outside: the sky in it head on by day, F0 (clear 1.2x; to 1 at grazing)##glf0", &s.reflectionF0, 0.0f, 0.4f);
         api->UiSliderFloat("outside: reflection strength##glouts", &s.reflectionStrength, 0.0f, 3.0f);
         api->UiCheckbox("fake rooms behind clear glass##glroom", &s.fakeInteriors);
-        api->UiSliderFloat("fake rooms: share by day (clear; leaded 0.77x)##glshd", &s.roomShareDay, 0.0f, 1.0f);
+        api->UiSliderFloat("fake rooms: share by day and dusk (clear; leaded 0.85x)##glshd", &s.roomShareDay, 0.0f, 1.0f);
         api->UiSliderFloat("fake rooms: share at night##glshn", &s.roomShareNight, 0.0f, 1.0f);
-        api->UiSliderFloat("fake rooms: light (1 = about the glass by day)##glrooms", &s.interiorStrength, 0.0f, 3.0f);
+        api->UiSliderFloat("fake rooms: light (1 = by day a little darker than the glass)##glrooms", &s.interiorStrength, 0.0f, 3.0f);
         api->UiCheckbox("rooms: each building its own (tint, brightness, a few dark)##glvar", &s.roomVariety);
         api->UiSliderFloat("rooms: how far buildings differ##glvars", &s.varietyStrength, 0.0f, 2.0f);
         api->UiCheckbox("rooms: lamp-lit at night behind the lit windows##gllit", &s.litRooms);
@@ -941,8 +1268,10 @@ namespace wxl_livingazeroth::glass
         api->UiSliderFloat("hearth flicker speed (x)##glfrs", &s.flickerSpeed, 0.0f, 3.0f);
         api->UiSliderFloat("rooms: lamp flicker behind clear and leaded glass (0 = steady lamps)##gllpf", &s.lampFlicker, 0.0f, 0.3f);
         api->UiCheckbox("Ironforge: every window lit all night (they still flicker)##glifl", &s.ironforgeAlwaysLit);
-        api->UiCheckbox("rooms: shelves, curtains, a dividing wall##gllay", &s.roomLayouts);
-        api->UiSliderFloat("rooms: the furniture's detail##gllays", &s.layoutStrength, 0.0f, 2.0f);
+        api->UiCheckbox("rooms: furniture (tables, beds, shelves, hearths...) at its depth##gldet", &s.roomDetail);
+        api->UiCheckbox("rooms: floors, walls and ceilings in the client's interior textures##gltex", &s.roomTextures);
+        api->UiCheckbox("rooms: curtains half drawn in some##gllay", &s.roomLayouts);
+        api->UiSliderFloat("rooms: the furniture's and curtains' detail##gllays", &s.layoutStrength, 0.0f, 2.0f);
         api->UiCheckbox("coloured shafts in the room's air##glsh", &s.colouredShafts);
         api->UiSliderFloat("coloured shafts: strength##glshs", &s.shaftStrength, 0.0f, 3.0f);
         api->UiCheckbox("light through the panes on the floor##glfl", &s.floorLight);
@@ -956,6 +1285,7 @@ namespace wxl_livingazeroth::glass
                       g_light.sunGain, g_light.skyGain, g_light.day, g_light.dim, g_indoors);
         api->UiText(line);
         api->UiText(RoomLine());
+        api->UiText(WindowLine());
         api->UiText(FrostLine());
     }
 
@@ -977,6 +1307,20 @@ namespace wxl_livingazeroth::glass
                       g_settings.ironforgeAlwaysLit ? " (IronforgeAlwaysLit: all lit)" : "");
         g_frostLine = line;
         return g_frostLine.c_str();
+    }
+
+    const char* WindowLine()
+    {
+        static std::string line;
+        int loaded = 0, failed = 0;
+        for (const SetTextures& st : g_sets) { loaded += st.state == 2 ? 1 : 0; failed += st.state == 3 ? 1 : 0; }
+        char buf[512];
+        std::snprintf(buf, sizeof(buf), "%s; on the device: table %s, atlas %s; texture sets loaded %d of %d (%d failed%s%s); last frame %u glass batches "
+                      "with rooms, %u without a placement frame, %u whose group has no windows",
+                      g_windowStatus.c_str(), g_tableTex ? "yes" : "no", g_atlasTex ? "yes" : "no", loaded, kTextureSets, failed,
+                      g_textureError.empty() ? "" : ": ", g_textureError.c_str(), g_lastRoomBatches, g_lastNoFrame, g_lastNoGrid);
+        line = buf;
+        return line.c_str();
     }
 
     const char* RoomLine()

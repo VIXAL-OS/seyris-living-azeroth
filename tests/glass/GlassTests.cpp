@@ -1,46 +1,59 @@
-// Window glass (env/GlassModel, features/GlassShader, features/GlassShaftShaders, features/ModelIce's WMO edit, the
-// shipped tables).
+// Window glass (env/GlassModel, env/GlassRooms, features/GlassShader, features/GlassShaftShaders, features/ModelIce's WMO
+// edit, the shipped tables).
 //  1. The rules: the light through glass by time and weather, Schlick's Fresnel, the sun through a pane, the inside or
-//     outside decision, the inside colour, the floor light's projection and its leak guards, the fake room's faces.
-//     The rooms: lights out by the hour (inns late, shops early), the layouts' thresholds and how often the hash picks
-//     each, finding a building (by place and WMO, a city's groups, a WMO's default), a building's room constants
-//     (variety, lamp, dark places, empty buildings, cities, everything off), the layouts' geometry (dividing wall and
-//     doorway, curtains and gap, planks and things, the detail fading), a lit room as bright as the client's window, and
-//     by day a room about kDayRoom of the glass in front, with no step anywhere along the glass (the night's crisp
-//     look has its edges).
+//     outside decision, the inside colour, the floor light's projection and its leak guards. One room per window
+//     (env/GlassRooms): the window's frame, its room's box, the window table (a grid per WMO and group; every window found
+//     at its own points, none between them or in another group, never more than the loop's bound in a cell, a big city
+//     group too), the room's ray (CastRoom: the back wall, the side walls, the floor and the ceiling, where it meets
+//     them), the classes' rooms and furniture, the palettes' textures, the furniture atlas, an instance's frame.
+//     The rooms: lights out by the hour (inns late, shops early), the curtains' band, finding a building (by place and
+//     WMO, a city's groups, a WMO's default), a building's room constants (variety, lamp, dark places, empty buildings,
+//     cities, the textures' share of the tint, everything off), rooms dark by the threshold over the windows' keys.
+//     1b': the day's look (c85, c86) by kind, at dusk and at night (none), the day's knobs changing no register at night,
+//     F0 by day and night, the room at dusk seen by the day's light, DayCool (cooler, more up the pane and at a slant, the
+//     luminance kept, a fog's hue bounded).
 //  2. The WMO pixel edit with the glass blocks on every stock WMO pixel shader (the client's ps_MapObj*.bls, argv
 //     folder): every shadow variant takes them, assembles, and stays within the slots (reported).
 //  3. The coloured shafts' shaders compile (slots reported).
 //  4. On WARP (the CPU rasterizer behind D3D9On12; no GPU), the blocks drawn: the inside colour, Fresnel outside and
-//     the floor light against the rules above; the rooms behind the glass pixel by pixel against RoomOutside (each
-//     layout, a city's blocks, lamp-lit at night, a dark place); degenerate rays (along the normal, toward the sun,
-//     edge-on, no gradients) give no NaN or Inf. --no-warp skips it (and 6).
-//  5. The shipped tables (argv data folder): GlassMaterials.cdbc, GlassPanes.cdbc, RoomStyles.cdbc and
-//     GlassBuildings.cdbc read back sane.
-//  6. On WARP, Stormwind's leaded windows at night (rooms lit, dark, all shelves) and by day (outside, inside; outside
-//     as clear and as stained glass too) from 5 to 50 yd, head on to grazing: no NaN or Inf, the glass's speckle and
-//     shimmer against the stock colour's bounded; by day outside the glass keeps at least 75% of the stock's light
-//     (leaded, stained), 60% (clear). 6b: a facade of clear glass by day, 5 to 20 yd: no step between neighbouring
-//     pixels above 4% of the glass's mean (the rooms' walls, doorways, shelves and cells' edges all soft).
+//     the floor light against the rules above, the glass cooler by day against DayCool; the room's ray pixel by pixel
+//     against CastRoom (which face, how far, where) from many eyes; degenerate rays (along the normal, toward the sun,
+//     edge-on, no gradients) give no NaN or Inf. --no-warp skips it (and 6, 7, 8's WARP parts).
+//  5. The shipped tables (argv data folder): GlassMaterials.cdbc, GlassPanes.cdbc, RoomStyles.cdbc,
+//     GlassBuildings.cdbc and GlassWindows.cdbc read back sane; the window table built from them (each window found at
+//     its middle unless one lower overlapping it at a slant holds it: 98% of them, 99% of those with a room; no cell over
+//     the loop's bound); WindowRooms.cdbc's keys all windows of their buildings' WMOs.
+//  6. On WARP, Stormwind's leaded windows at night (rooms lit, dark, all furnished) and by day (outside, inside; outside
+//     as clear and as stained glass too) from 5 to 50 yd, head on to grazing, each the window of its own room: no NaN
+//     or Inf, the glass's speckle and shimmer against the stock colour's bounded; by day outside the glass keeps at least
+//     70% of the stock's light (leaded), 60% (clear), 75% (stained) and is cooler than the stock (leaded, clear; stained
+//     barely moved by the cooling); at dusk (19:00) at least 75%, the warmth back. 6b: a facade of six clear windows by
+//     day, 5 to 20 yd: no NaN, no shimmer (a third of a pixel's move changes the glass by little), the rooms visible
+//     (their contrast in the glass), in depth (the box's faces as a view sees them: head on the back wall, at a slant the
+//     side wall, near from below the ceiling, from above the floor), and about room::kDayRoom of the glass's light.
 //  7. Lit or dark, shared with the window lights (features/Windows): the exact hash against whole-number arithmetic,
-//     the cells about the building's origin and its anchors, the dark band (the clock running, a jump's cross-fade),
-//     a batch's band, origin and fallback seed (1c); and on WARP 96 windows (the origin, Goldshire, Stormwind,
-//     Northrend; origins up to 600 yd away; at rest, fading, cross-fading, all dark, all lit) pixel by pixel against
-//     the CPU's cell, hash and lit value, and each light's share from its cells cut exactly against the pixels'.
+//     the dark band (the clock running, a jump's cross-fade), a batch's band, origin and fallback seed (1c); and on WARP
+//     96 windows (the origin, Goldshire, Stormwind, Northrend; at rest, fading, cross-fading, all dark, all lit) pixel by
+//     pixel: the window found, its key, the lit hash's and the lit value's bits against the CPU's; a light over two
+//     windows and the mullion between them its share against the pixels'.
 //  8. Frosted glass (lit by the client, no room): which batches, their constants (the band, the glow hidden, the
 //     hearth's flicker; Ironforge always lit; underground no sky), the flicker (env/Flame's rates, its range and mean, a
 //     frame's step, no seam at the clock's wrap, each window its own), the hearth clock; the shipped tables (Ironforge's
 //     groups by sub-zone and their hours at 23:00 and 03:00, the underground and dungeon flags, the panes with no sky,
-//     WindowRooms' frosted cells); and on WARP 48 frosted windows pixel by pixel against the CPU's lit value, dip and
+//     WindowRooms' frosted windows); and on WARP 48 frosted windows pixel by pixel against the CPU's lit value, dip and
 //     glow hidden, and each light's share with its flicker against the pixels'.
 // Run: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]
+// GLASS_TEXTURES=<folder>: the client's interior BLPs (waterscan --extract-list's names) for the rooms on WARP, else
+// synthetic ones. GLASS_ONLY=<parts>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, lit, frosted).
 #include "env/Flame.hpp"
 #include "env/GlassModel.hpp"
+#include "env/GlassRooms.hpp"
 #include "features/Glass.hpp"
 #include "features/GlassShader.hpp"
 #include "features/GlassShaftShaders.hpp"
 #include "features/ModelIce.hpp"
 #include "render/ShaderPatch.hpp"
+#include "RoomHarness.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -60,11 +73,13 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace
 {
     namespace gl = wxl_livingazeroth::glass;
+    namespace rh = roomharness;
     int g_failures = 0;
     void Check(bool ok, const std::string& what)
     {
@@ -74,6 +89,8 @@ namespace
     bool Near(float a, float b, float tol) { return std::fabs(a - b) <= tol; }
     const float kZeroSeed[4 * gl::kSeedRegisters] = {};
     void Norm(float v[3]) { const float n = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); for (int k = 0; k < 3; ++k) v[k] /= n; }
+    uint32_t Bits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
+    const char* TexturesFolder() { return std::getenv("GLASS_TEXTURES"); }
 
     // --- 1. the rules -----------------------------------------------------------------------------------------
     gl::Pane WallWindow()
@@ -165,23 +182,258 @@ namespace
         const float rmax[3] = { p.roomMax[0] - origin[0], p.roomMax[1] - origin[1], p.roomMax[2] - origin[2] };
         Check(Near(gl::FloorWeight(rows, rel, rmin, rmax, 6, 4), 1, 1e-3f), "floor light: the same about the camera (camera-relative rows and box)");
 
-        // The fake room.
-        float dist = 0;
-        const float at[2] = { 0.5f, 1.6f };
-        const float straight[3] = { 0, 0, 1 }, down[3] = { 0, -1.2f, 0.4f }, side[3] = { 1.5f, 0, 0.3f }, upward[3] = { 0, 1.5f, 0.3f };
-        const gl::RoomFace f1 = gl::RoomHit(at, straight, 3.5f, 3.2f, 4, dist);
-        const float d1 = dist;
-        const gl::RoomFace f2 = gl::RoomHit(at, down, 3.5f, 3.2f, 4, dist);
-        const gl::RoomFace f3 = gl::RoomHit(at, side, 3.5f, 3.2f, 4, dist);
-        const gl::RoomFace f4 = gl::RoomHit(at, upward, 3.5f, 3.2f, 4, dist);
-        Check(f1 == gl::kBackWall && Near(d1, 4, 1e-4f) && f2 == gl::kFloor && f3 == gl::kSideWall && f4 == gl::kCeiling,
-              "the fake room: straight in the back wall (4 yd), down the floor, sideways a side wall, up the ceiling");
+    }
+
+    // --- 1a. one room per window (env/GlassRooms) ---------------------------------------------------------------------
+    const uint32_t kFacadePath = 0x12345u, kSecondPath = 0x777u;
+
+    // A facade of windows facing +x at x = 10 (6 across, 3 up: 1.2 x 1.6 yd, 1 yd apart), group 4; a second group's
+    // window at the same spot as the first; a skylight; a frosted window.
+    std::vector<gl::Window> Facade()
+    {
+        std::vector<gl::Window> v;
+        const float out[3] = { 1, 0, 0 };
+        uint32_t ordinal = 0;
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 6; ++col)
+            {
+                const float c[3] = { 10.0f, -12.0f + col * 4.2f, 2.0f + row * 3.6f };
+                v.push_back(rh::MakeWindow(kFacadePath, 4, ordinal++, c, out, 1.2f, 1.6f));
+            }
+        const float first[3] = { 10.0f, -12.0f, 2.0f };
+        v.push_back(rh::MakeWindow(kFacadePath, 5, ordinal++, first, out, 1.2f, 1.6f));
+        const float up[3] = { 0, 0, 1 }, skyMid[3] = { 4.0f, 3.0f, 14.0f };
+        v.push_back(rh::MakeWindow(kFacadePath, 4, ordinal++, skyMid, up, 1.5f, 1.0f));
+        const float frostMid[3] = { 10.0f, 15.0f, 2.0f };
+        v.push_back(rh::MakeWindow(kFacadePath, 4, ordinal++, frostMid, out, 0.8f, 1.0f, gl::kFrosted));
+        return v;
+    }
+
+    // The window's key found at a point (WMO space) of a group, -1 none.
+    int KeyAt(const gl::WindowTable& t, uint32_t path, uint32_t group, float x, float y, float z)
+    {
+        const gl::WindowTable::Grid* g = t.Find(path, group);
+        if (!g) return -1;
+        const float p[3] = { x, y, z };
+        const int e = t.Lookup(*g, p);
+        return e < 0 ? -1 : static_cast<int>(t.Texel(e + 3)[3]);
+    }
+
+    void WindowRulesTests()
+    {
+        char line[640];
+        // The frame: along (-n.y, n.x, 0), x for a skylight; up n x along.
+        float a[3], u[3], a2[3], u2[3], a3[3], u3[3];
+        const float east[3] = { 1, 0, 0 }, sky[3] = { 0.0f, 0.005f, 0.99999f }, slope[3] = { 0.6f, 0.0f, 0.8f };
+        gl::WindowFrame(east, a, u);
+        gl::WindowFrame(sky, a2, u2);
+        gl::WindowFrame(slope, a3, u3);
+        Check(Near(a[1], 1, 1e-6f) && Near(u[2], 1, 1e-6f) && Near(a2[0], 1, 1e-6f) && Near(u2[1], 1, 1e-4f) && Near(a3[1], 1, 1e-6f) &&
+              Near(u3[0], -0.8f, 1e-6f) && Near(u3[2], 0.6f, 1e-6f),
+              "the window's frame: along (-n.y, n.x, 0) (x for a skylight), up n x along: facing east along +y, up +z; a skylight along +x; "
+              "a sloped pane's up along its slope");
+
+        // The room's box: the opening extruded, a little wider than the window, the floor below the sill, never a cupboard.
+        const gl::RoomBox little = gl::RoomBoxOf(0.3f, 0.4f), shop = gl::RoomBoxOf(1.3f, 0.8f), tall = gl::RoomBoxOf(0.7f, 3.0f);
+        bool boxes = true;
+        for (const auto& [hw, hh, b] : { std::tuple{ 0.3f, 0.4f, little }, std::tuple{ 1.3f, 0.8f, shop }, std::tuple{ 0.7f, 3.0f, tall } })
+            boxes = boxes && b.halfWidth >= hw + 0.2f && b.halfWidth >= 0.5f * gl::rooms::kMinWidth && b.floor <= -hh - gl::rooms::kSillMin + 1e-6f &&
+                    b.ceiling >= hh + gl::rooms::kHeadMin - 1e-6f && b.ceiling - b.floor >= gl::rooms::kMinHeight - 1e-5f;
+        std::snprintf(line, sizeof(line), "the room's box: a small window's %.2f wide, %.2f .. %.2f up; a shop window's %.2f wide, %.2f .. %.2f; a tall one's "
+                      "%.2f, %.2f .. %.2f (wider than the window, the floor below the sill, at least %.1f x %.1f yd)",
+                      2 * little.halfWidth, little.floor, little.ceiling, 2 * shop.halfWidth, shop.floor, shop.ceiling, 2 * tall.halfWidth, tall.floor, tall.ceiling,
+                      gl::rooms::kMinWidth, gl::rooms::kMinHeight);
+        Check(boxes, line);
+
+        // The table: each window found at its own points (its middle, near its corners), none between them, none in another
+        // group's grid, the second group's window at its own spot; the skylight and the frosted window too.
+        gl::WindowTable t;
+        t.Build(Facade());
+        int found = 0, wrong = 0, between = 0, points = 0;
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 6; ++col)
+            {
+                const int want = row * 6 + col;
+                const float y = -12.0f + col * 4.2f, z = 2.0f + row * 3.6f;
+                for (const auto& [dy, dz] : { std::pair{ 0.0f, 0.0f }, std::pair{ 1.18f, 1.58f }, std::pair{ -1.18f, -1.58f }, std::pair{ 0.5f, -1.0f } })
+                    for (float dx : { 0.0f, 0.2f, -0.2f })
+                    {
+                        const int k = KeyAt(t, kFacadePath, 4, 10.0f + dx, y + dy, z + dz);
+                        found += k == want ? 1 : 0; wrong += k >= 0 && k != want ? 1 : 0; ++points;
+                    }
+                between += KeyAt(t, kFacadePath, 4, 10.0f, y + 2.1f, z) >= 0 ? 1 : 0;      // the wall between windows
+                between += KeyAt(t, kFacadePath, 4, 10.6f, y, z) >= 0 ? 1 : 0;             // off the glass's plane
+            }
+        const int second = KeyAt(t, kFacadePath, 5, 10.0f, -12.0f, 2.0f), noGroup = KeyAt(t, kFacadePath, 6, 10.0f, -12.0f, 2.0f);
+        const int skylight = KeyAt(t, kFacadePath, 4, 4.8f, 3.5f, 14.0f), frost = KeyAt(t, kFacadePath, 4, 10.0f, 15.5f, 2.5f);
+        const gl::WindowTable::Grid* g4 = t.Find(kFacadePath, 4);
+        std::snprintf(line, sizeof(line), "the window table: %d of %d points in the facade's windows find their own (%d another), %d of 36 between them or off "
+                      "the glass find one; the second group's window %d (18), a group with none %d, the skylight %d (19), the frosted window %d (20); the "
+                      "grid %u x %u x %u cells of %.1f yd, %u windows, at most %u a cell",
+                      found, points, wrong, between, second, noGroup, skylight, frost, g4 ? g4->n[0] : 0, g4 ? g4->n[1] : 0, g4 ? g4->n[2] : 0,
+                      g4 ? g4->cell : 0.0f, g4 ? g4->windows : 0, g4 ? g4->worst : 0);
+        Check(found == points && wrong == 0 && between == 0 && second == 18 && noGroup == -1 && skylight == 19 && frost == 20 &&
+              g4 && g4->worst <= static_cast<uint32_t>(gl::rooms::kMaxPerCell), line);
+
+        // A big city group: 1,500 windows in a 300 x 300 x 60 yd box, crowded along streets: each found at its middle, no
+        // cell over the loop's bound.
+        {
+            std::vector<gl::Window> many;
+            uint32_t rng = 99;
+            auto rnd = [&rng]() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; };
+            for (uint32_t i = 0; i < 1500; ++i)
+            {
+                const float street = std::floor(rnd() * 12.0f) * 25.0f;
+                const bool alongX = rnd() < 0.5f;
+                const float c[3] = { alongX ? rnd() * 300.0f : street, alongX ? street : rnd() * 300.0f, rnd() * 60.0f };
+                float n[3] = { alongX ? 0.0f : 1.0f, alongX ? 1.0f : 0.0f, 0.0f };
+                if (rnd() < 0.5f) for (float& x : n) x = -x;
+                many.push_back(rh::MakeWindow(kSecondPath, 2, i, c, n, 0.5f + rnd(), 0.6f + rnd()));
+            }
+            gl::WindowTable big;
+            big.Build(many);
+            const gl::WindowTable::Grid* g = big.Find(kSecondPath, 2);
+            int self = 0, other = 0;
+            for (const gl::Window& w : many)
+            {
+                const int k = KeyAt(big, kSecondPath, 2, w.center[0], w.center[1], w.center[2]);
+                self += k == static_cast<int>(w.ordinal) ? 1 : 0; other += k >= 0 && k != static_cast<int>(w.ordinal) ? 1 : 0;
+            }
+            std::snprintf(line, sizeof(line), "a big city group: 1500 windows, %d found at their middles (%d where windows overlap find another), cells of %.1f yd, "
+                          "at most %u windows a cell (the loop's bound %d), a table of %d x %d texels",
+                          self, other, g ? g->cell : 0.0f, g ? g->worst : 0, gl::rooms::kMaxPerCell, gl::rooms::kWidth, big.Height());
+            Check(g && g->worst <= static_cast<uint32_t>(gl::rooms::kMaxPerCell) && self + other == 1500 && self >= 1450, line);
+        }
+
+        // The ray into the room (CastRoom): straight in the back wall at the room's depth; down the floor, up the ceiling,
+        // sideways a side wall; where it meets a face lies on it.
+        {
+            const float mid[3] = { 10.0f, -12.0f, 2.0f };
+            const gl::WindowTable::Grid* g = t.Find(kFacadePath, 4);
+            const int e = g ? t.Lookup(*g, mid) : -1;
+            const gl::RoomBox box = gl::RoomBoxOf(1.2f, 1.6f);
+            auto cast = [&](float vx, float vy, float vz, gl::RoomRay& r) { float v[3] = { vx, vy, vz }; Norm(v); return gl::CastRoom(t, e, mid, v, 4.0f, r); };
+            gl::RoomRay straight, down, up, side;
+            const bool ok = cast(1, 0, 0, straight) && cast(1, 0, 0.8f, down) && cast(1, 0, -0.8f, up) && cast(1, -0.9f, 0, side);
+            int onFace = 0, rays = 0;
+            uint32_t rng = 5;
+            auto rnd = [&rng]() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; };
+            for (int i = 0; i < 2000; ++i)
+            {
+                float v[3] = { 0.2f + rnd(), rnd() * 2 - 1, rnd() * 2 - 1 }; Norm(v);
+                const float p[3] = { 10.0f, -12.0f + (rnd() * 2 - 1) * 1.1f, 2.0f + (rnd() * 2 - 1) * 1.5f };
+                gl::RoomRay r;
+                if (!gl::CastRoom(t, t.Lookup(*g, p), p, v, 3.0f + rnd(), r)) continue;
+                const float depth = r.face == gl::kBackWall ? r.hit[2] : -1.0f;
+                bool on = false;
+                switch (r.face)
+                {
+                case gl::kBackWall: on = depth > 2.9f; break;
+                case gl::kSideWall: on = Near(std::fabs(r.hit[0]), box.halfWidth, 1e-3f); break;
+                case gl::kFloor: on = Near(r.hit[1], box.floor, 1e-3f); break;
+                case gl::kCeiling: on = Near(r.hit[1], box.ceiling, 1e-3f); break;
+                }
+                onFace += on ? 1 : 0; ++rays;
+            }
+            std::snprintf(line, sizeof(line), "the room's ray (CastRoom): straight in the back wall at %.2f yd (4), looking down the floor (%d), up the ceiling (%d), "
+                          "sideways a side wall (%d); %d of %d random rays meet a face where it is",
+                          straight.t, down.face, up.face, side.face, onFace, rays);
+            Check(ok && straight.face == gl::kBackWall && Near(straight.t, 4.0f, 1e-4f) && down.face == gl::kFloor && up.face == gl::kCeiling &&
+                  side.face == gl::kSideWall && onFace == rays && rays > 1900, line);
+        }
+
+        // The classes' rooms and furniture; the palettes' textures.
+        bool kinds = true;
+        for (uint32_t c = 0; c < gl::kClassCount; ++c)
+        {
+            const gl::RoomKind& k = gl::RoomKindOf(c);
+            kinds = kinds && k.depth >= 2.5f && k.depth <= 6.0f;
+            for (int i = 0; i < 4; ++i) kinds = kinds && k.mid[i] < gl::rooms::kTiles && k.back[i] < gl::rooms::kTiles;
+        }
+        const gl::RoomKind& shopKind = gl::RoomKindOf(gl::kClassShop);
+        const gl::RoomKind& innKind = gl::RoomKindOf(gl::kClassInn);
+        const gl::RoomKind& keepKind = gl::RoomKindOf(gl::kClassKeep);
+        const gl::RoomKind& houseKind = gl::RoomKindOf(gl::kClassHouse);
+        auto has = [](const uint8_t* m, int p) { for (int i = 0; i < 4; ++i) if (m[i] == p) return true; return false; };
+        Check(kinds && has(shopKind.back, gl::kPropShelves) && has(shopKind.mid, gl::kPropCounter) && has(innKind.mid, gl::kPropRoundTable) &&
+              has(innKind.mid, gl::kPropCounter) && has(keepKind.mid, gl::kPropRack) && has(keepKind.back, gl::kPropBanner) &&
+              has(houseKind.mid, gl::kPropBed) && has(houseKind.mid, gl::kPropTable) && has(houseKind.back, gl::kPropFireplace),
+              "the classes' rooms: 2.5 .. 6 yd deep; a shop's shelves and counter, an inn's tables and bar, a keep's racks and banners, a house's bed, "
+              "table and hearth");
+        const int human = gl::TextureSetOf(0, gl::kClassHouse), farm = gl::TextureSetOf(0, gl::kClassFarm), dwarf = gl::TextureSetOf(12, gl::kClassHouse),
+                  forge = gl::TextureSetOf(0, gl::kClassForge), vrykul = gl::TextureSetOf(8, gl::kClassHouse), goblin = gl::TextureSetOf(9, gl::kClassShop),
+                  forsaken = gl::TextureSetOf(10, gl::kClassHouse), draenei = gl::TextureSetOf(7, gl::kClassHouse), elf = gl::TextureSetOf(4, gl::kClassHouse),
+                  orc = gl::TextureSetOf(11, gl::kClassHouse), unknown = gl::TextureSetOf(999, gl::kClassHouse);
+        std::snprintf(line, sizeof(line), "the palettes' interiors: human %s (%s), a human farm %s, dwarf %s, Ironforge's forge %s, vrykul %s, goblin %s, Forsaken %s, "
+                      "draenei %s, elven %s, orc %s, an unknown palette %s",
+                      gl::TextureSetAt(human).name, gl::TextureSetAt(human).floor, gl::TextureSetAt(farm).name, gl::TextureSetAt(dwarf).name,
+                      gl::TextureSetAt(forge).name, gl::TextureSetAt(vrykul).name, gl::TextureSetAt(goblin).name, gl::TextureSetAt(forsaken).name,
+                      gl::TextureSetAt(draenei).name, gl::TextureSetAt(elf).name, gl::TextureSetAt(orc).name, gl::TextureSetAt(unknown).name);
+        Check(std::string(gl::TextureSetAt(human).floor).find("mm_strmwnd_int_floor") != std::string::npos && farm != human && dwarf == forge &&
+              std::string(gl::TextureSetAt(vrykul).wall).find("vrykul") != std::string::npos && std::string(gl::TextureSetAt(forsaken).wall).find("fskn") != std::string::npos &&
+              std::string(gl::TextureSetAt(draenei).floor).find("draenei") != std::string::npos && std::string(gl::TextureSetAt(elf).wall).find("bloodelf") != std::string::npos &&
+              std::string(gl::TextureSetAt(goblin).wall).find("bbay") != std::string::npos && orc != human && unknown == human, line);
+
+        // The furniture atlas: every prop has its cut-out (a share of its tile), none reaches its tile's border (no
+        // neighbour bleeds in), the empty tile none, the hearth and the candles a glow.
+        {
+            std::vector<uint32_t> atlas;
+            gl::FurnitureAtlas(atlas);
+            const int T = gl::rooms::kTileTexels;
+            int filled = 0, bordered = 0, glowing = 0;
+            float empty = 0;
+            for (int tile = 0; tile < gl::rooms::kTiles; ++tile)
+            {
+                int inside = 0, border = 0, glow = 0;
+                for (int j = 0; j < T; ++j)
+                    for (int i = 0; i < T; ++i)
+                    {
+                        const uint32_t texel = atlas[static_cast<size_t>((tile / 8) * T + j) * gl::rooms::kAtlasWidth + (tile % 8) * T + i];
+                        const bool in = (texel >> 24) > 128;
+                        inside += in ? 1 : 0;
+                        border += in && (i < 2 || j < 2 || i >= T - 2 || j >= T - 2) ? 1 : 0;
+                        glow += in && ((texel >> 8) & 0xFF) > 212 ? 1 : 0;
+                    }
+                if (tile == gl::kPropNone) { empty = inside / float(T * T); continue; }
+                filled += inside > T * T / 33 ? 1 : 0;
+                bordered += border;
+                glowing += glow > 0 && (tile == gl::kPropFireplace || tile == gl::kPropCandles || tile == gl::kPropDesk) ? 1 : 0;
+            }
+            int stuff = -1;
+            const float table = gl::PropDistance(gl::kPropTable, 0.0f, 0.8f, &stuff);
+            std::snprintf(line, sizeof(line), "the furniture atlas: %d of 15 props cut out, %d texels at a tile's border, the empty tile %.3f, %d of 3 alight "
+                          "(the hearth, the candles, the desk's candle); the table's top at 0.8 yd up %.3f yd inside (wood %d)",
+                          filled, bordered, empty, glowing, -table, stuff);
+            Check(filled == 15 && bordered == 0 && empty == 0 && glowing == 3 && table < -0.01f && stuff == 0, line);
+        }
+
+        // An instance's frame (RoomRegisters' c15..c17): its WMO turned 90 degrees about z and moved; a world point (about
+        // the camera, the shader's) to its WMO-space point.
+        {
+            const float axes[9] = { 0, 1, 0, -1, 0, 0, 0, 0, 1 };   // its x along the world's y, its y along -x
+            const float origin[3] = { -8913.2f, 554.6f, 93.1f }, cam[3] = { -8900.0f, 560.0f, 99.0f };
+            const float local[3] = { 3.5f, -2.0f, 1.25f };
+            float world[3];
+            for (int k = 0; k < 3; ++k) world[k] = origin[k] + local[0] * axes[k] + local[1] * axes[3 + k] + local[2] * axes[6 + k];
+            float regs[4 * gl::kRoomRegisters];
+            const float scales[4] = { 2, 2.6f, 2.4f, 1.6f }, gains[4] = { 1, 1, 1, 1 };
+            gl::RoomRegisters(axes, origin, cam, nullptr, 1, gl::kClassHouse, scales, gains, gl::Settings{}, regs);
+            float back[3];
+            for (int i = 0; i < 3; ++i)
+                back[i] = regs[4 * i] * (world[0] - cam[0]) + regs[4 * i + 1] * (world[1] - cam[1]) + regs[4 * i + 2] * (world[2] - cam[2]) + regs[4 * i + 3];
+            const float notTurned[9] = { 1, 0, 0, 0, 2, 0, 0, 0, 1 };
+            std::snprintf(line, sizeof(line), "an instance's frame: a world point about the camera back in its WMO's space (%.4f, %.4f, %.4f) for (3.5, -2, 1.25); "
+                          "no grid: c20.w %.0f; a scaled frame isn't a rotation (%s); the house's depth %.1f, furniture %.0f",
+                          back[0], back[1], back[2], regs[23], gl::IsRotation(notTurned) ? "is" : "isn't", regs[24], regs[26]);
+            Check(Near(back[0], local[0], 2e-3f) && Near(back[1], local[1], 2e-3f) && Near(back[2], local[2], 2e-3f) && regs[23] == 0 &&
+                  gl::IsRotation(axes) && !gl::IsRotation(notTurned) && Near(regs[24], gl::RoomKindOf(gl::kClassHouse).depth, 1e-6f) && regs[26] == 1, line);
+        }
     }
 
     // --- 1b. the rooms behind the glass: who lives there ----------------------------------------------------------
-    // A pane at x = 5 facing the eye at the origin (-x), the room behind it; the room's constants for a style.
-    gl::RoomConstants RoomFor(const gl::RoomStyle& style, const gl::Building* b, float night, float hour, bool selfLit, const gl::Settings& s,
-                              float dayLight = 1.0f, float seed[4 * gl::kSeedRegisters] = nullptr, uint32_t kind = gl::kClear, float clock = 0.0f)
+    // The batch's constants (c192..c205) and seed (c212, c213) for a style, a building, the night, the hour.
+    void RoomFor(const gl::RoomStyle& style, const gl::Building* b, float night, float hour, bool selfLit, const gl::Settings& s,
+                 float c[4 * gl::kConstantCount], float sd[4 * gl::kSeedRegisters], float dayLight = 1.0f, uint32_t kind = gl::kClear)
     {
         gl::Material m;
         m.kind = kind;
@@ -189,47 +441,16 @@ namespace
         in.sun[0] = -0.3f; in.sun[1] = 0.2f; in.sun[2] = 0.9f; Norm(in.sun);
         in.daylight = dayLight; in.night = night;
         const gl::Light light = gl::Evaluate(in);
-        float c[4 * gl::kConstantCount], sd[4 * gl::kSeedRegisters], look[4 * gl::kLookRegisters];
         gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
         gl::RoomInputs ri;
         ri.night = night; ri.hour = hour; ri.selfLit = selfLit; ri.fallbackSeed = 12345;
-        ri.kind = kind; ri.hearthClock = clock;
+        ri.kind = kind;
         gl::RoomBatchConstants(style, b, light, ri, s, c, sd);
-        gl::LookConstants(light, look);
-        gl::RoomConstants k;
-        k.share = c[6];
-        for (int i = 0; i < 4; ++i)
-        {
-            k.c198[i] = c[24 + i]; k.c199[i] = c[28 + i]; k.c202[i] = c[40 + i]; k.c203[i] = c[44 + i];
-            k.c204[i] = c[48 + i]; k.c205[i] = c[52 + i]; k.c212[i] = sd[i]; k.c213[i] = sd[4 + i];
-            k.c218[i] = look[i]; k.c219[i] = look[4 + i];
-        }
-        k.c200w = c[35];
-        for (int i = 0; i < 4; ++i) k.c201[i] = c[36 + i];
-        if (seed) for (int i = 0; i < 4 * gl::kSeedRegisters; ++i) seed[i] = sd[i];
-        return k;
-    }
-
-    // The night's look (crisp edges, the detail to 70 yd, the cells' edges as they are): the layouts' geometry.
-    gl::RoomConstants Crisp(gl::RoomConstants k)
-    {
-        const gl::RoomConstants night;
-        for (int i = 0; i < 4; ++i) { k.c218[i] = night.c218[i]; k.c219[i] = night.c219[i]; }
-        return k;
-    }
-
-    // The room's colour for the eye at the origin looking at (5, y, z) on the pane facing -x.
-    float RoomAt(const gl::RoomConstants& k, float y, float z, const float r12[3], float out[3], gl::RoomSample* s = nullptr)
-    {
-        const float P[3] = { 5, y, z }, N[3] = { -1, 0, 0 };
-        float V[3] = { -5, -y, -z }; Norm(V);
-        gl::RoomOutside(P, V, N, k, r12, r12, out, s);
-        return 0.2126f * out[0] + 0.7152f * out[1] + 0.0722f * out[2];
     }
 
     void RoomRulesTests()
     {
-        char line[400];
+        char line[640];
         // The night: lights out by the hour.
         const float h20 = gl::LightsOutShare(20, 0, 1), h2230 = gl::LightsOutShare(22.5f, 0, 1), h0 = gl::LightsOutShare(0, 0, 1),
                     h2 = gl::LightsOutShare(2, 0, 1), h430 = gl::LightsOutShare(4.5f, 0, 1), h6 = gl::LightsOutShare(6, 0, 1);
@@ -246,39 +467,36 @@ namespace
                       inn0, inn3, innMax, shop22, gl::LightsOutShare(22, 0, 1));
         Check(Near(inn0, 0.15f, 1e-4f) && Near(inn3, 0.55f, 1e-5f) && innMax <= 0.55f + 1e-6f && shop22 > gl::LightsOutShare(22, 0, 1) + 0.1f, line);
 
-        // The layouts: thresholds from the weights, and the hash picking them as often as the weights say.
+        // The curtains' band: the layouts' thresholds from the weights (the curtains between the first two), and the room's
+        // hash picking them as often as the weights say.
         const gl::RoomStyle house;
         float t[3];
         gl::LayoutThresholds(house.weights, t);
         const float none[4] = { 0, 0, 0, 0 };
         float tz[3];
         gl::LayoutThresholds(none, tz);
-        int count[4] = {};
-        constexpr int kCells = 40000;
+        int curtains = 0;
+        constexpr int kRooms = 40000;
         double mean[4] = {};
-        for (int i = 0; i < kCells; ++i)
+        for (int i = 0; i < kRooms; ++i)
         {
             float h[4];
-            gl::Hash42(static_cast<float>(i % 200) - 100.0f + 4321.0f, static_cast<float>(i / 200) + 377.0f, h);
-            ++count[gl::PickLayout(h[0], t)];
-            for (int k = 0; k < 4; ++k) mean[k] += h[k] / kCells;
+            gl::Hash42(static_cast<float>(i % 400) + 4321.0f, static_cast<float>(i / 400) + 377.0f, h);
+            curtains += h[0] >= t[0] && h[0] < t[1] ? 1 : 0;
+            for (int k = 0; k < 4; ++k) mean[k] += h[k] / kRooms;
         }
-        std::snprintf(line, sizeof(line), "layouts: a house's thresholds %.2f %.2f %.2f; over %d rooms shelves %.3f, curtains %.3f, divider %.3f, plain %.3f "
-                      "(weights 0.25 0.35 0.15 0.25); the hash's means %.3f %.3f %.3f %.3f",
-                      t[0], t[1], t[2], kCells, count[0] / double(kCells), count[1] / double(kCells), count[2] / double(kCells), count[3] / double(kCells),
-                      mean[0], mean[1], mean[2], mean[3]);
+        std::snprintf(line, sizeof(line), "the curtains' band: a house's %.2f .. %.2f; over %d rooms (windows' keys) %.3f curtained (weight 0.35); the hash's means %.3f %.3f %.3f %.3f",
+                      t[0], t[1], kRooms, curtains / double(kRooms), mean[0], mean[1], mean[2], mean[3]);
         bool even = true;
         for (int k = 0; k < 4; ++k) even = even && std::fabs(mean[k] - 0.5) < 0.01;
-        Check(Near(t[0], 0.25f, 1e-5f) && Near(t[1], 0.6f, 1e-5f) && Near(t[2], 0.75f, 1e-5f) && tz[0] == 0 && tz[2] == 0 &&
-              std::fabs(count[0] / double(kCells) - 0.25) < 0.015 && std::fabs(count[1] / double(kCells) - 0.35) < 0.015 &&
-              std::fabs(count[2] / double(kCells) - 0.15) < 0.015 && std::fabs(count[3] / double(kCells) - 0.25) < 0.015 && even, line);
+        Check(Near(t[0], 0.25f, 1e-5f) && Near(t[1], 0.6f, 1e-5f) && tz[0] == 0 && tz[1] == 0 && std::fabs(curtains / double(kRooms) - 0.35) < 0.015 && even, line);
 
         // The buildings: by where they stand and their WMO, a city's groups, a default per WMO.
         std::vector<gl::Building> rows(5);
         rows[0].map = 0; rows[0].uniqueId = 10047; rows[0].pos[0] = -8913.2f; rows[0].pos[1] = 554.6f; rows[0].pos[2] = 93.1f; rows[0].style = 1;
         rows[0].path = gl::PathHash("World\\wmo\\Azeroth\\Buildings\\Stormwind\\Stormwind.wmo");
         rows[1] = rows[0]; rows[1].group = 93; rows[1].style = 2;
-        rows[2] = rows[0]; rows[2].uniqueId = 555; rows[2].path = gl::PathHash("world\\wmo\\x\\nowall.wmo"); rows[2].style = 3;   // the same spot, another WMO
+        rows[2] = rows[0]; rows[2].uniqueId = 555; rows[2].path = gl::PathHash("world\\wmo\\x\\nowall.wmo"); rows[2].style = 3;
         rows[3].map = 0; rows[3].uniqueId = 0; rows[3].path = gl::PathHash("world/wmo/transports/ship.wmo"); rows[3].style = 4;
         rows[4].map = 1; rows[4].uniqueId = 77; rows[4].pos[0] = 100; rows[4].pos[1] = 7.9f; rows[4].style = 5;
         gl::BuildingIndex index;
@@ -301,221 +519,182 @@ namespace
         Check(a && a->style == 1 && g93 && g93->style == 2 && g94 && g94->style == 1 && other && other->style == 3 && ship && ship->style == 4 && !nothing &&
               acrossCells && acrossCells->style == 5 && index.Placements() == 3, line);
 
-        // The room's constants for a building.
+        // The room's constants for a building (RoomTextures off: the tints as the style has them; on: part of the way
+        // from their grey, the same luminance).
         gl::Settings s;
+        s.roomTextures = 0;
         gl::RoomStyle elf;
         elf.tint[0] = 0.95f; elf.tint[1] = 0.78f; elf.tint[2] = 0.48f; elf.tint2[0] = 0.86f; elf.tint2[1] = 0.5f; elf.tint2[2] = 0.42f;
         elf.lamp[0] = 1.0f; elf.lamp[1] = 0.78f; elf.lamp[2] = 0.38f; elf.spread = 0.2f; elf.darkShare = 0.1f;
         gl::Building b;
         b.seed = (37u << 10) | 911u;
-        const gl::RoomConstants day = RoomFor(elf, &b, 0, 13, true, s);
-        const gl::RoomConstants nightLit = RoomFor(elf, &b, 1, 1, true, s, 0.0f);
-        const gl::RoomConstants nightPlain = RoomFor(elf, &b, 1, 1, false, s, 0.0f);
+        float day[4 * gl::kConstantCount], daySd[8], nightLit[4 * gl::kConstantCount], nlSd[8], nightPlain[4 * gl::kConstantCount], npSd[8];
+        RoomFor(elf, &b, 0, 13, true, s, day, daySd);
+        RoomFor(elf, &b, 1, 1, true, s, nightLit, nlSd, 0.0f);
+        RoomFor(elf, &b, 1, 1, false, s, nightPlain, npSd, 0.0f);
         gl::Building dark = b; dark.flags = gl::kBuildingDarkPlace;
         gl::Building empty = b; empty.flags = gl::kBuildingEmpty;
         gl::Building city = b; city.flags = gl::kBuildingCity;
-        const gl::RoomConstants nightDarkPlace = RoomFor(elf, &dark, 1, 1, true, s, 0.0f);
-        const gl::RoomConstants dayEmpty = RoomFor(elf, &empty, 0, 13, true, s);
-        const gl::RoomConstants inCity = RoomFor(elf, &city, 0, 13, true, s);
+        float nightDark[4 * gl::kConstantCount], ndSd[8], dayEmpty[4 * gl::kConstantCount], deSd[8], inCity[4 * gl::kConstantCount], icSd[8];
+        RoomFor(elf, &dark, 1, 1, true, s, nightDark, ndSd, 0.0f);
+        RoomFor(elf, &empty, 0, 13, true, s, dayEmpty, deSd);
+        RoomFor(elf, &city, 0, 13, true, s, inCity, icSd);
         gl::Settings off = s; off.roomVariety = 0; off.roomLayouts = 0; off.litRooms = 0;
-        const gl::RoomConstants plainDay = RoomFor(elf, &b, 0, 13, true, off);
-        const gl::RoomConstants plainNight = RoomFor(elf, &b, 1, 1, true, off, 0.0f);
-        std::snprintf(line, sizeof(line), "room constants: by day tints %.2f / %.2f, spread %.2f, dark %.2f, no lamp %.2f, layouts %.2f %.2f %.2f, seed %.0f %.0f; "
+        float plainDay[4 * gl::kConstantCount], pdSd[8], plainNight[4 * gl::kConstantCount], pnSd[8];
+        RoomFor(elf, &b, 0, 13, true, off, plainDay, pdSd);
+        RoomFor(elf, &b, 1, 1, true, off, plainNight, pnSd, 0.0f);
+        gl::Settings textured = s; textured.roomTextures = 1;
+        float tex[4 * gl::kConstantCount], txSd[8];
+        RoomFor(elf, &b, 0, 13, true, textured, tex, txSd);
+        auto lum = [](const float* c) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
+        std::snprintf(line, sizeof(line), "room constants: by day tints %.2f / %.2f, spread %.2f, dark %.2f, no lamp %.2f, curtains %.2f .. %.2f, seed %.0f %.0f; "
                       "at 01:00 lit behind a lit window: lamp %.2f %.2f %.2f, dark %.2f, glow hidden %.2f; not lit there: lamp %.2f; a dark place: dark %.2f, lamp %.2f; "
-                      "empty: dark %.2f; a city: block 1/%.0f; variety, layouts and lit rooms off: tints %.2f / %.2f, dark %.2f, layouts %.2f, lamp %.2f, glow hidden %.2f",
-                      day.c199[0], day.c202[0], day.c202[3], day.c203[3], day.c203[0], day.c204[0], day.c204[1], day.c204[2], day.c212[0], day.c212[1],
-                      nightLit.c203[0], nightLit.c203[1], nightLit.c203[2], nightLit.c203[3], nightLit.c205[3], nightPlain.c203[0], nightDarkPlace.c203[3],
-                      nightDarkPlace.c203[0], dayEmpty.c203[3], inCity.c212[2] > 0 ? 1.0f / inCity.c212[2] : 0.0f, plainDay.c199[0], plainDay.c202[0],
-                      plainDay.c203[3], plainDay.c204[2], plainNight.c203[0], plainNight.c205[3]);
-        // (by day the buildings differ by kDayVariety of the night's: the tints and the spread)
-        Check(Near(day.c199[0], 0.95f, 1e-5f) && Near(day.c202[0], 0.95f + (0.86f - 0.95f) * gl::room::kDayVariety, 1e-5f) &&
-              Near(day.c202[3], 0.2f * gl::room::kDayVariety, 1e-5f) && Near(nightLit.c202[0], 0.86f, 1e-5f) && Near(nightLit.c202[3], 0.2f, 1e-5f) &&
-              Near(day.c203[3], 0.1f, 1e-5f) &&
-              day.c203[0] == 0 && Near(day.c204[2], 0.75f, 1e-5f) && day.c212[0] == 911 && day.c212[1] == 37 && day.c212[2] == 0 &&
-              nightLit.c203[0] > 0.5f && nightLit.c203[2] < nightLit.c203[0] && Near(nightLit.c203[3], gl::LightsOutShare(1, 0, 1), 1e-5f) &&
-              Near(nightLit.c205[3], 0.75f, 1e-5f) && nightPlain.c203[0] == 0 && nightDarkPlace.c203[3] == 1 && nightDarkPlace.c203[0] == 0 &&
-              dayEmpty.c203[3] == 1 && Near(inCity.c212[2], 1.0f / gl::room::kBlock, 1e-6f) &&
-              Near(plainDay.c199[0], 0.85f, 1e-5f) && Near(plainDay.c202[0], 0.85f, 1e-5f) && plainDay.c202[3] == 0 && plainDay.c203[3] == 0 &&
-              plainDay.c204[2] == 0 && plainNight.c203[0] == 0 && plainNight.c205[3] == 0, line);
+                      "empty: dark %.2f; a city: block 1/%.0f; variety, layouts and lit rooms off: tints %.2f / %.2f, dark %.2f, curtains %.2f, lamp %.2f, glow "
+                      "hidden %.2f; with the textures the tint %.3f (its luminance %.3f, %.3f without)",
+                      day[28], day[40], day[43], day[47], day[44], day[48], day[49], daySd[0], daySd[1], nightLit[44], nightLit[45], nightLit[46], nightLit[47],
+                      nightLit[55], nightPlain[44], nightDark[47], nightDark[44], dayEmpty[47], icSd[2] > 0 ? 1.0f / icSd[2] : 0.0f, plainDay[28], plainDay[40],
+                      plainDay[47], plainDay[49], plainNight[44], plainNight[55], tex[28], lum(tex + 28), lum(day + 28));
+        Check(Near(day[28], 0.95f, 1e-5f) && Near(day[40], 0.95f + (0.86f - 0.95f) * gl::room::kDayVariety, 1e-5f) &&
+              Near(day[43], 0.2f * gl::room::kDayVariety, 1e-5f) && Near(nightLit[40], 0.86f, 1e-5f) && Near(nightLit[43], 0.2f, 1e-5f) &&
+              Near(day[47], 0.1f, 1e-5f) && day[44] == 0 && Near(day[48], 0.25f, 1e-5f) && Near(day[49], 0.6f, 1e-5f) && daySd[0] == 911 && daySd[1] == 37 &&
+              daySd[2] == 0 && nightLit[44] > 0.5f && nightLit[46] < nightLit[44] && Near(nightLit[47], gl::LightsOutShare(1, 0, 1), 1e-5f) &&
+              Near(nightLit[55], 0.75f, 1e-5f) && nightPlain[44] == 0 && nightDark[47] == 1 && nightDark[44] == 0 && dayEmpty[47] == 1 &&
+              Near(icSd[2], 1.0f / gl::room::kBlock, 1e-6f) && Near(plainDay[28], 0.85f, 1e-5f) && Near(plainDay[40], 0.85f, 1e-5f) && plainDay[43] == 0 &&
+              plainDay[47] == 0 && plainDay[49] == 0 && plainNight[44] == 0 && plainNight[55] == 0 &&
+              Near(lum(tex + 28), lum(day + 28), 1e-4f) && tex[28] < day[28] - 0.05f, line);
 
-        // The room's geometry (RoomOutside, as the shader works it), by layout. Rooms over a stretch of glass.
-        const float r12[3] = { 0.3f, 0.3f, 0.3f };
-        gl::RoomStyle force = elf;
-        auto only = [&](int layout) { gl::RoomStyle st = force; for (int k = 0; k < 4; ++k) st.weights[k] = k == layout ? 1.0f : 0.0f; return st; };
-        int doors = 0, walls = 0, cloths = 0, gaps = 0, planks = 0, things = 0, backs = 0, shelvesFar = 0, n = 0;
-        float out[3];
-        for (int pass = 0; pass < 3; ++pass)
-        {
-            const gl::RoomStyle st = only(pass == 0 ? gl::kLayoutDivider : pass == 1 ? gl::kLayoutCurtains : gl::kLayoutShelves);
-            const gl::RoomConstants k = Crisp(RoomFor(st, &b, 0, 13, false, s));
-            for (float y = -20; y < 20; y += 0.173f)
-                for (float z = -1; z < 3; z += 0.21f)
-                {
-                    gl::RoomSample sm;
-                    RoomAt(k, y, z, r12, out, &sm);
-                    if (pass == 0) { doors += sm.door; walls += sm.wall; }
-                    if (pass == 1) { cloths += sm.cloth > 0.99f; gaps += sm.cloth < 0.01f; }
-                    if (pass == 2 && sm.hit[2] > 0.999f)
-                    {
-                        ++backs;
-                        planks += sm.shelf > 1.3f;
-                        things += sm.shelf != 1.0f && sm.shelf != gl::room::kShelfBack && sm.shelf < 1.3f;
-                    }
-                    ++n;
-                }
-        }
-        // Far away (100 yd) the shelves fade to the plain wall.
-        {
-            gl::RoomConstants k = Crisp(RoomFor(only(gl::kLayoutShelves), &b, 0, 13, false, s));
-            k.cam[0] = -95;
-            for (float y = -20; y < 20; y += 0.31f)
-            {
-                gl::RoomSample sm;
-                RoomAt(k, y, 1.0f, r12, out, &sm);
-                shelvesFar += sm.shelf != 1.0f;
-            }
-        }
-        std::snprintf(line, sizeof(line), "room layouts: a dividing wall %d points and doorways %d; curtains %d cloth and %d gap; shelves on %d back-wall points: "
-                      "planks %d, things %d; 100 yd away %d not plain", walls, doors, cloths, gaps, backs, planks, things, shelvesFar);
-        Check(walls > 100 && doors > 20 && cloths > 100 && gaps > 50 && backs > 100 && planks > 5 && things > 20 && shelvesFar == 0, line);
-
-        // At night a lit room is about as bright as the client's lit window it replaces; a dark one hides most of it.
-        const float lamp12[3] = { 0.62f, 0.47f, 0.28f };
-        const float lum12 = 0.2126f * lamp12[0] + 0.7152f * lamp12[1] + 0.0722f * lamp12[2];
-        double sumLit = 0, sumRoom = 0;
-        int lit = 0, darkRooms = 0;
-        for (int st = 0; st < 2; ++st)
-        {
-            gl::Settings all = s;
-            all.lightsOut = 0;   // every room lit
-            gl::RoomStyle style = st ? elf : gl::RoomStyle{};
-            for (uint32_t seed = 1; seed < 40; ++seed)
-            {
-                gl::Building bb; bb.seed = seed * 2654435761u;
-                const gl::RoomConstants k = RoomFor(style, &bb, 1, 23, true, all, 0.0f);
-                for (float y = -6; y < 6; y += 0.37f)
-                    for (float z = -1; z < 4; z += 0.43f)
-                    {
-                        gl::RoomSample sm;
-                        const float l = RoomAt(k, y, z, lamp12, out, &sm);
-                        sumLit += l; ++lit;
-                        // the room alone: out = share room + (1 - share) r12
-                        sumRoom += (l - (1 - k.share) * lum12) / k.share;
-                    }
-            }
-        }
-        const gl::RoomConstants kd = RoomFor(elf, &dark, 1, 1, true, s, 0.0f);
-        float worst = 0;
-        for (float y = -6; y < 6; y += 0.5f)
-        {
-            const float l = RoomAt(kd, y, 1.0f, lamp12, out);
-            worst = std::max(worst, l / lum12);
-            darkRooms++;
-        }
-        // The share of rooms dark is the threshold's: over many rooms at three shares of the night.
+        // The share of rooms dark is the threshold's: the windows' keys (ordinals in a group, many seeds) under three shares.
         {
             float frac[3] = {};
             const float shares[3] = { 0.22f, 0.5f, 0.744f };
             for (int i = 0; i < 3; ++i)
             {
-                gl::RoomConstants k = RoomFor(elf, &b, 1, 23, true, s, 0.0f);
-                k.c203[3] = shares[i]; k.c200w = shares[i];
                 int darkCount = 0, all = 0;
                 for (uint32_t seed = 0; seed < 64; ++seed)
-                {
-                    k.c212[0] = static_cast<float>(seed * 13 % 1024); k.c212[1] = static_cast<float>(seed * 101 % 1024);
-                    for (float y = -40; y < 40; y += 3.5f)
-                        for (float z = -3; z < 9; z += 3.2f)
-                        {
-                            gl::RoomSample sm;
-                            RoomAt(k, y + 0.3f, z + 0.4f, lamp12, out, &sm);
-                            darkCount += sm.lit ? 0 : 1; ++all;
-                        }
-                }
+                    for (int ordinal = 0; ordinal < 120; ++ordinal)
+                    {
+                        const float h = gl::LitHash(static_cast<float>(ordinal), static_cast<float>(seed % 7), static_cast<float>(seed * 13 % 1024),
+                                                    static_cast<float>(seed * 101 % 1024));
+                        darkCount += gl::RoomLit(h, gl::Band(shares[i], shares[i])) < 0.5f ? 1 : 0; ++all;
+                    }
                 frac[i] = darkCount / static_cast<float>(all);
             }
-            std::snprintf(line, sizeof(line), "rooms dark at night by the share: 0.22 -> %.3f, 0.50 -> %.3f, 0.744 -> %.3f", frac[0], frac[1], frac[2]);
+            std::snprintf(line, sizeof(line), "rooms dark at night by the share (the windows' keys): 0.22 -> %.3f, 0.50 -> %.3f, 0.744 -> %.3f", frac[0], frac[1], frac[2]);
             Check(std::fabs(frac[0] - 0.22f) < 0.03f && std::fabs(frac[1] - 0.5f) < 0.03f && std::fabs(frac[2] - 0.744f) < 0.03f, line);
-        }
-        std::snprintf(line, sizeof(line), "at night, lit rooms (%d points): the room's mean luminance %.3f against the client's lit window's %.3f (x %.2f; kNightMean %.2f), "
-                      "the glass %.3f; dark rooms behind it keep at most %.0f%% of its glow",
-                      lit, sumRoom / lit, lum12, sumRoom / lit / lum12, gl::room::kNightMean, sumLit / lit, worst * 100);
-        Check(std::fabs(sumRoom / lit / lum12 - 1.0) < 0.15 && worst < 0.12f && darkRooms > 0, line);
-
-        // By day the room is about kDayRoom of the glass in front of it (the client's colour after the darkening) over
-        // many rooms, buildings and views from 4 to 30 yd; and it has no edges: along rows of glass 2 mm apart (a pixel
-        // 2 yd away) the largest change of the room (over its mean), where the night's crisp look has its walls',
-        // doorways', shelves' and the cells' own.
-        {
-            gl::Material clear;
-            clear.kind = gl::kClear;
-            gl::Inputs din;
-            din.daylight = 1; din.night = 0;
-            const gl::Light dl = gl::Evaluate(din);
-            float bc[4 * gl::kConstantCount];
-            gl::BatchConstants(clear, 0.0f, dl, din.sun, din.sunColour, din.sky, s, bc);
-            const float darken = bc[20];
-            const float glass12[3] = { 0.62f, 0.5f, 0.3f };
-            float outside[3];
-            for (int i = 0; i < 3; ++i) outside[i] = glass12[i] * (1.0f - darken);
-            const float lumGlass = 0.2126f * outside[0] + 0.7152f * outside[1] + 0.0722f * outside[2];
-            auto lum = [](const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
-            const float N[3] = { -1, 0, 0 };
-            double sum = 0;
-            int count = 0;
-            float stepDay = 0, stepNight = 0;
-            for (int st = 0; st < 2; ++st)
-                for (uint32_t seed = 1; seed < 33; ++seed)
-                {
-                    gl::Building bb;
-                    bb.seed = seed * 2654435761u;
-                    const gl::RoomConstants k = RoomFor(st ? elf : gl::RoomStyle{}, &bb, 0, 13, false, s);
-                    for (float dist = 4; dist < 30; dist += 6.5f)
-                        for (float y = -8; y < 8; y += 0.53f)
-                            for (float z = -2; z < 5; z += 0.61f)
-                            {
-                                const float P[3] = { dist, y, z };
-                                float V[3] = { -P[0], -P[1], -P[2] }; Norm(V);
-                                gl::RoomSample sm;
-                                float o[3];
-                                gl::RoomOutside(P, V, N, k, glass12, outside, o, &sm);
-                                sum += lum(sm.room) / lumGlass;
-                                ++count;
-                            }
-                    if (seed > 8) continue;
-                    for (int look = 0; look < 2; ++look)
-                    {
-                        const gl::RoomConstants kk = look ? Crisp(k) : k;
-                        for (float z = -1.3f; z < 4.5f; z += 0.9f)
-                        {
-                            float prev = -1, worst = 0;
-                            double mean = 0;
-                            int m = 0;
-                            for (float y = -9; y < 9; y += 0.002f)
-                            {
-                                const float P[3] = { 6, y, z };
-                                float V[3] = { -P[0], -P[1], -P[2] }; Norm(V);
-                                gl::RoomSample sm;
-                                float o[3];
-                                gl::RoomOutside(P, V, N, kk, glass12, outside, o, &sm);
-                                const float l = lum(sm.room);
-                                if (prev >= 0) worst = std::max(worst, std::fabs(l - prev));
-                                prev = l; mean += l; ++m;
-                            }
-                            const float rel = m ? static_cast<float>(worst / (mean / m)) : 1.0f;
-                            (look ? stepNight : stepDay) = std::max(look ? stepNight : stepDay, rel);
-                        }
-                    }
-                }
-            std::snprintf(line, sizeof(line), "by day the room is %.2f of the glass in front (kDayRoom %.2f; %d points 4..30 yd, 64 buildings); along rows of glass "
-                          "2 mm apart its largest step %.2f%% of its mean (the night's crisp look %.0f%%)",
-                          sum / count, gl::room::kDayRoom, count, stepDay * 100, stepNight * 100);
-            Check(std::fabs(sum / count / gl::room::kDayRoom - 1.0) < 0.12 && stepDay < 0.015f && stepNight > 0.2f, line);
         }
     }
 
-    // --- 1c. lit or dark: the exact hash, the cells, the dark band (shared with the window lights) -----------------
-    uint32_t Bits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
+    // --- 1b'. by day, at dusk and at night: the glass's day look (c85, c86), its F0, the room at dusk ---------------
+    // "they read as lamplit at noon ... I also feel like the inside faint rooms are only barely visible" (the user,
+    // Theramore at 16:01, 2026-10-18): by day the painted glass cooler (DayCool), more of the sky in it, the room behind
+    // more of the window and darker than the glass; the warmth back at dusk; the night as it was.
+    void DayRulesTests()
+    {
+        char line[480];
+        gl::Settings s;
+        gl::Inputs noon;
+        noon.sun[0] = -0.3f; noon.sun[1] = 0.2f; noon.sun[2] = 0.9f; Norm(noon.sun);
+        noon.daylight = 1; noon.night = 0;
+        gl::Inputs dusk = noon;           // 19:00: the sun's day over (18:00), the client's windows not lit yet (20:30)
+        dusk.daylight = 0; dusk.sun[2] = -0.1f; Norm(dusk.sun);
+        gl::Inputs night = dusk;          // 22:40
+        night.night = 1;
+        const gl::Light ln = gl::Evaluate(noon), ld = gl::Evaluate(dusk), lt = gl::Evaluate(night);
+        auto day = [&](uint32_t kind, uint32_t flags, const gl::Light& l, const gl::Settings& st, float out[8]) {
+            gl::Material m; m.kind = kind; m.flags = flags & 0xFF;
+            gl::DayConstants(m, l, st, flags >> 8, out);
+        };
+        float clear[8], leaded[8], stained[8], frosted[8], under[8], matte[8], atNight[8], atDusk[8];
+        day(gl::kClear, 0, ln, s, clear); day(gl::kLeaded, 0, ln, s, leaded); day(gl::kStained, 0, ln, s, stained); day(gl::kFrosted, 0, ln, s, frosted);
+        day(gl::kClear, gl::kBuildingUnderground << 8, ln, s, under); day(gl::kClear, gl::kMatte, ln, s, matte);
+        day(gl::kLeaded, 0, lt, s, atNight); day(gl::kLeaded, 0, ld, s, atDusk);
+        std::snprintf(line, sizeof(line), "the day's look (c85.x cooler; c86 the sun's patch, farther darker, the light falling): noon clear %.2f %.2f %.2f %.2f, leaded "
+                      "%.2f, stained %.3f, frosted %.2f; underground %.2f %.2f, matte %.2f; dusk %.2f %.2f %.2f %.2f; night %.2f %.2f %.2f %.2f",
+                      clear[0], clear[4], clear[5], clear[6], leaded[0], stained[0], frosted[0], under[0], under[4], matte[0], atDusk[0], atDusk[4], atDusk[5],
+                      atDusk[6], atNight[0], atNight[4], atNight[5], atNight[6]);
+        Check(Near(clear[0], s.dayCoolness, 1e-6f) && Near(leaded[0], s.dayCoolness, 1e-6f) && Near(stained[0], 0.25f * s.dayCoolness, 1e-6f) &&
+              Near(frosted[0], 0.6f * s.dayCoolness, 1e-6f) && clear[4] > 0.5f * gl::room::kPatch && Near(clear[5], gl::room::kFarDay, 1e-6f) &&
+              Near(clear[6], gl::room::kFallDay, 1e-6f) && under[0] == 0 && under[4] == 0 && matte[0] == 0 && atDusk[0] == 0 && atDusk[4] == 0 &&
+              Near(atDusk[5], gl::room::kFarDay, 1e-6f) && Near(atDusk[6], gl::room::kFallDay, 1e-6f) &&
+              atNight[0] == 0 && atNight[4] == 0 && atNight[5] == 0 && atNight[6] == 0, line);
+
+        // At night none of the day's knobs changes a register: the batch's constants (c192..c205, c212, c213, c218, c219,
+        // c85, c86) with the defaults and with DayCoolness, ReflectionF0, RoomShareDay and OutsideDarkening all changed are
+        // the same bits; F0 at night is room::kNightF0 x the kind's, as before.
+        gl::Settings other = s;
+        other.dayCoolness = 1.0f; other.reflectionF0 = 0.4f; other.roomShareDay = 0.95f; other.outsideDarkening = 0.6f;
+        gl::RoomStyle style;
+        gl::Building b;
+        b.seed = 977;
+        bool same = true;
+        float nightF0[2] = {};
+        for (uint32_t kind : { gl::kClear, gl::kLeaded, gl::kStained, gl::kFrosted })
+        {
+            float regs[2][4 * gl::kConstantCount + 4 * gl::kSeedRegisters + 4 * gl::kLookRegisters + 4 * gl::kDayRegisters];
+            for (int v = 0; v < 2; ++v)
+            {
+                const gl::Settings& st = v ? other : s;
+                gl::Material m; m.kind = kind;
+                float* c = regs[v];
+                float* sd = c + 4 * gl::kConstantCount;
+                float* look = sd + 4 * gl::kSeedRegisters;
+                float* dy = look + 4 * gl::kLookRegisters;
+                gl::BatchConstants(m, 0.0f, lt, night.sun, night.sunColour, night.sky, st, c);
+                gl::RoomInputs ri; ri.night = 1; ri.hour = 22.67f; ri.selfLit = true; ri.kind = kind;
+                gl::RoomBatchConstants(style, &b, lt, ri, st, c, sd);
+                gl::LookConstants(lt, look);
+                gl::DayConstants(m, lt, st, 0, dy);
+                if (kind == gl::kClear) nightF0[0] = c[22] * 1.0f;   // clear: F0 / Fresnel's strength 1
+            }
+            same = same && std::memcmp(regs[0], regs[1], sizeof(regs[0])) == 0;
+        }
+        nightF0[1] = gl::room::kNightF0 * 1.2f;
+        // By day F0 is the setting's x the kind's: clear 1.2, leaded 1, stained and frosted 0.5.
+        float noonC[4 * gl::kConstantCount], noonS[4 * gl::kConstantCount];
+        gl::Material mc; mc.kind = gl::kClear;
+        gl::Material ms; ms.kind = gl::kStained;
+        gl::BatchConstants(mc, 0.0f, ln, noon.sun, noon.sunColour, noon.sky, s, noonC);
+        gl::BatchConstants(ms, 0.0f, ln, noon.sun, noon.sunColour, noon.sky, s, noonS);
+        std::snprintf(line, sizeof(line), "at night the day's knobs (DayCoolness, ReflectionF0, RoomShareDay, OutsideDarkening) change no register: %s; F0 at night "
+                      "%.3f (kNightF0 x 1.2: %.3f), by day clear %.3f, stained %.3f (x its Fresnel 0.6)",
+                      same ? "the same bits" : "DIFFERENT", nightF0[0], nightF0[1], noonC[22], noonS[22] * 0.6f);
+        Check(same && Near(nightF0[0], nightF0[1], 1e-6f) && Near(noonC[22], s.reflectionF0 * 1.2f, 1e-6f) && Near(noonS[22] * 0.6f, s.reflectionF0 * 0.5f, 1e-6f), line);
+
+        // Dusk (19:00): no cooling or darkening (the painted glass's warmth again), the room still seen by the day's light
+        // (not black: before, between 18:00 and the client's lit windows at 20:30 the room had no light at all), its day share.
+        float duskC[4 * gl::kConstantCount], duskSeed[4 * gl::kSeedRegisters];
+        gl::Material ml; ml.kind = gl::kLeaded;
+        gl::BatchConstants(ml, 0.0f, ld, dusk.sun, dusk.sunColour, dusk.sky, s, duskC);
+        gl::RoomInputs rd; rd.night = 0; rd.hour = 19; rd.selfLit = true; rd.kind = gl::kLeaded;
+        gl::RoomBatchConstants(style, &b, ld, rd, s, duskC, duskSeed);
+        float duskLook[4];
+        gl::LookConstants(ld, duskLook);
+        std::snprintf(line, sizeof(line), "dusk (day %.2f, rooms %.2f): darkening %.2f, the room's day light c198.w %.2f, share %.3f (RoomShareDay x kLeadedRoom %.3f), "
+                      "its detail's fade over the distance %.2g (the day's and the night's)", ld.day, ld.rooms, duskC[20], duskC[27], duskC[6], s.roomShareDay * gl::kLeadedRoom, duskLook[1]);
+        Check(ld.day == 0 && ld.rooms == 1 && duskC[20] == 0 && duskC[27] > 0.5f && Near(duskC[6], s.roomShareDay * gl::kLeadedRoom, 1e-5f) &&
+              duskLook[1] < 0.0f, line);
+
+        // DayCool: warm painted glass under a blue sky keeps its luminance and goes cooler, more up the pane and at a slant;
+        // a green fog's hue stays within kSkyHue.
+        const float glassWarm[3] = { 0.6f, 0.45f, 0.2f }, blue[3] = { 0.5f, 0.6f, 0.8f }, green[3] = { 0.15f, 0.9f, 0.15f };
+        const float c85[4] = { 0.5f, gl::room::kCoolUp, gl::room::kCoolGraze, gl::room::kCoolTint };
+        float level[3], up[3], slant[3], fog[3];
+        gl::DayCool(glassWarm, blue, 0.0f, 1.0f, c85, level);
+        gl::DayCool(glassWarm, blue, 0.4f, 1.0f, c85, up);
+        gl::DayCool(glassWarm, blue, 0.0f, 0.3f, c85, slant);
+        gl::DayCool(glassWarm, green, 0.0f, 1.0f, c85, fog);
+        auto warmth = [](const float* q) { return (q[0] - q[2]) / (q[0] + q[1] + q[2]); };
+        auto lum = [](const float* q) { return 0.2126f * q[0] + 0.7152f * q[1] + 0.0722f * q[2]; };
+        float fogHue = 0;
+        for (int k = 0; k < 3; ++k) fogHue = std::max(fogHue, fog[k] / lum(glassWarm));
+        std::snprintf(line, sizeof(line), "DayCool: warmth %.3f -> %.3f head on, %.3f up the pane, %.3f at a slant; luminance %.3f -> %.3f; a green fog's channel at most "
+                      "%.2f x the luminance (kSkyHue %.1f)", warmth(glassWarm), warmth(level), warmth(up), warmth(slant), lum(glassWarm), lum(level), fogHue,
+                      gl::room::kSkyHue[1]);
+        Check(warmth(level) < warmth(glassWarm) - 0.08f && warmth(up) < warmth(level) && warmth(slant) < warmth(level) &&
+              std::fabs(lum(level) / lum(glassWarm) - 1.0f) < 0.03f && fogHue < gl::room::kSkyHue[1], line);
+    }
+
+    // --- 1c. lit or dark: the exact hash, the dark band (shared with the window lights) ------------------------------
 
     void LitRulesTests()
     {
@@ -548,25 +727,6 @@ namespace
         std::snprintf(line, sizeof(line), "the lit hash: the shader's float steps give the whole-number hash's bits in %d of %d cells (offsets to +-2600 cells); "
                       "289 cells in a row each value once; below 0.37: %.3f of the rooms", n - off, n, below / double(all));
         Check(off == 0 && perm && std::fabs(below / double(all) - 0.37) < 0.01, line);
-
-        // The cells: about the building's origin, in the face's frame (along (-N.y, N.x, 0), up N x along).
-        const float inv[2] = { 1 / 3.5f, 1 / 3.2f };
-        const float o[3] = { -8913.2f, 554.6f, 93.1f };
-        const float nx[3] = { 1, 0, 0 }, ny[3] = { 0, 1, 0 }, sky[3] = { 0, 0, 1 };
-        float c1[2], c2[2], c3[2];
-        const float p1[3] = { o[0], o[1] + 7.1f, o[2] + 3.3f }, p2[3] = { o[0] - 4.0f, o[1], o[2] - 0.5f }, p3[3] = { o[0] + 3.6f, o[1] - 0.1f, o[2] };
-        gl::RoomCell(p1, o, nx, inv, c1);
-        gl::RoomCell(p2, o, ny, inv, c2);
-        gl::RoomCell(p3, o, sky, inv, c3);
-        std::snprintf(line, sizeof(line), "room cells about Stormwind's origin: facing +x 7.1 along, 3.3 up -> (%.0f, %.0f); facing +y 4 yd west, 0.5 down -> (%.0f, %.0f); "
-                      "a skylight (along x) -> (%.0f, %.0f)", c1[0], c1[1], c2[0], c2[1], c3[0], c3[1]);
-        Check(c1[0] == 2 && c1[1] == 1 && c2[0] == 1 && c2[1] == -1 && c3[0] == 1 && c3[1] == -1, line);
-        // 40 yd east of it: about the anchor 64 yd east, its offset (211, 59) in the cell (the generator's test too)
-        float c4[2];
-        const float p4[3] = { o[0] + 40.0f, o[1] + 7.1f, o[2] + 3.3f };
-        gl::RoomCell(p4, o, nx, inv, c4);
-        std::snprintf(line, sizeof(line), "room cells 40 yd east of the origin: about the anchor 64 yd east, (2, 1) + (211, 59) -> (%.0f, %.0f)", c4[0], c4[1]);
-        Check(c4[0] == 213 && c4[1] == 60, line);
 
         // The dark band: at rest a step; the clock running: a fade by when the threshold crossed each room, going dark
         // (a room near the share now lit, near the share then dark) or lit again; after a jump, every room it crossed
@@ -826,13 +986,7 @@ namespace
         return true;
     }
 
-    // The room's look (c218, c219) as a RoomConstants has it, or the runtime's for a light.
-    void UploadLook(IDirect3DDevice9* dev, const gl::RoomConstants& k)
-    {
-        float look[4 * gl::kLookRegisters];
-        for (int i = 0; i < 4; ++i) { look[i] = k.c218[i]; look[4 + i] = k.c219[i]; }
-        dev->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
-    }
+    // The room's detail by the distance (c218) for a light.
     void UploadLook(IDirect3DDevice9* dev, const gl::Light& light)
     {
         float look[4 * gl::kLookRegisters];
@@ -907,7 +1061,7 @@ namespace
         // night look (c218, c219) unless a check sets its own.
         float view[16] = { 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
         w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
-        UploadLook(w.dev, gl::RoomConstants{});
+        UploadLook(w.dev, gl::Light{});
 
         // Inside: a pane 5 yd ahead (+x), its face toward the eye; the sun beyond it.
         {
@@ -923,7 +1077,7 @@ namespace
             c[12] = sun[0]; c[13] = sun[1]; c[14] = sun[2]; c[15] = 1.3f;
             c[16] = c[17] = c[18] = 0.5f; c[19] = 1;
             c[20] = 0.5f; c[21] = 0; c[22] = 0.04f; c[23] = 0.2f;
-            c[24] = 1 / 3.5f; c[25] = 1 / 3.2f; c[26] = 0.25f; c[27] = 0.3f;
+            c[24] = c[25] = c[26] = 1.0f; c[27] = 0.3f;
             c[28] = 0.85f; c[29] = 0.72f; c[30] = 0.55f; c[31] = 1.6f;
             c[32] = 1.0f; c[33] = 0.95f; c[34] = 0.85f; c[36] = 1;
             std::vector<float> rgb;
@@ -954,13 +1108,63 @@ namespace
                               ok ? rgb[mid] : -1, want, f);
                 Check(ok && Near(rgb[mid], want, 0.003f), line);
             }
-            // The room behind clear glass changes it, stays finite and in range.
+            // By day cooler (c85): warm painted glass under a blue sky (its hue; no reflection), face on and at a slant, against
+            // the rules (SkyAlong, DayCool); cooler than without, more so at the slant.
+            {
+                float cc[4 * gl::kConstantCount];
+                std::memcpy(cc, c, sizeof(cc));
+                cc[16] = 0.45f; cc[17] = 0.55f; cc[18] = 0.8f;
+                cc[19] = 0;   // no reflection: the cooling alone (more at a slant)
+                const float warm[3] = { 0.6f, 0.45f, 0.2f };
+                const float c85[4] = { 0.5f, gl::room::kCoolUp, gl::room::kCoolGraze, gl::room::kCoolTint };
+                const float noCool[8] = {}, cool[8] = { c85[0], c85[1], c85[2], c85[3], 0, 0, 0, 0 };
+                float shift[2] = {}, err = 0;
+                bool ok = true;
+                for (int pass = 0; pass < 2; ++pass)
+                {
+                    const float* nn = pass ? tilted : n;
+                    quad(p, nn, warm, v);
+                    std::vector<float> plain, cooled;
+                    w.dev->SetPixelShaderConstantF(gl::kDayConstant, noCool, gl::kDayRegisters);
+                    ok = ok && Draw(w, ps, v, cc, gl::kFirstConstant, gl::kConstantCount, true, false, plain);
+                    w.dev->SetPixelShaderConstantF(gl::kDayConstant, cool, gl::kDayRegisters);
+                    ok = ok && Draw(w, ps, v, cc, gl::kFirstConstant, gl::kConstantCount, true, false, cooled);
+                    if (!ok) break;
+                    const float N[3] = { nn[0], nn[1], nn[2] }, V[3] = { -1, 0, 0 };
+                    const float cosine = std::max(0.0f, N[0] * V[0] + N[1] * V[1] + N[2] * V[2]);
+                    float sky[3], glass[3], cooledGlass[3], want[3];
+                    const float height = gl::SkyAlong(N, V, cc + 16, sky);
+                    for (int k = 0; k < 3; ++k) glass[k] = warm[k] * (1 - cc[20]);
+                    gl::DayCool(glass, sky, height, cosine, c85, cooledGlass);
+                    const float f = gl::Fresnel(cosine, cc[22]) * cc[19];
+                    for (int k = 0; k < 3; ++k) { want[k] = sky[k] * f + cooledGlass[k] * (1 - f); err = std::max(err, std::fabs(cooled[mid + k] - want[k])); }
+                    auto warmth = [](const float* q) { return (q[0] - q[2]) / (q[0] + q[1] + q[2]); };
+                    shift[pass] = warmth(&plain[mid]) - warmth(&cooled[mid]);
+                }
+                w.dev->SetPixelShaderConstantF(gl::kDayConstant, noCool, gl::kDayRegisters);
+                char cl[256];
+                std::snprintf(cl, sizeof(cl), "WARP, outside by day cooler (c85.x 0.5): off from the rules by %.5f; warmth (R - B) / (R + G + B) down by %.3f face on, "
+                              "%.3f at a slant", err, shift[0], shift[1]);
+                Check(ok && err < 0.003f && shift[0] > 0.03f && shift[1] > shift[0], cl);
+            }
+            // The room behind clear glass changes it, stays finite and in range (the pane its own window's: the camera at the
+            // origin, so the quad's point is the world's).
+            rh::Rooms rooms;
+            rooms.Textures(w.dev);
+            const float wn[3] = { -1, 0, 0 }, wc[3] = { 5, 0, 0 }, origin[3] = { 0, 0, 0 };
+            rooms.Table(w.dev, { rh::MakeWindow(kFacadePath, 0, 1, wc, wn, 1.0f, 1.0f) });
+            float regs[4 * gl::kRoomRegisters];
+            rooms.Registers(origin, kFacadePath, 0, gl::kClassHouse, gl::Settings{}, regs);
+            w.dev->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+            rooms.Bind(w.dev);
             c[6] = 0.75f;
             quad(p, tilted, base, v);
             std::vector<float> room;
             const bool ok = Draw(w, ps, v, c, gl::kFirstConstant, gl::kConstantCount, true, false, room);
             bool finite = ok;
             for (float x : room) finite = finite && std::isfinite(x) && x >= 0 && x <= 2;
+            const float noRooms[4 * gl::kRoomRegisters] = {};
+            w.dev->SetPixelShaderConstantF(gl::kRoomConstant, noRooms, gl::kRoomRegisters);
             std::snprintf(line, sizeof(line), "WARP, the fake room behind the glass: %.3f %.3f %.3f (finite, in range, not the plain outside)", ok ? room[mid] : -1,
                           ok ? room[mid + 1] : -1, ok ? room[mid + 2] : -1);
             Check(finite && std::fabs(room[mid] - rgb[mid]) > 0.002f, line);
@@ -1005,108 +1209,6 @@ namespace
             Check(drew && worst < 0.02f && peak > 0.3f && lit > 100 && lit < kSide * kSide / 2, line);
         }
 
-        // The rooms behind the glass against RoomOutside, pixel by pixel: a pane at x = 5 facing the eye, 2.4 x 1.8 yd
-        // (y -1.2 .. 1.2, z 0.2 .. 2: a pixel 0.075 yd, so the detail shows at 84%), with no reflection or glint so the
-        // output is the room seen through the glass. Each case forces a layout (or night, dark, a city's blocks) over
-        // eight buildings' seeds.
-        {
-            gl::Settings s;
-            gl::RoomStyle elf;
-            elf.tint[0] = 0.95f; elf.tint[1] = 0.78f; elf.tint[2] = 0.48f; elf.tint2[0] = 0.62f; elf.tint2[1] = 0.64f; elf.tint2[2] = 0.92f;
-            elf.lamp[0] = 1.0f; elf.lamp[1] = 0.62f; elf.lamp[2] = 0.3f; elf.spread = 0.3f; elf.darkShare = 0.15f;
-            const float p[4][3] = { { 5, 1.2f, 2.0f }, { 5, -1.2f, 2.0f }, { 5, 1.2f, 0.2f }, { 5, -1.2f, 0.2f } };
-            // the pixel's footprint on the glass, squared, as the shader's screen gradients have it (an affine quad)
-            const float footprint2 = std::max(2.4f * 2.4f, 1.8f * 1.8f) / (kSide * kSide);
-            const float n[3] = { -1, 0, 0 };
-            struct Case { const char* name; int layout; float night; bool selfLit; uint32_t flags; float r12[3]; uint32_t kind = gl::kClear; float lampFlicker = 0; };
-            const Case cases[] = {
-                { "plain, by day", gl::kLayoutPlain, 0, false, 0, { 0.2f, 0.2f, 0.2f } },
-                { "shelves, by day", gl::kLayoutShelves, 0, false, 0, { 0.2f, 0.2f, 0.2f } },
-                { "curtains, by day", gl::kLayoutCurtains, 0, false, 0, { 0.2f, 0.2f, 0.2f } },
-                { "a dividing wall, by day", gl::kLayoutDivider, 0, false, 0, { 0.2f, 0.2f, 0.2f } },
-                { "the house's mix, a city's blocks, by day", -1, 0, false, gl::kBuildingCity, { 0.2f, 0.2f, 0.2f } },
-                { "the house's mix at 23:00, lamp-lit", -1, 1, true, 0, { 0.62f, 0.47f, 0.28f } },
-                { "curtains at 23:00, backlit", gl::kLayoutCurtains, 1, true, 0, { 0.62f, 0.47f, 0.28f } },
-                { "a dark place at night", -1, 1, true, gl::kBuildingDarkPlace, { 0.62f, 0.47f, 0.28f } },
-                { "the house's mix at 23:00, lamp-lit, the lamps flickering (LampFlicker 0.12)", -1, 1, true, 0, { 0.62f, 0.47f, 0.28f }, gl::kClear, 0.12f },
-                { "frosted glass at 02:00 (no room: dark ones hide their glow, lit ones a hearth's flicker)", -1, 1, true, 0, { 0.62f, 0.47f, 0.28f }, gl::kFrosted },
-            };
-            for (const Case& cs : cases)
-            {
-                float spread = 0;
-                int off = 0, total = 0;
-                std::vector<float> errors;
-                double mean = 0;
-                float lo = 1e9f, hi = -1e9f;
-                bool drewAll = true;
-                for (uint32_t seedNo = 0; seedNo < 8; ++seedNo)
-                {
-                    gl::RoomStyle st = elf;
-                    if (cs.layout >= 0) for (int k = 0; k < 4; ++k) st.weights[k] = k == cs.layout ? 1.0f : 0.0f;
-                    gl::Building b;
-                    b.seed = (seedNo + 1) * 2654435761u;
-                    b.flags = cs.flags;
-                    float sd[4 * gl::kSeedRegisters];
-                    gl::Settings si = s;
-                    if (cs.night > 0 && cs.selfLit && !(cs.flags & gl::kBuildingDarkPlace)) si.lightsOut = 0;
-                    si.lampFlicker = cs.lampFlicker;
-                    const bool frosted = cs.kind == gl::kFrosted;
-                    gl::RoomConstants k = RoomFor(st, &b, cs.night, frosted ? 2.0f : 23.0f, cs.selfLit, si, cs.night > 0 ? 0.0f : 1.0f, sd, cs.kind,
-                                                  137.25f + 61.5f * seedNo);
-                    k.footprint2 = footprint2;
-                    float c[4 * gl::kConstantCount] = {};
-                    c[3] = 1;                                     // mask: all glass
-                    c[4] = 0; c[5] = 1; c[6] = k.share; c[7] = 0; // outside, no thickness
-                    c[8] = 0.3f; c[9] = 0.35f; c[10] = 0.4f; c[11] = 0;
-                    float sun[3] = { -0.3f, 0.2f, 0.9f }; Norm(sun);
-                    c[12] = sun[0]; c[13] = sun[1]; c[14] = sun[2]; c[15] = 1;
-                    c[16] = c[17] = c[18] = 0.5f; c[19] = 0;      // no reflection
-                    c[20] = 0; c[21] = 0; c[22] = 0.04f; c[23] = 0.2f;   // no darkening, no glint
-                    for (int i = 0; i < 4; ++i)
-                    {
-                        c[24 + i] = k.c198[i]; c[28 + i] = k.c199[i]; c[40 + i] = k.c202[i]; c[44 + i] = k.c203[i]; c[48 + i] = k.c204[i]; c[52 + i] = k.c205[i];
-                    }
-                    c[32] = 1; c[33] = 0.95f; c[34] = 0.85f; c[35] = k.c200w; c[36] = 1;
-                    c[37] = k.c201[1]; c[38] = k.c201[2]; c[39] = k.c201[3];
-                    w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
-                    UploadLook(w.dev, k);
-                    V v[4];
-                    quad(p, n, cs.r12, v);
-                    std::vector<float> rgb;
-                    const bool drew = Draw(w, ps, v, c, gl::kFirstConstant, gl::kConstantCount, true, false, rgb);
-                    drewAll = drewAll && drew;
-                    if (!drew) continue;
-                    for (int row = 0; row < kSide; ++row)
-                        for (int col = 0; col < kSide; ++col)
-                        {
-                            const float fu = (col + 0.5f) / kSide, fv = (row + 0.5f) / kSide;
-                            float P[3];
-                            for (int i = 0; i < 3; ++i) P[i] = p[0][i] + (p[1][i] - p[0][i]) * fu + (p[2][i] - p[0][i]) * fv;
-                            float V3[3] = { -P[0], -P[1], -P[2] }; Norm(V3);
-                            float want[3];
-                            gl::RoomOutside(P, V3, n, k, cs.r12, cs.r12, want, nullptr);
-                            const size_t at = (static_cast<size_t>(row) * kSide + col) * 3;
-                            float e = 0;
-                            for (int i = 0; i < 3; ++i) e = std::max(e, std::isfinite(rgb[at + i]) ? std::fabs(rgb[at + i] - want[i]) : 1e9f);
-                            // a shelf's or a doorway's edge a hair away is off by a lot at a few points
-                            if (e > 0.01f * std::max(1.0f, std::max(want[0], std::max(want[1], want[2])))) ++off;
-                            errors.push_back(e);
-                            const float l = 0.2126f * rgb[at] + 0.7152f * rgb[at + 1] + 0.0722f * rgb[at + 2];
-                            mean += l; lo = std::min(lo, l); hi = std::max(hi, l);
-                            ++total;
-                        }
-                }
-                spread = hi - lo;
-                std::sort(errors.begin(), errors.end());
-                const float median = errors.empty() ? 1.0f : errors[errors.size() / 2], p95 = errors.empty() ? 1.0f : errors[errors.size() * 95 / 100];
-                char line[320];
-                std::snprintf(line, sizeof(line), "WARP, the room (%s): %d points against RoomOutside, off by %.5f (median), %.4f (95%%); %d by more than 1%% "
-                              "(an edge a hair away); luminance %.3f (%.3f .. %.3f)", cs.name, total, median, p95, off, total ? mean / total : 0.0, lo, hi);
-                Check(drewAll && total > 0 && off <= total / 25 && median < 0.001f && (spread > 0.005f || (cs.flags & gl::kBuildingDarkPlace)), line);
-            }
-            w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
-        }
-
         // Degenerate rays, the runtime's constants for leaded glass at night (rooms dark) and by day, the glint on:
         // the ray straight along the pane's normal (the room's steps along and up exactly 0, or -0), the eye straight
         // toward the sun (the glint's half vector 0), the pane edge-on (cos 0), a pixel with no screen gradients (the
@@ -1117,6 +1219,8 @@ namespace
             m.kind = gl::kLeaded;
             int bad = 0, pixels = 0;
             bool drewAll = true;
+            rh::Rooms degenerate;
+            degenerate.Textures(w.dev);
             for (int night = 0; night < 2; ++night)
             {
                 gl::Inputs in;
@@ -1148,6 +1252,17 @@ namespace
                     float camView[16] = { 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
                     if (where) { camView[0] = -8838.6f; camView[1] = 627.4f; camView[2] = 99.3f; }
                     w.dev->SetPixelShaderConstantF(gl::kViewConstant, camView, 4);
+                    {
+                        // the probes' panes their own windows (facing the eye, and a skylight above it)
+                        const float cam[3] = { camView[0], camView[1], camView[2] };
+                        const float n1[3] = { -1, 0, 0 }, n2[3] = { 0, 0, -1 };
+                        const float c1[3] = { cam[0] + 5, cam[1], cam[2] }, c2[3] = { cam[0], cam[1], cam[2] + 5 };
+                        degenerate.Table(w.dev, { rh::MakeWindow(kFacadePath, 1, 0, c1, n1, 1, 1), rh::MakeWindow(kFacadePath, 1, 1, c2, n2, 1, 1) });
+                        float regs[4 * gl::kRoomRegisters];
+                        degenerate.Registers(cam, kFacadePath, 1, gl::kClassInn, s, regs);
+                        w.dev->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+                        degenerate.Bind(w.dev);
+                    }
                     for (const Probe& pr : probes)
                     {
                         float sun[3] = { pr.sun[0], pr.sun[1], pr.sun[2] }; Norm(sun);
@@ -1166,7 +1281,9 @@ namespace
             }
             w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
             w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
-            UploadLook(w.dev, gl::RoomConstants{});
+            UploadLook(w.dev, gl::Light{});
+            const float noRooms[4 * gl::kRoomRegisters] = {};
+            w.dev->SetPixelShaderConstantF(gl::kRoomConstant, noRooms, gl::kRoomRegisters);
             char line[256];
             std::snprintf(line, sizeof(line), "WARP, degenerate rays (along the normal, +-0; the eye toward the sun; edge-on; no gradients; about the origin and "
                           "Stormwind's camera; night and day): %d NaN/Inf of %d pixels' channels", bad, pixels * 3);
@@ -1274,6 +1391,197 @@ namespace
             depth->Release();
             march->Release();
         }
+    }
+
+    // --- 4b. the room's ray on WARP against CastRoom ------------------------------------------------------------------
+    // The blocks with a probe right after the ray meets the room: r0 = (t, the face (0 back, 1 side, 2 floor, 3 ceiling),
+    // where across, where up).
+    std::string RoomProbeShader()
+    {
+        const std::string probeRoom =
+            "\n            mov r0.x, r13.w"
+            "\n            mul r0.y, r25.y, c175.x"
+            "\n            mad r0.y, r25.z, c175.w, r0.y"
+            "\n            add r0.y, r0.y, r25.w"
+            "\n            mov r0.zw, r26.xxxy";
+        return "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c176, 0.2126, 0.7152, 0.0722, 0.2\n" + gl::ShaderDefs() +
+               "    dcl_texcoord0 v0.xyz\n    dcl_texcoord1 v1.xyz\n    dcl_texcoord2 v2.xy\n    dcl_texcoord3 v3.xyz\n    dcl_2d s0\n"
+               "    mov r0, c175.y\n    mov r0.y, -c175.x\n    mov r12.xyz, v3\n    mov r31.xyz, c175.y" + gl::GlassBlock("v0", "v1", "v2", std::string(), probeRoom) +
+               "\n    mov oC0, r0\n";
+    }
+
+    // Renders a quad (corners about the camera, screen order) into `px` (rgba floats, kS x kS) with the shader and
+    // whatever constants are up; the stock colour `base`.
+    bool DrawQuad(IDirect3DDevice9* d, IDirect3DPixelShader9* ps, IDirect3DSurface9* target, IDirect3DSurface9* readback, int kS, const float rel[4][3],
+                  const float N[3], const float base[3], std::vector<float>& px, IDirect3DTexture9* texel)
+    {
+        struct PV { float x, y, z, rhw, p[3], n[3], uv[2], base[3]; };
+        PV v[4];
+        const float e = kS - 0.5f, xy[4][2] = { { -0.5f, -0.5f }, { e, -0.5f }, { -0.5f, e }, { e, e } };
+        for (int k = 0; k < 4; ++k)
+            v[k] = { xy[k][0], xy[k][1], 0, 1, { rel[k][0], rel[k][1], rel[k][2] }, { N[0], N[1], N[2] }, { 0.5f, 0.5f }, { base[0], base[1], base[2] } };
+        d->SetRenderTarget(0, target);
+        D3DVIEWPORT9 vp{ 0, 0, static_cast<DWORD>(kS), static_cast<DWORD>(kS), 0.0f, 1.0f };
+        d->SetViewport(&vp);
+        d->SetRenderState(D3DRS_ZENABLE, FALSE); d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+        d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+        d->SetVertexShader(nullptr); d->SetPixelShader(ps);
+        d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
+        d->SetTexture(0, texel);
+        const BOOL on = TRUE, off = FALSE;
+        d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
+        d->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
+        D3DLOCKED_RECT lr{};
+        bool ok = SUCCEEDED(d->BeginScene());
+        if (ok) { d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(PV)); d->EndScene(); }
+        ok = ok && SUCCEEDED(d->GetRenderTargetData(target, readback)) && SUCCEEDED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY));
+        if (!ok) return false;
+        px.resize(static_cast<size_t>(kS) * kS * 4);
+        for (int row = 0; row < kS; ++row)
+            std::memcpy(&px[static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
+        readback->UnlockRect();
+        return true;
+    }
+
+    // A window `w` (its WMO space the world's) as a quad about the camera `cam`: its corners (screen order: top-left,
+    // top-right, bottom-left, bottom-right as the eye sees it), and the normal facing the eye.
+    void WindowQuad(const gl::Window& w, const float cam[3], float rel[4][3], float N[3], float shrink = 1.0f)
+    {
+        float a[3], u[3];
+        gl::WindowFrame(w.normal, a, u);
+        const float toEye = (cam[0] - w.center[0]) * w.normal[0] + (cam[1] - w.center[1]) * w.normal[1] + (cam[2] - w.center[2]) * w.normal[2];
+        const float s = toEye >= 0 ? 1.0f : -1.0f;   // seen from behind: mirrored across
+        const float cs[4][2] = { { -s, 1 }, { s, 1 }, { -s, -1 }, { s, -1 } };
+        for (int k = 0; k < 4; ++k)
+            for (int i = 0; i < 3; ++i)
+                rel[k][i] = static_cast<float>(static_cast<double>(w.center[i]) - cam[i] + static_cast<double>(a[i]) * cs[k][0] * w.halfWidth * shrink +
+                                               static_cast<double>(u[i]) * cs[k][1] * w.halfHeight * shrink);
+        for (int i = 0; i < 3; ++i) N[i] = w.normal[i] * s;
+    }
+
+    void RoomRayTests()
+    {
+        Warp w;
+        std::string why;
+        if (!InitWarp(w, why)) { std::printf("skip  room rays: %s\n", why.c_str()); return; }
+        std::vector<uint8_t> code;
+        if (!wxl_livingazeroth::shaderpatch::Assemble(RoomProbeShader(), "room probe", code, why)) { Check(false, "the room probe assembles: " + why.substr(0, 300)); return; }
+        IDirect3DPixelShader9* ps = nullptr;
+        constexpr int kS = 96;
+        IDirect3DSurface9 *target = nullptr, *readback = nullptr;
+        if (FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps)) ||
+            FAILED(w.dev->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
+            FAILED(w.dev->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
+        { Check(false, "the room probe on WARP"); return; }
+        rh::Rooms rooms;
+        rooms.Textures(w.dev);
+        // The batch: clear glass outside by day, the room on (its share), a house's class.
+        gl::Settings s;
+        gl::Material m; m.kind = gl::kClear;
+        gl::Inputs in; in.daylight = 1; in.night = 0;
+        const gl::Light light = gl::Evaluate(in);
+        float c[4 * gl::kConstantCount], sd[4 * gl::kSeedRegisters], look[4], day[8];
+        gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
+        gl::RoomInputs ri; ri.night = 0; ri.hour = 13; ri.selfLit = true; ri.kind = gl::kClear;
+        gl::Building b; b.seed = 4242;
+        gl::RoomBatchConstants(gl::DefaultStyle(), &b, light, ri, s, c, sd);
+        gl::LookConstants(light, look);
+        gl::DayConstants(m, light, s, 0, day);
+        w.dev->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+        w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
+        w.dev->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
+        w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+        // Windows about the origin and at Stormwind, facing every way (a few tilted, a skylight), eyes 3 .. 25 yd off, at
+        // a slant up to 70 degrees; each pixel's ray against CastRoom: the same face (but where two faces are within 0.2%
+        // of each other's t), t within 0.1% (and 1 mm), no NaN.
+        uint32_t rng = 31337;
+        auto rnd = [&rng]() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; };
+        int windows = 0, missing = 0, faceOff = 0, faceEdge = 0, tOff = 0, nonFinite = 0;
+        long long pixels = 0;
+        int faces[4] = {};
+        float worstT = 0;
+        bool drewAll = true;
+        for (int place = 0; place < 2; ++place)
+            for (int k = 0; k < 24; ++k)
+            {
+                const float base[3] = { place ? -8838.6f : 0.0f, place ? 627.4f : 0.0f, place ? 99.3f : 0.0f };
+                const float yaw = rnd() * 6.2831853f, pitch = k == 5 ? 1.5f : (rnd() - 0.5f) * 0.4f;
+                float n[3] = { std::cos(yaw) * std::cos(pitch), std::sin(yaw) * std::cos(pitch), std::sin(pitch) };
+                Norm(n);
+                const float mid[3] = { base[0] + (rnd() - 0.5f) * 40, base[1] + (rnd() - 0.5f) * 40, base[2] + rnd() * 10 };
+                const gl::Window win = rh::MakeWindow(kFacadePath, 3, static_cast<uint32_t>(k), mid, n, 0.5f + rnd() * 1.5f, 0.5f + rnd() * 1.8f);
+                rooms.Table(w.dev, { win });
+                // the eye: in front, off its axis
+                float a[3], u[3];
+                gl::WindowFrame(n, a, u);
+                const float dist = 3.0f + rnd() * 22.0f, side = (rnd() - 0.5f) * 3.0f, lift = (rnd() - 0.5f) * 2.0f;
+                const float cam[3] = { mid[0] + (n[0] + a[0] * side + u[0] * lift) * dist, mid[1] + (n[1] + a[1] * side + u[1] * lift) * dist,
+                                       mid[2] + (n[2] + a[2] * side + u[2] * lift) * dist };
+                float view[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+                w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
+                float regs[4 * gl::kRoomRegisters];
+                rooms.Registers(cam, kFacadePath, 3, gl::kClassHouse, s, regs);
+                w.dev->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+                rooms.Bind(w.dev);
+                float rel[4][3], N[3];
+                WindowQuad(win, cam, rel, N, 0.98f);
+                std::vector<float> px;
+                const float stock[3] = { 0.5f, 0.45f, 0.4f };
+                if (!DrawQuad(w.dev, ps, target, readback, kS, rel, N, stock, px, w.texel)) { drewAll = false; continue; }
+                ++windows;
+                // the room's depth as the shader has it: the class's x (1 + spread (h.w - 0.5)) of the window's key and the seed
+                float h[4];
+                gl::Hash42(static_cast<float>(win.ordinal) + sd[0], static_cast<float>(win.group) + sd[1], h);
+                const float depth = gl::RoomDepthOf(gl::kClassHouse, h[3]);
+                const gl::WindowTable::Grid* g = rooms.table.Find(kFacadePath, 3);
+                for (int row = 0; row < kS; ++row)
+                    for (int col = 0; col < kS; ++col)
+                    {
+                        const float* q = &px[(static_cast<size_t>(row) * kS + col) * 4];
+                        for (int i = 0; i < 4; ++i) nonFinite += std::isfinite(q[i]) ? 0 : 1;
+                        ++pixels;
+                        if (q[1] < 0) { ++missing; continue; }
+                        const float fu = (col + 0.5f) / kS, fv = (row + 0.5f) / kS;
+                        float P[3], V[3];
+                        for (int i = 0; i < 3; ++i)
+                        {
+                            const float r = rel[0][i] + (rel[1][i] - rel[0][i]) * fu + (rel[2][i] - rel[0][i]) * fv;
+                            P[i] = r + cam[i];
+                            V[i] = -r;
+                        }
+                        Norm(V);
+                        gl::RoomRay ray;
+                        const int e = g ? rooms.table.Lookup(*g, P) : -1;
+                        if (!gl::CastRoom(rooms.table, e, P, V, depth, ray)) { ++missing; continue; }
+                        const int face = static_cast<int>(std::lround(q[1]));
+                        faces[std::clamp(face, 0, 3)]++;
+                        if (face != static_cast<int>(ray.face))
+                        {
+                            // a pixel where two faces meet: their t's within 0.2%
+                            gl::RoomRay alt = ray;
+                            const float tGpu = q[0];
+                            if (std::fabs(tGpu - ray.t) <= 2e-3f * ray.t + 1e-3f) ++faceEdge; else ++faceOff;
+                            (void)alt;
+                            continue;
+                        }
+                        const float dt = std::fabs(q[0] - ray.t);
+                        worstT = std::max(worstT, dt / std::max(ray.t, 1.0f));
+                        tOff += dt > 1e-3f * ray.t + 1e-3f ? 1 : 0;
+                    }
+            }
+        char line[480];
+        std::snprintf(line, sizeof(line), "WARP, the room's ray against CastRoom: %d windows (about the origin and Stormwind, any facing, a skylight; eyes 3 .. 25 yd off "
+                      "at a slant), %lld pixels: no window found %d, NaN/Inf %d; the face differs at %d (%d more where two meet), t off by more than 0.1%% "
+                      "at %d (worst %.1e); faces seen: back %d, side %d, floor %d, ceiling %d",
+                      windows, pixels, missing, nonFinite, faceOff, faceEdge, tOff, worstT, faces[0], faces[1], faces[2], faces[3]);
+        Check(drewAll && windows == 48 && missing == 0 && nonFinite == 0 && faceOff == 0 && faceEdge < pixels / 500 && tOff == 0 &&
+              faces[0] > 1000 && faces[1] > 1000 && faces[2] > 300 && faces[3] > 300, line);
+        const float zero[16] = {};
+        w.dev->SetPixelShaderConstantF(gl::kViewConstant, zero, 4);
+        w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
+        readback->Release();
+        target->Release();
+        ps->Release();
     }
 
     // --- preview (GLASS_PREVIEW=<folder>: for each <name>.rgba there, 256 x 256 RGBA texels of a window texture, a
@@ -1390,118 +1698,6 @@ namespace
         ps->Release();
     }
 
-    // --- room preview (ROOM_PREVIEW=<file.ppm>: a facade of glass 14 x 9.6 yd seen from 12 yd at an angle, through the
-    // blocks with the runtime's constants, for a few styles and hours: a contact sheet to look at) --------------------
-    void RoomPreview(const char* file)
-    {
-        Warp w;
-        std::string why;
-        if (!InitWarp(w, why)) { std::printf("room preview: %s\n", why.c_str()); return; }
-        std::vector<uint8_t> code;
-        if (!wxl_livingazeroth::shaderpatch::Assemble(BlockShader(), "room preview", code, why)) { std::printf("room preview: %s\n", why.c_str()); return; }
-        IDirect3DPixelShader9* ps = nullptr;
-        w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps);
-        constexpr int kW = 320, kH = 220, kCols = 4;
-        IDirect3DSurface9* target = nullptr;
-        IDirect3DSurface9* readback = nullptr;
-        w.dev->CreateRenderTarget(kW, kH, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr);
-        w.dev->CreateOffscreenPlainSurface(kW, kH, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr);
-        const float view[16] = { 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
-        w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
-        struct Panel { const char* name; uint32_t cls; float tint[3], tint2[3], lamp[3], curtain[3]; float bright, weights[4], late, cap; float hour; bool lit; uint32_t seed; };
-        const Panel panels[] = {
-            { "house, human, 13:00", gl::kClassHouse, { 0.86f, 0.71f, 0.53f }, { 0.78f, 0.70f, 0.60f }, { 1, 0.64f, 0.35f }, { 0.55f, 0.2f, 0.16f }, 1, { 0.25f, 0.35f, 0.15f, 0.25f }, 0, 1, 13, true, 17 },
-            { "house, human, 22:00", gl::kClassHouse, { 0.86f, 0.71f, 0.53f }, { 0.78f, 0.70f, 0.60f }, { 1, 0.64f, 0.35f }, { 0.55f, 0.2f, 0.16f }, 1, { 0.25f, 0.35f, 0.15f, 0.25f }, 0, 1, 22, true, 17 },
-            { "house, human, 03:00", gl::kClassHouse, { 0.86f, 0.71f, 0.53f }, { 0.78f, 0.70f, 0.60f }, { 1, 0.64f, 0.35f }, { 0.55f, 0.2f, 0.16f }, 1, { 0.25f, 0.35f, 0.15f, 0.25f }, 0, 1, 3, true, 17 },
-            { "inn, human, 01:00", gl::kClassInn, { 0.86f, 0.71f, 0.53f }, { 0.78f, 0.70f, 0.60f }, { 1, 0.64f, 0.35f }, { 0.55f, 0.2f, 0.16f }, 1.15f, { 0.2f, 0.3f, 0.25f, 0.25f }, 2.5f, 0.55f, 1, true, 23 },
-            { "house, blood elf, 13:00", gl::kClassHouse, { 0.95f, 0.78f, 0.48f }, { 0.86f, 0.5f, 0.42f }, { 1, 0.78f, 0.38f }, { 0.7f, 0.16f, 0.14f }, 1.1f, { 0.25f, 0.63f, 0.15f, 0.2f }, 0, 1, 13, true, 31 },
-            { "house, vrykul, 13:00", gl::kClassHouse, { 0.72f, 0.5f, 0.32f }, { 0.62f, 0.48f, 0.38f }, { 1, 0.5f, 0.2f }, { 0.48f, 0.38f, 0.28f }, 0.8f, { 0.125f, 0.56f, 0.15f, 0.25f }, 0, 1, 13, false, 41 },
-            { "shop, goblin, 13:00", gl::kClassShop, { 0.92f, 0.72f, 0.44f }, { 0.82f, 0.76f, 0.56f }, { 1, 0.6f, 0.3f }, { 0.3f, 0.5f, 0.3f }, 1.21f, { 1.21f, 0.08f, 0.15f, 0.12f }, -1, 1, 13, true, 51 },
-            { "tower, Dalaran, 23:00", gl::kClassTower, { 0.74f, 0.62f, 0.92f }, { 0.88f, 0.8f, 0.96f }, { 0.92f, 0.8f, 1 }, { 0.42f, 0.22f, 0.62f }, 1.1f, { 0.78f, 0.24f, 0.1f, 0.12f }, 2, 0.6f, 23, true, 61 },
-        };
-        constexpr int kPanels = static_cast<int>(sizeof(panels) / sizeof(panels[0]));
-        const int rows = (kPanels + kCols - 1) / kCols;
-        std::vector<uint8_t> image(static_cast<size_t>(kW) * kCols * kH * rows * 3, 0);
-        for (int i = 0; i < kPanels; ++i)
-        {
-            const Panel& pn = panels[i];
-            gl::RoomStyle st;
-            st.cls = pn.cls;
-            for (int k = 0; k < 3; ++k) { st.tint[k] = pn.tint[k]; st.tint2[k] = pn.tint2[k]; st.lamp[k] = pn.lamp[k]; st.curtain[k] = pn.curtain[k]; }
-            st.brightness = pn.bright;
-            for (int k = 0; k < 4; ++k) st.weights[k] = pn.weights[k];
-            st.lateHours = pn.late; st.nightCap = pn.cap;
-            gl::Building b;
-            b.seed = pn.seed * 2654435761u;
-            const bool night = pn.hour > 20.5f || pn.hour < 6.5f;
-            gl::Inputs in;
-            in.sun[0] = -0.4f; in.sun[1] = 0.5f; in.sun[2] = 0.75f; Norm(in.sun);
-            in.daylight = night ? 0.0f : 1.0f; in.night = night ? 1.0f : 0.0f;
-            in.sky[0] = 0.55f; in.sky[1] = 0.65f; in.sky[2] = 0.8f;
-            const gl::Light light = gl::Evaluate(in);
-            gl::Material m;
-            m.kind = gl::kLeaded; m.mask[0] = m.mask[1] = m.mask[2] = 0; m.mask[3] = 1;
-            float c[4 * gl::kConstantCount], sd[4 * gl::kSeedRegisters];
-            gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, gl::Settings{}, c);
-            gl::RoomInputs ri;
-            ri.night = night ? 1.0f : 0.0f; ri.hour = pn.hour; ri.selfLit = pn.lit;
-            gl::RoomBatchConstants(st, &b, light, ri, gl::Settings{}, c, sd);
-            w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
-            UploadLook(w.dev, light);
-            // The facade: the plane through (12, 0, 0) turned 25 degrees, 14 yd along, z -3 .. 6.6; the client's colour
-            // a dim glass by day, its lit window at night (where it lights it).
-            const float yaw = 0.436f, ca = std::cos(yaw), sa = std::sin(yaw);
-            const float base[3] = { night ? (pn.lit ? 0.62f : 0.04f) : 0.16f, night ? (pn.lit ? 0.47f : 0.045f) : 0.18f, night ? (pn.lit ? 0.28f : 0.06f) : 0.2f };
-            const float n[3] = { -ca, sa, 0 };
-            struct PV { float x, y, z, rhw, p[3], nn[3], uv[2], base[3]; };
-            PV v[4];
-            const float corner[4][2] = { { -7, 6.6f }, { 7, 6.6f }, { -7, -3 }, { 7, -3 } };
-            for (int k = 0; k < 4; ++k)
-            {
-                const float along = corner[k][0], up = corner[k][1];
-                const float P[3] = { 12 + sa * along, ca * along, up };
-                const float f = 150.0f;
-                v[k] = { kW * 0.5f - f * P[1] / P[0] - 0.5f, kH * 0.62f - f * P[2] / P[0] - 0.5f, 0.5f, 1.0f / P[0],
-                         { P[0], P[1], P[2] }, { n[0], n[1], n[2] }, { 0.5f, 0.5f }, { base[0], base[1], base[2] } };
-            }
-            w.dev->SetRenderTarget(0, target);
-            D3DVIEWPORT9 vp{ 0, 0, kW, kH, 0.0f, 1.0f };
-            w.dev->SetViewport(&vp);
-            w.dev->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(70, 66, 60), 1.0f, 0);
-            w.dev->SetRenderState(D3DRS_ZENABLE, FALSE); w.dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-            w.dev->SetVertexShader(nullptr); w.dev->SetPixelShader(ps);
-            w.dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
-            w.dev->SetTexture(0, w.texel);
-            w.dev->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
-            const BOOL on = TRUE, off = FALSE;
-            w.dev->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
-            w.dev->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
-            w.dev->BeginScene();
-            w.dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(PV));
-            w.dev->EndScene();
-            D3DLOCKED_RECT rr{};
-            if (FAILED(w.dev->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&rr, nullptr, D3DLOCK_READONLY))) continue;
-            const int ox = (i % kCols) * kW, oy = (i / kCols) * kH;
-            for (int y = 0; y < kH; ++y)
-                for (int x = 0; x < kW; ++x)
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        const float val = reinterpret_cast<const float*>(static_cast<const uint8_t*>(rr.pBits) + y * rr.Pitch)[x * 4 + k];
-                        image[(static_cast<size_t>(oy + y) * kW * kCols + ox + x) * 3 + k] =
-                            static_cast<uint8_t>(std::lround(std::clamp(std::pow(std::max(val, 0.0f), 1.0f / 1.1f), 0.0f, 1.0f) * 255.0f));
-                    }
-            readback->UnlockRect();
-            std::printf("room preview: panel %d %s\n", i + 1, pn.name);
-        }
-        std::ofstream out(file, std::ios::binary);
-        out << "P6\n" << kW * kCols << " " << kH * rows << "\n255\n";
-        out.write(reinterpret_cast<const char*>(image.data()), static_cast<std::streamsize>(image.size()));
-        w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
-        readback->Release();
-        target->Release();
-        ps->Release();
-    }
-
     // --- 5. the shipped tables --------------------------------------------------------------------------------------
     struct Table { uint32_t fields = 0; std::vector<std::vector<uint32_t>> rows; std::vector<char> strings; };
     bool ReadTable(const std::filesystem::path& p, Table& t)
@@ -1603,6 +1799,94 @@ namespace
         bool all = true;
         for (const char* place : places) all = all && named[place] > 0;
         Check(styles && bu.fields == 13 && st.rows.size() > 20 && placements > 800 && groups > 100 && defaults > 100 && missing == 0 && all, line);
+    }
+
+    // The shipped windows (GlassWindows.cdbc): sane rows, ordinals unique in each WMO; the table the runtime builds from
+    // them (every window found at its middle, no cell over the loop's bound); WindowRooms.cdbc's keys all windows of their
+    // buildings' WMOs.
+    void WindowTableTests(const std::filesystem::path& data)
+    {
+        Table wt, bu, wr;
+        if (!ReadTable(data / "GlassWindows.cdbc", wt) || !ReadTable(data / "GlassBuildings.cdbc", bu) || !ReadTable(data / "WindowRooms.cdbc", wr))
+        { Check(false, "the shipped window tables read (GlassWindows, GlassBuildings, WindowRooms)"); return; }
+        auto text = [](const Table& t, uint32_t at) { return at < t.strings.size() ? std::string(&t.strings[at]) : std::string(); };
+        std::vector<gl::Window> windows;
+        std::map<uint32_t, std::set<uint32_t>> ordinals;
+        std::map<std::pair<uint32_t, uint64_t>, int> byKey;   // (path, ordinal << 32 | group)
+        int kinds[5] = {}, insane = 0, duplicate = 0;
+        float thinnest = 1e9f, thickest = 0.0f;
+        for (const auto& r : wt.rows)
+        {
+            if (wt.fields < 17) break;
+            gl::Window w;
+            w.path = gl::PathHash(text(wt, r[1]).c_str());
+            w.group = r[2]; w.ordinal = r[3]; w.kind = r[4];
+            for (int k = 0; k < 3; ++k) { w.center[k] = F(r[5 + k]); w.normal[k] = F(r[8 + k]); }
+            w.halfWidth = F(r[11]); w.halfHeight = F(r[12]);
+            w.thickness = wt.fields > 16 ? F(r[16]) : 0.0f;
+            thinnest = std::min(thinnest, w.thickness);
+            thickest = std::max(thickest, w.thickness);
+            const float nl = std::sqrt(w.normal[0] * w.normal[0] + w.normal[1] * w.normal[1] + w.normal[2] * w.normal[2]);
+            const bool ok = w.path && std::fabs(nl - 1) < 1e-3f && w.halfWidth > 0 && w.halfHeight > 0 && w.halfWidth < 20 && w.halfHeight < 20 &&
+                            w.thickness >= 0.08f && w.thickness <= 1.0001f &&
+                            (w.kind == gl::kClear || w.kind == gl::kLeaded || w.kind == gl::kFrosted);
+            insane += ok ? 0 : 1;
+            if (w.kind < 5) kinds[w.kind]++;
+            duplicate += ordinals[w.path].insert(w.ordinal).second ? 0 : 1;
+            byKey[{ w.path, (static_cast<uint64_t>(w.ordinal) << 32) | w.group }]++;
+            windows.push_back(w);
+        }
+        size_t wmos = ordinals.size();
+        bool dense = true;
+        for (const auto& kv : ordinals) dense = dense && *kv.second.rbegin() + 1 == kv.second.size();
+        gl::WindowTable table;
+        table.Build(windows);
+        // At its middle a window is found unless another, lower in ordinal, holds that point too (overlapping windows
+        // at a slant the generator can't join): the window lights take the same one (gen_window_lights' Windows.at).
+        int found = 0, other = 0, none = 0, rooms = 0, roomsFound = 0;
+        uint32_t worst = 0, cells = 0;
+        float coarsest = 0;
+        for (const gl::Window& w : table.All())
+        {
+            const bool room = w.kind != gl::kFrosted;
+            rooms += room ? 1 : 0;
+            const gl::WindowTable::Grid* g = table.Find(w.path, w.group);
+            if (!g) { ++none; continue; }
+            worst = std::max(worst, g->worst);
+            const int e = table.Lookup(*g, w.center);
+            if (e < 0) ++none;
+            else if (static_cast<uint32_t>(table.Texel(e + 3)[3]) == w.ordinal) { ++found; roomsFound += room ? 1 : 0; }
+            else ++other;
+        }
+        for (const gl::Window& w : table.All())
+            if (const gl::WindowTable::Grid* g = table.Find(w.path, w.group)) { cells = std::max(cells, g->n[0] * g->n[1] * g->n[2]); coarsest = std::max(coarsest, g->cell); }
+        char line[700];
+        std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %zu windows (clear %d, leaded %d, frosted %d) in %zu WMOs, %d insane, %d ordinals repeated, ordinals "
+                      "0..n-1 in each: %s, the lookup %.2f .. %.2f yd off the plane; the table: %zu groups, %d x %d texels (%.1f MB), the most windows in a "
+                      "cell %u (bound %d), the most cells in a grid %u, the coarsest cell %.1f yd; at its middle each window found %d (%.1f%%; with a room "
+                      "%d of %d, %.1f%%), one lower overlapping it %d, none %d",
+                      windows.size(), kinds[gl::kClear], kinds[gl::kLeaded], kinds[gl::kFrosted], wmos, insane, duplicate, dense ? "yes" : "NO", thinnest,
+                      thickest, table.Grids(), gl::rooms::kWidth, table.Height(), table.Height() * gl::rooms::kWidth * 16.0 / (1 << 20), worst,
+                      gl::rooms::kMaxPerCell, cells, coarsest, found, 100.0 * found / std::max<size_t>(1, windows.size()), roomsFound, rooms,
+                      100.0 * roomsFound / std::max(1, rooms), other, none);
+        Check(wt.fields == 17 && windows.size() > 5000 && insane == 0 && duplicate == 0 && dense && worst <= static_cast<uint32_t>(gl::rooms::kMaxPerCell) &&
+              none == 0 && found >= static_cast<int>(windows.size()) * 98 / 100 && roomsFound >= rooms * 99 / 100 && table.Height() <= 4096, line);
+
+        // WindowRooms: each row's key is a window of its building's WMO (its GlassBuildings row's path), of the row's kind.
+        std::map<uint32_t, uint32_t> buildingPath;
+        for (const auto& r : bu.rows) buildingPath[r[0]] = gl::PathHash(text(bu, r[11]).c_str());
+        int keyed = 0, unknownBuilding = 0, noWindow = 0;
+        for (const auto& r : wr.rows)
+        {
+            if (wr.fields < 8) break;
+            auto b = buildingPath.find(r[2]);
+            if (b == buildingPath.end()) { ++unknownBuilding; continue; }
+            const uint32_t ordinal = r[3], group = r[4];
+            if (byKey.count({ b->second, (static_cast<uint64_t>(ordinal) << 32) | group })) ++keyed; else ++noWindow;
+        }
+        std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %zu rows, %d keyed to a window of their building's WMO (its ordinal, its group), %d with no such window, "
+                      "%d with no building row", wr.rows.size(), keyed, noWindow, unknownBuilding);
+        Check(wr.fields == 8 && keyed > 900 && noWindow == 0, line);
     }
 
     // --- 6. night windows: no sparkle (on WARP) -------------------------------------------------------------------
@@ -1799,31 +2083,51 @@ namespace
         dayIn.sun[0] = -0.4f; dayIn.sun[1] = 0.3f; dayIn.sun[2] = 0.86f; Norm(dayIn.sun);
         dayIn.daylight = 1; dayIn.night = 0;
         dayIn.sky[0] = 0.55f; dayIn.sky[1] = 0.65f; dayIn.sky[2] = 0.8f;
+        // 19:00: the sun's day over, the client's windows not lit yet, an orange sky.
+        gl::Inputs duskIn = dayIn;
+        duskIn.sun[2] = -0.05f; Norm(duskIn.sun);
+        duskIn.daylight = 0;
+        duskIn.sky[0] = 0.66f; duskIn.sky[1] = 0.5f; duskIn.sky[2] = 0.42f;
         // The cases: the stock lighting (texel x this: the client's lit window at night, a sunlit wall by day, a dim
         // room inside), rooms all lit (0), all dark (1) or the hour's (-1), a forced layout (-1: the style's); the
         // bounds: speckle and shimmer over the views (mean), speckle at the worst view. Before the fix the dark rooms'
         // were 3.7 and 2.2, worst 4.1 (synthetic; the real texture's 2.4 and 1.3, worst 3.0): the client's glow kept
         // where the mask is below 1, the lead's edges and the glass's darker texels, bright on the darkened glass. The
         // lit rooms' worst is the room itself 5 yd away (its shelves); seen from inside by day the glass is twice as
-        // bright as the stock against the same dark lead, so its edges change more.
+        // bright as the stock against the same dark lead, so its edges change more. With one textured 3D room per window
+        // (2026-10-18) the rooms' own detail 5 yd away (the walls' textures, the furniture's edges) is most of the worst
+        // view's speckle where the room is bright behind the glass: at night lit 2.34 (plain walls 1.16), at dusk 1.62
+        // (no darkening: the room weighs more than by day, 1.05); a sparkle raises the shimmer as well, which stays below
+        // the stock's (worst 1.14 and 1.07). The dark rooms' 0.99: the lead and the frame hidden as much as the glass.
         // By day seen from outside the glass keeps most of the client's painted window: at least `light` of the stock's
-        // light in the glass (leaded and stained 75%, clear 60%: "is all of the glass supposed to look dark in the
-        // daytime lol", the user, 2026-10-18; before, 48% for leaded), the same views.
-        struct NightCase { const char* name; bool night; int dark; float inside; int layout; float lit[3]; float speckle, shimmer, worst; uint32_t kind = gl::kLeaded; float light = 0; };
+        // light in the glass (leaded 70%, clear 60%, stained 75%: "is all of the glass supposed to look dark in the
+        // daytime lol", the user, 2026-10-18; before c83b430, 48% for leaded), the same views; and it no longer reads as
+        // lamplit ("they read as lamplit at noon", the user, Theramore at 16:01, 2026-10-18): the glass's mean colour at
+        // least `cooler` less warm than the stock's (warmth (R - B) / (R + G + B)); stained glass keeps its colours (the
+        // day's cooling moves its warmth by at most `keep`). At dusk (19:00) the warmth is back (within `keep` of the
+        // stock's) and the room behind is seen by the day's light: no darker than `light` (before, its rooms were black from
+        // 18:00 until the client lit its windows at 20:30).
+        struct NightCase { const char* name; bool night; int dark; float inside; int layout; float lit[3]; float speckle, shimmer, worst; uint32_t kind = gl::kLeaded;
+                           float light = 0; float cooler = 0; float keep = -1; bool dusk = false; };
         const NightCase cases[] = {
             { "night, rooms lit", true, 0, 0, -1, { 1.05f, 1.0f, 0.75f }, 1.4f, 1.2f, 2.5f },
             { "night, rooms dark", true, 1, 0, -1, { 1.05f, 1.0f, 0.75f }, 1.3f, 1.2f, 1.5f },
-            { "night, rooms lit, all shelves", true, 0, 0, gl::kLayoutShelves, { 1.05f, 1.0f, 0.75f }, 1.5f, 1.2f, 3.2f },
-            { "day, outside", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kLeaded, 0.75f },
+            { "night, rooms lit, plain walls (RoomTextures 0)", true, 0, 0, -2, { 1.05f, 1.0f, 0.75f }, 1.5f, 1.2f, 3.2f },
+            { "day, outside", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kLeaded, 0.70f, 0.08f },
             { "day, from inside", false, -1, 1, -1, { 0.5f, 0.48f, 0.45f }, 1.8f, 2.0f, 2.2f },
-            { "day, outside, as clear glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kClear, 0.6f },
-            { "day, outside, as stained glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kStained, 0.75f },
+            { "day, outside, as clear glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kClear, 0.6f, 0.08f },
+            { "day, outside, as stained glass", false, -1, 0, -1, { 0.95f, 0.92f, 0.86f }, 1.2f, 1.2f, 1.5f, gl::kStained, 0.75f, 0.0f, 0.04f },
+            { "dusk (19:00), outside", false, -1, 0, -1, { 0.62f, 0.5f, 0.45f }, 1.2f, 1.2f, 1.8f, gl::kLeaded, 0.75f, 0.0f, 0.08f, true },
         };
         const float cam0[3] = { -8838.6f, 627.4f, 99.3f };
         const float heading = 0.37f;
         const float dists[] = { 5, 10, 20, 35, 50 }, yaws[] = { 0, 35, 60, 75, 84 }, heights[] = { 0, 3 };
         const float hw = 0.7f, hh = 1.0f;   // the pane: 1.4 x 2 yd
 
+        // the rooms: each pane its own window (its room's textures the style's palette's)
+        rh::Rooms rooms;
+        rooms.Textures(w.dev, TexturesFolder(), gl::TextureSetOf(style.palette, style.cls));
+        std::printf("info  night windows: the rooms' textures %s\n", rooms.source.c_str());
         for (const NightTexture& tx : textures)
         {
             IDirect3DTexture9* tex = NightTextureOnWarp(w.dev, tx);
@@ -1849,21 +2153,24 @@ namespace
                 NightResult res;
                 double speckleSum = 0, shimmerSum = 0;
                 int speckleViews = 0, shimmerViews = 0;
-                float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters];
+                float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters], day[4 * gl::kDayRegisters];
                 gl::Settings s;
-                const gl::Inputs& in = cs.night ? nightIn : dayIn;
+                const gl::Inputs& in = cs.night ? nightIn : (cs.dusk ? duskIn : dayIn);
                 const gl::Light light = gl::Evaluate(in);
                 const float* lit = cs.lit;
                 gl::Material cm = mat;
                 cm.kind = cs.kind;
                 gl::BatchConstants(cm, cs.inside, light, in.sun, in.sunColour, in.sky, s, c);
                 gl::RoomInputs ri;
-                ri.night = cs.night ? 1.0f : 0.0f; ri.hour = cs.night ? 22.67f : 14.0f; ri.selfLit = true;
+                ri.night = cs.night ? 1.0f : 0.0f; ri.hour = cs.night ? 22.67f : (cs.dusk ? 19.0f : 14.0f); ri.selfLit = true;
                 gl::RoomStyle st = style;
-                if (cs.layout >= 0) for (int k = 0; k < 4; ++k) st.weights[k] = k == cs.layout ? 1.0f : 0.0f;
+                if (cs.layout == -2) s.roomTextures = 0;
                 gl::RoomBatchConstants(st, &building, light, ri, s, c, seed);
                 if (cs.dark >= 0) c[47] = c[35] = cs.dark ? 1.0f : 0.0f;   // c203.w, c200.w: every room dark, or every room lit
                 UploadLook(w.dev, light);
+                gl::DayConstants(cm, light, s, building.flags, day);
+                w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+                double hue[3][3] = {};   // the glass's mean colour inside the glass: stock, glass, glass without the day's cooling
                 for (float dist : dists)
                     for (float yawDeg : yaws)
                         for (float height : heights)
@@ -1872,13 +2179,23 @@ namespace
                             const float C[3] = { cam0[0] + dist * std::cos(heading), cam0[1] + dist * std::sin(heading), cam0[2] + height };
                             const float back[3] = { -std::cos(heading), -std::sin(heading), 0 };
                             const float N[3] = { back[0] * std::cos(yaw) - back[1] * std::sin(yaw), back[0] * std::sin(yaw) + back[1] * std::cos(yaw), 0 };
-                            const float A[3] = { -N[1], N[0], 0 };
+                            float A[3], Up[3];
+                            gl::WindowFrame(N, A, Up);
+                            rooms.Table(w.dev, { rh::MakeWindow(kSecondPath, 2, 7, C, N, hw, hh) });
                             // renders [stock, glass] x [camera, camera a third of a pixel to the right], then the uv
-                            std::vector<float> img[5];
+                            std::vector<float> img[6];
                             bool ok = true;
-                            for (int pass = 0; pass < 5 && ok; ++pass)
+                            const int passes = cs.keep >= 0 && !cs.dusk ? 6 : 5;   // 5: the glass without the day's cooling
+                            for (int pass = 0; pass < passes && ok; ++pass)
                             {
-                                const bool glass = pass == 1 || pass == 3, shifted = pass == 2 || pass == 3;
+                                const bool glass = pass == 1 || pass == 3 || pass == 5, shifted = pass == 2 || pass == 3;
+                                if (pass == 5)
+                                {
+                                    float warm[4 * gl::kDayRegisters];
+                                    std::memcpy(warm, day, sizeof(warm));
+                                    warm[0] = 0;
+                                    w.dev->SetPixelShaderConstantF(gl::kDayConstant, warm, gl::kDayRegisters);
+                                }
                                 float F3[3] = { C[0] - cam0[0], C[1] - cam0[1], C[2] - cam0[2] }; Norm(F3);
                                 float R[3] = { F3[1], -F3[0], 0 }; Norm(R);
                                 const float U[3] = { R[1] * F3[2] - R[2] * F3[1], R[2] * F3[0] - R[0] * F3[2], R[0] * F3[1] - R[1] * F3[0] };
@@ -1915,6 +2232,12 @@ namespace
                                 w.dev->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
                                 w.dev->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
                                 w.dev->SetPixelShaderConstantF(gl::kSeedConstant, seed, gl::kSeedRegisters);
+                                {
+                                    float regs[4 * gl::kRoomRegisters];
+                                    rooms.Registers(cam, kSecondPath, 2, st.cls, s, regs, cs.layout == -2);
+                                    w.dev->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+                                    rooms.Bind(w.dev, cs.layout == -2);
+                                }
                                 const BOOL on = glass ? TRUE : FALSE, off = FALSE;
                                 w.dev->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
                                 w.dev->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
@@ -1929,6 +2252,7 @@ namespace
                                 for (int y = 0; y < kS; ++y)
                                     std::memcpy(&img[pass][static_cast<size_t>(y) * kS * 4], static_cast<const uint8_t*>(rr.pBits) + y * rr.Pitch, kS * 16);
                                 readback->UnlockRect();
+                                if (pass == 5) w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
                             }
                             if (!ok) { Check(false, "night windows: drawing on WARP"); break; }
                             auto L = [&](int i, size_t p) { const float* q = &img[i][p * 4]; return 0.2126f * q[0] + 0.7152f * q[1] + 0.0722f * q[2]; };
@@ -1956,6 +2280,9 @@ namespace
                                     const int tu = std::clamp(static_cast<int>(uv[0] * 256), 0, 255), tv = std::clamp(static_cast<int>(uv[1] * 256), 0, 255);
                                     if (!interior[static_cast<size_t>(tv) * 256 + tu]) continue;
                                     ++inside;
+                                    for (int g = 0; g < 3; ++g)
+                                        for (int k = 0; k < 3; ++k)
+                                            if (!img[g == 2 ? 5 : g].empty() && std::isfinite(img[g == 2 ? 5 : g][p * 4 + k])) hue[g][k] += img[g == 2 ? 5 : g][p * 4 + k];
                                     for (int g = 0; g < 2; ++g)
                                     {
                                         const int i = g ? 1 : 0;
@@ -2016,14 +2343,22 @@ namespace
                         }
                 res.speckle = speckleViews ? static_cast<float>(speckleSum / speckleViews) : 0;
                 res.shimmer = shimmerViews ? static_cast<float>(shimmerSum / shimmerViews) : 0;
-                char line[400];
+                char line[560];
                 const double glassLight = res.lightViews ? res.light / res.lightViews : 0.0;
+                auto warmth = [](const double* q) { const double t = q[0] + q[1] + q[2]; return t > 0 ? (q[0] - q[2]) / t : 0.0; };
+                const double warmStock = warmth(hue[0]), warmGlass = warmth(hue[1]), warmUncooled = warmth(hue[2]);
+                // keep: by day the cooling's own shift (against the same glass without it), at dusk against the stock
+                const double kept = cs.dusk ? warmStock : warmUncooled;
+                const bool hueOk = (cs.cooler <= 0 || warmGlass <= warmStock - cs.cooler) && (cs.keep < 0 || std::fabs(warmGlass - kept) <= cs.keep);
                 std::snprintf(line, sizeof(line), "WARP, Stormwind's windows (%s; %s; %d views 5..50 yd, 0..84 deg): NaN/Inf %d; speckle in the glass x %.2f the "
-                              "stock's (mean; worst %.2f at %s), shimmer x %.2f (worst %.2f); the glass at %.2f of the stock's light%s",
+                              "stock's (mean; worst %.2f at %s), shimmer x %.2f (worst %.2f); the glass at %.2f of the stock's light%s; warmth %.3f against the "
+                              "stock's %.3f%s%s",
                               tx.name.c_str(), cs.name, res.views, res.nonfinite, res.speckle, res.worstSpeckle, res.worstAt.c_str(), res.shimmer,
-                              res.worstShimmer, glassLight, cs.light > 0 ? (glassLight >= cs.light ? " (at least the bound)" : " (BELOW the bound)") : "");
+                              res.worstShimmer, glassLight, cs.light > 0 ? (glassLight >= cs.light ? " (at least the bound)" : " (BELOW the bound)") : "",
+                              warmGlass, warmStock, cs.keep >= 0 && !cs.dusk ? (", without the day's cooling " + std::to_string(warmUncooled).substr(0, 5)).c_str() : "",
+                              cs.cooler > 0 ? (hueOk ? " (cooler)" : " (NOT cooler enough)") : (cs.keep >= 0 ? (hueOk ? " (kept)" : " (NOT kept)") : ""));
                 Check(res.views == 50 && res.nonfinite == 0 && speckleViews >= 10 && shimmerViews >= 30 && res.speckle <= cs.speckle &&
-                      res.shimmer <= cs.shimmer && res.worstSpeckle <= cs.worst && (cs.light <= 0 || glassLight >= cs.light), line);
+                      res.shimmer <= cs.shimmer && res.worstSpeckle <= cs.worst && (cs.light <= 0 || glassLight >= cs.light) && hueOk, line);
             }
             tex->Release();
         }
@@ -2046,18 +2381,21 @@ namespace
         ps->Release();
     }
 
-    // --- 6b. by day: rooms without edges (on WARP) ---------------------------------------------------------------------
-    // "fake rooms look blocky?" (the user, Stormwind's trade district at noon, 2026-10-18: the rooms' faces and the
-    // things on their shelves as hard-edged boxes, a different block in each pane). A facade of clear glass 8 x 5.4 yd
-    // (rooms across and up, their cells' edges in it) on one of Stormwind's buildings (its city group's style and seed)
-    // at 13:00, the runtime's constants, one flat colour for the client's, so only the room (and the sky) change it;
-    // seen from 5, 10 and 20 yd, head on, at 45 and 70 degrees, level and from below. Per view: no NaN or Inf, and the
-    // largest change between neighbouring pixels in the glass over the glass's mean (an edge: a step from one pixel to
-    // the next) below kDayEdge; the night's crisp look on the same rooms for comparison (its walls', doorways',
-    // shelves' and cells' edges).
+    // --- 6b. by day: rooms you can see, in depth (on WARP) ----------------------------------------------------------------
+    // "Rebuild the fake rooms ... as convincing 3D interior-mapped rooms" (the user, 2026-10-18; before, "fake rooms look
+    // blocky?" and "only barely visible"). A facade of six clear windows (3 x 2, 1.4 x 1.8 yd, 0.9 yd of wall between them),
+    // each the window of its own room, on one of Stormwind's buildings (its city group's style and seed) at 13:00, the
+    // runtime's constants, one flat colour for the client's (so only the room and the sky change the glass); seen from 5, 10
+    // and 20 yd, head on, at 45 and 70 degrees, level, from below and from above. Per view: no NaN or Inf; no shimmer (the
+    // change between two cameras a third of a pixel apart, over the glass's mean, below kShimmer: the edges in the rooms
+    // are a pixel's, never sparkling); the rooms visible (with the sky's reflection off their contrast in the glass, (p90 -
+    // p10) over the mean, at least kContrast over the views and kContrastLeast in each); in depth (the room probe's faces: at
+    // a slant a side wall and the back wall, from below the ceiling, from above the floor, each at least kFaceShare of the
+    // glass); and about room::kDayRoom of the glass's light (the room alone over the client's light x kGlassAlbedo x (1 - the
+    // darkening), all the views: within 20%).
     void DayRoomTests(const std::filesystem::path& data)
     {
-        constexpr float kDayEdge = 0.04f;
+        constexpr float kShimmer = 0.06f, kContrast = 0.25f, kContrastLeast = 0.1f, kFaceShare = 0.03f;
         Warp w;
         std::string why;
         if (!InitWarp(w, why)) { std::printf("skip  rooms by day: %s\n", why.c_str()); return; }
@@ -2065,16 +2403,21 @@ namespace
         gl::Building building;
         float mask[4];
         if (!StormwindBuilding(data, style, building, mask)) { building.seed = 4242; std::printf("info  rooms by day: no Stormwind row, the default house\n"); }
-        std::vector<uint8_t> code;
-        if (!wxl_livingazeroth::shaderpatch::Assemble(BlockShader(), "day rooms", code, why)) { Check(false, "rooms by day: the shader assembles: " + why.substr(0, 200)); return; }
-        IDirect3DPixelShader9* ps = nullptr;
+        std::vector<uint8_t> code, probeCode;
+        if (!wxl_livingazeroth::shaderpatch::Assemble(BlockShader(), "day rooms", code, why) ||
+            !wxl_livingazeroth::shaderpatch::Assemble(RoomProbeShader(), "day room probe", probeCode, why))
+        { Check(false, "rooms by day: the shaders assemble: " + why.substr(0, 200)); return; }
+        IDirect3DPixelShader9 *ps = nullptr, *probe = nullptr;
         constexpr int kS = 256;
         constexpr float kFocal = 960.0f;
         IDirect3DSurface9 *target = nullptr, *readback = nullptr;
         if (FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps)) ||
+            FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(probeCode.data()), &probe)) ||
             FAILED(w.dev->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
             FAILED(w.dev->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
         { Check(false, "rooms by day: WARP resources"); return; }
+        rh::Rooms rooms;
+        rooms.Textures(w.dev, TexturesFolder(), gl::TextureSetOf(style.palette, style.cls));
         gl::Inputs in;
         in.sun[0] = -0.4f; in.sun[1] = 0.3f; in.sun[2] = 0.86f; Norm(in.sun);
         in.daylight = 1; in.night = 0;
@@ -2088,224 +2431,219 @@ namespace
         gl::RoomInputs ri;
         ri.night = 0; ri.hour = 13; ri.selfLit = true;
         gl::RoomBatchConstants(style, &building, light, ri, s, c, seed);
-        const float lit[3] = { 0.62f, 0.5f, 0.3f };   // the client's painted glass in the sun
+        c[47] = c[35] = 0.0f;   // every room lit (a dark one by day keeps kDarkDay of its light: the measure is the lit rooms')
+        float day[4 * gl::kDayRegisters], look[4];
+        gl::DayConstants(m, light, s, building.flags, day);
+        gl::LookConstants(light, look);
+        w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+        w.dev->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
+        // (the room alone: the sky's reflection and glint off, all of the glass the room (share 1), no darkening, no cooling)
+        float noSky[4 * gl::kConstantCount], alone[4 * gl::kConstantCount];
+        std::memcpy(noSky, c, sizeof(noSky));
+        noSky[19] = 0; noSky[21] = 0;
+        std::memcpy(alone, noSky, sizeof(alone));
+        alone[6] = 1.0f;
+        const float lit[3] = { 0.62f, 0.5f, 0.3f };   // the client's painted glass in the sun (the stock colour; the texel w.texel's)
+        const float texelLum = 0.2126f * 0.8f + 0.7152f * (77.0f / 255.0f) + 0.0722f * 0.2f;
         const float cam0[3] = { -8838.6f, 627.4f, 99.3f }, heading = 0.37f;
-        const float dists[] = { 5, 10, 20 }, yaws[] = { 0, 45, 70 }, heights[] = { 0, 2.5f };
-        const float hw = 4.0f, hh = 2.7f;
-        float worst[2] = {}, meanLight = 0;
-        std::string worstAt[2];
-        int bad = 0, views = 0;
+        const float dists[] = { 5, 10, 20 }, yaws[] = { 0, 45, 70 }, heights[] = { 0, 2.5f, -2.5f };
+        const float hw = 0.7f, hh = 0.9f, gapX = 2 * hw + 0.9f, gapZ = 2 * hh + 1.2f;
+        double contrastSum = 0, roomRatio = 0;
+        float worstShimmer = 0, leastContrast = 1e9f;
+        int contrastViews = 0, bad = 0, views = 0, ratioViews = 0, depthOk = 0, depthViews = 0;
+        float seen[4] = {};
+        std::string worstAt, leastAt, depthMiss;
         bool drewAll = true;
-        for (int look = 0; look < 2; ++look)
-        {
-            if (look) UploadLook(w.dev, gl::RoomConstants{});
-            else UploadLook(w.dev, light);
-            for (float dist : dists)
-                for (float yawDeg : yaws)
-                    for (float height : heights)
-                    {
-                        const float yaw = yawDeg * 3.14159265f / 180.0f;
-                        const float C[3] = { cam0[0] + dist * std::cos(heading), cam0[1] + dist * std::sin(heading), cam0[2] + height };
-                        const float back[3] = { -std::cos(heading), -std::sin(heading), 0 };
-                        const float N[3] = { back[0] * std::cos(yaw) - back[1] * std::sin(yaw), back[0] * std::sin(yaw) + back[1] * std::cos(yaw), 0 };
-                        const float A[3] = { -N[1], N[0], 0 };
-                        float F3[3] = { C[0] - cam0[0], C[1] - cam0[1], C[2] - cam0[2] }; Norm(F3);
-                        float R[3] = { F3[1], -F3[0], 0 }; Norm(R);
-                        const float U[3] = { R[1] * F3[2] - R[2] * F3[1], R[2] * F3[0] - R[0] * F3[2], R[0] * F3[1] - R[1] * F3[0] };
-                        struct PV { float x, y, z, rhw, p[3], n[3], uv[2], base[3]; };
-                        PV v[4];
-                        const float corner[4][2] = { { -hw, hh }, { hw, hh }, { -hw, -hh }, { hw, -hh } };
-                        for (int k = 0; k < 4; ++k)
+        for (float dist : dists)
+            for (float yawDeg : yaws)
+                for (float height : heights)
+                {
+                    const float yaw = yawDeg * 3.14159265f / 180.0f;
+                    const float C[3] = { cam0[0] + dist * std::cos(heading), cam0[1] + dist * std::sin(heading), cam0[2] + height };
+                    const float back[3] = { -std::cos(heading), -std::sin(heading), 0 };
+                    const float N[3] = { back[0] * std::cos(yaw) - back[1] * std::sin(yaw), back[0] * std::sin(yaw) + back[1] * std::cos(yaw), 0 };
+                    float A[3], U[3];
+                    gl::WindowFrame(N, A, U);
+                    // the six windows of the facade, each its own room (its WMO space the world's)
+                    std::vector<gl::Window> ws;
+                    for (int r = 0; r < 2; ++r)
+                        for (int k = 0; k < 3; ++k)
                         {
-                            float q[3];
-                            for (int i = 0; i < 3; ++i) q[i] = C[i] + A[i] * corner[k][0] + (i == 2 ? corner[k][1] : 0.0f) - cam0[i];
-                            const float zf = q[0] * F3[0] + q[1] * F3[1] + q[2] * F3[2];
-                            const float sx = kS * 0.5f + kFocal * (q[0] * R[0] + q[1] * R[1] + q[2] * R[2]) / zf;
-                            const float sy = kS * 0.5f - kFocal * (q[0] * U[0] + q[1] * U[1] + q[2] * U[2]) / zf;
-                            v[k] = { sx - 0.5f, sy - 0.5f, 0.5f, 1.0f / zf, { q[0], q[1], q[2] }, { N[0], N[1], N[2] }, { 0.5f, 0.5f }, { lit[0], lit[1], lit[2] } };
+                            const float m3[3] = { C[0] + A[0] * gapX * (k - 1), C[1] + A[1] * gapX * (k - 1), C[2] + gapZ * (r - 0.5f) };
+                            ws.push_back(rh::MakeWindow(kFacadePath, 0, static_cast<uint32_t>(40 + r * 3 + k), m3, N, hw, hh));
                         }
-                        float cv[16] = { cam0[0], cam0[1], cam0[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+                    rooms.Table(w.dev, ws);
+                    float F3[3] = { C[0] - cam0[0], C[1] - cam0[1], C[2] - cam0[2] }; Norm(F3);
+                    const float fl = std::sqrt(F3[0] * F3[0] + F3[1] * F3[1]);
+                    const float R[3] = { F3[1] / fl, -F3[0] / fl, 0 };
+                    const float Uv[3] = { R[1] * F3[2] - R[2] * F3[1], R[2] * F3[0] - R[0] * F3[2], R[0] * F3[1] - R[1] * F3[0] };
+                    // passes: the look, it a third of a pixel to the right, the look without the sky, the room alone, the probe
+                    std::vector<float> img[5];
+                    bool ok = true;
+                    for (int pass = 0; pass < 5 && ok; ++pass)
+                    {
+                        const float step = pass == 1 ? dist / kFocal / 3.0f : 0.0f;
+                        const float cam[3] = { cam0[0] + R[0] * step, cam0[1] + R[1] * step, cam0[2] + R[2] * step };
+                        float regs[4 * gl::kRoomRegisters];
+                        rooms.Registers(cam, kFacadePath, 0, style.cls, s, regs);
                         IDirect3DDevice9* d = w.dev;
+                        d->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+                        rooms.Bind(d);
+                        float cv[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+                        d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
+                        d->SetPixelShaderConstantF(gl::kFirstConstant, pass == 2 ? noSky : (pass == 3 ? alone : c), gl::kConstantCount);
+                        d->SetPixelShaderConstantF(gl::kSeedConstant, seed, gl::kSeedRegisters);
                         d->SetRenderTarget(0, target);
                         D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
                         d->SetViewport(&vp);
                         d->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
                         d->SetRenderState(D3DRS_ZENABLE, FALSE); d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
                         d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-                        d->SetVertexShader(nullptr); d->SetPixelShader(ps);
+                        d->SetVertexShader(nullptr); d->SetPixelShader(pass == 4 ? probe : ps);
                         d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
                         d->SetTexture(0, w.texel);
-                        d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
-                        d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
-                        d->SetPixelShaderConstantF(gl::kSeedConstant, seed, gl::kSeedRegisters);
                         const BOOL on = TRUE, off = FALSE;
                         d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
                         d->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
-                        D3DLOCKED_RECT lr{};
-                        bool ok = SUCCEEDED(d->BeginScene());
-                        if (ok) { d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(PV)); d->EndScene(); }
-                        ok = ok && SUCCEEDED(d->GetRenderTargetData(target, readback)) && SUCCEEDED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY));
-                        drewAll = drewAll && ok;
-                        if (!ok) continue;
-                        std::vector<float> px(static_cast<size_t>(kS) * kS * 4);
-                        for (int row = 0; row < kS; ++row)
-                            std::memcpy(&px[static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
-                        readback->UnlockRect();
-                        auto L = [&](size_t p) { return 0.2126f * px[p * 4] + 0.7152f * px[p * 4 + 1] + 0.0722f * px[p * 4 + 2]; };
-                        auto drawn = [&](size_t p) { return px[p * 4 + 3] > 0.5f; };
-                        double sum = 0;
-                        int n = 0, stepX = 0, stepY = 0;
-                        float step = 0;
-                        for (int y = 1; y < kS - 1; ++y)
-                            for (int x = 1; x < kS - 1; ++x)
+                        ok = SUCCEEDED(d->BeginScene());
+                        if (!ok) break;
+                        struct PV { float x, y, z, rhw, p[3], n[3], uv[2], base[3]; };
+                        for (const gl::Window& win : ws)
+                        {
+                            PV v[4];
+                            const float corner[4][2] = { { -hw, hh }, { hw, hh }, { -hw, -hh }, { hw, -hh } };
+                            for (int k = 0; k < 4; ++k)
                             {
-                                const size_t p = static_cast<size_t>(y) * kS + x;
-                                for (int k = 0; k < 3; ++k) bad += std::isfinite(px[p * 4 + k]) ? 0 : 1;
-                                if (!drawn(p) || !drawn(p - 1) || !drawn(p + 1) || !drawn(p - kS) || !drawn(p + kS)) continue;
-                                sum += L(p); ++n;
-                                const float here = std::max(std::fabs(L(p) - L(p + 1)), std::fabs(L(p) - L(p + kS)));
-                                if (here > step) { step = here; stepX = x; stepY = y; }
+                                float q[3];
+                                for (int i = 0; i < 3; ++i) q[i] = win.center[i] + A[i] * corner[k][0] * 0.995f + U[i] * corner[k][1] * 0.995f - cam[i];
+                                const float zf = q[0] * F3[0] + q[1] * F3[1] + q[2] * F3[2];
+                                const float sx = kS * 0.5f + kFocal * (q[0] * R[0] + q[1] * R[1] + q[2] * R[2]) / zf;
+                                const float sy = kS * 0.5f - kFocal * (q[0] * Uv[0] + q[1] * Uv[1] + q[2] * Uv[2]) / zf;
+                                v[k] = { sx - 0.5f, sy - 0.5f, 0.5f, 1.0f / zf, { q[0], q[1], q[2] }, { N[0], N[1], N[2] }, { 0.5f, 0.5f }, { lit[0], lit[1], lit[2] } };
                             }
-                        // GLASS_DAY_DUMP=<folder>: each view as a picture (day_<look>_<yd>_<deg>_<height>.ppm) and where its step is
-                        if (const char* dump = std::getenv("GLASS_DAY_DUMP"))
-                        {
-                            char name[128];
-                            std::snprintf(name, sizeof(name), "day_%s_%02.0f_%02.0f_%.0f.ppm", look ? "crisp" : "day", dist, yawDeg, height);
-                            std::ofstream f(std::filesystem::path(dump) / name, std::ios::binary);
-                            f << "P6\n" << kS << " " << kS << "\n255\n";
-                            for (size_t p = 0; p < static_cast<size_t>(kS) * kS; ++p)
-                                for (int k = 0; k < 3; ++k)
-                                {
-                                    const char b = static_cast<char>(std::lround(std::clamp(drawn(p) ? px[p * 4 + k] : 0.1f, 0.0f, 1.0f) * 255.0f));
-                                    f.write(&b, 1);
-                                }
-                            std::printf("      %s: the step %.4f at (%d, %d), the mean %.4f\n", name, step, stepX, stepY, n ? sum / n : 0.0);
+                            d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(PV));
                         }
-                        if (n < 400) continue;
-                        const float rel = static_cast<float>(step / (sum / n));
-                        if (!look) { meanLight += static_cast<float>(sum / n); ++views; }
-                        if (rel > worst[look])
-                        {
-                            char at[96];
-                            std::snprintf(at, sizeof(at), "%.0f yd, %.0f deg%s", dist, yawDeg, height > 0 ? ", from below" : "");
-                            worst[look] = rel; worstAt[look] = at;
-                        }
+                        d->EndScene();
+                        D3DLOCKED_RECT lr{};
+                        ok = SUCCEEDED(d->GetRenderTargetData(target, readback)) && SUCCEEDED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY));
+                        if (!ok) break;
+                        img[pass].resize(static_cast<size_t>(kS) * kS * 4);
+                        for (int row = 0; row < kS; ++row)
+                            std::memcpy(&img[pass][static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
+                        readback->UnlockRect();
                     }
-        }
-        char line[400];
-        std::snprintf(line, sizeof(line), "WARP, rooms by day (Stormwind, clear glass, %d views 5..20 yd, 0..70 deg): NaN/Inf %d; the largest step between "
-                      "neighbouring pixels %.1f%% of the glass's mean (at %s; bound %.0f%%), with the night's crisp look %.1f%% (at %s); the glass's mean %.3f "
-                      "against the client's %.3f", views, bad, worst[0] * 100, worstAt[0].c_str(), kDayEdge * 100, worst[1] * 100, worstAt[1].c_str(),
-                      views ? meanLight / views : 0.0f, 0.2126f * lit[0] + 0.7152f * lit[1] + 0.0722f * lit[2]);
-        Check(drewAll && views == 18 && bad == 0 && worst[0] < kDayEdge && worst[1] > 2 * worst[0], line);
-        UploadLook(w.dev, gl::RoomConstants{});
+                    drewAll = drewAll && ok;
+                    if (!ok) continue;
+                    ++views;
+                    auto L = [&](int i, size_t p) { const float* q = &img[i][p * 4]; return 0.2126f * q[0] + 0.7152f * q[1] + 0.0722f * q[2]; };
+                    auto drawn = [&](int i, size_t p) { return img[i][p * 4 + 3] > 0.5f; };
+                    char at[96];
+                    std::snprintf(at, sizeof(at), "%.0f yd, %.0f deg%s", dist, yawDeg, height > 0 ? ", from below" : (height < 0 ? ", from above" : ""));
+                    // NaN; shimmer; contrast without the sky; the room alone's light; the faces
+                    double ch = 0, lv = 0, sum = 0, alone = 0;
+                    std::vector<float> ls;
+                    int faces[4] = {}, glass = 0;
+                    for (size_t p = 0; p < static_cast<size_t>(kS) * kS; ++p)
+                    {
+                        for (int i = 0; i < 4; ++i)
+                            for (int k = 0; k < 3; ++k) bad += drawn(i, p) && !std::isfinite(img[i][p * 4 + k]) ? 1 : 0;
+                        if (!drawn(0, p) || !drawn(1, p)) continue;
+                        ch += std::fabs(L(0, p) - L(1, p)); lv += L(0, p);
+                        ls.push_back(L(2, p)); sum += L(2, p); alone += L(3, p);
+                        ++glass;
+                        const float face = img[4][p * 4 + 1];
+                        if (face >= 0) faces[std::clamp(static_cast<int>(std::lround(face)), 0, 3)]++;
+                    }
+                    if (glass < 300) continue;
+                    const float shimmer = static_cast<float>(ch / lv);
+                    if (shimmer > worstShimmer) { worstShimmer = shimmer; worstAt = at; }
+                    std::sort(ls.begin(), ls.end());
+                    const float contrast = static_cast<float>((ls[ls.size() * 9 / 10] - ls[ls.size() / 10]) / (sum / ls.size()));
+                    contrastSum += contrast; ++contrastViews;
+                    if (contrast < leastContrast) { leastContrast = contrast; leastAt = at; }
+                    // the room alone over the glass it stands for: the client's light (its colour over its texel) x
+                    // kGlassAlbedo x (1 - the darkening)
+                    const float lum12 = 0.2126f * lit[0] + 0.7152f * lit[1] + 0.0722f * lit[2];   // (the blocks' shader: r12 the vertex colour)
+                    const float glassRef = lum12 / texelLum * gl::rooms::kGlassAlbedo * (1.0f - c[20]);
+                    roomRatio += alone / glass / glassRef; ++ratioViews;
+                    // in depth
+                    const float share[4] = { faces[0] / float(glass), faces[1] / float(glass), faces[2] / float(glass), faces[3] / float(glass) };
+                    // (the room is about the window's size, so what a view sees is the box's: head on and level mostly the
+                    // back wall; at a slant the far side wall, which hides the back wall from 45 degrees; from below the
+                    // ceiling, from above the floor, near (5 yd) and not at a grazing slant; RoomRayTests checks every face pixel by
+                    // pixel against CastRoom)
+                    bool deep = true;
+                    if (yawDeg == 0 && height == 0) deep = share[0] > 0.5f;
+                    if (yawDeg >= 45) deep = deep && share[1] > kFaceShare;
+                    if (height > 0 && dist <= 5 && yawDeg <= 45) deep = deep && share[3] > kFaceShare;
+                    if (height < 0 && dist <= 5 && yawDeg <= 45) deep = deep && share[2] > kFaceShare;
+                    for (int f = 0; f < 4; ++f) seen[f] = std::max(seen[f], share[f]);
+                    depthOk += deep ? 1 : 0; ++depthViews;
+                    if (!deep)
+                    {
+                        char miss[160];
+                        std::snprintf(miss, sizeof(miss), " [%s: back %.2f side %.2f floor %.2f ceiling %.2f]", at, share[0], share[1], share[2], share[3]);
+                        depthMiss += miss;
+                    }
+                    if (const char* dump = std::getenv("GLASS_DAY_DUMP"))
+                    {
+                        char name[128];
+                        std::snprintf(name, sizeof(name), "day_%02.0f_%02.0f_%+.0f.ppm", dist, yawDeg, height);
+                        std::ofstream f(std::filesystem::path(dump) / name, std::ios::binary);
+                        f << "P6\n" << kS << " " << kS << "\n255\n";
+                        for (size_t p = 0; p < static_cast<size_t>(kS) * kS; ++p)
+                            for (int k = 0; k < 3; ++k)
+                            {
+                                const char bt = static_cast<char>(std::lround(std::clamp(drawn(0, p) ? img[0][p * 4 + k] : 0.1f, 0.0f, 1.0f) * 255.0f));
+                                f.write(&bt, 1);
+                            }
+                    }
+                }
+        char line[3000];
+        const float meanContrast = contrastViews ? static_cast<float>(contrastSum / contrastViews) : 0.0f;
+        const float ratio = ratioViews ? static_cast<float>(roomRatio / ratioViews) : 0.0f;
+        std::snprintf(line, sizeof(line), "WARP, rooms by day (Stormwind's style, six clear windows, %d views 5..20 yd, 0..70 deg, level, from below and above): NaN/Inf "
+                      "%d; shimmer (a third of a pixel's move) at most %.3f of the glass's mean (at %s; bound %.2f); the rooms' contrast without the sky %.3f "
+                      "over the views (bound %.2f), the least %.3f (at %s; bound %.2f); the room alone %.2f of the glass it stands for (room::kDayRoom %.2f: "
+                      "within 20%%); in depth (the box's faces as a view sees them) in %d of %d views, the most of the glass each face fills in a view: back "
+                      "%.2f, side %.2f, floor %.2f, ceiling %.2f%s",
+                      views, bad, worstShimmer, worstAt.c_str(), kShimmer, meanContrast, kContrast, leastContrast, leastAt.c_str(), kContrastLeast, ratio,
+                      gl::room::kDayRoom, depthOk, depthViews, seen[0], seen[1], seen[2], seen[3], depthMiss.c_str());
+        Check(drewAll && views == 27 && bad == 0 && worstShimmer < kShimmer && meanContrast >= kContrast && leastContrast >= kContrastLeast &&
+              depthOk == depthViews && std::fabs(ratio / gl::room::kDayRoom - 1.0f) < 0.2f, line);
+        const float zero[16] = {};
+        w.dev->SetPixelShaderConstantF(gl::kViewConstant, zero, 4);
         w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
         readback->Release();
         target->Release();
+        probe->Release();
         ps->Release();
     }
 
     // --- 7. lit or dark: the shader and the window lights agree (on WARP) -------------------------------------------
-    // The exact share of a flat quad (corners in order, world) in each room cell about `origin` (and its anchors, cut
-    // where they meet: room::kAnchor), in the frame of its normal N facing the eye: the quad cut by the cells, a cell
-    // with its anchor's offset (the window lights' cells, tools/gen_window_lights.py room_cells).
-    std::map<std::pair<int, int>, double> QuadCells(const double corner[4][3], const float N[3], const float origin[3])
+    // The blocks with a probe right after the window's lit value: r0 = (lit, the lit hash, its key: ordinal, group).
+    std::string LitProbeShader(const std::string& probe)
     {
-        namespace rm = gl::room;
-        float a[3] = { -N[1], N[0], 0.0f };
-        if (a[0] * a[0] + a[1] * a[1] < 0.0001f) { a[0] = 1; a[1] = 0; }
-        const float al = std::sqrt(a[0] * a[0] + a[1] * a[1]);
-        a[0] /= al; a[1] /= al;
-        const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
-        using P3 = std::vector<std::array<double, 3>>;
-        using Poly = std::vector<std::pair<double, double>>;
-        P3 quad;
-        for (int k = 0; k < 4; ++k) quad.push_back({ corner[k][0] - origin[0], corner[k][1] - origin[1], corner[k][2] - origin[2] });
-        auto clip3 = [](const P3& p, int axis, double bound, bool above) {
-            P3 out;
-            for (size_t i = 0; i < p.size(); ++i)
-            {
-                const auto& s = p[i];
-                const auto& e = p[(i + 1) % p.size()];
-                const bool si = above ? s[axis] >= bound : s[axis] <= bound, ei = above ? e[axis] >= bound : e[axis] <= bound;
-                if (si) out.push_back(s);
-                if (si != ei)
-                {
-                    const double t = (bound - s[axis]) / (e[axis] - s[axis]);
-                    out.push_back({ s[0] + (e[0] - s[0]) * t, s[1] + (e[1] - s[1]) * t, s[2] + (e[2] - s[2]) * t });
-                }
-            }
-            return out;
-        };
-        auto clip = [](const Poly& p, int axis, double bound, bool above) {
-            Poly out;
-            for (size_t i = 0; i < p.size(); ++i)
-            {
-                const auto& s = p[i];
-                const auto& e = p[(i + 1) % p.size()];
-                const double sv = axis ? s.second : s.first, ev = axis ? e.second : e.first;
-                const bool si = above ? sv >= bound : sv <= bound, ei = above ? ev >= bound : ev <= bound;
-                if (si) out.push_back(s);
-                if (si != ei)
-                {
-                    const double t = (bound - sv) / (ev - sv);
-                    out.push_back({ s.first + (e.first - s.first) * t, s.second + (e.second - s.second) * t });
-                }
-            }
-            return out;
-        };
-        auto area = [](const Poly& p) {
-            double s = 0;
-            for (size_t i = 0; i < p.size(); ++i) s += p[i].first * p[(i + 1) % p.size()].second - p[(i + 1) % p.size()].first * p[i].second;
-            return std::fabs(s) * 0.5;
-        };
-        auto project = [&](const P3& p, const int k[3]) {
-            Poly st;
-            for (const auto& q : p)
-            {
-                const double r[3] = { q[0] - k[0] * rm::kAnchor, q[1] - k[1] * rm::kAnchor, q[2] - k[2] * rm::kAnchor };
-                st.push_back({ (r[0] * a[0] + r[1] * a[1] + r[2] * a[2]) / 3.5, (r[0] * u[0] + r[1] * u[1] + r[2] * u[2]) / 3.2 });
-            }
-            return st;
-        };
-        const int zero[3] = { 0, 0, 0 };
-        const double whole = area(project(quad, zero));
-        int lo[3], hi[3];
-        for (int i = 0; i < 3; ++i)
+        return "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c176, 0.2126, 0.7152, 0.0722, 0.2\n" + gl::ShaderDefs() +
+               "    dcl_texcoord0 v0.xyz\n    dcl_texcoord1 v1.xyz\n    dcl_texcoord2 v2.xy\n    dcl_texcoord3 v3.xyz\n    dcl_2d s0\n"
+               "    mov r0, c175.y\n    mov r0.z, -c175.x\n    mov r12.xyz, v3\n    mov r31.xyz, c175.y" + gl::GlassBlock("v0", "v1", "v2", probe) +
+               "\n    mov oC0, r0\n";
+    }
+
+    struct Band { const char* name; gl::DarkBand band; };
+    gl::DarkBand PickBand(int win, float r1, float r2)
+    {
+        switch (win % 8)
         {
-            double mn = 1e30, mx = -1e30;
-            for (const auto& q : quad) { mn = std::min(mn, q[i]); mx = std::max(mx, q[i]); }
-            lo[i] = static_cast<int>(std::floor(mn / rm::kAnchor + 0.5)); hi[i] = static_cast<int>(std::floor(mx / rm::kAnchor + 0.5));
+        case 0: return gl::Band(r1, r1);                                           // at rest
+        case 1: return gl::Band(r1 + 6e-5f, r1);                                   // the clock, going dark
+        case 2: { const float t = r1 * 0.7f; return gl::Band(t, t + 0.25f); }      // a fast clock, lit again
+        case 3: { const float t = r1 * 0.5f; return gl::Band(t + 0.4f, t); }       // ... going dark
+        case 4: { const float t = r1 * 0.3f; return gl::Crossfade(t, t + 0.5f, r2); } // a jump, going dark
+        case 5: { const float t = r1 * 0.3f; return gl::Crossfade(t + 0.5f, t, r2); } // a jump, lit again
+        case 6: return gl::Band(1.0f, 1.0f);                                       // a dark place
+        default: return gl::Band(0.0f, 0.0f);                                      // every room lit
         }
-        std::map<std::pair<int, int>, double> out;
-        int k[3];
-        for (k[0] = lo[0]; k[0] <= hi[0]; ++k[0])
-            for (k[1] = lo[1]; k[1] <= hi[1]; ++k[1])
-                for (k[2] = lo[2]; k[2] <= hi[2]; ++k[2])
-                {
-                    P3 part = quad;
-                    for (int i = 0; i < 3 && part.size() >= 3; ++i)
-                        part = clip3(clip3(part, i, (k[i] - 0.5) * rm::kAnchor, true), i, (k[i] + 0.5) * rm::kAnchor, false);
-                    if (part.size() < 3) continue;
-                    const int ox = static_cast<int>(k[0] * rm::kAnchorKeyX[0] + k[1] * rm::kAnchorKeyX[1] + k[2] * rm::kAnchorKeyX[2]);
-                    const int oy = static_cast<int>(k[0] * rm::kAnchorKeyY[0] + k[1] * rm::kAnchorKeyY[1] + k[2] * rm::kAnchorKeyY[2]);
-                    const Poly st = project(part, k);
-                    double x0 = 1e30, x1 = -1e30;
-                    for (const auto& q : st) { x0 = std::min(x0, q.first); x1 = std::max(x1, q.first); }
-                    for (int x = static_cast<int>(std::floor(x0)); x <= static_cast<int>(std::floor(x1)); ++x)
-                    {
-                        const Poly col = clip(clip(st, 0, x, true), 0, x + 1.0, false);
-                        if (col.size() < 3) continue;
-                        double y0 = 1e30, y1 = -1e30;
-                        for (const auto& q : col) { y0 = std::min(y0, q.second); y1 = std::max(y1, q.second); }
-                        for (int y = static_cast<int>(std::floor(y0)); y <= static_cast<int>(std::floor(y1)); ++y)
-                        {
-                            const Poly piece = clip(clip(col, 1, y, true), 1, y + 1.0, false);
-                            if (piece.size() >= 3) out[{ x + ox, y + oy }] += area(piece) / whole;
-                        }
-                    }
-                }
-        return out;
     }
 
     void LitAgreementTests()
@@ -2313,34 +2651,31 @@ namespace
         Warp w;
         std::string why;
         if (!InitWarp(w, why)) { std::printf("skip  lit agreement: %s\n", why.c_str()); return; }
-        // The blocks with a probe right after the room's lit value: r0 = (lit, the lit hash, the cell about the origin).
-        const std::string probe = "\n        mov r0.x, r20.w\n        mov r0.y, r22.x\n        mov r0.zw, r29.xxxy";
-        const std::string text = "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c176, 0.2126, 0.7152, 0.0722, 0.2\n" + gl::ShaderDefs() +
-                                 "    dcl_texcoord0 v0.xyz\n    dcl_texcoord1 v1.xyz\n    dcl_texcoord2 v2.xy\n    dcl_texcoord3 v3.xyz\n    dcl_2d s0\n"
-                                 "    mov r0, c175.y\n    mov r12.xyz, v3\n    mov r31.xyz, c175.y" + gl::GlassBlock("v0", "v1", "v2", probe) +
-                                 "\n    mov oC0, r0\n";
+        const std::string probe = "\n          mov r0.x, r14.z\n          mov r0.y, r22.x\n          mov r0.z, r13.w\n          mov r0.w, r20.w";
         std::vector<uint8_t> code;
-        if (!wxl_livingazeroth::shaderpatch::Assemble(text, "lit probe", code, why)) { Check(false, "the lit probe assembles: " + why.substr(0, 300)); return; }
+        if (!wxl_livingazeroth::shaderpatch::Assemble(LitProbeShader(probe), "lit probe", code, why)) { Check(false, "the lit probe assembles: " + why.substr(0, 300)); return; }
         IDirect3DPixelShader9* ps = nullptr;
-        constexpr int kS = 128;
+        constexpr int kS = 96;
         IDirect3DSurface9 *target = nullptr, *readback = nullptr;
         if (FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps)) ||
             FAILED(w.dev->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
             FAILED(w.dev->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
         { Check(false, "the lit probe on WARP"); return; }
-        UploadLook(w.dev, gl::RoomConstants{});
-
-        // Places: about the world's origin, Goldshire, Stormwind (its WMO's origin hundreds of yards from a window),
-        // Northrend's far corner. Each window: a random facing (a little tilt), 1.5 .. 5 yd wide, 1.2 .. 4 tall, 6 .. 45 yd
-        // from the camera, its building's origin 0 .. 600 yd away, a random seed, and a band: at rest, a slow clock's
-        // fade, a sweep's, everything dark or lit.
+        rh::Rooms rooms;
+        rooms.Textures(w.dev);
+        float look[4];
+        gl::LookConstants(gl::Light{}, look);
+        w.dev->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
+        // Places: about the world's origin, Goldshire, Stormwind, Northrend's far corner. Each a window: a random facing (a
+        // little tilt), 1.5 .. 5 yd wide, 1.2 .. 4 tall, 6 .. 45 yd from the camera; its key (an ordinal, a group), a seed, a
+        // band. Every fourth is a light over two windows side by side with a mullion between them (not glass in the table:
+        // its share stays lit, as the window lights' tool has it).
         struct Place { const char* name; float x, y, z; };
         const Place places[] = { { "the origin", 0, 0, 0 }, { "Goldshire", -9460, 62, 57 }, { "Stormwind", -8838.6f, 627.4f, 99.3f },
                                  { "Northrend's far side", 5800, 600, 640 } };
         uint32_t rng = 12345;
         auto rnd = [&rng]() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; };
-        int windows = 0, hardCell = 0, edgeCell = 0, hashOff = 0, litOff = 0, partLit = 0, wobbleOff = 0;
-        double worstEdge = 0;
+        int windows = 0, missing = 0, keyOff = 0, hashOff = 0, litOff = 0, partLit = 0, wobbleOff = 0, pairs = 0;
         long long pixels = 0;
         float worstShare = 0, sumShare = 0;
         bool drewAll = true;
@@ -2349,66 +2684,53 @@ namespace
             for (int win = 0; win < 24; ++win)
             {
                 const float yaw = rnd() * 6.2831853f, pitch = (rnd() - 0.5f) * 0.3f;
-                float N[3] = { std::cos(yaw) * std::cos(pitch), std::sin(yaw) * std::cos(pitch), std::sin(pitch) };
+                float n[3] = { std::cos(yaw) * std::cos(pitch), std::sin(yaw) * std::cos(pitch), std::sin(pitch) };
+                Norm(n);
                 const float hw = 0.75f + rnd() * 1.75f, hh = 0.6f + rnd() * 1.4f, dist = 6.0f + rnd() * 39.0f;
-                // the window's middle (world) and the camera in front of it, a little off its axis
                 const float mid[3] = { pl.x + (rnd() - 0.5f) * 60.0f, pl.y + (rnd() - 0.5f) * 60.0f, pl.z + rnd() * 12.0f };
-                const float side = (rnd() - 0.5f) * 0.6f, lift = (rnd() - 0.5f) * 0.4f;
-                float a[3] = { -N[1], N[0], 0 }; Norm(a);
-                const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
-                const float cam[3] = { mid[0] + (N[0] + a[0] * side + u[0] * lift) * dist, mid[1] + (N[1] + a[1] * side + u[1] * lift) * dist,
-                                       mid[2] + (N[2] + a[2] * side + u[2] * lift) * dist };
-                const float originDist = (win % 3 == 0) ? 0.0f : rnd() * 600.0f, originYaw = rnd() * 6.2831853f;
-                const float origin[3] = { mid[0] + std::cos(originYaw) * originDist, mid[1] + std::sin(originYaw) * originDist, mid[2] - rnd() * 20.0f };
-                // the quad: corners about the camera (as the shader gets them: floats) in screen order (top-left,
-                // top-right, bottom-left, bottom-right); its real normal from those (a float corner at -8800 yd is a
-                // hair off the ideal plane), facing the eye; the corners in the world as a polygon
-                float rel[4][3];
-                const float cs[4][2] = { { -hw, hh }, { hw, hh }, { -hw, -hh }, { hw, -hh } };
-                for (int k = 0; k < 4; ++k)
-                    for (int i = 0; i < 3; ++i)
-                        rel[k][i] = static_cast<float>(static_cast<double>(mid[i]) - cam[i] + static_cast<double>(a[i]) * cs[k][0] + static_cast<double>(u[i]) * cs[k][1]);
-                {
-                    double e1[3], e2[3], nn[3];
-                    for (int i = 0; i < 3; ++i) { e1[i] = static_cast<double>(rel[1][i]) - rel[0][i]; e2[i] = static_cast<double>(rel[2][i]) - rel[0][i]; }
-                    nn[0] = e1[1] * e2[2] - e1[2] * e2[1]; nn[1] = e1[2] * e2[0] - e1[0] * e2[2]; nn[2] = e1[0] * e2[1] - e1[1] * e2[0];
-                    const double len = std::sqrt(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]);
-                    const double facing = -(nn[0] * rel[0][0] + nn[1] * rel[0][1] + nn[2] * rel[0][2]) >= 0 ? 1.0 : -1.0;
-                    for (int i = 0; i < 3; ++i) N[i] = static_cast<float>(nn[i] / len * facing);
-                }
-                double poly[4][3];
-                const int order[4] = { 0, 1, 3, 2 };
-                for (int k = 0; k < 4; ++k)
-                    for (int i = 0; i < 3; ++i) poly[k][i] = static_cast<double>(rel[order[k]][i]) + cam[i];
-                // the seed and the band
+                const uint32_t group = static_cast<uint32_t>(rnd() * 300.0f), ordinal = static_cast<uint32_t>(rnd() * 2000.0f);
                 const float seed[2] = { std::floor(rnd() * 1024.0f), std::floor(rnd() * 1024.0f) };
-                gl::DarkBand band;
-                switch (win % 8)
+                const gl::DarkBand band = PickBand(win, rnd(), rnd());
+                const bool pair = win % 4 == 3;
+                float a[3], u[3];
+                gl::WindowFrame(n, a, u);
+                std::vector<gl::Window> ws;
+                const float mullion = 0.3f;
+                if (!pair) ws.push_back(rh::MakeWindow(kSecondPath, group, ordinal, mid, n, hw, hh));
+                else
                 {
-                case 0: { const float t = rnd(); band = gl::Band(t, t); break; }                            // at rest
-                case 1: { const float t = rnd(); band = gl::Band(t + 6e-5f, t); break; }                    // the clock, going dark
-                case 2: { const float t = rnd() * 0.7f; band = gl::Band(t, t + 0.25f); break; }            // a fast clock, lit again
-                case 3: { const float t = rnd() * 0.5f; band = gl::Band(t + 0.4f, t); break; }             // ... going dark
-                case 4: { const float t = rnd() * 0.3f; band = gl::Crossfade(t, t + 0.5f, rnd()); break; } // a jump, going dark
-                case 5: { const float t = rnd() * 0.3f; band = gl::Crossfade(t + 0.5f, t, rnd()); break; } // a jump, lit again
-                case 6: band = gl::Band(1.0f, 1.0f); break;                                                // a dark place
-                default: band = gl::Band(0.0f, 0.0f); break;                                               // every room lit
+                    // two windows, each (hw - mullion / 2) / 2 wide... the pair spans the quad's width
+                    const float half = 0.5f * (hw - 0.5f * mullion);
+                    for (int sd = -1; sd <= 1; sd += 2)
+                    {
+                        const float m3[3] = { mid[0] + a[0] * sd * (half + 0.5f * mullion), mid[1] + a[1] * sd * (half + 0.5f * mullion), mid[2] + a[2] * sd * (half + 0.5f * mullion) };
+                        ws.push_back(rh::MakeWindow(kSecondPath, group, ordinal + (sd > 0 ? 1u : 0u), m3, n, half, hh));
+                    }
+                    ++pairs;
                 }
-                // the constants: outside, the room on, nothing else that matters to it
+                rooms.Table(w.dev, ws);
+                const float side = (rnd() - 0.5f) * 0.6f, lift = (rnd() - 0.5f) * 0.4f;
+                const float cam[3] = { mid[0] + (n[0] + a[0] * side + u[0] * lift) * dist, mid[1] + (n[1] + a[1] * side + u[1] * lift) * dist,
+                                       mid[2] + (n[2] + a[2] * side + u[2] * lift) * dist };
+                // the constants: outside, the room on, the band, the seed
                 float c[4 * gl::kConstantCount] = {};
                 c[3] = 1; c[5] = 1; c[6] = 0.65f;
-                c[24] = 1 / 3.5f; c[25] = 1 / 3.2f; c[26] = 0.25f; c[27] = 0.3f;
-                c[28] = 0.85f; c[29] = 0.72f; c[30] = 0.55f;
-                c[40] = 0.85f; c[41] = 0.72f; c[42] = 0.55f;
-                c[35] = band.hi;
-                c[47] = band.lo;
-                c[51] = 1;
-                const float sd[4 * gl::kSeedRegisters] = { seed[0], seed[1], 0, band.slope, origin[0], origin[1], origin[2], band.base };
+                c[27] = 0.3f; c[28] = 0.85f; c[29] = 0.72f; c[30] = 0.55f; c[40] = 0.85f; c[41] = 0.72f; c[42] = 0.55f;
+                c[35] = band.hi; c[47] = band.lo; c[51] = 1;
+                const float sd[4 * gl::kSeedRegisters] = { seed[0], seed[1], 0, band.slope, 0, 0, 0, band.base };
                 float view[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
                 w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
                 w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
-                // Twice: the vertex normal flat, then wobbled 8 degrees at the corners (a smoothed mesh): the cells go
-                // by the face's own normal, so the same.
+                w.dev->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+                float regs[4 * gl::kRoomRegisters];
+                rooms.Registers(cam, kSecondPath, group, gl::kClassHouse, gl::Settings{}, regs);
+                w.dev->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+                rooms.Bind(w.dev);
+                // the quad: the window (the pair: both and the mullion), a hair inside its edges
+                const gl::Window whole = rh::MakeWindow(kSecondPath, group, ordinal, mid, n, hw, hh);
+                float rel[4][3], N[3];
+                WindowQuad(whole, cam, rel, N, 0.995f);
+                // Twice: the vertex normal flat, then wobbled 8 degrees at the corners (a smoothed mesh): the same
                 std::vector<float> first;
                 for (int pass = 0; pass < 2; ++pass)
                 {
@@ -2419,8 +2741,7 @@ namespace
                     {
                         float nn[3] = { N[0], N[1], N[2] };
                         if (pass) { nn[0] += 0.14f * (k & 1 ? 1 : -1); nn[2] += 0.14f * (k & 2 ? 1 : -1); Norm(nn); }
-                        v[k] = { xy[k][0], xy[k][1], 0, 1, { rel[k][0], rel[k][1], rel[k][2] }, { nn[0], nn[1], nn[2] },
-                                 { 0.5f, 0.5f }, { 0.5f, 0.4f, 0.3f } };
+                        v[k] = { xy[k][0], xy[k][1], 0, 1, { rel[k][0], rel[k][1], rel[k][2] }, { nn[0], nn[1], nn[2] }, { 0.5f, 0.5f }, { 0.5f, 0.4f, 0.3f } };
                     }
                     IDirect3DDevice9* d = w.dev;
                     d->SetRenderTarget(0, target);
@@ -2431,7 +2752,6 @@ namespace
                     d->SetVertexShader(nullptr); d->SetPixelShader(ps);
                     d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
                     d->SetTexture(0, w.texel);
-                    d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
                     const BOOL on = TRUE, off = FALSE;
                     d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
                     d->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
@@ -2446,62 +2766,54 @@ namespace
                         std::memcpy(&px[static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
                     readback->UnlockRect();
                     if (pass == 0) { first = px; continue; }
-                    // the wobbled normals: the same cells and lit values as the flat ones
-                    for (size_t i = 0; i < px.size(); i += 4)
-                        if (px[i] != first[i] || px[i + 2] != first[i + 2] || px[i + 3] != first[i + 3]) ++wobbleOff;
+                    for (size_t i = 0; i < px.size(); ++i)
+                        if (Bits(px[i]) != Bits(first[i])) { ++wobbleOff; break; }
                 }
                 if (first.empty()) continue;
                 ++windows;
-                // Pixel by pixel against the CPU's rules: the cell from the pixel's point, the hash, the lit value.
+                // Pixel by pixel: the window found (in the pair the mullion none: lit), its key, the hash's and the lit
+                // value's bits against the CPU's.
                 double gpuSum = 0;
+                int inA = 0, inB = 0, inNone = 0;
                 for (int row = 0; row < kS; ++row)
                     for (int col = 0; col < kS; ++col)
                     {
                         const float* g = &first[(static_cast<size_t>(row) * kS + col) * 4];
+                        ++pixels;
+                        gpuSum += g[2] < 0 ? 1.0 : g[0];
                         const float fu = (col + 0.5f) / kS, fv = (row + 0.5f) / kS;
                         float P[3];
-                        for (int i = 0; i < 3; ++i)
-                            P[i] = rel[0][i] + (rel[1][i] - rel[0][i]) * fu + (rel[2][i] - rel[0][i]) * fv + cam[i];
-                        const float inv[2] = { 1 / 3.5f, 1 / 3.2f };
-                        float cell[2];
-                        gl::RoomCell(P, origin, N, inv, cell);
-                        if (cell[0] != g[2] || cell[1] != g[3])
+                        for (int i = 0; i < 3; ++i) P[i] = rel[0][i] + (rel[1][i] - rel[0][i]) * fu + (rel[2][i] - rel[0][i]) * fv + cam[i];
+                        const gl::WindowTable::Grid* gr = rooms.table.Find(kSecondPath, group);
+                        const int e = gr ? rooms.table.Lookup(*gr, P) : -1;
+                        const int cpuKey = e < 0 ? -1 : static_cast<int>(rooms.table.Texel(e + 3)[3]);
+                        if (g[2] < 0) { ++inNone; if (cpuKey >= 0 && !pair) ++missing; continue; }
+                        (static_cast<uint32_t>(g[2]) == ordinal ? inA : inB)++;
+                        if (static_cast<int>(g[2]) != cpuKey || static_cast<uint32_t>(g[3]) != group)
                         {
-                            // A pixel a hair from a cell's edge may land either side: the face normal from the screen
-                            // gradients is ~1e-4 rad off, which moves an edge by that x the point's distance to its
-                            // anchor (R'). Allowed within 3e-4 R' + 5 mm of the edge; the worst seen is reported.
-                            double R[3], len = 0;
-                            for (int i = 0; i < 3; ++i)
-                            {
-                                const double r = static_cast<double>(P[i]) - origin[i];
-                                R[i] = r - std::floor(r / gl::room::kAnchor + 0.5) * gl::room::kAnchor;
-                                len += R[i] * R[i];
-                            }
-                            len = std::sqrt(len);
-                            float fa[3] = { -N[1], N[0], 0 }; Norm(fa);
-                            const float fu2[3] = { N[1] * fa[2] - N[2] * fa[1], N[2] * fa[0] - N[0] * fa[2], N[0] * fa[1] - N[1] * fa[0] };
-                            const double s = (R[0] * fa[0] + R[1] * fa[1] + R[2] * fa[2]) / 3.5, t = (R[0] * fu2[0] + R[1] * fu2[1] + R[2] * fu2[2]) / 3.2;
-                            const double ds = std::fabs(s - std::round(s)) * 3.5, dt = std::fabs(t - std::round(t)) * 3.2;
-                            const double edge = std::max(cell[0] != g[2] ? ds : 0.0, cell[1] != g[3] ? dt : 0.0);
-                            worstEdge = std::max(worstEdge, std::max(0.0, edge - 0.005) / std::max(len, 1.0));
-                            if (edge > 3e-4 * len + 0.005) ++hardCell;
-                            else ++edgeCell;
+                            // a pixel a hair from a window's edge (in the pair, the mullion's) may land either side
+                            if (!pair) ++keyOff;
+                            continue;
                         }
-                        // the hash and the lit value of the GPU's own cell: the same bits
                         const float h = gl::LitHash(g[2], g[3], seed[0], seed[1]);
                         hashOff += Bits(h) != Bits(g[1]) ? 1 : 0;
                         litOff += Bits(gl::RoomLit(h, band)) != Bits(g[0]) ? 1 : 0;
                         partLit += g[0] > 0.0f && g[0] < 1.0f ? 1 : 0;
-                        gpuSum += g[0];
-                        ++pixels;
                     }
-                // The window light's share (its cells cut exactly, each x its room's lit value) against the pixels'.
+                // The window light's share (its windows' shares of the glass, each x its room's lit value, the rest lit)
+                // against the pixels'.
+                // (a window's share as the lookup finds it: its rectangle and kMargin about it, within the quad; in the
+                // pair each reaches kMargin into the mullion)
                 std::vector<gl::LightCell> cells;
-                for (const auto& kv : QuadCells(poly, N, origin))
+                for (const gl::Window& win2 : ws)
                 {
                     gl::LightCell lc;
-                    lc.hash = gl::LitHash(static_cast<float>(kv.first.first), static_cast<float>(kv.first.second), seed[0], seed[1]);
-                    lc.share = static_cast<float>(kv.second); lc.band = band;
+                    lc.hash = gl::LitHash(static_cast<float>(win2.ordinal), static_cast<float>(win2.group), seed[0], seed[1]);
+                    const float off = (win2.center[0] - mid[0]) * a[0] + (win2.center[1] - mid[1]) * a[1] + (win2.center[2] - mid[2]) * a[2];
+                    const float edge = 0.995f * hw;
+                    const float lo = std::max(off - win2.halfWidth - gl::rooms::kMargin, -edge), hi = std::min(off + win2.halfWidth + gl::rooms::kMargin, edge);
+                    lc.share = std::max(0.0f, hi - lo) / (2.0f * edge);
+                    lc.band = band;
                     cells.push_back(lc);
                 }
                 const float cpuShare = gl::LitShare(cells.data(), cells.size()), gpuShare = static_cast<float>(gpuSum / (kS * kS));
@@ -2509,21 +2821,20 @@ namespace
                 if (std::fabs(cpuShare - gpuShare) > worstShare)
                 {
                     worstShare = std::fabs(cpuShare - gpuShare);
-                    char at[160];
-                    std::snprintf(at, sizeof(at), "%s, window %d: %zu cells, %.3f against %.3f", pl.name, win, cells.size(), cpuShare, gpuShare);
+                    char at[200];
+                    std::snprintf(at, sizeof(at), "%s, window %d%s: %.3f against %.3f (pixels %d, %d, %d)", pl.name, win, pair ? " (a pair)" : "", cpuShare, gpuShare,
+                                  inA, inB, inNone);
                     worstAt = at;
                 }
             }
-        char line[600];
-        std::snprintf(line, sizeof(line), "WARP, lit or dark, the shader against the window lights' rules: %d windows (the origin, Goldshire, Stormwind, Northrend; "
-                      "6 .. 45 yd; origins 0 .. 600 yd away; at rest, the clock fading, cross-fades after a jump, all dark, all lit), %lld pixels: the lit hash's "
-                      "bits differ at %d, the lit value's at %d (%d part lit); the cell differs at %d pixels, all at a cell's edge (within %.1e x their "
-                      "distance to the anchor + 5 mm; %d farther); vertex normals wobbled 8 degrees change %d; the light's share from its cells against the "
-                      "pixels' worst %.4f (%s), mean lit %.2f",
-                      windows, pixels, hashOff, litOff, partLit, edgeCell + hardCell, worstEdge, hardCell, wobbleOff, worstShare, worstAt.c_str(),
-                      windows ? sumShare / windows : 0.0f);
-        Check(drewAll && windows == 96 && hashOff == 0 && litOff == 0 && hardCell == 0 && edgeCell < pixels / 1000 && wobbleOff == 0 && partLit > 1000 &&
-              worstShare < 0.01f, line);
+        char line[700];
+        std::snprintf(line, sizeof(line), "WARP, lit or dark, the shader against the window lights' rules: %d windows (%d of them a light over two; the origin, Goldshire, "
+                      "Stormwind, Northrend; 6 .. 45 yd; at rest, the clock fading, cross-fades after a jump, all dark, all lit), %lld pixels: no window found at "
+                      "%d, another key at %d, the lit hash's bits differ at %d, the lit value's at %d (%d part lit); vertex normals wobbled 8 degrees change %d "
+                      "windows; the light's share from its windows against the pixels' worst %.4f (%s), mean lit %.2f",
+                      windows, pairs, pixels, missing, keyOff, hashOff, litOff, partLit, wobbleOff, worstShare, worstAt.c_str(), windows ? sumShare / windows : 0.0f);
+        Check(drewAll && windows == 96 && missing == 0 && keyOff == 0 && hashOff == 0 && litOff == 0 && wobbleOff == 0 && partLit > 1000 &&
+              worstShare < 0.015f, line);
         const float zero[16] = {};
         w.dev->SetPixelShaderConstantF(gl::kViewConstant, zero, 4);
         w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
@@ -2702,26 +3013,6 @@ namespace
         std::snprintf(line, sizeof(line), "a window light's share with the flicker: lit 60%% x 0.95, dark 30%%, no cell 10%% -> %.4f", gl::LitShare(cells, 2));
         Check(Near(gl::LitShare(cells, 2), 0.1f + 0.6f * 0.95f, 1e-6f), line);
 
-        // RoomOutside for frosted glass (no room: k.share 0): the client's colour x (1 - hide), hide = (1 - lit) x 0.85 + lit x dip.
-        gl::RoomConstants k;
-        k.share = 0; k.c205[3] = hh::kFrostedHidden; k.c201[1] = 77.0f; k.c201[2] = 0.1f; k.c201[3] = 1;
-        k.c203[3] = 0.5f; k.c200w = 0.5f; k.c212[0] = 3; k.c212[1] = 900;
-        int frostOk = 0, frostN = 0, darkN = 0;
-        for (int y = -20; y < 20; ++y)
-        {
-            const float r12[3] = { 0.8f, 0.5f, 0.3f };
-            float out[3];
-            gl::RoomSample sm;
-            RoomAt(k, y * 0.9f, 1.7f, r12, out, &sm);
-            const float hide = (1.0f - sm.litValue) * hh::kFrostedHidden + sm.litValue * sm.dip;
-            frostOk += Near(out[0], r12[0] * (1 - hide), 1e-5f) && Near(out[2], r12[2] * (1 - hide), 1e-5f) &&
-                       Near(sm.dip, gl::HearthDip(sm.litHash, 77.0f, 0.1f), 1e-7f) ? 1 : 0;
-            darkN += sm.litValue < 0.5f ? 1 : 0;
-            ++frostN;
-        }
-        std::snprintf(line, sizeof(line), "frosted glass seen from outside (RoomOutside, no room): the client's colour x (1 - hide) at %d of %d points (%d dark)",
-                      frostOk, frostN, darkN);
-        Check(frostOk == frostN && darkN > 5 && darkN < frostN - 5, line);
     }
 
     // The shipped tables: Ironforge's groups by sub-zone, their hours, the flags, the panes with no sky, WindowRooms' frosted
@@ -2817,8 +3108,9 @@ namespace
         std::snprintf(line, sizeof(line), "GlassPanes.cdbc: %d panes with no sky behind them (Ironforge's %d, the tram's), none elsewhere (%d)", noSky, ifPanes, otherFlagged);
         Check(noSky >= ifPanes && ifPanes > 700 && otherFlagged == 0, line);
 
-        // WindowRooms: the Flags column, frosted cells at the lights of dwarven, orcish and taunka towns, each light's cells at
-        // most its glass.
+        // WindowRooms: the Flags column, frosted windows at the lights of dwarven, orcish and taunka towns (449 at 355 lights
+        // on the 2026-10-17 scan; Dalaran's stained glass a little behind its frosted windows is in none of them), each
+        // light's windows at most its glass.
         std::map<uint32_t, float> perLight;
         int frostCells = 0;
         std::set<uint32_t> frostLights;
@@ -2830,9 +3122,9 @@ namespace
         }
         float most = 0;
         for (const auto& kv : perLight) most = std::max(most, kv.second);
-        std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u columns, %zu cells, %d of them lit frosted glass at %zu lights; a light's cells at most %.4f of its glass",
+        std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u columns, %zu rooms (windows), %d of them lit frosted glass at %zu lights; a light's windows at most %.4f of its glass",
                       wr.fields, wr.rows.size(), frostCells, frostLights.size(), most);
-        Check(wr.fields == 8 && frostCells > 500 && frostLights.size() > 100 && most <= 1.0005f, line);
+        Check(wr.fields == 8 && frostCells > 400 && frostLights.size() > 300 && most <= 1.0005f, line);
     }
 
     // On WARP: frosted windows (no room) pixel by pixel against the CPU's rules, and each light's share with its flicker.
@@ -2842,13 +3134,9 @@ namespace
         std::string why;
         if (!InitWarp(w, why)) { std::printf("skip  frosted agreement: %s\n", why.c_str()); return; }
         // The probe: r0 = (the flicker's dip, the glow hidden, lit, the lit hash).
-        const std::string probe = "\n        mov r0.x, r21.w\n        mov r0.y, r14.y\n        mov r0.z, r20.w\n        mov r0.w, r22.x";
-        const std::string text = "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c176, 0.2126, 0.7152, 0.0722, 0.2\n" + gl::ShaderDefs() +
-                                 "    dcl_texcoord0 v0.xyz\n    dcl_texcoord1 v1.xyz\n    dcl_texcoord2 v2.xy\n    dcl_texcoord3 v3.xyz\n    dcl_2d s0\n"
-                                 "    mov r0, c175.y\n    mov r12.xyz, v3\n    mov r31.xyz, c175.y" + gl::GlassBlock("v0", "v1", "v2", probe) +
-                                 "\n    mov oC0, r0\n";
+        const std::string probe = "\n          mov r0.x, r21.w\n          mov r0.y, r14.y\n          mov r0.z, r14.z\n          mov r0.w, r22.x";
         std::vector<uint8_t> code;
-        if (!wxl_livingazeroth::shaderpatch::Assemble(text, "frosted probe", code, why)) { Check(false, "the frosted probe assembles: " + why.substr(0, 300)); return; }
+        if (!wxl_livingazeroth::shaderpatch::Assemble(LitProbeShader(probe), "frosted probe", code, why)) { Check(false, "the frosted probe assembles: " + why.substr(0, 300)); return; }
         IDirect3DPixelShader9* ps = nullptr;
         constexpr int kS = 96;
         IDirect3DSurface9 *target = nullptr, *readback = nullptr;
@@ -2856,14 +3144,17 @@ namespace
             FAILED(w.dev->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
             FAILED(w.dev->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
         { Check(false, "the frosted probe on WARP"); return; }
-        UploadLook(w.dev, gl::RoomConstants{});
-
+        rh::Rooms rooms;
+        rooms.Textures(w.dev);
+        float look[4];
+        gl::LookConstants(gl::Light{}, look);
+        w.dev->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
         struct Place { const char* name; float x, y, z; };
         const Place places[] = { { "the origin", 0, 0, 0 }, { "Kharanos", -5600, -480, 397 }, { "Ironforge", -4900, -950, 501 },
                                  { "the Storm Peaks", 7800, -2600, 1100 } };
         uint32_t rng = 777;
         auto rnd = [&rng]() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; };
-        int windows = 0, cellOff = 0, litOff = 0, nonFinite = 0, repeatOff = 0;
+        int windows = 0, keyOff = 0, litOff = 0, nonFinite = 0, repeatOff = 0, missing = 0;
         long long pixels = 0;
         float worstDip = 0, worstHide = 0, worstShare = 0, worstWrap = 0;
         bool drewAll = true;
@@ -2872,31 +3163,12 @@ namespace
             for (int win = 0; win < 12; ++win)
             {
                 const float yaw = rnd() * 6.2831853f, pitch = (rnd() - 0.5f) * 0.3f;
-                float N[3] = { std::cos(yaw) * std::cos(pitch), std::sin(yaw) * std::cos(pitch), std::sin(pitch) };
+                float n[3] = { std::cos(yaw) * std::cos(pitch), std::sin(yaw) * std::cos(pitch), std::sin(pitch) };
+                Norm(n);
                 const float hw = 0.75f + rnd() * 1.75f, hh = 0.6f + rnd() * 1.4f, dist = 6.0f + rnd() * 30.0f;
                 const float mid[3] = { pl.x + (rnd() - 0.5f) * 60.0f, pl.y + (rnd() - 0.5f) * 60.0f, pl.z + rnd() * 12.0f };
-                float a[3] = { -N[1], N[0], 0 }; Norm(a);
-                const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
-                const float cam[3] = { mid[0] + N[0] * dist, mid[1] + N[1] * dist, mid[2] + N[2] * dist };
-                const float originDist = (win % 3 == 0) ? 0.0f : rnd() * 400.0f, originYaw = rnd() * 6.2831853f;
-                const float origin[3] = { mid[0] + std::cos(originYaw) * originDist, mid[1] + std::sin(originYaw) * originDist, mid[2] - rnd() * 20.0f };
-                float rel[4][3];
-                const float cs[4][2] = { { -hw, hh }, { hw, hh }, { -hw, -hh }, { hw, -hh } };
-                for (int k = 0; k < 4; ++k)
-                    for (int i = 0; i < 3; ++i)
-                        rel[k][i] = static_cast<float>(static_cast<double>(mid[i]) - cam[i] + static_cast<double>(a[i]) * cs[k][0] + static_cast<double>(u[i]) * cs[k][1]);
-                {
-                    double e1[3], e2[3], nn[3];
-                    for (int i = 0; i < 3; ++i) { e1[i] = static_cast<double>(rel[1][i]) - rel[0][i]; e2[i] = static_cast<double>(rel[2][i]) - rel[0][i]; }
-                    nn[0] = e1[1] * e2[2] - e1[2] * e2[1]; nn[1] = e1[2] * e2[0] - e1[0] * e2[2]; nn[2] = e1[0] * e2[1] - e1[1] * e2[0];
-                    const double len = std::sqrt(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]);
-                    const double facing = -(nn[0] * rel[0][0] + nn[1] * rel[0][1] + nn[2] * rel[0][2]) >= 0 ? 1.0 : -1.0;
-                    for (int i = 0; i < 3; ++i) N[i] = static_cast<float>(nn[i] / len * facing);
-                }
-                double poly[4][3];
-                const int order[4] = { 0, 1, 3, 2 };
-                for (int k = 0; k < 4; ++k)
-                    for (int i = 0; i < 3; ++i) poly[k][i] = static_cast<double>(rel[order[k]][i]) + cam[i];
+                const uint32_t group = static_cast<uint32_t>(rnd() * 200.0f), ordinal = static_cast<uint32_t>(rnd() * 3000.0f);
+                const float cam[3] = { mid[0] + n[0] * dist, mid[1] + n[1] * dist, mid[2] + n[2] * dist };
                 const float seed[2] = { std::floor(rnd() * 1024.0f), std::floor(rnd() * 1024.0f) };
                 gl::DarkBand band;
                 switch (win % 6)
@@ -2909,53 +3181,36 @@ namespace
                 default: { const float t = 0.3f + rnd() * 0.4f; band = gl::Band(t, t); break; }
                 }
                 const float clock = rnd() * gl::hearth::kWrap, amp = 0.05f + rnd() * 0.25f;
+                const gl::Window fw = rh::MakeWindow(kSecondPath, group, ordinal, mid, n, hw, hh, gl::kFrosted);
+                rooms.Table(w.dev, { fw });
                 // lit frosted glass, outside: no room (c193.z 0), c201.w 1, the hearth clock and amplitude, the glow a dark one hides
                 float c[4 * gl::kConstantCount] = {};
                 c[3] = 1; c[5] = 1; c[6] = 0;
-                c[24] = 1 / 3.5f; c[25] = 1 / 3.2f; c[26] = 0.25f;
                 c[35] = band.hi; c[47] = band.lo;
                 c[37] = clock; c[38] = amp; c[39] = 1;
                 c[55] = gl::hearth::kFrostedHidden;
-                const float sd[4 * gl::kSeedRegisters] = { seed[0], seed[1], 0, band.slope, origin[0], origin[1], origin[2], band.base };
+                const float sd[4 * gl::kSeedRegisters] = { seed[0], seed[1], 0, band.slope, 0, 0, 0, band.base };
                 float view[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
                 w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
                 w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
+                float regs[4 * gl::kRoomRegisters];
+                rooms.Registers(cam, kSecondPath, group, gl::kClassHouse, gl::Settings{}, regs);
+                w.dev->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+                rooms.Bind(w.dev);
+                float rel[4][3], N[3];
+                WindowQuad(fw, cam, rel, N, 0.995f);
                 // Three draws: as given, again (the same bits), and the clock a wrap later (no seam).
                 std::vector<float> px[3];
                 for (int pass = 0; pass < 3; ++pass)
                 {
-                    struct PV { float x, y, z, rhw, p[3], n[3], uv[2], base[3]; };
-                    PV v[4];
-                    const float e = kS - 0.5f, xy[4][2] = { { -0.5f, -0.5f }, { e, -0.5f }, { -0.5f, e }, { e, e } };
-                    for (int k = 0; k < 4; ++k)
-                        v[k] = { xy[k][0], xy[k][1], 0, 1, { rel[k][0], rel[k][1], rel[k][2] }, { N[0], N[1], N[2] }, { 0.5f, 0.5f }, { 0.5f, 0.4f, 0.3f } };
                     c[37] = pass == 2 ? clock + gl::hearth::kWrap : clock;
-                    IDirect3DDevice9* d = w.dev;
-                    d->SetRenderTarget(0, target);
-                    D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
-                    d->SetViewport(&vp);
-                    d->SetRenderState(D3DRS_ZENABLE, FALSE); d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-                    d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-                    d->SetVertexShader(nullptr); d->SetPixelShader(ps);
-                    d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
-                    d->SetTexture(0, w.texel);
-                    d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
-                    const BOOL on = TRUE, off = FALSE;
-                    d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
-                    d->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
-                    D3DLOCKED_RECT lr{};
-                    bool ok = SUCCEEDED(d->BeginScene());
-                    if (ok) { d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(PV)); d->EndScene(); }
-                    ok = ok && SUCCEEDED(d->GetRenderTargetData(target, readback)) && SUCCEEDED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY));
-                    drewAll = drewAll && ok;
-                    if (!ok) break;
-                    px[pass].resize(static_cast<size_t>(kS) * kS * 4);
-                    for (int row = 0; row < kS; ++row)
-                        std::memcpy(&px[pass][static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
-                    readback->UnlockRect();
+                    w.dev->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+                    const float base[3] = { 0.5f, 0.4f, 0.3f };
+                    if (!DrawQuad(w.dev, ps, target, readback, kS, rel, N, base, px[pass], w.texel)) { drewAll = false; break; }
                 }
                 if (px[2].empty()) continue;
                 ++windows;
+                const float hash = gl::LitHash(static_cast<float>(ordinal), static_cast<float>(group), seed[0], seed[1]);
                 double gpuSum = 0;
                 for (int row = 0; row < kS; ++row)
                     for (int col = 0; col < kS; ++col)
@@ -2967,16 +3222,10 @@ namespace
                             nonFinite += std::isfinite(g[i]) ? 0 : 1;
                             repeatOff += Bits(g[i]) != Bits(px[1][at + i]) ? 1 : 0;
                         }
+                        ++pixels;
+                        if (g[2] < 0.0f) { ++missing; continue; }   // the probe never ran: no window found
                         worstWrap = std::max(worstWrap, std::fabs(px[2][at] - g[0]) / amp);
-                        // the CPU's cell and hash (a pixel a hair from a cell's edge may land either side: counted, allowed)
-                        const float fu = (col + 0.5f) / kS, fv = (row + 0.5f) / kS;
-                        float P[3];
-                        for (int i = 0; i < 3; ++i) P[i] = rel[0][i] + (rel[1][i] - rel[0][i]) * fu + (rel[2][i] - rel[0][i]) * fv + cam[i];
-                        const float inv[2] = { 1 / 3.5f, 1 / 3.2f };
-                        float cell[2];
-                        gl::RoomCell(P, origin, N, inv, cell);
-                        cellOff += Bits(gl::LitHash(cell[0], cell[1], seed[0], seed[1])) != Bits(g[3]) ? 1 : 0;
-                        // the lit value, the dip and the glow hidden from the GPU's own hash
+                        keyOff += Bits(hash) != Bits(g[3]) ? 1 : 0;
                         const float lit = gl::RoomLit(g[3], band);
                         litOff += Bits(lit) != Bits(g[2]) ? 1 : 0;
                         const float dip = gl::HearthDip(g[3], clock, amp);
@@ -2984,34 +3233,28 @@ namespace
                         const float hide = (1.0f - lit) * gl::hearth::kFrostedHidden + lit * dip;
                         worstHide = std::max(worstHide, std::fabs(hide - g[1]));
                         gpuSum += g[2] * (1.0f - g[0]);
-                        ++pixels;
                     }
-                // The window light: its cells cut exactly, each lit x (1 - its dip), against the pixels'.
-                std::vector<gl::LightCell> cells;
-                for (const auto& kv : QuadCells(poly, N, origin))
-                {
-                    gl::LightCell lc;
-                    lc.hash = gl::LitHash(static_cast<float>(kv.first.first), static_cast<float>(kv.first.second), seed[0], seed[1]);
-                    lc.share = static_cast<float>(kv.second); lc.band = band; lc.dip = gl::HearthDip(lc.hash, clock, amp);
-                    cells.push_back(lc);
-                }
-                const float cpuShare = gl::LitShare(cells.data(), cells.size()), gpuShare = static_cast<float>(gpuSum / (kS * kS));
+                // The window light: its window lit x (1 - its dip), against the pixels'.
+                gl::LightCell lc;
+                lc.hash = hash; lc.share = 1.0f; lc.band = band; lc.dip = gl::HearthDip(hash, clock, amp);
+                const float cpuShare = gl::LitShare(&lc, 1), gpuShare = static_cast<float>(gpuSum / (kS * kS));
                 if (std::fabs(cpuShare - gpuShare) > worstShare)
                 {
                     worstShare = std::fabs(cpuShare - gpuShare);
                     char at[160];
-                    std::snprintf(at, sizeof(at), "%s, window %d: %zu cells, %.3f against %.3f", pl.name, win, cells.size(), cpuShare, gpuShare);
+                    std::snprintf(at, sizeof(at), "%s, window %d: %.3f against %.3f", pl.name, win, cpuShare, gpuShare);
                     worstAt = at;
                 }
             }
         char line[700];
         std::snprintf(line, sizeof(line), "WARP, frosted windows (no room), the shader against the window lights' rules: %d windows (the origin, Kharanos, Ironforge, "
-                      "the Storm Peaks; at rest, fading, cross-fading, all dark, all lit; the flicker 0.05 .. 0.30), %lld pixels: NaN/Inf %d; the hash off its "
-                      "cell at %d (a cell's edge); the lit value's bits differ at %d; the dip off the CPU's by at most %.1e of its amplitude, the glow hidden by "
-                      "%.1e; drawn again the same bits (%d differ); a wrap of the clock later the dip off by %.1e of it; the light's share with its flicker against "
-                      "the pixels' worst %.4f (%s)", windows, pixels, nonFinite, cellOff, litOff, worstDip, worstHide, repeatOff, worstWrap, worstShare, worstAt.c_str());
-        Check(drewAll && windows == 48 && nonFinite == 0 && cellOff < pixels / 1000 && litOff == 0 && worstDip < 2e-3f && worstHide < 1e-3f && repeatOff == 0 &&
-              worstWrap < 2e-3f && worstShare < 0.01f, line);
+                      "the Storm Peaks; at rest, fading, cross-fading, all dark, all lit; the flicker 0.05 .. 0.30), %lld pixels: no window found %d, NaN/Inf %d; "
+                      "the hash off the window's key's at %d; the lit value's bits differ at %d; the dip off the CPU's by at most %.1e of its amplitude, the glow "
+                      "hidden by %.1e; drawn again the same bits (%d differ); a wrap of the clock later the dip off by %.1e of it; the light's share with its "
+                      "flicker against the pixels' worst %.4f (%s)", windows, pixels, missing, nonFinite, keyOff, litOff, worstDip, worstHide, repeatOff, worstWrap,
+                      worstShare, worstAt.c_str());
+        Check(drewAll && windows == 48 && missing == 0 && nonFinite == 0 && keyOff == 0 && litOff == 0 && worstDip < 2e-3f && worstHide < 1e-3f &&
+              repeatOff == 0 && worstWrap < 2e-3f && worstShare < 0.01f, line);
         const float zero[16] = {};
         w.dev->SetPixelShaderConstantF(gl::kViewConstant, zero, 4);
         w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
@@ -3031,22 +3274,26 @@ int main(int argc, char** argv)
         else args.push_back(argv[i]);
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
-    RulesTests();
-    RoomRulesTests();
-    LitRulesTests();
-    EditTests(args[0]);
-    ShaftShaderTests();
-    if (warp) WarpTests();
-    else std::printf("skip  WARP checks (--no-warp)\n");
-    TableTests(args[1]);
-    if (warp) NightTests(args[1]);
-    if (warp) DayRoomTests(args[1]);
-    if (warp) LitAgreementTests();
-    FrostedRulesTests();
-    FrostedTableTests(args[1]);
-    if (warp) FrostedAgreementTests();
+    // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, lit, frosted)
+    const char* only = std::getenv("GLASS_ONLY");
+    auto run = [only](const char* part) {
+        if (!only) return true;
+        const std::string list = std::string(",") + only + ",";
+        return list.find(std::string(",") + part + ",") != std::string::npos;
+    };
+    if (run("rules")) { RulesTests(); WindowRulesTests(); RoomRulesTests(); DayRulesTests(); LitRulesTests(); }
+    if (run("edit")) EditTests(args[0]);
+    if (run("shafts")) ShaftShaderTests();
+    if (!warp) std::printf("skip  WARP checks (--no-warp)\n");
+    if (warp && run("warp")) WarpTests();
+    if (warp && run("rays")) RoomRayTests();
+    if (run("tables")) { TableTests(args[1]); WindowTableTests(args[1]); }
+    if (warp && run("night")) NightTests(args[1]);
+    if (warp && run("dayrooms")) DayRoomTests(args[1]);
+    if (warp && run("lit")) LitAgreementTests();
+    if (run("frosted")) { FrostedRulesTests(); FrostedTableTests(args[1]); }
+    if (warp && run("frosted")) FrostedAgreementTests();
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
-    if (const char* preview = std::getenv("ROOM_PREVIEW")) RoomPreview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;
 }

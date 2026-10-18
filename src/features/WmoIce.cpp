@@ -45,7 +45,7 @@ namespace wxl_livingazeroth::wmoice
         constexpr size_t kMomtFlags = 0x00, kMomtSidn = 0x10;
         constexpr uint32_t kMomtFlagSidn = 0x10, kMomtFlagUnlit = 0x1;
         constexpr size_t kRootPath = 0x1C;
-        constexpr size_t kInstanceArg = 0xB0, kInstanceOrigin = 0xA0;
+        constexpr size_t kInstanceArg = 0xB0, kInstanceOrigin = 0xA0, kInstanceMatrix = 0x70;
         constexpr uint32_t kMaxMaterials = 4096, kMaxName = 260;
         constexpr DWORD kSampler = 14;
 
@@ -179,6 +179,19 @@ namespace wxl_livingazeroth::wmoice
             for (int k = 0; k < 3; ++k)
                 if (!std::isfinite(pos[k]) || std::fabs(pos[k]) > 40000.0f) return false;
             return true;
+        }
+
+        // Its rotation: the placement matrix's first three rows (row-major, row vectors: world = (x, y, z, 1) M, so row i
+        // is the WMO's axis i in the world); glass::IsRotation checks it is one.
+        bool ReadAxes(const uint8_t* instance, float axes[9])
+        {
+            __try
+            {
+                for (int r = 0; r < 3; ++r)
+                    for (int k = 0; k < 3; ++k) axes[3 * r + k] = reinterpret_cast<const float*>(instance + kInstanceMatrix)[4 * r + k];
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+            return glass::IsRotation(axes);
         }
 
         bool ReadMaterialIndex(const void* record, uint8_t& index)
@@ -359,10 +372,11 @@ namespace wxl_livingazeroth::wmoice
                 if (const RootIce* r = IceOf(static_cast<const uint8_t*>(root)); r && r->anyGlass)
                 {
                     const uint8_t* instance = instanceArg ? static_cast<const uint8_t*>(instanceArg) - kInstanceArg : nullptr;
-                    float pos[3];
+                    float pos[3], axes[9];
                     const bool have = instance && ReadOrigin(instance, pos);
+                    const bool turned = have && ReadAxes(instance, axes);
                     const uintptr_t address = reinterpret_cast<uintptr_t>(instance);
-                    glass::BeginInstance(have ? pos : nullptr, r->path, static_cast<uint32_t>(group),
+                    glass::BeginInstance(have ? pos : nullptr, turned ? axes : nullptr, r->path, static_cast<uint32_t>(group),
                                          static_cast<uint32_t>(address ^ (address >> 16)) * 2654435761u);
                     began = true;
                 }

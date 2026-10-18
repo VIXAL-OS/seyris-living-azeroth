@@ -1,4 +1,5 @@
 #include "GlassModel.hpp"
+#include "GlassRooms.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -85,6 +86,9 @@ namespace wxl_livingazeroth::glass
         l.sunGain = up * l.day * (1.0f - 0.85f * Clamp01(in.overcast)) * (1.0f - 0.8f * Clamp01(in.precipitation)) * (1.0f - Clamp01(in.storm));
         l.skyGain = l.day * l.dim;
         for (int k = 0; k < 3; ++k) l.sky[k] = Clamp01(in.sky[k]) * l.skyGain;
+        // The room behind the glass keeps the day's light until the client lights its windows (dusk: the sun's day is
+        // over at 18:00, the windows light from 20:30): no black rooms between.
+        l.rooms = Clamp01(1.0f - in.night);
         return l;
     }
 
@@ -159,20 +163,6 @@ namespace wxl_livingazeroth::glass
         float rows[12];
         if (!ProjectionRows(p, sun, origin, reach, rows)) return 0.0f;
         return FloorWeight(rows, point, p.roomMin, p.roomMax, soft, farSoft);
-    }
-
-    RoomFace RoomHit(const float pos[2], const float dir[3], float cellW, float cellH, float depth, float& distance)
-    {
-        // In the cell (0..1 across, up and deep), as the shader works it: each wall the ray heads for, the back wall.
-        const float f[2] = { pos[0] / cellW - std::floor(pos[0] / cellW), pos[1] / cellH - std::floor(pos[1] / cellH) };
-        const float d[3] = { dir[0] / cellW, dir[1] / cellH, std::max(dir[2], 1e-4f) / depth };
-        const float tx = ((d[0] >= 0.0f ? 1.0f : 0.0f) - f[0]) / d[0];
-        const float ty = ((d[1] >= 0.0f ? 1.0f : 0.0f) - f[1]) / d[1];
-        const float tz = 1.0f / d[2];
-        distance = std::min(tx, std::min(ty, tz));
-        if (distance == tz) return kBackWall;
-        if (distance == tx) return kSideWall;
-        return d[1] >= 0.0f ? kCeiling : kFloor;
     }
 
     // --- who lives behind the glass ---------------------------------------------------------------------------------
@@ -285,7 +275,6 @@ namespace wxl_livingazeroth::glass
     {
         float Frac(float v) { return v - std::floor(v); }
         float Lerp(float f, float a, float b) { return f * a + (1.0f - f) * b; }   // the shader's lrp f, a, b
-        float Ge(float v) { return v >= 0.0f ? 1.0f : 0.0f; }                     // cmp v, 1, 0
     }
 
     void Hash42(float x, float y, float h[4])
@@ -341,41 +330,6 @@ namespace wxl_livingazeroth::glass
     }
 
     // --- lit or dark, shared by the shader and the window lights --------------------------------------------------
-    namespace
-    {
-        // The point about the building's origin, then about its anchor (the nearest kAnchor-yd step from the origin:
-        // within kAnchor / 2 on each axis), and the anchor's offset to the cell (whole numbers), as the shader.
-        void Anchored(const float P[3], const float origin[3], float R[3], float offset[2])
-        {
-            using namespace room;
-            float k[3];
-            for (int i = 0; i < 3; ++i)
-            {
-                R[i] = P[i] - origin[i];
-                const float q = R[i] * (1.0f / kAnchor) + 0.5f;
-                k[i] = q - (q - std::floor(q));
-                R[i] = k[i] * -kAnchor + R[i];
-            }
-            offset[0] = k[0] * kAnchorKeyX[0] + k[1] * kAnchorKeyX[1] + k[2] * kAnchorKeyX[2];
-            offset[1] = k[0] * kAnchorKeyY[0] + k[1] * kAnchorKeyY[1] + k[2] * kAnchorKeyY[2];
-        }
-    }
-
-    void RoomCell(const float P[3], const float origin[3], const float N[3], const float inv[2], float cell[2])
-    {
-        // As the shader: along (-N.y, N.x, 0) (x for a skylight), normalised; up N x along; the point about the
-        // origin's anchor; the cell, plus the anchor's offset.
-        float a[3] = { -N[1], N[0], 0.0f };
-        if (a[0] * a[0] + a[1] * a[1] - 0.0001f < 0.0f) { a[0] = 1; a[1] = 0; a[2] = 0; }
-        const float al = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-        for (float& v : a) v /= al;
-        const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
-        float R[3], offset[2];
-        Anchored(P, origin, R, offset);
-        const float pos[2] = { Dot(R, a) * inv[0], Dot(R, u) * inv[1] };
-        for (int k = 0; k < 2; ++k) cell[k] = pos[k] - (pos[k] - std::floor(pos[k])) + offset[k];
-    }
-
     namespace
     {
         // Mod 289 of a whole number below 2^22: floor((v + 0.5) / 289) is never within the product's rounding of a
@@ -586,178 +540,39 @@ namespace wxl_livingazeroth::glass
         m_clock -= hearth::kWrap * std::floor(m_clock / hearth::kWrap);
     }
 
-    void RoomLook(float day, float out[8])
+    void RoomLook(float out[4])
     {
-        using namespace room;
-        const float d = Clamp01(day);
-        out[0] = kWallSoftDay * d;
-        out[1] = kLayoutSoftDay * d;
-        out[2] = kPixelSoft;
-        out[3] = 1.0f + (kThingContrastDay - 1.0f) * d;
-        const float n = kDetailNear[0] + (kDetailNear[1] - kDetailNear[0]) * d, f = kDetailFar[0] + (kDetailFar[1] - kDetailFar[0]) * d;
+        // saturate(d^2 x slope + base): 1 within kDetailNear, 0 from kDetailFar (over the distance squared)
+        const float n = rooms::kDetailNear, f = rooms::kDetailFar;
         const float span = std::max(1.0f, f * f - n * n);
-        out[4] = f * f / span;
-        out[5] = -1.0f / span;
-        out[6] = 1.0f / kEdgeEase;
-        out[7] = 1.0f - d;
+        out[0] = f * f / span;
+        out[1] = -1.0f / span;
+        out[2] = 0.0f;
+        out[3] = 0.0f;
     }
 
-    void RoomOutside(const float P[3], const float V[3], const float N[3], const RoomConstants& k, const float r12[3],
-                     const float outside[3], float out[3], RoomSample* sample)
+    float SkyAlong(const float N[3], const float V[3], const float reflected[3], float out[3])
+    {
+        const float cosine = Clamp01(Dot(N, V));
+        const float height = Clamp01((cosine + cosine) * N[2] + -V[2]);
+        for (int i = 0; i < 3; ++i) out[i] = ((room::kZenith[i] + -1.0f) * height + 1.0f) * reflected[i];
+        return height;
+    }
+
+    void DayCool(const float outside[3], const float sky[3], float height, float cosine, const float c85[4], float out[3])
     {
         using namespace room;
-        // The pane's frame: along (-N.y, N.x, 0), or x for a skylight; up = N x along.
-        float a[3] = { -N[1], N[0], 0.0f };
-        if (a[0] * a[0] + a[1] * a[1] - 0.0001f < 0.0f) { a[0] = 1; a[1] = 0; a[2] = 0; }
-        const float al = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-        for (float& v : a) v /= al;
-        const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
-        const float cosine = std::max(0.0f, std::min(1.0f, Dot(N, V)));
-        // The ray (cell units), where it enters (cells, about the building's origin), the cell, the walls it heads for.
-        const float d[3] = { -Dot(V, a) * k.c198[0], -Dot(V, u) * k.c198[1], std::max(cosine, 0.0001f) * k.c198[2] };
-        float R[3], offset[2];
-        Anchored(P, k.c213, R, offset);
-        const float pos[2] = { Dot(R, a) * k.c198[0], Dot(R, u) * k.c198[1] };
-        const float f[2] = { Frac(pos[0]), Frac(pos[1]) };
-        const float cell[2] = { pos[0] - f[0] + offset[0], pos[1] - f[1] + offset[1] };
-        // (the way to the wall over the step, both as sizes: a step of 0 or -0 never divides)
-        const float tx = std::fabs(Ge(d[0]) - f[0]) * (1.0f / std::max(std::fabs(d[0]), 0.0001f));
-        const float ty = std::fabs(Ge(d[1]) - f[1]) * (1.0f / std::max(std::fabs(d[1]), 0.0001f)), tz = 1.0f / d[2];
-        const float t = std::min(std::min(tx, ty), tz);
-        // The room's hash and the building's (in a city, the block's).
-        float h[4], bh[4];
-        Hash42(cell[0] + k.c212[0], cell[1] + k.c212[1], h);
-        const float bx = P[0] * k.c212[2], by = P[1] * k.c212[2];
-        Hash42((by - Frac(by)) + k.c212[0], (bx - Frac(bx)) + k.c212[1], bh);
-        float tint[3];
-        for (int i = 0; i < 3; ++i) tint[i] = (k.c202[i] - k.c199[i]) * bh[0] + k.c199[i];
-        const float bright = (bh[1] * 2.0f + -1.0f) * k.c202[3] + 1.0f;
-        // The layout; where the ray meets the room; lit or dark.
-        float mask[3];
-        for (int i = 0; i < 3; ++i) mask[i] = h[0] - k.c204[i] >= 0.0f ? 0.0f : 1.0f;
-        const float shelves = mask[0], curtains = mask[1] - mask[0], divider = mask[2] - mask[1];
-        float hit[3] = { d[0] * t + f[0], d[1] * t + f[1], d[2] * t };
-        // (lit or dark: the exact hash against the dark band, part lit while it fades)
-        const float litHash = LitHash(cell[0], cell[1], k.c212[0], k.c212[1]);
-        DarkBand band;
-        band.lo = k.c203[3]; band.hi = k.c200w; band.base = k.c213[3]; band.slope = k.c212[3];
-        const float lit = RoomLit(litHash, band);
-        // (the flicker's dip: the hearth clock c201.y, its amplitude c201.z)
-        const float dip = HearthDip(litHash, k.c201[1], k.c201[2]);
-        // The soft widths at the point the ray meets (cells): the walls' and the layouts' plus the pixel's footprint
-        // there (on the glass x (1 + the ray's depth over the eye's distance)), never below 1e-4.
-        const float e[3] = { P[0] - k.cam[0], P[1] - k.cam[1], P[2] - k.cam[2] };
-        const float eye2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
-        const float foot = 1.0f / (1.0f / std::sqrt(k.footprint2 + 1e-12f));
-        const float px = (t * (1.0f / std::sqrt(eye2)) + 1.0f) * foot * k.c198[0];
-        const float invWall = 1.0f / std::max(px * k.c218[2] + k.c218[0], 0.0001f);
-        const float invLayout = 1.0f / std::max(px * k.c218[2] + k.c218[1], 0.0001f);
-        // Near the cell's edge on the glass, or its anchor's (where the cells are cut: how far along the glass the
-        // nearest anchor plane crossing it is, each axis's over sqrt(|1 - N_i^2|)), the room eases to its mean (by day;
-        // 1 at night).
-        float anchorEdge[3];
-        for (int i = 0; i < 3; ++i)
-            anchorEdge[i] = (-std::fabs(R[i]) + 0.5f * kAnchor) * (1.0f / std::sqrt(std::fabs(1.0f - N[i] * N[i]) + 1e-12f));
-        const float toAnchor = std::min(std::min(anchorEdge[0], anchorEdge[1]), anchorEdge[2]) * k.c198[0];
-        const float toEdge = std::min(std::min(std::min(1.0f - f[0], f[0]), std::min(1.0f - f[1], f[1])), toAnchor);
-        const float edge = Clamp01(toEdge * k.c219[2] + k.c219[3]);
-        // The dividing wall (where the ray would go deeper, soft) with its doorway (its edge soft): the point and the way
-        // to it the wall's where it's in the way.
-        const float td = kDividerDepth * tz;
-        const float hd[2] = { d[0] * td + f[0], d[1] * td + f[1] };
-        const float ahead = Clamp01((hit[2] - kDividerDepth) * invLayout + 0.5f) * divider;
-        float door = std::min(-std::fabs(hd[0] - (h[3] * kDoorSpan + kDoorBase)) + kDoorHalfWidth, -hd[1] + kDoorHeight);
-        door = Clamp01(door * invLayout + 0.5f) * ahead;
-        const float wall = ahead - door;
-        const float depth = Lerp(wall, td, t);
-        const float dividerPoint[3] = { hd[0], hd[1], kDividerDepth };
-        for (int i = 0; i < 3; ++i) hit[i] = Lerp(wall, dividerPoint[i], hit[i]);
-        // The walls' shade, soft: how near the point is to each wall (across the nearer side, up the floor and the
-        // ceiling), smoothstepped over the walls' width, each wall's shade toward 1 away from it, x each other; the
-        // dividing wall a little darker; farther darker; beyond the doorway dimmer.
-        const float near[3] = { std::min(1.0f - hit[0], hit[0]), hit[1], 1.0f - hit[1] };
-        float g[3];
+        const float skyLum = std::max(0.2126f * sky[0] + 0.7152f * sky[1] + 0.0722f * sky[2], 0.05f);
+        const float inv = 1.0f / skyLum;
+        const float lum = 0.2126f * outside[0] + 0.7152f * outside[1] + 0.0722f * outside[2];
+        float amount = height * c85[1];
+        amount = (1.0f + -cosine) * c85[2] + amount;
+        amount = Clamp01(amount * c85[0] + c85[0]);
         for (int i = 0; i < 3; ++i)
         {
-            const float w = Clamp01(near[i] * invWall);
-            const float smooth = (w * w) * (3.0f - (w + w));
-            g[i] = Lerp(smooth, 1.0f, kFace[i]);
-        }
-        float shade = g[0] * g[1] * g[2];
-        shade = shade * (1.0f / (depth * kFar + 1.0f));
-        shade = shade * ((wall * kDividerShade - wall) + 1.0f);
-        shade = shade * (1.0f - door * kDoorDim);
-        // Curtains (their edges soft over the layouts' width, at least 1 / kClothEdge of the cell).
-        const float hc = d[0] * (kCurtainDepth * tz) + f[0];
-        const float gapHalf = Frac(h[3] * kGapHash) * kGapHalfSpan + kGapMinHalf;
-        float cloth = std::fabs(hc - (h[3] * kGapSpan + kGapBase)) + -gapHalf;
-        cloth = Clamp01(cloth * std::min(invLayout, kClothEdge)) * curtains;
-        float fold = std::fabs(Frac(hc * kFolds) - 0.5f) * kFoldAmp + kFoldBase;
-        // Shelves on the back wall (every edge soft over the layouts' width).
-        float region = std::min(-std::fabs(hit[0] - kShelfCentre[0]) + kShelfHalf[0], -std::fabs(hit[1] - kShelfCentre[1]) + kShelfHalf[1]);
-        region = Clamp01(region * invLayout + 0.5f) * shelves;
-        const float sx = hit[0] * kSlots, sy = hit[1] * kShelves;
-        const float fx = Frac(sx), fy = Frac(sy);
-        float q = (sy - fy) * kShelfHashShelf + (sx - fx);
-        q = h[3] * kShelfHashRoom + q;
-        q = Frac(q * kHashK[0]);
-        q = q * (q + kHashAdd);
-        q = Frac(q * q + q * q);
-        const float above = fy + -kPlank;
-        const float thing = std::min(q * kThingMax + -above, -std::fabs(fx - 0.5f) + kThingGap);
-        const float slotSoft = invLayout * kSlotSoft;
-        // (the plank soft about its middle, so one shelf's row meets the next without a step; a thing soft inward from
-        // its outline, so one place meets the next without one)
-        const float plankAt = Frac(fy + kPlankMid) + -0.5f;
-        const float inPlank = Clamp01((-std::fabs(plankAt) + kPlankHalf) * slotSoft + 0.5f);
-        const float thingIn = Clamp01(thing * slotSoft);
-        float shelf = Lerp(thingIn, Frac(q * kThingHash) * kThingSpan + kThingBase, kShelfBack);
-        shelf = Lerp(inPlank, kPlankLight, shelf);
-        shelf = (shelf + -1.0f) * region;
-        // The lamp.
-        const float ld[3] = { hit[0] - (h[2] * kLamp[1] + kLamp[0]), hit[1] - kLamp[2], hit[2] - kLamp[3] };
-        const float falloff = (1.0f / ((ld[0] * ld[0] + ld[1] * ld[1] + ld[2] * ld[2]) + 1.0f / kLampK)) * (kLampGain / kLampK) + kLampBase;
-        // The detail fades with distance (c219.xy), with the pixel's footprint and near the cell's edge; the things at
-        // c218.w of their contrast.
-        const float fade = Clamp01(eye2 * k.c219[1] + k.c219[0]) * k.c204[3] * Clamp01(k.footprint2 * kFootprintB + kFootprintA) * edge;
-        shelf = shelf * (fade * k.c218[3]) + 1.0f;
-        const float clothFar = curtains * kClothFar * edge;
-        cloth = (cloth - clothFar) * fade + clothFar;
-        fold = (fold - kFoldMean) * fade + kFoldMean;
-        // The light: by day x the client's colour (the room seen through the painted glass; c198.w makes it about the
-        // glass's own brightness; the curtains in front x its luminance); near the cell's edge the room's light and
-        // its dark rooms' ease to their means.
-        const float lum = 0.2126f * r12[0] + 0.7152f * r12[1] + 0.0722f * r12[2];
-        float roomLight = (h[2] * kCellLight[0] + kCellLight[1]) * shade * shelf;
-        roomLight = Lerp(edge, roomLight, kEdgeMean);
-        const float darkDay = Lerp(edge, lit * (1.0f - kDarkDay) + kDarkDay, kDarkDayMean);
-        const float day = bright * k.c198[3] * darkDay;
-        const float dayLum = day * lum;
-        float lamp = lum * lit;
-        lamp = lamp * -dip + lamp;
-        float room[3], cloth3[3];
-        for (int i = 0; i < 3; ++i)
-        {
-            room[i] = ((tint[i] * k.c203[i]) * (lamp * falloff) + (tint[i] * day) * r12[i]) * roomLight;
-            cloth3[i] = (k.c203[i] * lamp + dayLum * kCurtainDay) * k.c205[i] * fold * kCurtainGain;
-            room[i] = Lerp(cloth, cloth3[i], room[i]);
-        }
-        // Dark rooms behind the client's lit windows at night hide most of its glow (from the whole window: the
-        // shader takes it from the rest of the window too); lit ones the flicker's dip.
-        float hide = (1.0f - lit) * k.c205[3];
-        hide = lit * dip + hide;
-        for (int i = 0; i < 3; ++i) out[i] = Lerp(k.share, room[i], outside[i] * -hide + outside[i]);
-        if (sample)
-        {
-            sample->hide = hide; sample->dip = dip;
-            sample->layout = shelves > 0 ? kLayoutShelves : curtains > 0 ? kLayoutCurtains : divider > 0 ? kLayoutDivider : kLayoutPlain;
-            sample->lit = lit >= 0.5f; sample->litValue = lit; sample->litHash = litHash;
-            sample->cell[0] = cell[0]; sample->cell[1] = cell[1];
-            sample->door = door > 0; sample->wall = wall > 0;
-            sample->cloth = cloth; sample->fold = fold; sample->shelf = shelf; sample->falloff = falloff; sample->fade = fade;
-            sample->shade = shade; sample->building[0] = bh[0]; sample->building[1] = bh[1];
-            sample->edge = edge; sample->light = roomLight;
-            for (int i = 0; i < 3; ++i) { sample->hit[i] = hit[i]; sample->room[i] = room[i]; }
+            float hue = std::min(std::max(sky[i] * inv, kSkyHue[0]), kSkyHue[1]);
+            hue = ((hue + -1.0f) * c85[3] + 1.0f) * lum;
+            out[i] = Lerp(amount, hue, outside[i]);
         }
     }
 }

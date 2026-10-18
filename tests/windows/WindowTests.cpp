@@ -629,17 +629,28 @@ int main(int argc, char** argv)
                     for (int p = 0; p < 2; ++p) place[p][k] = placeLights[p] ? static_cast<float>(sumPlace[p] / placeLights[p]) : 0.0f;
                     for (int p = 0; p < 3; ++p) frostPlace[p][k] = frostLights[p] ? static_cast<float>(sumFrost[p] / frostLights[p]) : 0.0f;
                 }
-                std::printf("  %zu room cells behind %zu lights (%u without a building), at most %zu a light\n", r.rows.size(), cells.size(), noBuilding, most);
+                std::printf("  %zu rooms (windows) behind %zu lights (%u without a building), at most %zu a light\n", r.rows.size(), cells.size(), noBuilding, most);
                 std::printf("  the lights with rooms, lit on average:");
                 for (int k = 0; k < 9; ++k) std::printf(" %02d:%02d %.0f%%", static_cast<int>(hours[k]), static_cast<int>((hours[k] - std::floor(hours[k])) * 60), 100 * mean[k]);
                 std::printf("\n  Stormwind (%u lights) at 23:00 %.0f%%, 02:00 %.0f%%; Goldshire (%u) at 23:00 %.0f%%, 02:00 %.0f%%\n",
                             placeLights[0], 100 * place[0][2], 100 * place[0][5], placeLights[1], 100 * place[1][2], 100 * place[1][5]);
-                std::printf("  lit frosted glass: %u cells at %zu lights; Kharanos (%u lights) at 23:00 %.0f%%, 02:00 %.0f%%; Thelsamar (%u) %.0f%%, %.0f%%; "
+                std::printf("  lit frosted glass: %u windows at %zu lights; Kharanos (%u lights) at 23:00 %.0f%%, 02:00 %.0f%%; Thelsamar (%u) %.0f%%, %.0f%%; "
                             "Orgrimmar (%u) %.0f%%, %.0f%%\n", frostCells, frosted.size(), frostLights[0], 100 * frostPlace[0][2], 100 * frostPlace[0][5],
                             frostLights[1], 100 * frostPlace[1][2], 100 * frostPlace[1][5], frostLights[2], 100 * frostPlace[2][2], 100 * frostPlace[2][5]);
-                // the dwarves' and the orcs' frosted windows follow the night too; none at Stormwind's or Goldshire's (leaded)
-                for (int p = 0; p < 3; ++p) CHECK(frostLights[p] > 0 && frostPlace[p][0] > frostPlace[p][5]);
-                CHECK(frostCells > 500 && frosted.size() > 100);
+                // the dwarves' and the orcs' frosted windows follow the night too: each town never brighter at 02:00 than at
+                // 21:00, the three together dimmer (Kharanos's are its inn's and its smithy's, both late: by the windows'
+                // hashes all eight may stay lit); none at Stormwind's or Goldshire's (leaded)
+                double frostFirst = 0, frostLate = 0;
+                unsigned frostAll = 0;
+                for (int p = 0; p < 3; ++p)
+                {
+                    CHECK(frostLights[p] > 0 && frostPlace[p][0] >= frostPlace[p][5]);
+                    frostFirst += frostPlace[p][0] * frostLights[p];
+                    frostLate += frostPlace[p][5] * frostLights[p];
+                    frostAll += frostLights[p];
+                }
+                CHECK(frostAll > 0 && frostLate < frostFirst);
+                CHECK(frostCells > 400 && frosted.size() > 300);
                 // dimming through the night to the small hours, early risers lighting some again at dawn
                 CHECK(mean[0] > 0.8f && mean[0] > mean[2] && mean[2] > mean[3] && mean[3] > mean[5] && mean[7] < 0.45f && mean[8] > mean[7]);
                 CHECK(noBuilding == 0 && placeLights[0] > 50 && placeLights[1] > 10);

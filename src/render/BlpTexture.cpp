@@ -79,6 +79,13 @@ namespace wxl_livingazeroth::blp
     {
         std::vector<uint8_t> file;
         if (!ReadFile(path, file)) { error = "can't read the file"; return nullptr; }
+        return LoadFromMemory(dev, file.data(), file.size(), error);
+    }
+
+    IDirect3DTexture9* LoadFromMemory(IDirect3DDevice9* dev, const uint8_t* data, size_t size, std::string& error)
+    {
+        if (!data || size <= sizeof(Header)) { error = "too short for a BLP2 file"; return nullptr; }
+        const std::vector<uint8_t> file(data, data + size);
         Header h;
         std::memcpy(&h, file.data(), sizeof(h));
         if (std::memcmp(h.magic, "BLP2", 4) != 0) { error = "not a BLP2 file"; return nullptr; }

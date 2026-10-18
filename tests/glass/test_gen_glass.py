@@ -1,10 +1,12 @@
 """Window glass (tools/gen_glass.py) on names, texels and small WMOs built here, no map data: which textures are
 candidates and how they are classified (Stormwind's walls are not windows; broken, burnt and abandoned glass is left
 out), the glass mask on texels, the panes of a WMO, which way is out (an exterior face, its interior twin, an
-interior-only window), the room each pane lights, and the placement into world space.
+interior-only window), the room each pane lights, the placement into world space, and the windows (GlassWindows: which
+panes make one window, its rectangle, tiles, ordinals).
 
 Run:  python -m unittest discover -s tests/glass -p "test_*.py"     (from the repository)
 """
+import math
 import os
 import struct
 import sys
@@ -181,6 +183,222 @@ class Panes(unittest.TestCase):
         u, w = g.pane_axes((1.0, 0.0, 0.0))
         self.assertAlmostEqual(u[1], 1.0, places=5)   # along the wall
         self.assertAlmostEqual(w[2], 1.0, places=5)   # up it
+
+    def test_a_pane_keeps_its_triangles(self):
+        grp = g.wl.parse_group(group(0x8, ((-6, -4, 0), (0.5, 4, 5)), [(0, wall_x(0.0, -1, 1, 1, 3, out=True))]))
+        p, = g.group_panes(grp, 0, {0: WINDOW}, True)
+        self.assertEqual(len(p.points), 6)                 # two triangles, three corners each
+        self.assertEqual(p.areas, {WINDOW: p.area})
+
+
+CLEAR_TEX = "dungeons\\textures\\windows\\am_bbay_windows.blp"
+FROST_TEX = "dungeons\\textures\\windows\\mm_irnfg_windows_01.blp"
+ROOM_MATS, FROST_MATS = {0: WINDOW, 2: CLEAR_TEX}, {1: FROST_TEX}   # materials 0 leaded, 1 frosted, 2 clear
+
+
+def wall_y(y, x0, x1, z0, z1):
+    """A quad in the plane y, facing +y."""
+    return [(x1, y, z0), (x0, y, z0), (x0, y, z1), (x1, y, z1)]
+
+
+def windows_of(groups):
+    """The windows of groups built here ({group index: (flags, quads)}), as wmo_windows makes them from a scan."""
+    sorts = [[], []]
+    for gi, (flags, quads) in sorted(groups.items()):
+        grp = g.wl.parse_group(group(flags, ((-50, -50, -50), (50, 50, 50)), quads))
+        exterior = bool(flags & 0x8) and not flags & 0x2000
+        for k, mats in enumerate((ROOM_MATS, FROST_MATS)):
+            sorts[k] += g.group_panes(grp, gi, mats, exterior, g.W_MIN_AREA, tile=False)
+    return g.windows_of(sorts)
+
+
+def corners_inside(test, w):
+    """Every corner of the window's glass inside its rectangle, in the runtime's frame of its stored normal."""
+    a, u = g.wl.window_frame(w.normal)
+    for p in w.panes:
+        for q in p.points:
+            r = g.wl.sub(q, w.center)
+            test.assertLessEqual(abs(g.wl.dot(r, a)), w.hw)
+            test.assertLessEqual(abs(g.wl.dot(r, u)), w.hh)
+
+
+class Windows(unittest.TestCase):
+    """GlassWindows: which panes make one window (mullions, a facade's separate windows, the size cap, kinds), the
+    rectangle in the runtime's frame (float32, every corner inside), big sheets cut into tiles, the ordinals, the twin
+    face's way out and the table's rows."""
+
+    def test_mullioned_panes_are_one_window(self):
+        # four lights of one window facing +x, 0.15 yd mullions between them
+        quads = [(0, wall_x(0.0, y0, y0 + 0.8, z0, z0 + 1.0)) for y0 in (-0.875, 0.075) for z0 in (1.0, 2.15)]
+        ws = windows_of({0: (0x8, quads)})
+        self.assertEqual(len(ws), 1)
+        w = ws[0]
+        self.assertEqual((len(w.panes), w.kind, w.exterior), (4, g.LEADED, True))
+        self.assertEqual(tuple(round(c, 4) for c in w.center), (0.0, 0.0, 2.075))
+        self.assertEqual(tuple(round(c, 4) for c in w.normal), (1.0, 0.0, 0.0))
+        self.assertAlmostEqual(w.hw, 0.875 + g.W_MARGIN, places=5)
+        self.assertAlmostEqual(w.hh, 1.075 + g.W_MARGIN, places=5)
+        corners_inside(self, w)
+
+    def test_a_facades_windows_08_yd_apart_stay_two(self):
+        ws = windows_of({0: (0x8, [(0, wall_x(0.0, 0.0, 1.5, 1, 3)), (0, wall_x(0.0, 2.3, 3.8, 1, 3))])})
+        self.assertEqual([len(w.panes) for w in ws], [1, 1])
+        # stacked 0.8 apart (two storeys): two as well; 0.3 apart (a transom): one
+        self.assertEqual(len(windows_of({0: (0x8, [(0, wall_x(0.0, 0, 1.5, 1, 3)), (0, wall_x(0.0, 0, 1.5, 3.8, 5))])})), 2)
+        self.assertEqual(len(windows_of({0: (0x8, [(0, wall_x(0.0, 0, 1.5, 1, 3)), (0, wall_x(0.0, 0, 1.5, 3.3, 4))])})), 1)
+
+    def test_corner_to_corner_or_off_the_plane_is_not_one_window(self):
+        diagonal = [(0, wall_x(0.0, 0, 1, 1, 2)), (0, wall_x(0.0, 1.1, 2.1, 2.1, 3.1))]   # near, but neither beside nor above
+        self.assertEqual(len(windows_of({0: (0x8, diagonal)})), 2)
+        behind = [(0, wall_x(0.0, 0, 1, 1, 2)), (0, wall_x(-0.3, 1.1, 2.1, 1, 2))]        # 0.3 yd behind its plane
+        self.assertEqual(len(windows_of({0: (0x8, behind)})), 2)
+        turned = [(0, wall_x(0.0, 0, 1, 1, 2)), (0, [(0.1, 1.1, 1), (0.3, 2.1, 1), (0.3, 2.1, 2), (0.1, 1.1, 2)])]
+        self.assertEqual(len(windows_of({0: (0x8, turned)})), 2)                          # 11 degrees apart
+
+    def test_a_long_row_never_merges_past_the_cap(self):
+        # twenty 1-yd lights 0.2 yd apart: 23.8 yd of glass
+        ws = windows_of({0: (0x8, [(0, wall_x(0.0, 1.2 * k, 1.2 * k + 1.0, 1, 3)) for k in range(20)])})
+        self.assertGreater(len(ws), 3)
+        self.assertEqual(sum(len(w.panes) for w in ws), 20)
+        for w in ws:
+            self.assertLessEqual(2 * w.hw, g.W_WIDTH + 2 * g.W_MARGIN + 1e-6)
+            self.assertIsNone(w.tile)
+            corners_inside(self, w)
+
+    def test_frosted_never_merges_with_clear(self):
+        ws = windows_of({0: (0x8, [(2, wall_x(0.0, 0, 1, 1, 2)), (1, wall_x(0.0, 1.1, 2.1, 1, 2))])})
+        self.assertEqual(sorted(w.kind for w in ws), [g.CLEAR, g.FROSTED])
+        # clear and leaded glass do share a window: the kind with more glass
+        ws = windows_of({0: (0x8, [(2, wall_x(0.0, 0, 1, 1, 2)), (0, wall_x(0.0, 1.1, 2.6, 1, 2))])})
+        self.assertEqual([(len(w.panes), w.kind) for w in ws], [(2, g.LEADED)])
+
+    def test_overlapping_and_duplicated_faces_are_one_window(self):
+        # an exact copy shares the original's corners: one pane already; a copy 0.01 yd in front of it: one window
+        self.assertEqual([len(w.panes) for w in windows_of({0: (0x8, [(0, wall_x(0.0, 0, 2, 1, 3))] * 2)})], [1])
+        dup = [(0, wall_x(0.0, 0, 2, 1, 3)), (0, wall_x(0.01, 0, 2, 1, 3))]
+        self.assertEqual([len(w.panes) for w in windows_of({0: (0x8, dup)})], [2])
+        # overlapping pieces too big together for the cap: still one window (a pixel finds one)
+        ws = windows_of({0: (0x8, [(0, wall_x(0.0, 0, 5, 0, 6)), (0, wall_x(0.0, 3, 8, 0, 6))])})
+        self.assertEqual([len(w.panes) for w in ws], [2])
+
+    def test_twins_are_one_window(self):
+        # a sheet's two faces 0.02 yd apart, one winding out and one in (an exterior group's glass as it winds), on
+        # both sides of a house: one window each, facing away from the group's glass's middle (out of the house)
+        quads = [(0, wall_x(0.0, 0, 2, 1, 3)), (0, wall_x(-0.02, 0, 2, 1, 3, out=False)),
+                 (0, wall_x(-6.0, 0, 2, 1, 3, out=False)), (0, wall_x(-5.98, 0, 2, 1, 3))]
+        ws = windows_of({0: (0x8, quads)})
+        self.assertEqual(sorted((round(w.center[0], 2), w.normal, len(w.panes)) for w in ws),
+                         [(-5.99, (-1.0, 0.0, 0.0), 2), (-0.01, (1.0, 0.0, 0.0), 2)])
+        for w in ws:
+            corners_inside(self, w)
+
+        # a window and a piece of glass standing in it at 15 degrees (a facet): one; at 40 degrees: two
+        def piece(degrees):
+            n = (math.cos(math.radians(degrees)), math.sin(math.radians(degrees)), 0.0)
+            a = g.wl.window_frame(n)[0]
+            return [g.wl.add((0.02, 1.0, 0.0), g.wl.add(g.wl.mul(a, x), (0.0, 0.0, z)))
+                    for x, z in ((-0.4, 1.5), (0.4, 1.5), (0.4, 2.5), (-0.4, 2.5))]
+        self.assertEqual(len(windows_of({0: (0x8, [(0, wall_x(0.0, 0, 2, 1, 3)), (0, piece(15))])})), 1)
+        self.assertEqual(len(windows_of({0: (0x8, [(0, wall_x(0.0, 0, 2, 1, 3)), (0, piece(40))])})), 2)
+
+    def test_a_flat_panes_lookup_is_thin(self):
+        w, = windows_of({0: (0x8, [(0, wall_x(0.0, 0, 2, 1, 3))])})
+        self.assertEqual(w.thickness, g.f32_up(g.W_SLAB_MIN))
+        self.assertTrue(w.holds((0.07, 1.0, 2.0)))
+        self.assertFalse(w.holds((0.1, 1.0, 2.0)))                          # a neighbour at a slant 0.1 yd off isn't in it
+        self.assertTrue(w.holds((0.0, 2.0 + g.W_LOOKUP, 2.0)))
+        self.assertFalse(w.holds((0.0, 2.0 + g.W_LOOKUP + 0.01, 2.0)))
+
+    def test_the_frame_is_the_runtimes(self):
+        # along (-n.y, n.x, 0) made unit; up n x along; x for a skylight (n.x^2 + n.y^2 < 1e-4)
+        self.assertEqual(g.wl.window_frame((1.0, 0.0, 0.0)), ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
+        self.assertEqual(g.wl.window_frame((0.0, 1.0, 0.0)), ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+        self.assertEqual(g.wl.window_frame((0.0, 0.0, 1.0)), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
+        self.assertEqual(g.wl.window_frame((0.005, 0.0, 0.99998))[0], (1.0, 0.0, 0.0))
+        # a skylight: its rectangle along x and y
+        sky = [(0, 0, 5), (2, 0, 5), (2, 1, 5), (0, 1, 5)]
+        w, = windows_of({0: (0x8, [(0, sky)])})
+        self.assertEqual(w.normal, (0.0, 0.0, 1.0))
+        self.assertEqual(tuple(round(c, 4) for c in w.center), (1.0, 0.5, 5.0))
+        self.assertAlmostEqual(w.hw, 1.0 + g.W_MARGIN, places=5)
+        self.assertAlmostEqual(w.hh, 0.5 + g.W_MARGIN, places=5)
+        # a window facing (0.6, 0.8, 0) far from the origin, tilted a little: every corner inside, all float32
+        n = g.wl.unit((0.6, 0.8, 0.05))
+        a, u = g.wl.window_frame(n)
+        o = (523.17, -311.9, 41.3)
+        quad = [g.wl.add(o, g.wl.add(g.wl.mul(a, x), g.wl.mul(u, y))) for x, y in ((-0.9, -1.3), (0.9, -1.3), (0.9, 1.3), (-0.9, 1.3))]
+        w, = windows_of({0: (0x8, [(0, quad)])})
+        self.assertGreater(g.wl.dot(w.normal, n), 0.99999)
+        corners_inside(self, w)
+        for v in w.center + w.normal + (w.hw, w.hh):
+            self.assertEqual(g.f32(v), v)            # as the table stores them
+        self.assertAlmostEqual(w.hw, 0.9 + g.W_MARGIN, places=3)
+        self.assertAlmostEqual(w.hh, 1.3 + g.W_MARGIN, places=3)
+
+    def test_a_big_sheet_is_cut_into_tiles(self):
+        # 3 x 15 yd of glass (a tall tower window): three tiles 5 yd tall, the sheet's normal, side by side, all the glass
+        ws = windows_of({0: (0x8, [(0, wall_x(0.0, 0, 3, 0, 15))])})
+        self.assertEqual([w.tile for w in ws], [(1, 3), (2, 3), (3, 3)])
+        self.assertAlmostEqual(sum(w.area for w in ws), 45.0, places=4)
+        for w in ws:
+            self.assertEqual(w.normal, (1.0, 0.0, 0.0))
+            self.assertAlmostEqual(w.hh, 2.5 + g.W_MARGIN, places=4)
+            corners_inside(self, w)
+        for lower, upper in zip(ws, ws[1:]):
+            self.assertLessEqual(abs(upper.center[2] - lower.center[2]) - (upper.hh + lower.hh), 1e-6)
+            self.assertGreaterEqual(abs(upper.center[2] - lower.center[2]) - (upper.hh + lower.hh), -2 * g.W_MARGIN - 1e-6)
+        # 10 yd tall (one pane, under W_CUT): one window, over the merging cap but whole
+        self.assertEqual([w.tile for w in windows_of({0: (0x8, [(0, wall_x(0.0, 0, 3, 0, 10))])})], [None])
+
+    def test_ordinals_are_steady_and_unique(self):
+        groups = {0: (0x8, [(0, wall_x(0.0, 0, 1, 4, 5)), (0, wall_x(0.0, 3, 4, 1, 2)), (0, wall_x(0.0, 6, 7, 1, 2))]),
+                  2: (0x8, [(1, wall_y(0.0, 0, 1, -3, -2))])}
+        ws = windows_of(groups)
+        self.assertEqual([w.ordinal for w in ws], [0, 1, 2, 3])
+        # by group, then the middle bottom to top, then x, then y
+        self.assertEqual([(w.group, round(w.center[1], 1), round(w.center[2], 1)) for w in ws],
+                         [(0, 3.5, 1.5), (0, 6.5, 1.5), (0, 0.5, 4.5), (2, 0.0, -2.5)])
+        # the panes in any order: the same windows, the same numbers
+        shuffled = {gi: (fl, list(reversed(q))) for gi, (fl, q) in groups.items()}
+        self.assertEqual([(w.ordinal, w.center) for w in windows_of(shuffled)], [(w.ordinal, w.center) for w in ws])
+
+    def build(self, files, placed):
+        d = Path(tempfile.mkdtemp())
+        (d / "wmo-windows").mkdir()
+        for name, data in files.items():
+            (d / "wmo-windows" / name.replace(BS, "#")).write_bytes(data)
+        (d / "maps.tsv").write_text("0\tAzeroth\n", newline="")
+        rows = ["source\twmo\tuniqueId\tpx\tpy\tpz\trx\try\trz"]
+        for uid, wmo in enumerate(placed):
+            rows.append("world\\maps\\azeroth\\azeroth_32_32.adt\t%s\t%d\t17000.0\t50.0\t17100.0\t0\t0\t0" % (wmo, uid + 1))
+        (d / "adt_wmos.tsv").write_text("\n".join(rows) + "\n", newline="")
+        return d
+
+    def test_the_inside_face_faces_out_and_the_table(self):
+        # a house: the window's outside face in the exterior group 0, its inside face (facing in) in the interior group 1;
+        # stained glass beside it has no window
+        wmo = "World\\WMO\\Test\\House.wmo"
+        stained = "x\\mm_stained_01.blp"
+        ext = group(0x8, ((-6, -4, 0), (0.5, 4, 5)), [(0, wall_x(0.0, -1, 1, 1, 3, out=True)), (2, wall_x(0.0, 2, 3, 1, 3))])
+        room = group(0x2000, ((-6, -4, 0), (0.2, 4, 5)), [(1, wall_x(-0.1, -1, 1, 1, 3, out=False))])
+        scan = self.build({wmo: root([WINDOW, WINDOW_IN, stained], 2), wmo[:-4] + "_000.wmo": ext, wmo[:-4] + "_001.wmo": room},
+                          [wmo.lower(), wmo.lower()])
+        ws, why = g.wmo_windows(scan, wmo.lower())
+        self.assertEqual(why, "")
+        self.assertEqual([(w.group, w.ordinal, w.exterior) for w in ws], [(0, 0, True), (1, 1, False)])
+        self.assertEqual(ws[1].normal, (1.0, 0.0, 0.0))     # out of the house, though its triangles face in
+        rows, report = g.windows_table(scan)
+        self.assertEqual(len(rows), 2)                      # per WMO file, not per placement
+        r = rows[0]
+        self.assertEqual(len(r), len(g.GLASS_WINDOWS))
+        self.assertEqual(r[:5], [1, "world\\wmo\\test\\house.wmo", 0, 0, g.LEADED])
+        self.assertEqual(r[13:16], [g.WIN_EXTERIOR, 1, "house: group 0 leaded 1 pane"])
+        self.assertEqual(r[16], g.f32_up(g.W_SLAB_MIN))                      # a flat pane's lookup: thin
+        self.assertEqual(rows[1][13], 0)
+        _, raw, string_at = g.io.read(g.io.build(g.GLASS_WINDOWS, [tuple(x) for x in rows]))
+        self.assertEqual(string_at(raw[0][1]), "world\\wmo\\test\\house.wmo")
+        self.assertEqual([g.io.as_float(v) for v in raw[0][5:13]], r[5:13])   # float32 exactly
+        self.assertEqual(g.io.as_float(raw[0][16]), r[16])
 
 
 def root_with_groups(textures, names, lit=(), unlit=(), wmo_id=0, group_flags=None):

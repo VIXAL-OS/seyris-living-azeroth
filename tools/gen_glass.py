@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Window glass: which WMO textures are glass and what kind, and where the panes stand, as data
-(data/GlassMaterials.cdbc and data/GlassPanes.cdbc, read by features/Glass; docs/cdbc-tables.md).
+"""Window glass: which WMO textures are glass and what kind, where the panes stand and which panes make one window, as
+data (data/GlassMaterials.cdbc, GlassPanes.cdbc and GlassWindows.cdbc, read by features/Glass; docs/cdbc-tables.md).
 
 Why: "make the window glass look like real glass ... every glass window, not only stained glass" (the user,
 2026-10-17). Nearly every window material is opaque (MOMT blend 0: 2 of ~1,100 are not), so the glass is a look the
@@ -36,6 +36,25 @@ GlassPanes (one row per window pane of every placed WMO with glass, all maps the
 - In world coordinates (the placement convention of gen_window_lights.placement), with the placement's unique ID; its
   light is its texture's x the share of the texture that is glass (at least 0.35). Windows painted into a wall texture
   have no panes (their triangles are the whole wall).
+
+GlassWindows (one row per window of every WMO file with clear, leaded or frosted glass; not per placement): one room
+behind each window (the shader finds the window a pixel is in and looks into that window's room), and the night's
+lights out by window (gen_window_lights' WindowRooms names the same windows).
+- A window: a group's panes (connected coplanar glass, not tiled) that face within W_FACING on one plane (W_PLANE),
+  side by side or stacked with at most W_GAP between their rectangles (a mullion; a facade's windows stand 0.6 yd or
+  more apart), up to W_WIDTH x W_HEIGHT; clear and leaded glass together, frosted only with frosted. Panes whose
+  rectangles overlap on one plane are one window whatever its size (duplicated faces, an arch over its window), so a
+  pixel lies in one window; so are windows facing within W_TWIN (or back to back: a sheet's two faces) where one's
+  middle lies in the other's lookup, if their glass stays within W_DEPTH of one plane (twins()). A window wider or
+  taller than W_CUT (a tall tower window, a wall of hide panels) is cut into equal tiles, each a window, its glass cut
+  exactly at their edges; the tiles keep the window's normal (their rectangles share its frame and never overlap; a
+  curved sheet's tiles stand off it).
+- Its rectangle in the runtime's frame (gen_window_lights.window_frame of its normal, out of the building where the
+  panes say, else as they wind): the middle of the glass's extent, half sizes holding every corner of its glass, as
+  float32 (rounded up by W_MARGIN); its Thickness, how far off its plane the lookup reaches (its glass's depth off
+  the plane + W_SLAB, within W_SLAB_MIN .. W_SLAB_MAX: a flat pane's lookup is thin, so a neighbour at a slant
+  isn't in it). Numbered per WMO by group, then its middle bottom to top, x, y (the ordinal: the
+  window's identity with its group, for the lights out).
 
 RoomStyles and GlassBuildings: the rooms behind the glass differ by building. "Per building: pick the tint and
 brightness from the building's identity ... Room types that follow the building and the zone" (the user, 2026-10-17).
@@ -74,9 +93,10 @@ Usage:
   python gen_glass.py <scan> --texture-list <out.txt>       the candidate textures to extract
   python gen_glass.py <scan> --group-list <out.txt>         the group files of WMOs with glass not extracted yet
   python gen_glass.py <scan> <textures> [data dir] [--sheets <dir>]
-        writes GlassMaterials.cdbc, GlassPanes.cdbc, RoomStyles.cdbc and GlassBuildings.cdbc (--sheets: contact sheets
-        of each texture and its mask)
+        writes GlassMaterials.cdbc, GlassPanes.cdbc, GlassWindows.cdbc, RoomStyles.cdbc and GlassBuildings.cdbc
+        (--sheets: contact sheets of each texture and its mask)
   python gen_glass.py <scan> --rooms [data dir]             only RoomStyles.cdbc and GlassBuildings.cdbc
+  python gen_glass.py <scan> --windows [data dir]           only GlassWindows.cdbc (no textures needed)
 """
 import collections
 import csv
@@ -384,17 +404,26 @@ def pane_axes(n):
 
 
 class Pane:
-    __slots__ = ("center", "normal", "area", "hw", "hh", "u", "w", "texture", "group", "exterior", "out", "room")
+    """A pane: its rectangle (middle, normal by the winding, area, half sizes along u and up w), its main texture, its
+    group, whether that is an exterior group, the way out and its room (wmo_panes), its triangles' corners (three per
+    triangle, WMO space) and its glass area by texture."""
+    __slots__ = ("center", "normal", "area", "hw", "hh", "u", "w", "texture", "group", "exterior", "out", "room",
+                 "points", "areas")
 
-    def __init__(self, center, normal, area, hw, hh, u, w, texture, group, exterior):
+    def __init__(self, center, normal, area, hw, hh, u, w, texture, group, exterior, points=(), areas=None):
         self.center, self.normal, self.area, self.hw, self.hh = center, normal, area, hw, hh
         self.u, self.w, self.texture, self.group, self.exterior = u, w, texture, group, exterior
         self.out = normal if exterior else None
         self.room = None
+        self.points = points
+        self.areas = areas if areas is not None else {texture: area}
 
 
-def group_panes(g, gi, materials, exterior):
-    """The glass panes of one group: connected triangles of glass facing within FLAT of each other."""
+def group_panes(g, gi, materials, exterior, min_area=MIN_AREA, tile=True):
+    """The glass panes of one group: connected triangles of glass facing within FLAT of each other (at least min_area
+    yd^2 of glass); with `tile`, a sheet larger than 2 x TILE across cut into tiles by its triangles' middles (a tile's
+    rectangle is its triangles', so a long triangle's tile crosses its neighbours': the windows take sheets whole and
+    cut() them exactly)."""
     v, idx = g["vertices"], g["indices"]
     tris = []
     for start, count, _mn, _mx, _fl, material in g["batches"]:
@@ -433,7 +462,7 @@ def group_panes(g, gi, materials, exterior):
 
     def make(ks):
         area = sum(tris[k][3] for k in ks)
-        if area < MIN_AREA:
+        if area < min_area:
             return None
         n = wl.unit(wl.vsum(wl.mul(tris[k][2], tris[k][3]) for k in ks))
         if wl.length(n) < 0.5:
@@ -449,14 +478,14 @@ def group_panes(g, gi, materials, exterior):
         for k in ks:
             texture[tris[k][1]] += tris[k][3]
         return Pane(mid, n, area, 0.5 * (max(us) - min(us)), 0.5 * (max(ws) - min(ws)), u, w,
-                    texture.most_common(1)[0][0], gi, exterior)
+                    texture.most_common(1)[0][0], gi, exterior, pts, dict(texture))
 
     out = []
     for ks in pieces.values():
         p = make(ks)
         if p is None:
             continue
-        if p.hw <= TILE and p.hh <= TILE:
+        if (p.hw <= TILE and p.hh <= TILE) or not tile:
             out.append(p)
             continue
         tiles = collections.defaultdict(list)
@@ -480,16 +509,11 @@ def box_volume(box):
     return max(0.0, hi[0] - lo[0]) * max(0.0, hi[1] - lo[1]) * max(0.0, hi[2] - lo[2])
 
 
-def wmo_panes(scan, wmo):
-    """The WMO's glass panes, each with its way out and its room (WMO space), or [] (no glass or groups missing)."""
-    rp = flat(scan, wmo)
-    if not rp.exists():
-        return [], "root missing"
-    info = parse_root_all(rp.read_bytes())
-    mats = glass_materials(info, panes=True)
-    if not mats:
-        return [], "no glass"
-    groups, panes, tris = [], [], []
+def read_groups(scan, wmo, info, material_sets, min_area=MIN_AREA, tile=True):
+    """(groups, panes, tris, missing): each group's (flags, box), None where its file is missing; the panes of each set
+    of glass materials (one list per set: a set's triangles never join another's in a pane; group_panes' min_area and
+    tile); every triangle of the WMO (for the open rays); how many group files are missing."""
+    groups, panes, tris = [], [[] for _ in material_sets], []
     missing = 0
     for gi in range(info["groups"]):
         gp = flat(scan, "%s_%03d.wmo" % (wmo[:-4], gi))
@@ -501,10 +525,17 @@ def wmo_panes(scan, wmo):
         flags, box = parse_group_box(b)
         g = wl.parse_group(b)
         groups.append((flags, box))
-        panes += group_panes(g, gi, mats, bool(flags & EXTERIOR) and not (flags & INDOOR))
+        for k, mats in enumerate(material_sets):
+            panes[k] += group_panes(g, gi, mats, bool(flags & EXTERIOR) and not (flags & INDOOR), min_area, tile)
         tris += wl.triangles(g)
-    if missing == info["groups"]:
-        return [], "groups missing"
+    return groups, panes, tris, missing
+
+
+def face_out(panes, tris):
+    """Which way is out for each interior pane (an exterior pane's is its winding): [(pane, its exterior twin or None)],
+    in order. An exterior pane within TWIN yd facing the other way is the same window seen from outside: out is as that
+    one faces. Otherwise the side whose open rays get away (gen_window_lights.orient); if neither, behind it (it faces
+    in)."""
     ext = [p for p in panes if p.exterior]
     grid = collections.defaultdict(list)
     for p in ext:
@@ -522,27 +553,16 @@ def wmo_panes(scan, wmo):
                             best, bd = q, d
         return best
 
-    def interior_room(point):
-        best = None
-        for gi, gb in enumerate(groups):
-            if gb and not (gb[0] & EXTERIOR) and inside_box(point, gb[1], 0.25):
-                if best is None or box_volume(gb[1]) < box_volume(groups[best][1]):
-                    best = gi
-        return best
-
     occluder = None
-    kept = []
-    taken = set()
+    out = []
     for p in panes:
         if p.exterior:
             continue
         q = twin(p)
         if q is not None:
-            # the window seen from inside: one pane, out as the exterior face says, lighting this group
-            q.room = p.group
-            taken.add(id(q))
+            p.out = q.out
+            out.append((p, q))
             continue
-        # an interior face with no exterior twin: which way is out?
         if occluder is None:
             occluder = wl.Occluder(tris)
         probe = wl.Pane(p.center, p.normal, p.area, [], p.texture)
@@ -551,6 +571,39 @@ def wmo_panes(scan, wmo):
             p.out = p.normal          # it faces out (Orgrimmar's huts: the whole city is interior groups)
         else:
             p.out = wl.mul(p.normal, -1.0)
+        out.append((p, None))
+    return out
+
+
+def wmo_panes(scan, wmo):
+    """The WMO's glass panes, each with its way out and its room (WMO space), or [] (no glass or groups missing)."""
+    rp = flat(scan, wmo)
+    if not rp.exists():
+        return [], "root missing"
+    info = parse_root_all(rp.read_bytes())
+    mats = glass_materials(info, panes=True)
+    if not mats:
+        return [], "no glass"
+    groups, (panes,), tris, missing = read_groups(scan, wmo, info, [mats])
+    if missing == info["groups"]:
+        return [], "groups missing"
+    ext = [p for p in panes if p.exterior]
+
+    def interior_room(point):
+        best = None
+        for gi, gb in enumerate(groups):
+            if gb and not (gb[0] & EXTERIOR) and inside_box(point, gb[1], 0.25):
+                if best is None or box_volume(gb[1]) < box_volume(groups[best][1]):
+                    best = gi
+        return best
+
+    kept = []
+    for p, q in face_out(panes, tris):
+        if q is not None:
+            # the window seen from inside: one pane, out as the exterior face says, lighting this group
+            q.room = p.group
+            continue
+        # an interior face with no exterior twin: its room is its own group
         p.room = p.group
         kept.append(p)
     for p in ext:
@@ -563,12 +616,355 @@ def wmo_panes(scan, wmo):
     return [p for p in kept if p.room is not None], ("%d groups missing" % missing if missing else "")
 
 
+# --- windows: one room behind each (GlassWindows.cdbc) ---------------------------------------------------------------
+# A window divided by stone or wooden mullions into several pieces of glass is one window, with one room behind all of
+# them (the mullions stand in front of it). Per WMO file, not per placement (the runtime finds a pixel's window in WMO
+# space, so every instance and the transports work), and per group: the panes of clear and leaded glass (they may share
+# a window) and of frosted glass (only with frosted; stained glass has none) join when they face the same way on one
+# plane, side by side or stacked with no more than a mullion between their rectangles, up to a window's size.
+ROOM_GLASS = (CLEAR, LEADED)    # kinds with a room behind them
+W_MIN_AREA = 0.02   # yd^2: glass pieces this small still join a window (a mullioned window's small lights)...
+W_ALONE = MIN_AREA  # ... but a window smaller than this in all is trim
+W_FACING = 0.985    # cos: the panes of one window face within ~10 degrees of each other
+W_PLANE = 0.15      # yd: ... and stand on one plane (one's middle at most this far off the other's plane)
+W_GAP = 0.45        # yd: at most this between their rectangles on both axes (a mullion; a facade's windows stand
+                    # further apart), and overlapping on one of them (side by side or stacked, not just corner to corner)
+W_WIDTH, W_HEIGHT = 6.0, 7.0    # yd: a window this wide and tall at most (a pane that would make it bigger doesn't join)
+W_CUT = 2.0 * TILE  # yd: a window wider or taller than this (one big sheet) is cut into tiles of at most W_WIDTH x W_HEIGHT
+W_DEPTH = 0.3       # yd: its glass at most this deep (off its plane) in all
+W_MARGIN = 0.002    # yd: the half sizes rounded up by this, so no corner falls outside after float32 rounding
+W_LOOKUP = 0.03     # yd: the runtime's lookup (env/GlassRooms rooms::kMargin): a point this far outside a window's
+                    # rectangle is still in it...
+W_SLAB = 0.05       # yd: ... and one within its Thickness of its plane: its glass's depth off the plane plus this,
+W_SLAB_MIN, W_SLAB_MAX = 0.08, 1.0   # yd: within these (a flat pane's 0.08; a curved sheet's tile's at most 1)
+W_TWIN = 0.9        # |cos|: windows of one group facing within ~25 degrees of each other, or of each other's way back
+                    # (the two faces of one sheet), are one where one's middle lies in the other's lookup (twins())
+WIN_EXTERIOR = 0x1  # GlassWindows.Flags: the window's group is an exterior one (MOGP 0x8, not 0x2000)
+
+
+def f32(x):
+    """x as the table stores it (float32)."""
+    return struct.unpack("<f", struct.pack("<f", x))[0]
+
+
+def f32_up(x):
+    """The float32 at or just above x (x > 0)."""
+    y = f32(x)
+    if y < x:
+        y = struct.unpack("<f", struct.pack("<I", struct.unpack("<I", struct.pack("<f", y))[0] + 1))[0]
+    return y
+
+
+def facing(p):
+    """A pane's normal turned out of the building (its way out), else as its triangles wind."""
+    return wl.mul(p.normal, -1.0) if p.out is not None and wl.dot(p.normal, p.out) < 0.0 else p.normal
+
+
+class Window:
+    """A window of one group: its panes; its kind (the most glass), and its rectangle in the window frame
+    (gen_window_lights.window_frame, the runtime's) as the table stores it: middle, unit normal, half sizes, all float32,
+    holding every corner of its glass; how far its glass stands off that plane; its ordinal in the WMO; (k, n) when it's
+    the k-th of a big window's n tiles (cut())."""
+    __slots__ = ("group", "panes", "exterior", "kind", "area", "center", "normal", "hw", "hh", "depth", "thickness",
+                 "ordinal", "tile")
+
+    def __init__(self, panes, normal=None):
+        self.panes, self.group, self.exterior = panes, panes[0].group, panes[0].exterior
+        self.area = sum(p.area for p in panes)
+        by_kind = collections.Counter()
+        for p in panes:
+            for t, a in p.areas.items():
+                by_kind[classify(t)[0]] += a
+        self.kind = by_kind.most_common(1)[0][0]
+        n = normal or wl.unit(wl.vsum(wl.mul(facing(p), p.area) for p in panes))
+        self.normal = tuple(f32(x) for x in n)
+        along, up = wl.window_frame(self.normal)
+        pts = [q for p in panes for q in p.points]
+        c0 = wl.mul(wl.vsum(wl.mul(p.center, p.area) for p in panes), 1.0 / self.area)
+        a = [wl.dot(wl.sub(q, c0), along) for q in pts]
+        b = [wl.dot(wl.sub(q, c0), up) for q in pts]
+        c = wl.add(c0, wl.add(wl.mul(along, 0.5 * (min(a) + max(a))), wl.mul(up, 0.5 * (min(b) + max(b)))))
+        self.center = tuple(f32(x) for x in c)
+        rel = [wl.sub(q, self.center) for q in pts]
+        self.hw = f32_up(max(abs(wl.dot(r, along)) for r in rel) + W_MARGIN)
+        self.hh = f32_up(max(abs(wl.dot(r, up)) for r in rel) + W_MARGIN)
+        self.depth = max(abs(wl.dot(r, self.normal)) for r in rel)
+        self.thickness = f32_up(min(max(self.depth + W_SLAB, W_SLAB_MIN), W_SLAB_MAX))
+        self.ordinal = 0
+        self.tile = None
+
+    def holds(self, q):
+        """Whether the runtime's lookup puts point q in this window: within W_LOOKUP of its rectangle and its thickness
+        of its plane."""
+        along, up = wl.window_frame(self.normal)
+        r = wl.sub(q, self.center)
+        return (abs(wl.dot(r, along)) <= self.hw + W_LOOKUP and abs(wl.dot(r, up)) <= self.hh + W_LOOKUP and
+                abs(wl.dot(r, self.normal)) <= self.thickness)
+
+    def order(self):
+        """The ordinal's order: group, then the middle bottom to top, x, y (to 0.01 yd); then the rest, so a twin face
+        in the same place has a steady number too."""
+        c, n = self.center, self.normal
+        return (self.group, round(c[2], 2), round(c[0], 2), round(c[1], 2), round(n[0], 3), round(n[1], 3), round(n[2], 3),
+                self.hw, self.hh, self.kind)
+
+
+def gaps(s, t):
+    """The gaps between two sets of points' extents on each axis of a frame (< 0: they overlap on it): s, t are the
+    points' coordinates (one column per axis)."""
+    return [max(t[:, k].min() - s[:, k].max(), s[:, k].min() - t[:, k].max()) for k in range(s.shape[1])]
+
+
+def group_windows(panes):
+    """The windows of one group's panes of one sort (room glass, or frosted): lists of panes. Union-find, the biggest
+    panes first: two panes join when they face within W_FACING, stand on one plane (W_PLANE), and their rectangles in
+    the first's window frame are side by side or stacked, at most W_GAP apart on both axes; unless the window they make
+    would be wider than W_WIDTH, taller than W_HEIGHT or deeper than W_DEPTH. Then windows facing the same way on one
+    plane whose rectangles overlap are one, whatever their size (a pixel finds one window; cut() makes a big one
+    tiles)."""
+    import numpy as np
+    ps = sorted(panes, key=lambda p: (-p.area, p.center))
+    normals = [facing(p) for p in ps]
+    pts = [np.array(p.points, dtype=np.float64) for p in ps]
+    reach = W_GAP + W_PLANE
+    lo = np.array([x.min(axis=0) for x in pts]) - reach
+    hi = np.array([x.max(axis=0) for x in pts]) + reach
+    parent = list(range(len(ps)))
+    members = {i: [i] for i in range(len(ps))}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def frame(n):
+        return np.array(wl.window_frame(n)).T
+
+    def joins(i, j):
+        if wl.dot(normals[i], normals[j]) <= W_FACING:
+            return False
+        if abs(wl.dot(wl.sub(ps[j].center, ps[i].center), normals[i])) >= W_PLANE:
+            return False
+        g = gaps(pts[i] @ frame(normals[i]), pts[j] @ frame(normals[i]))
+        return max(g) < W_GAP and min(g) < 0.0
+
+    def fits(ks):
+        n = wl.unit(wl.vsum(wl.mul(normals[k], ps[k].area) for k in ks))
+        x = np.vstack([pts[k] for k in ks])
+        along, up = wl.window_frame(n)
+        return (np.ptp(x @ np.array(along)) <= W_WIDTH and np.ptp(x @ np.array(up)) <= W_HEIGHT and
+                np.ptp(x @ np.array(n)) <= W_DEPTH)
+
+    for i in range(len(ps)):
+        near = np.nonzero(np.all(lo[i + 1:] <= hi[i], axis=1) & np.all(hi[i + 1:] >= lo[i], axis=1))[0] + i + 1
+        for j in near:
+            ri, rj = find(i), find(int(j))
+            if ri == rj or not joins(i, int(j)):
+                continue
+            ks = members[ri] + members[rj]
+            if fits(ks):
+                parent[rj] = ri
+                members[ri] = ks
+                del members[rj]
+
+    # overlapping windows: one
+    def summary(ks):
+        area = sum(ps[k].area for k in ks)
+        n = wl.unit(wl.vsum(wl.mul(normals[k], ps[k].area) for k in ks))
+        c = wl.mul(wl.vsum(wl.mul(ps[k].center, ps[k].area) for k in ks), 1.0 / area)
+        x = np.vstack([pts[k] for k in ks])
+        return n, c, x, x.min(axis=0), x.max(axis=0)
+
+    summ = {r: summary(ks) for r, ks in members.items()}
+    changed = True
+    while changed:
+        changed = False
+        for ri in sorted(members):
+            if ri not in members:
+                continue
+            for rj in sorted(members):
+                if rj <= ri or rj not in members:
+                    continue
+                n, c, x, xlo, xhi = summ[ri]
+                m, d, y, ylo, yhi = summ[rj]
+                if (np.any(ylo > xhi) or np.any(yhi < xlo) or wl.dot(n, m) <= W_FACING or
+                        abs(wl.dot(wl.sub(d, c), n)) >= W_PLANE or max(gaps(x @ frame(n), y @ frame(n))) >= -0.01):
+                    continue
+                members[ri] += members.pop(rj)
+                for k in members[ri]:
+                    parent[k] = ri
+                summ[ri] = summary(members[ri])
+                del summ[rj]
+                changed = True
+    return [[ps[k] for k in sorted(ks)] for _r, ks in sorted(members.items())]
+
+
+def clip(poly, axis, bound, keep_above):
+    """Sutherland-Hodgman: the part of a polygon (3D corners) where dot(p, axis) >= bound (or <=)."""
+    out = []
+    for i, p in enumerate(poly):
+        q = poly[(i + 1) % len(poly)]
+        sp, sq = wl.dot(p, axis), wl.dot(q, axis)
+        pin = sp >= bound if keep_above else sp <= bound
+        qin = sq >= bound if keep_above else sq <= bound
+        if pin:
+            out.append(p)
+        if pin != qin:
+            t = (bound - sp) / (sq - sp)
+            out.append(tuple(p[k] + (q[k] - p[k]) * t for k in range(3)))
+    return out
+
+
+def cut(panes, normal=None):
+    """A window wider or taller than W_CUT (one big sheet of glass: a tall tower window, a wall of hide panels) as equal
+    tiles of at most W_WIDTH x W_HEIGHT on that axis: ([[tile panes]], the window's normal), each tile's glass its panes'
+    triangles cut exactly at the tiles' edges. The tiles keep the window's normal (`normal`, else its panes' facing
+    them), so they share its frame and no tile's rectangle overlaps another's (a curved sheet's tiles stand a little off
+    its plane). A window that fits: ([panes], normal)."""
+    n = normal or wl.unit(wl.vsum(wl.mul(facing(p), p.area) for p in panes))
+    along, up = wl.window_frame(tuple(f32(x) for x in n))
+    pts = [q for p in panes for q in p.points]
+    a = [wl.dot(q, along) for q in pts]
+    b = [wl.dot(q, up) for q in pts]
+    na = math.ceil((max(a) - min(a)) / W_WIDTH - 1e-9) if max(a) - min(a) > W_CUT else 1
+    nb = math.ceil((max(b) - min(b)) / W_HEIGHT - 1e-9) if max(b) - min(b) > W_CUT else 1
+    if na == 1 and nb == 1:
+        return [panes], normal
+    wa, wb = (max(a) - min(a)) / na, (max(b) - min(b)) / nb
+    edges_a = [min(a) + i * wa for i in range(na + 1)]
+    edges_b = [min(b) + j * wb for j in range(nb + 1)]
+    edges_a[-1], edges_b[-1] = max(a), max(b)
+    tiles = collections.defaultdict(list)
+    for p in panes:
+        parts = collections.defaultdict(list)
+        for t in range(0, len(p.points) - 2, 3):
+            tri = list(p.points[t:t + 3])
+            for i in range(na):
+                col = clip(clip(tri, along, edges_a[i], True), along, edges_a[i + 1], False) if na > 1 else tri
+                if len(col) < 3:
+                    continue
+                for j in range(nb):
+                    piece = clip(clip(col, up, edges_b[j], True), up, edges_b[j + 1], False) if nb > 1 else col
+                    for k in range(1, len(piece) - 1):
+                        corners = (piece[0], piece[k], piece[k + 1])
+                        if 0.5 * wl.length(wl.cross(wl.sub(corners[1], corners[0]), wl.sub(corners[2], corners[0]))) > 1e-9:
+                            parts[(i, j)].append(corners)
+        for key, tris in parts.items():
+            area = sum(0.5 * wl.length(wl.cross(wl.sub(t[1], t[0]), wl.sub(t[2], t[0]))) for t in tris)
+            if area <= 1e-6:
+                continue
+            normal = wl.unit(wl.vsum(wl.cross(wl.sub(t[1], t[0]), wl.sub(t[2], t[0])) for t in tris))
+            if wl.length(normal) < 0.5:
+                normal = p.normal
+            center = wl.mul(wl.vsum(wl.mul(wl.add(wl.add(t[0], t[1]), t[2]), 0.5 * wl.length(wl.cross(
+                wl.sub(t[1], t[0]), wl.sub(t[2], t[0]))) / 3.0) for t in tris), 1.0 / area)
+            q = Pane(center, normal, area, 0.0, 0.0, along, up, p.texture, p.group, p.exterior,
+                     [c for t in tris for c in t], {p.texture: area})
+            q.out = p.out
+            tiles[key].append(q)
+    return [tiles[k] for k in sorted(tiles)], n
+
+
+def twins(lists):
+    """Windows of one group and sort (group_windows' lists of panes) a pixel couldn't tell apart, as one: while one's
+    middle lies in the other's lookup (Window.holds) and they face within W_TWIN of each other or of each other's way
+    back (the two faces of one sheet, a window at a slant over its arch), they join if their glass together stays within
+    W_DEPTH of one plane. The joined window faces as both do, by their glass; the two faces of one sheet as the bigger
+    does, or the other where the bigger faces the group's glass's middle (out of the building). [(panes, its normal or
+    None for its panes' own)], in their order."""
+    items = [[ks, None, Window(ks)] for ks in lists]
+    if len(items) < 2:
+        return [(ks, n) for ks, n, _w in items]
+    area = sum(p.area for ks in lists for p in ks)
+    mid = wl.mul(wl.vsum(wl.mul(p.center, p.area) for ks in lists for p in ks), 1.0 / area)
+
+    def reach(w):
+        return w.hw + w.hh + w.thickness + W_LOOKUP
+
+    alive = [True] * len(items)
+    todo = list(range(len(items)))[::-1]
+    while todo:
+        i = todo.pop()
+        if not alive[i]:
+            continue
+        wi = items[i][2]
+        for j in range(len(items)):
+            if j == i or not alive[j]:
+                continue
+            wj = items[j][2]
+            if wl.length(wl.sub(wi.center, wj.center)) > reach(wi) + reach(wj):
+                continue
+            if not (wi.holds(wj.center) or wj.holds(wi.center)):
+                continue
+            d = wl.dot(wi.normal, wj.normal)
+            if abs(d) < W_TWIN:
+                continue
+            big, small = (wi, wj) if wi.area >= wj.area else (wj, wi)
+            if d > 0.0:
+                n = wl.unit(wl.add(wl.mul(big.normal, big.area), wl.mul(small.normal, small.area)))
+            else:
+                n = small.normal if wl.dot(wl.sub(big.center, mid), big.normal) < -0.01 else big.normal
+            m = Window(items[i][0] + items[j][0], n)
+            if m.depth > W_DEPTH:
+                continue
+            lo, hi = min(i, j), max(i, j)
+            items[lo] = [items[lo][0] + items[hi][0], n, m]
+            alive[hi] = False
+            todo.append(lo)
+            break
+    return [(ks, n) for (ks, n, _w), a in zip(items, alive) if a]
+
+
+def windows_of(sorts):
+    """The windows of a WMO's panes (oriented: face_out), [room glass panes, frosted panes], numbered 0..n-1 in order
+    (Window.order): per group and sort, group_windows, then twins; a window under W_ALONE in all is trim; a big one is
+    cut()."""
+    windows = []
+    for panes in sorts:
+        by_group = collections.defaultdict(list)
+        for p in panes:
+            by_group[p.group].append(p)
+        for gi in sorted(by_group):
+            for ks, out in twins(group_windows(by_group[gi])):
+                if sum(p.area for p in ks) < W_ALONE:
+                    continue
+                tiles, normal = cut(ks, out)
+                for k, part in enumerate(tiles):
+                    w = Window(part, normal)
+                    w.tile = (k + 1, len(tiles)) if len(tiles) > 1 else None
+                    windows.append(w)
+    windows.sort(key=Window.order)
+    for k, w in enumerate(windows):
+        w.ordinal = k
+    return windows
+
+
+def wmo_windows(scan, wmo):
+    """The WMO's windows (WMO space; windows_of), or [] and why."""
+    rp = flat(scan, wmo)
+    if not rp.exists():
+        return [], "root missing"
+    info = parse_root_all(rp.read_bytes())
+    mats = glass_materials(info, panes=True)
+    room = {i: t for i, t in mats.items() if classify(t)[0] in ROOM_GLASS}
+    frost = {i: t for i, t in mats.items() if classify(t)[0] == FROSTED}
+    if not room and not frost:
+        return [], "no glass"
+    _groups, sorts, tris, missing = read_groups(scan, wmo, info, [room, frost], W_MIN_AREA, tile=False)
+    if missing == info["groups"]:
+        return [], "groups missing"
+    face_out(sorts[0] + sorts[1], tris)
+    windows = windows_of(sorts)
+    return windows, ("%d groups missing" % missing if missing else "")
+
+
 # --- the rooms behind the glass: who lives there ----------------------------------------------------------------------
 # A building's class comes from its WMO's path (in a city's one big WMO, from each group's name or its district), its
 # palette from its culture (the path) and its place (the area, the continent). A class and a palette make a style
 # (RoomStyles.cdbc); every placement of a WMO with glass gets one and a seed (GlassBuildings.cdbc). features/Glass's
 # shader then picks, per window, the layout (by the style's weights), whether the room is dark, its light and the rest
-# from a hash of the window's cell and the seed.
+# from a hash of the window (GlassWindows: its ordinal and group) and the seed.
 OTHER, HOUSE, FARM, INN, SHOP, TEMPLE, KEEP, TOWER, CITY, SHIP, FORGE, COMMONS, QUARTER, CAVERN = range(14)
 CLASS_NAMES = ["other", "house", "farm", "inn", "shop", "temple", "keep", "tower", "city", "ship",
                "forge", "commons", "quarter", "cavern"]
@@ -1086,6 +1482,9 @@ ROOM_STYLES = ["u", "u", "u"] + ["f"] * 21 + ["s"]
 #  Brightness Spread DarkShare Shelves Curtains Divider Plain LateHours NightCap Comment
 GLASS_BUILDINGS = ["u", "u", "u", "f", "f", "f", "u", "u", "u", "u", "u", "s", "s"]
 #  ID MapID UniqueID PosX PosY PosZ Group Style Seed Flags AreaID Wmo Comment
+GLASS_WINDOWS = ["u", "s", "u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "u", "u", "s", "f"]
+#  ID Wmo Group Ordinal Kind CenterX CenterY CenterZ NormalX NormalY NormalZ HalfWidth HalfHeight Flags Panes Comment
+#  Thickness
 
 
 def flat(scan, name):
@@ -1214,6 +1613,50 @@ def panes_table(scan, light_of):
     return rows, by_map, len(wmos_with), why_none
 
 
+def windows_table(scan):
+    """(rows, report) of GlassWindows: every window of every root the scan places, per WMO file (WMO space), by path
+    and ordinal."""
+    rows, report = [], collections.Counter()
+    for wmo in all_roots(scan):
+        windows, why = wmo_windows(scan, wmo)
+        if why and why != "no glass":
+            report["WMOs " + ("with some groups missing" if why[0].isdigit() else why)] += 1
+        if not windows:
+            continue
+        report["WMOs"] += 1
+        path = wmo.lower().replace("/", BS)
+        base = path.split(BS)[-1][:-4]
+        for w in windows:
+            n = len(w.panes)
+            rows.append([0, path, w.group, w.ordinal, w.kind, *w.center, *w.normal, w.hw, w.hh,
+                         WIN_EXTERIOR if w.exterior else 0, n,
+                         "%s: group %d %s %d pane%s" % (base, w.group, KIND_NAMES[w.kind], n, "" if n == 1 else "s") +
+                         (", tile %d of %d" % w.tile if w.tile else ""), w.thickness])
+            report["tiles" if w.tile else "merged" if n > 1 else "single"] += 1
+            if w.tile and w.tile[0] == 1:
+                report["cut"] += 1
+            if w.depth > W_DEPTH:
+                report["deep"] += 1
+    rows.sort(key=lambda r: (r[1], r[3]))
+    for i, r in enumerate(rows):
+        r[0] = i + 1
+    return rows, report
+
+
+def write_windows(scan, folder):
+    """GlassWindows.cdbc, with a report."""
+    rows, report = windows_table(scan)
+    per_group = collections.Counter((r[1], r[2]) for r in rows)
+    print(f"{len(rows)} windows in {report['WMOs']} WMOs ({len(per_group)} groups, at most {max(per_group.values(), default=0)} "
+          f"in one): {report['single']} of one pane, {report['merged']} of panes merged, {report['tiles']} tiles of "
+          f"{report['cut']} big windows; " + ", ".join(f"{sum(1 for r in rows if r[4] == k)} {KIND_NAMES[k]}" for k in (CLEAR, LEADED, FROSTED)) +
+          f"; {report['deep']} with glass more than {W_DEPTH} yd off their plane (curved)")
+    missing = {k: n for k, n in report.items() if k.startswith("WMOs ")}
+    if missing:
+        print("  " + ", ".join(f"{n} {k}" for k, n in missing.items()))
+    write(folder / "GlassWindows.cdbc", io.build(GLASS_WINDOWS, [tuple(r) for r in rows]))
+
+
 def group_list(scan):
     names = []
     for wmo in all_roots(scan):
@@ -1289,7 +1732,7 @@ def main():
         a = rest.pop(0)
         if a in ("--group-list", "--texture-list", "--sheets"):
             options[a] = rest.pop(0) if rest else sys.exit(f"{a} needs a path")
-        elif a == "--rooms":
+        elif a in ("--rooms", "--windows"):
             options[a] = True
         else:
             argv.append(a)
@@ -1305,6 +1748,9 @@ def main():
             return
     if "--rooms" in options:
         write_rooms(scan, Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "data")
+        return
+    if "--windows" in options:
+        write_windows(scan, Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "data")
         return
     if len(argv) < 2:
         sys.exit(__doc__)
@@ -1331,6 +1777,7 @@ def main():
         print("WMOs without panes: " + ", ".join(f"{n} {w}" for w, n in why_none.most_common()))
     write(folder / "GlassMaterials.cdbc", io.build(GLASS_MATERIALS, [tuple(r) for r in mrows]))
     write(folder / "GlassPanes.cdbc", io.build(GLASS_PANES, [tuple(r) for r in prows]))
+    write_windows(scan, folder)
     write_rooms(scan, folder)
 
 

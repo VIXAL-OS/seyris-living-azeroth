@@ -6,10 +6,14 @@
 //  - The floor light (b10): each frame the sunlit panes nearest the camera (up to kFloorPanes) become projection
 //    rows; the batches of a building's interior groups (not its glass, not a sand floor's rims) take them.
 //  - The coloured shafts: features/GlassShafts marches the room's air with the panes whose room holds the camera.
-//  - The rooms behind clear glass, per building (RoomStyles.cdbc, GlassBuildings.cdbc): features/WmoIce's group hook
-//    (Wmo.RenderGroup: the placed instance and the group) names the building before its batches draw; each glass
-//    batch then gets its style (tints, brightness, lamp, curtains, the layouts' weights, the dark share by the hour),
-//    its seed and its origin. A batch whose material the client lights at night (MOMT SIDN) gets a lamp-lit room.
+//  - The rooms behind clear glass, one per window (GlassWindows.cdbc: env/GlassRooms' WindowTable, a texture the
+//    shader looks the pixel's window up in), per building (RoomStyles.cdbc, GlassBuildings.cdbc): features/WmoIce's
+//    group hook (Wmo.RenderGroup: the placed instance, its placement matrix and the group) names the building and its
+//    frame before its batches draw; each glass batch then gets its style (tints, brightness, lamp, curtains, the dark
+//    share by the hour), its seed, the group's grid in the window table, the frame that takes the point into its WMO's
+//    space, its class's room depth and furniture, and its palette's interior textures (client BLPs, loaded the first
+//    time a palette is seen; s8..s11) with the furniture atlas (s12) and the table (s13). A batch whose material the
+//    client lights at night (MOMT SIDN) gets a lamp-lit room.
 //    The dark share goes by the rooms' clock (RoomClock: never jumping, so a room fades over 1.5 s); features/Windows
 //    asks for the same band (BandNow) so the window lights dim with the rooms behind them.
 //  - Frosted glass the client lights (SIDN, or unlit: at full day and night) goes dark the same way without a room
@@ -21,6 +25,7 @@
 #pragma once
 
 #include "../env/GlassModel.hpp"
+#include "../env/GlassRooms.hpp"
 #include "GlassShader.hpp"
 
 #include "wxl/PluginApi.h"
@@ -32,6 +37,9 @@ struct WXL_SeyrisCdbcApi;
 
 namespace wxl_livingazeroth::glass
 {
+    /// Leaded glass's share of the room (x RoomShareDay, RoomShareNight): its lead hides a little of it.
+    constexpr float kLeadedRoom = 0.85f;
+
     struct Settings
     {
         int   enabled = 1;              // everything below
@@ -42,23 +50,26 @@ namespace wxl_livingazeroth::glass
         int   floorLight = 1;           // light through sunlit panes on the room's floor and walls
         float insideStrength = 1.0f;    // x the light coming through
         float reflectionStrength = 1.0f;// x the reflection and the glint
-        float interiorStrength = 1.0f;  // x the room's light
+        float interiorStrength = 1.0f;  // x the room's light (1: by day about room::kDayRoom of the glass)
         float shaftStrength = 1.0f;     // x the coloured shafts
         float floorStrength = 1.0f;     // x the floor light
         float range = 70.0f;            // yd from the camera: the panes the floor light and the shafts use
         int   roomVariety = 1;          // the rooms differ by building: tint, brightness, a few dark (RoomStyles.cdbc)
         int   litRooms = 1;             // at night, lamp-lit rooms behind the windows the client lights
         int   lightsOut = 1;            // ... more of them dark as the night goes on (inns stay lit late)
-        int   roomLayouts = 1;          // shelves, curtains half drawn, a dividing wall with a doorway
+        int   roomLayouts = 1;          // curtains half drawn in some rooms (the style's share)
         float varietyStrength = 1.0f;   // x how far the buildings' tints, brightness and dark rooms spread
         float litRoomStrength = 1.0f;   // x the lit rooms' brightness (1: about the client's own lit window)
         float lightsOutStrength = 1.0f; // x the share of rooms dark at night
-        float layoutStrength = 1.0f;    // x the layouts' detail (the things on the shelves, the folds, the curtains)
+        float layoutStrength = 1.0f;    // x the furniture's and the curtains' detail (their folds)
+        int   roomDetail = 1;           // furniture in the rooms (tables, beds, shelves, hearths...), at its depth
+        int   roomTextures = 1;         // the rooms' floors, walls and ceilings in the palette's client interior textures
         // Seen from outside (the kinds' shares of these: features/Glass's Look).
-        float outsideDarkening = 0.3f;  // by day clear glass this much darker than the client's own (leaded 0.6 x it, stained and frosted 0.2 x)
-        float reflectionF0 = 0.1f;      // the sky's share in the glass head on (clear 1.2 x it, leaded 1 x, stained 0.8 x, frosted 0.5 x; to 1 at grazing)
-        float roomShareDay = 0.3f;      // by day the room behind clear glass shows this much (leaded 0.77 x it): a hint
-        float roomShareNight = 0.65f;   // at night (the lamp-lit rooms) this much (leaded 0.77 x)
+        float outsideDarkening = 0.45f; // by day clear glass this much darker than the client's own (leaded 0.6 x it, stained and frosted 0.2 x)
+        float reflectionF0 = 0.2f;      // by day the sky's share in the glass head on (clear 1.2 x it, leaded 1 x, stained and frosted 0.5 x; to 1 at grazing; at night 0.1 x the kind's)
+        float dayCoolness = 0.25f;      // by day the painted glass this far toward cool glass (its luminance in the sky's hue; more up the pane and at a slant; frosted 0.6 x, stained 0.25 x)
+        float roomShareDay = 0.65f;     // by day (and at dusk) the room behind clear glass shows this much (leaded kLeadedRoom x it)
+        float roomShareNight = 0.75f;   // at night (the lamp-lit rooms) this much (leaded kLeadedRoom x)
         // Frosted glass (no room behind it): the windows the client lights.
         int   frostedLightsOut = 1;     // they go dark through the night as rooms do (the building's hours; Ironforge's parts their own)
         float hearthFlicker = 0.08f;    // a lit one's glow dips by up to this (a hearth behind it), x the night; 0 = steady
@@ -79,8 +90,22 @@ namespace wxl_livingazeroth::glass
     /// The room is the plain warm one (as before room variety); RoomBatchConstants makes it a building's.
     void BatchConstants(const Material& m, float inside, const Light& light, const float sun[3], const float sunColour[3], const float sky[3],
                         const Settings& s, float out[4 * kConstantCount]);
-    /// The room's look by day and night for a batch (c218, c219: env/GlassModel's RoomLook at the light's day).
+    /// The room's detail by the distance for a batch (c218: env/GlassModel's RoomLook).
     void LookConstants(const Light& light, float out[4 * kLookRegisters]);
+    /// The room's registers for a batch (c15..c25: GlassShader.hpp): the instance's frame (`axes`: its WMO's x, y and z in
+    /// the world, three rows; `origin` where its 0, 0, 0 stands) about the camera; the group's grid in the window table
+    /// (null: no rooms) and the table's height; the building's class (its rooms' depth and furniture: RoomKindOf); the
+    /// texture set's scales (yd a repeat) and gains (to a mean of 1); the settings (RoomDetail, LayoutStrength).
+    void RoomRegisters(const float axes[9], const float origin[3], const float camera[3], const WindowTable::Grid* grid, int tableHeight,
+                       uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters]);
+    /// Whether a placement matrix's rotation (three rows) is a rotation: unit rows at right angles (else no rooms).
+    bool IsRotation(const float axes[9]);
+    /// The windows as loaded (GlassWindows.cdbc; for the tests and the panel).
+    const WindowTable& Windows();
+    /// The day's look for a batch (c85, c86): the glass cooler (DayCoolness x the kind's x the day; none matte, underground
+    /// or without OutsideReflection) and the room by day (the sun's patch x the sun through, farther darker x the light's
+    /// rooms). c85.x and c86 are 0 at night (the night's look).
+    void DayConstants(const Material& m, const Light& light, const Settings& s, uint32_t buildingFlags, float out[4 * kDayRegisters]);
 
     /// The room for one glass batch: its building's style (a default house when `building` is null), the night
     /// (the client's window fade, 0..1), the hour (0..24), whether the client lights this material at night (SIDN).
@@ -117,7 +142,7 @@ namespace wxl_livingazeroth::glass
     float FlickerAmplitude(float amount, float night);
     /// Rewrites the room's part of `out` (c198.w, c199.rgb, c200.w, c201.yzw, c202..c205; `out` as BatchConstants left
     /// it: the day's room light goes by its darkening, c197.x) and fills `seed` (c212: the seed, the block, the dark
-    /// band's slope; c213: the origin the cells are about, the building's else the instance's, and the band's base). The
+    /// band's slope; c213: the building's origin, else the instance's, and the band's base). The
     /// band: c203.w lo, c200.w hi. Lit frosted glass (FrostedLit) gets its band, c201.w 1, the glow a dark one hides at
     /// night (c205.w) and the hearth's flicker (c201.y the clock, c201.z its amplitude); a lamp-lit room the lamps'
     /// (LampFlicker). Underground (kBuildingUnderground) the street's look without sky: c193.x, c196.w, c197.xy 0.
@@ -167,9 +192,10 @@ namespace wxl_livingazeroth::glass
     void NotePatchedVariant();
     unsigned PatchedVariants();
     /// Around a placed instance's group (Wmo.RenderGroup), before its batch loops: where the instance stands (its
-    /// origin, world; null when unknown), its WMO's path (PathHash, 0 unknown), the group's index, and a seed for a
-    /// building the tables don't have (the instance's address: steady while it's loaded; FallbackSeed prefers the path).
-    void BeginInstance(const float pos[3], uint32_t path, uint32_t group, uint32_t fallbackSeed);
+    /// origin, world; null when unknown), its placement's rotation (its WMO's x, y and z in the world, three rows; null
+    /// when unknown or not a rotation: no rooms), its WMO's path (PathHash, 0 unknown), the group's index, and a seed for
+    /// a building the tables don't have (the instance's address: steady while it's loaded; FallbackSeed prefers the path).
+    void BeginInstance(const float pos[3], const float axes[9], uint32_t path, uint32_t group, uint32_t fallbackSeed);
     void EndInstance();
     /// Around a group's batch loop: its MOGP flags, and whether its root has glass materials.
     void BeginGroup(uint32_t groupFlags, bool rootHasGlass);
@@ -195,6 +221,9 @@ namespace wxl_livingazeroth::glass
     void DrawPanelSection(const WXL_Api* api);
     const char* StatusLine();
     const char* RoomLine();
+    /// The windows' line: GlassWindows.cdbc, the table and atlas on the device, the texture sets loaded, last frame's glass
+    /// batches with rooms and those without (no placement frame, no windows in their group).
+    const char* WindowLine();
     /// Frosted glass's line: lights out, the flicker now, the lit frosted and underground batches drawn last frame, and
     /// Ironforge's parts' dark shares at this hour.
     const char* FrostLine();

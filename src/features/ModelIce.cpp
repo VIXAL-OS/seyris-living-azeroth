@@ -473,6 +473,9 @@ namespace wxl_livingazeroth::modelice
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
             static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
+            // (the glass's too: the rooms' samplers s8..s13, c15..c25, c83..c100)
+            static const std::regex glassClash(R"(\b(s([89]|1[0-3])|c1[5-9]|c2[0-5]|c8[3-9]|c9[0-9]|c100)\b)");
+            if (glassBlocks && std::regex_search(src, glassClash)) { why = "uses a register the glass needs"; return false; }
             // The variant's view-space position and normal: what its shadow fade reads (dp3 with c3) and
             // what its sun-facing term reads (dp3 with c4). Shadow-less variants have neither.
             static const std::regex position(R"(dp3 r\d+\.\w, (v\d+), c3\b)"), normal(R"(dp3 r\d+\.\w, c4, (v\d+))");

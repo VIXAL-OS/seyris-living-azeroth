@@ -385,47 +385,46 @@ editing, press "Reload light tables from disk" in the lights panel.
 
 Which rooms are behind each window light's glass, so the light and its glow follow the fake rooms'
 night (features/Glass: rooms go dark as the night goes on; `LightsFollowRooms` in config.md), and
-which cells of it are lit frosted glass (no room: the glass itself goes dark by the same schedule and
+which of it is lit frosted glass (no room: the glass itself goes dark by the same schedule and
 flickers like a hearth; `FrostedLightsOut`, `HearthFlicker`). Generated with WindowLights.cdbc by
-`tools/gen_window_lights.py`, from the same panes, and from gen_glass.py's GlassMaterials.cdbc (which
-glass has a room: clear and leaded; which is frosted) and GlassBuildings.cdbc (which building, its seed
-and origin), as installed. One row per room cell (or frosted cell) a light's glass covers.
+`tools/gen_window_lights.py`, from the same panes, and from gen_glass.py's GlassWindows.cdbc (the
+windows: one room behind each of clear or leaded glass; frosted ones) and GlassBuildings.cdbc (which
+building, its seed), as installed. One row per window a light's glass is in.
 
-The shader's room is a cell of the glass: the pixel's point about its building's origin, in the
-face's own frame (its geometric normal n facing out: along (−n.y, n.x, 0), x for a skylight; up
-n × along), over 3.5 × 3.2 yd. Farther than 32 yd from the origin on an axis (a city's one big WMO),
-the point is about the nearest 64-yd step from the origin (its anchor) and the anchor's index k adds
-k · (211, 97, 53) to the cell's x and k · (59, 173, 31) to its y. Each light's triangles are cut
-exactly by the anchors and the cells. Whether a room is lit is an exact hash of its cell and the
+The shader's room is the window's (GlassWindows.cdbc, below: per WMO file and group). Each of a
+light's glass triangles belongs to the window of the same WMO and group whose rectangle holds its
+middle, in WMO space, as the shader finds it: within 0.03 yd of the rectangle's edges and the window's
+Thickness of its plane, the lower ordinal if two hold it (a cell of the shader's table lists its
+windows by ordinal and the shader takes the first), so a light dims with the window its glass shows. Whether a room is lit is an exact hash of its window (its ordinal and group) and the
 building's seed (whole numbers mod 289: the same on the GPU and the CPU) against the share of rooms
-dark by the hour (RoomStyles); the runtime works the hash out per cell at load.
+dark by the hour (RoomStyles); the runtime works the hash out per window at load.
 
 | Field | Meaning |
 |---|---|
-| ID | row id (by window, then building and cell) |
+| ID | row id (by window light, then building and window) |
 | WindowID | the WindowLights row |
-| BuildingID | the GlassBuildings row (a city's group's row, else the placement's); 0 = none: the built-in house, `Seed` and the cells about the placement's origin |
-| CellX, CellY | the cell (signed; about the building's origin and its anchor, the anchor's offset in) |
-| Share | the share of the light's glass in this cell (0..1). The light's glass with no cell (stained, not glass) is 1 − the light's shares: it always lights |
+| BuildingID | the GlassBuildings row (a city's group's row, else the placement's); 0 = none: the built-in house and `Seed` |
+| CellX, CellY | the window behind the glass: its GlassWindows **Ordinal** (CellX) and **Group** (CellY), its identity in its WMO (the names are from when a room was a cell of the glass) |
+| Share | the share of the light's glass in this window (0..1). The light's glass in no window (stained, painted into a wall, not glass) is 1 − the light's shares: it always lights |
 | Seed | the shader's seed for an instance GlassBuildings doesn't name: PathHash of the WMO's path (bits 0..9 and 10..19, as GlassBuildings.Seed) |
-| Flags | 0x1 **frosted**: the cell is lit frosted glass, not a room (its band is frosted glass's: `FrostedLightsOut`, a dungeon's never; its flicker the hearth's: `HearthFlicker`). 0 = a room behind clear or leaded glass (its lamp flickers only with `LampFlicker`). Appended |
+| Flags | 0x1 **frosted**: the window is lit frosted glass, not a room (its band is frosted glass's: `FrostedLightsOut`, a dungeon's never; its flicker the hearth's: `HearthFlicker`). 0 = a room behind clear or leaded glass (its lamp flickers only with `LampFlicker`). Appended |
 
-At run time each light's share lit is its no-room share plus each cell's share × how lit that room
+At run time each light's share lit is its no-room share plus each window's share × how lit that room
 is now (x 1 − the flicker's dip, in time with the glass: env/GlassModel's HearthDip on the glass's
-hearth clock, each cell's phase from its hash): dark (its hash at or below the building's dark share), lit, or part lit while it fades. A
+hearth clock, each window's phase from its hash): dark (its hash at or below the building's dark share), lit, or part lit while it fades. A
 room the threshold crosses as the clock runs fades over 1.5 s; after a jump of the time (the climate
 panel's override, the night test) every room it crossed fades together over 1.5 s (a slider being
 dragged holds them until it stops). The shader's rooms fade the same way. Without the file, or with
-`LightsFollowRooms` 0, the lights stay as WindowLights has them. If GlassBuildings changes, rerun
-gen_window_lights.py (the building IDs and origins come from it).
+`LightsFollowRooms` 0, the lights stay as WindowLights has them. If GlassBuildings or GlassWindows
+changes, rerun gen_window_lights.py (the building IDs and the windows' ordinals come from them).
 
-## Window glass: four tables
+## Window glass: five tables
 
 Window glass that looks like glass (features/Glass, `[LivingAzeroth.Glass]` in config.md): seen from
 inside, the day coming through it (stained glass glowing in its own colours, brightest with the sun
 beyond it); seen from outside by day, the client's painted glass a little darker with the sky in it and, behind clear panes, a hint of a room;
 at night the client's own lit windows, or a lamp-lit room behind them. Sunlit panes also cast their
-light on the room's floor and walls and through its air (coloured shafts). All four tables come from
+light on the room's floor and walls and through its air (coloured shafts). All five tables come from
 `tools/gen_glass.py` (its header says how glass is found and how buildings are classed) and can be
 edited by hand. Without GlassMaterials and GlassPanes there's no glass look, floor light or shafts;
 without RoomStyles and GlassBuildings every room is the same plain warm one (and lamp-lit at night).
@@ -478,6 +477,55 @@ floor that a real wall or ceiling would shade (a storey below a high window, the
 arch); a building's other groups get none of a pane's light (the cathedral's side aisles when the
 window is in the nave). The coloured shafts use the panes whose room holds the camera (up to 16).
 
+### GlassWindows.cdbc — `GlassWindows.xml`
+
+Every window of every WMO file with clear, leaded or frosted glass (all maps the scan has), in the
+WMO's own space (its file's coordinates, z up): one set of rows per WMO file, not per placement, so
+every instance and the transports have them. Behind each window of clear or leaded glass there is
+one room: the shader finds the window a pixel of glass is in (by its WMO's path, its group and its
+point in WMO space) and looks into that window's room. The night's lights out goes by window too (its
+ordinal and group hashed with the building's seed), frosted windows' included, and WindowRooms.cdbc
+names the same windows. Generated by `python tools/gen_glass.py <scan> --windows [data dir]` (no
+textures needed) or with the other glass tables.
+
+How the windows are made (gen_glass.py's header has the numbers): a group's pieces of glass
+(connected, coplanar triangles) are one window when they face within ~10° of each other on one plane
+(within 0.15 yd), side by side or stacked with at most 0.45 yd between their rectangles (the
+mullions of one window; a facade's separate windows stand 0.6 yd or more apart), up to 6 yd wide and
+7 yd tall. Clear and leaded glass may share a window (its kind is the one with more glass), frosted
+glass only frosted; stained glass and windows painted into a wall texture have none. Pieces whose
+rectangles overlap on one plane (a duplicated face, an arch over its window) are one window whatever
+its size, so a pixel lies in one window; so are two that face within ~25° of each other (or back to
+back: a sheet's two faces, facing out of the building) where one's middle lies in the other's lookup,
+if their glass stays within 0.3 yd of one plane. A window wider or taller than 12 yd (a tall tower window, a
+wall of hide panels) is cut into equal tiles of at most 6 × 7 yd, each a window: the tiles keep the
+whole window's normal, so their rectangles share its frame and never overlap (a curved sheet's tiles
+stand off their plane, up to 3 yd on the Exodar's crystal walls). A window seen from both sides in two
+groups (its outside face in the exterior group, its inside face in its room's group) is two windows.
+Trim under 0.15 yd² is left out.
+
+| Field | Meaning |
+|---|---|
+| ID | row id (by WMO path, then ordinal) |
+| Wmo | the WMO's path as the maps place it, lower case with backslashes (`world\wmo\azeroth\buildings\stormwind\stormwind.wmo`); the runtime matches it by its PathHash (FNV-1a of that string, as GlassBuildings' fallback seed) |
+| Group | the WMO group's index (the `_NNN.wmo` number) |
+| Ordinal | the window's number in its WMO, 0..n−1: by group, then its middle from the bottom up, then x, then y (to 0.01 yd). With Group, the window's identity: its room's hash, and WindowRooms.CellX and CellY |
+| Kind | as GlassMaterials: 1 clear, 4 leaded (a room behind it), 3 frosted (no room: lit frosted glass's lights out) |
+| CenterX/Y/Z | the middle of the window's rectangle, on its plane (WMO space) |
+| NormalX/Y/Z | the window's unit normal, out of the building (an exterior group's glass as it winds; an inside face as its exterior twin faces; else where open rays get out, as GlassPanes' Out), else as its triangles wind |
+| HalfWidth, HalfHeight | the rectangle's half sizes along and up the window's frame: along = (−n.y, n.x, 0) made unit, (1, 0, 0) when n.x² + n.y² < 0.0001 (a skylight); up = n × along. Every corner of the window's glass is inside, the float32 values rounded up by 0.002 yd |
+| Flags | 0x1 the window's group is an exterior one (MOGP 0x8, not 0x2000) |
+| Panes | how many pieces of glass make it (for the editor) |
+| Comment | the WMO, the group, the kind and the panes (and a cut window's tile); never read |
+| Thickness | how far off its plane (yd) the lookup finds the window: its glass's depth off the plane + 0.05, 0.08 .. 1 (a flat pane's 0.08, so a neighbour at a slant isn't in it). A pixel is in a window within 0.03 yd of its rectangle and this of its plane; where two hold it, the lower ordinal's. 0.3 without it. Appended |
+
+On the 2026-10-17 scan: 10,572 windows in 219 WMOs and 644 groups (509 clear, 2,944 leaded, 7,119
+frosted), at most 833 in one group (Dalaran's group 3, 102 × 125 × 27 yd); 1,058 windows of more than
+one piece, 2,131 tiles of 412 big windows. The lookup finds 98% of the windows at their middle (99% of
+those with a room); the rest are panes at a slant over a lower-numbered window (a bay's side lights,
+a siege engine's curved glass), where the pixel takes that window's room. WindowRooms: 988 rooms for
+887 lights, 449 lit frosted windows at 355 lights.
+
 ### RoomStyles.cdbc — `RoomStyles.xml`
 
 How the rooms behind clear and leaded glass look, one row per pair of a building's **class** and its
@@ -485,9 +533,8 @@ place's **palette** in use (about 100). The class (from the WMO's file name, or 
 or district) sets the layouts' weights, the brightness, the rooms dark by day and how late the lights
 stay on; the palette (the culture by the path: vrykul, blood elf, Dalaran, goblin, Forsaken, orc...,
 else the place: Duskwood, the Scarlet Crusade's towns, Forsaken zones, goblin ports, Northrend's and
-Outland's humans) the colours, x the layouts' weights. Per window the shader hashes the window's cell
-(about the building's origin, in the face's own frame: WindowRooms.cdbc says how) with the building's
-seed to pick the layout, its light, the lamp's place, the curtains' gap and the things on the shelves;
+Outland's humans) the colours, x the layouts' weights. Per window the shader hashes the window (its
+GlassWindows ordinal and group) with the building's seed to pick the layout, its light, the lamp's place, the curtains' gap and the things on the shelves;
 and, with an exact hash the window lights share, whether it's dark or lit.
 
 | Field | Meaning |
@@ -554,10 +601,10 @@ WMO is the same, then its group's row if it has one, else the WMO's default, els
 | ID | row id (placements by map and unique ID, their city groups after them, the defaults last) |
 | MapID | Map.dbc ID |
 | UniqueID | the placement's unique ID (MODF); 0 for a WMO's default |
-| PosX/Y/Z | the placement's origin (its WMO's 0, 0, 0) in world coordinates; its windows' room cells are about it (a WMO's default: the instance's own origin) |
+| PosX/Y/Z | the placement's origin (its WMO's 0, 0, 0) in world coordinates (a WMO's default: 0, 0, 0, any instance) |
 | Group | the WMO group's index for a city's group, else 4294967295 (the whole placement) |
 | Style | its RoomStyles row |
-| Seed | its hash seed (a CRC of the map, the unique ID and the group): two numbers 0..1023 (bits 0..9, 10..19) offset the windows' cells |
+| Seed | its hash seed (a CRC of the map, the unique ID and the group): two numbers 0..1023 (bits 0..9, 10..19) hashed with each window's ordinal and group (GlassWindows) |
 | Flags | 0x1 a city (the shader's 14-yd blocks are its buildings: each its own tint and brightness); 0x2 a dark place (gen_window_lights' DARK_AREAS or DARK_PATHS: ruined, abandoned, haunted, dungeons, ships): no lit rooms at night; 0x4 empty: every room dark (a share of each class's buildings whose windows the client doesn't light: SIDN windows, or unlit frosted glass); 0x8 its WMO has windows the client lights at night (for the editor); 0x10 **underground**: no sky behind its glass (Ironforge's interior groups, the tram): the street's look whatever the camera's indoors, no sky, darkening or glint in it; 0x20 a **dungeon's** WMO (its path): its frosted windows keep the client's look (no lights out, no flicker) |
 | AreaID | AreaTable ID at its origin (a city group's: at its middle), for the editor |
 | Wmo | the WMO's path (case and slashes don't matter): the instance must be of this WMO |
