@@ -222,7 +222,7 @@ namespace wxl_livingazeroth::config
             t.thunder = In(s, f, "Thunder", "Heavy rain: lightning strikes, lighting the sky and (near ones) the ground.", t.thunder);
             t.sounds = In(s, f, "ThunderSounds", "A strike's crack, after the sound's travel time (about 3 s per km), quieter the farther.", t.sounds);
             t.soundDistance = In(s, f, "ThunderSoundDistance", "Strikes farther than this (yards) are silent.", t.soundDistance);
-            t.soundVolume = In(s, f, "ThunderVolume", "Your multiplier on the thunder's loudness (a near strike at 1 plays its recording at full volume).", t.soundVolume);
+            t.soundVolume = In(s, f, "ThunderVolume", "Your multiplier on the thunder's loudness (1.5: a strike within 600 yards plays its recording at full volume, one at 1000 yards at about 80%; no recording plays above full, so near strikes, under 150 yards, layer a second crack).", t.soundVolume);
             t.rumble = In(s, f, "ThunderRumble", "A deep rumble rolls after near and mid cracks, and is all you hear of very far strikes.", t.rumble);
             t.nativeSound = In(s, f, "ThunderNative", "Play thunder through the client's sound kits: a loudness per distance, from the strike's direction. 0 = Lua PlaySound (fixed volumes, no direction).", t.nativeSound);
             t.strikeLight = In(s, f, "StrikeLight", "Your multiplier on the point light at a strike within light range, 0 = none.", t.strikeLight);

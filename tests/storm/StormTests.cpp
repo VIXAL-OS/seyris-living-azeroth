@@ -350,20 +350,21 @@ int main(int argc, char** argv)
             CHECK(Near(st::ThunderDelay(2500.0f), 6.66f, 0.02f));
         });
 
-        Test("thunder's loudness: full near, (60/d)^0.6 out, quieter all the way, fading out before the silent distance", []
+        Test("thunder's loudness: full near, (190/d)^0.38 out, quieter all the way, fading out before the silent distance", []
         {
-            CHECK(st::ThunderGain(0.0f, 1600.0f) == 1.0f && st::ThunderGain(60.0f, 1600.0f) == 1.0f);
-            CHECK(Near(st::ThunderGain(250.0f, 1600.0f), 0.425f, 0.005f));
-            CHECK(Near(st::ThunderGain(1000.0f, 1600.0f), 0.185f, 0.005f));
+            CHECK(st::ThunderGain(0.0f, 1600.0f) == 1.0f && st::ThunderGain(60.0f, 1600.0f) == 1.0f && st::ThunderGain(190.0f, 1600.0f) == 1.0f);
+            CHECK(Near(st::ThunderGain(250.0f, 1600.0f), 0.90f, 0.005f));
+            CHECK(Near(st::ThunderGain(600.0f, 1600.0f), 0.646f, 0.005f));
+            CHECK(Near(st::ThunderGain(1000.0f, 1600.0f), 0.532f, 0.005f));
             float last = 1.0f;
-            for (float d = 61.0f; d < 1600.0f; d += 7.0f)
+            for (float d = 191.0f; d < 1600.0f; d += 7.0f)
             {
                 const float g = st::ThunderGain(d, 1600.0f);
                 CHECK(g < last && g > 0.0f);
                 last = g;
             }
             // No fade far from the end; gone at it; nothing beyond, or with no distance, or for a nonsense one.
-            CHECK(Near(st::ThunderGain(1300.0f, 1600.0f), std::pow(60.0f / 1300.0f, 0.6f), 1e-6f));
+            CHECK(Near(st::ThunderGain(1300.0f, 1600.0f), std::pow(190.0f / 1300.0f, 0.38f), 1e-6f));
             CHECK(st::ThunderGain(1600.0f, 1600.0f) == 0.0f && st::ThunderGain(1601.0f, 1600.0f) == 0.0f);
             CHECK(st::ThunderGain(100.0f, 0.0f) == 0.0f && st::ThunderGain(std::nanf(""), 1600.0f) == 0.0f);
             std::printf("  gain at 60 / 250 / 700 / 1000 / 1500 yd: %.2f %.2f %.2f %.2f %.2f\n", st::ThunderGain(60.0f, 1600.0f),
@@ -372,12 +373,19 @@ int main(int argc, char** argv)
 
         Test("thunder's recordings: near the machine's crack (or Shaman thunder, Call Lightning), then the Blasted Lands bolt, far the rumble alone", []
         {
-            // Near: the crack by the pick, the rumble after it at half.
+            // Near (under 150 yd): the crack by the pick with a second crack under it at the same moment and gain, the
+            // rumble after them at 0.8.
             st::ThunderPlan p = st::PlanThunder(100.0f, 1600.0f, 0.2f, true);
-            CHECK(p.count == 2 && p.layer[0].kit == st::Kit::Machine && p.layer[0].after == 0.0f && p.layer[1].kit == st::Kit::Rumble);
-            CHECK(Near(p.layer[1].gain, 0.5f * p.layer[0].gain, 1e-6f) && p.layer[1].after > 0.0f);
-            CHECK(st::PlanThunder(100.0f, 1600.0f, 0.6f, true).layer[0].kit == st::Kit::ShamanThunder);
-            CHECK(st::PlanThunder(100.0f, 1600.0f, 0.9f, true).layer[0].kit == st::Kit::CallLightning);
+            CHECK(p.count == 3 && p.layer[0].kit == st::Kit::Machine && p.layer[0].after == 0.0f);
+            CHECK(p.layer[1].kit == st::Kit::ShamanThunder && p.layer[1].after == 0.0f && p.layer[1].gain == p.layer[0].gain);
+            CHECK(p.layer[2].kit == st::Kit::Rumble && Near(p.layer[2].gain, 0.8f * p.layer[0].gain, 1e-6f) && p.layer[2].after > 0.0f);
+            p = st::PlanThunder(100.0f, 1600.0f, 0.6f, true);
+            CHECK(p.layer[0].kit == st::Kit::ShamanThunder && p.layer[1].kit == st::Kit::Machine && p.layer[1].after == 0.0f);
+            p = st::PlanThunder(100.0f, 1600.0f, 0.9f, true);
+            CHECK(p.layer[0].kit == st::Kit::CallLightning && p.layer[1].kit == st::Kit::ShamanThunder);
+            // From 150 to 250 yd: one crack, the rumble after it.
+            p = st::PlanThunder(200.0f, 1600.0f, 0.2f, true);
+            CHECK(p.count == 2 && p.layer[0].kit == st::Kit::Machine && p.layer[1].kit == st::Kit::Rumble && Near(p.layer[1].gain, 0.8f * p.layer[0].gain, 1e-6f));
             // Half the near strikes are the machine's.
             unsigned machine = 0;
             st::Rng rng;
@@ -394,7 +402,7 @@ int main(int argc, char** argv)
             p = st::PlanThunder(1400.0f, 1600.0f, 0.1f, true);
             CHECK(p.count == 1 && p.layer[0].kit == st::Kit::Rumble && p.layer[0].after == 0.0f && p.layer[0].gain > st::ThunderGain(1400.0f, 1600.0f));
             // The rumble off: cracks and bolts only, and very far strikes keep their bolt.
-            CHECK(st::PlanThunder(100.0f, 1600.0f, 0.1f, false).count == 1);
+            CHECK(st::PlanThunder(100.0f, 1600.0f, 0.1f, false).count == 2 && st::PlanThunder(200.0f, 1600.0f, 0.1f, false).count == 1);
             p = st::PlanThunder(1400.0f, 1600.0f, 0.1f, false);
             CHECK(p.count == 1 && p.layer[0].kit == st::Kit::Bolt);
             // Silent beyond the distance (the setting), and for no distance setting at all.
@@ -409,6 +417,41 @@ int main(int argc, char** argv)
             // Every name fits the DBC's 31 characters (Lua PlaySound looks them up as stored).
             for (const st::KitInfo& k : st::kKits) CHECK(std::strlen(k.name) <= 31);
             for (const st::LuaRow& r : st::kLuaRows) CHECK(std::strlen(r.name) <= 31);
+        });
+
+        Test("thunder's volumes: louder than before, never above full for any layer, distance, setting or nonsense", []
+        {
+            // Every layer the plan makes, over the distances, the picks and the slider's whole range (and past it): its
+            // volume as the client gets it within 0..1, and the scale the native path passes x the kit's volume too.
+            bool inRange = true;
+            for (float d = 0.0f; d <= 1700.0f; d += 13.0f)
+                for (float pick : { 0.1f, 0.6f, 0.9f })
+                    for (float setting : { 0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 10.0f })
+                    {
+                        const st::ThunderPlan p = st::PlanThunder(d, 1600.0f, pick, true);
+                        for (int i = 0; i < p.count; ++i)
+                        {
+                            const float v = st::LayerVolume(p.layer[i].kit, p.layer[i].gain, setting);
+                            const float scale = v / st::Info(p.layer[i].kit).volume;
+                            inRange = inRange && v >= 0.0f && v <= 1.0f && scale * st::Info(p.layer[i].kit).volume <= 1.0f;
+                        }
+                    }
+            CHECK(inRange);
+            CHECK(st::LayerVolume(st::Kit::Machine, 1.0f, 3.0f) == 1.0f && st::LayerVolume(st::Kit::Machine, 1.0f, -1.0f) == 0.0f &&
+                  st::LayerVolume(st::Kit::Machine, std::nanf(""), 1.0f) == 0.0f && Near(st::LayerVolume(st::Kit::Bolt, 0.5f, 1.0f), 0.5f, 1e-6f));
+            // The main layer (the crack or the bolt) at 100, 250, 600 and 1000 yd: before, (60/d)^0.6 at 1; now at 1.5.
+            std::printf("  thunder's main layer (the client's volume), before -> now:");
+            for (float d : { 100.0f, 250.0f, 600.0f, 1000.0f })
+            {
+                const st::ThunderPlan p = st::PlanThunder(d, 1600.0f, 0.1f, true);
+                const st::Kit kit = p.layer[0].kit;
+                const float before = std::fmin(1.0f, st::Info(kit).volume * std::pow(60.0f / std::fmax(d, 60.0f), 0.6f));
+                const float now = st::LayerVolume(kit, p.layer[0].gain, st::kThunderVolume);
+                CHECK(now > before);
+                std::printf(" %.0f yd %.2f -> %.2f%s;", d, before, now, p.count == 3 ? " (+ a second crack)" : "");
+            }
+            std::printf("\n");
+            static_assert(st::kThunderVolume == 1.5f, "ThunderVolume's default");
         });
 
         Test("thunder's Lua fallback: the row nearest the volume; none when every row is far too loud", []
@@ -426,9 +469,12 @@ int main(int argc, char** argv)
             // Every kit has a row at its own volume.
             for (int i = 0; i < static_cast<int>(st::Kit::Count); ++i)
                 CHECK(st::LuaRowFor(static_cast<st::Kit>(i), st::kKits[i].volume) != nullptr);
-            // A whole storm through Lua: a far strike with only loud bolt rows is heard as its rumble.
+            // A whole storm through Lua: a far strike's bolt at its volume plays (the 0.8 row); at a quiet setting a bolt
+            // with only loud rows to play it is heard as its rumble.
             const st::ThunderPlan p = st::PlanThunder(1100.0f, 1600.0f, 0.1f, true);
-            CHECK(p.count == 2 && st::LuaRowFor(p.layer[0].kit, p.layer[0].gain) == nullptr && st::LuaRowFor(p.layer[1].kit, p.layer[1].gain) != nullptr);
+            CHECK(p.count == 2 && st::LuaRowFor(p.layer[0].kit, st::LayerVolume(p.layer[0].kit, p.layer[0].gain, 1.5f)) != nullptr);
+            CHECK(st::LuaRowFor(p.layer[0].kit, st::LayerVolume(p.layer[0].kit, p.layer[0].gain, 0.5f)) == nullptr &&
+                  st::LuaRowFor(p.layer[1].kit, st::LayerVolume(p.layer[1].kit, p.layer[1].gain, 0.5f)) != nullptr);
         });
 
         Test("thunder's direction: each positional kit is placed inside its MinDistance, so the client's rolloff keeps our volume", []

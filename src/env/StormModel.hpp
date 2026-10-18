@@ -160,25 +160,37 @@ namespace wxl_livingazeroth::storm
     const char* LuaRowFor(Kit kit, float volume);
 
     // The loudness by distance: (kThunderRef / d)^kThunderFalloff, 1 up to kThunderRef -- a near strike at full
-    // volume, 0.42 at 250 yd, 0.19 at 1000, 0.14 at 1600 -- fading to nothing over the last 15% before the silent
-    // distance. A gain on the kit's own volume.
-    constexpr float kThunderRef = kNearestStrike;
-    constexpr float kThunderFalloff = 0.6f;
+    // volume, 0.90 at 250 yd, 0.65 at 600, 0.53 at 1000, 0.45 at 1600 -- fading to nothing over the last 15% before the
+    // silent distance. A gain on the kit's own volume. "can we make thunder noises louder :D" (the user, 2026-10-18):
+    // it was (60 / d)^0.6, 0.42 at 250 yd and 0.19 at 1000.
+    constexpr float kThunderRef = 190.0f;
+    constexpr float kThunderFalloff = 0.38f;
     constexpr float kThunderFadeShare = 0.15f;
     float ThunderGain(float distanceYards, float maxDistance);
 
     // What a strike sounds like by its distance:
     //  - nearer than kNearCrack: a crack (the machine's lightning half the time, Shaman thunder or Call Lightning's
-    //    impact a quarter each), then the rumble rolling after it at half its gain;
+    //    impact a quarter each), then the rumble rolling after it at kRumbleNear of its gain; nearer than kPunch a
+    //    second crack at the same time under it (Shaman thunder under the machine's and Call Lightning's, the machine's
+    //    under Shaman thunder): one channel stops at full volume (LayerVolume), two together are louder;
     //  - nearer than kRumbleOnly: the Blasted Lands bolt, the rumble after it at 0.7;
     //  - farther: the rumble alone (x1.3), or the bolt when the rumble is off.
     constexpr float kNearCrack = 250.0f;
+    constexpr float kPunch = 150.0f;
     constexpr float kRumbleOnly = 1200.0f;
+    constexpr float kRumbleNear = 0.8f, kRumbleMid = 0.7f, kRumbleAlone = 1.3f;
     constexpr float kRumbleAfterNear = 0.25f, kRumbleAfterMid = 0.5f; // seconds after the crack
     struct ThunderLayer { Kit kit = Kit::Rumble; float gain = 0.0f; float after = 0.0f; }; // after: s after the crack's arrival
-    struct ThunderPlan  { int count = 0; ThunderLayer layer[2]; };
+    struct ThunderPlan  { int count = 0; ThunderLayer layer[3]; };
     /// pick: 0..1 (random), which crack a near strike gets. Nothing (count 0) beyond maxDistance.
     ThunderPlan PlanThunder(float distanceYards, float maxDistance, float pick, bool rumble);
+
+    /// A layer's volume as the client gets it: the kit's own x the layer's gain x the volume setting, never above 1
+    /// (the most a sound kit plays at: SE2SoundKitProperties' volume is used only within 0..1, and FMOD's channel
+    /// volume stops at 1), never below 0.
+    float LayerVolume(Kit kit, float gain, float volumeSetting);
+    /// The volume setting's default ([LivingAzeroth.Storm] ThunderVolume; it was 1).
+    constexpr float kThunderVolume = 1.5f;
 
     /// The native path's point for a positional kit: this far from the listener toward the strike -- a quarter of its
     /// MinDistance, at most 6 yd -- so the client's rolloff leaves the volume as we set it, with room for the

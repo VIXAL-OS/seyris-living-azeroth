@@ -241,15 +241,23 @@ namespace wxl_livingazeroth::storm
         {
             const Kit crack = pick < 0.5f ? Kit::Machine : (pick < 0.75f ? Kit::ShamanThunder : Kit::CallLightning);
             p.layer[p.count++] = { crack, g, 0.0f };
-            if (rumble) p.layer[p.count++] = { Kit::Rumble, 0.5f * g, kRumbleAfterNear };
+            // Near: a second crack under it, at the same moment (the machine's under Shaman thunder, else Shaman thunder).
+            if (d < kPunch) p.layer[p.count++] = { crack == Kit::ShamanThunder ? Kit::Machine : Kit::ShamanThunder, g, 0.0f };
+            if (rumble) p.layer[p.count++] = { Kit::Rumble, kRumbleNear * g, kRumbleAfterNear };
         }
         else if (d < kRumbleOnly || !rumble)
         {
             p.layer[p.count++] = { Kit::Bolt, g, 0.0f };
-            if (rumble) p.layer[p.count++] = { Kit::Rumble, 0.7f * g, kRumbleAfterMid };
+            if (rumble) p.layer[p.count++] = { Kit::Rumble, kRumbleMid * g, kRumbleAfterMid };
         }
-        else p.layer[p.count++] = { Kit::Rumble, std::fmin(1.0f, 1.3f * g), 0.0f };
+        else p.layer[p.count++] = { Kit::Rumble, std::fmin(1.0f, kRumbleAlone * g), 0.0f };
         return p;
+    }
+
+    float LayerVolume(Kit kit, float gain, float volumeSetting)
+    {
+        const float v = Info(kit).volume * gain * volumeSetting;
+        return v > 0.0f ? std::fmin(1.0f, v) : 0.0f;   // (NaN: 0)
     }
 
     float PlacementDistance(Kit kit)

@@ -113,9 +113,11 @@ and cooler than the sky above, a pale blue-grey veil, bright by day and dim at n
 take this one colour.
 
 Thunder: a near strike (under 250 yards) cracks like the Goblin weather machine's lightning half the
-time (else Shaman thunder or Call Lightning's impact), a farther one is the Blasted Lands bolt, the
-farthest (from 1200 yards) only a deep rumble, which also rolls after the nearer ones. Through the
-client's sound kits each plays at a loudness by distance ((60 / yards)^0.6) from the strike's
+time (else Shaman thunder or Call Lightning's impact; under 150 yards a second crack under it, as loud:
+one recording can't play above full volume, two together are louder), a farther one is the Blasted
+Lands bolt, the farthest (from 1200 yards) only a deep rumble, which also rolls after the nearer ones.
+Through the client's sound kits each plays at a loudness by distance ((190 / yards)^0.38: 0.9 at 250
+yards, 0.65 at 600, 0.53 at 1000; x `ThunderVolume`, never above full) from the strike's
 direction; if that call isn't available, Lua PlaySound plays the row nearest that loudness (the log
 says which). The storm panel auditions every recording.
 
@@ -129,7 +131,7 @@ says which). The storm panel auditions every recording.
 | Thunder | 1 | Heavy rain: lightning strikes, lighting the sky and (near ones) the ground. |
 | ThunderSounds | 1 | A strike's crack, after the sound's travel time (about 3 s per km), quieter the farther. |
 | ThunderSoundDistance | 1600 | Strikes farther than this (yards) are silent. |
-| ThunderVolume | 1 | Your multiplier on the thunder's loudness (a near strike at 1 plays its recording at full volume). |
+| ThunderVolume | 1.5 | Your multiplier on the thunder's loudness (at 1.5 a strike within 600 yards plays its recording at full volume, one at 1000 yards at about 80%). No recording plays above full volume, so near strikes (under 150 yards) layer a second crack under the first. |
 | ThunderRumble | 1 | A deep rumble rolls after near and mid cracks, and is all you hear of very far strikes. |
 | ThunderNative | 1 | Play thunder through the client's sound kits: a loudness per distance, from the strike's direction. 0 = Lua PlaySound (fixed volumes, no direction). |
 | StrikeLight | 1 | Your multiplier on the point light at a strike within light range, 0 = none. |

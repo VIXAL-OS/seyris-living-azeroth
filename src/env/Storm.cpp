@@ -299,8 +299,8 @@ namespace wxl_livingazeroth::storm
         void PlayLayer(Kit kit, float gain, const float dir[2])
         {
             const KitInfo& k = Info(kit);
-            float scale = gain * (g_settings.soundVolume > 0.0f ? g_settings.soundVolume : 0.0f);
-            if (scale * k.volume > 1.0f) scale = 1.0f / k.volume;
+            // The kit's volume x this scale is what it plays at: LayerVolume, at most 1.
+            const float scale = LayerVolume(kit, gain, g_settings.soundVolume) / k.volume;
             if (!(scale > 0.0f)) return;
             const char* why = !g_settings.nativeSound ? "switched off in the panel or WarcraftXL.ini" : g_soundStatus;
             if (g_settings.nativeSound && g_soundNative && !g_soundBroken)

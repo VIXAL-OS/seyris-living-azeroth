@@ -49,7 +49,7 @@ namespace wxl_livingazeroth::debug
             g_api->UiCheckbox("heavy rain: strikes##storm", &s.thunder);
             g_api->UiCheckbox("thunder sounds##storm", &s.sounds);
             g_api->UiSliderFloat("strikes farther than this are silent (yd)##storm", &s.soundDistance, 0.0f, 2500.0f);
-            g_api->UiSliderFloat("thunder volume (x)##storm", &s.soundVolume, 0.0f, 2.0f);
+            g_api->UiSliderFloat("thunder volume (x; each recording at most full)##storm", &s.soundVolume, 0.0f, 3.0f);
             g_api->UiCheckbox("rolling rumble after the cracks (alone for very far strikes)##storm", &s.rumble);
             g_api->UiCheckbox("thunder through the client's sound kits (volume by distance, direction); off = Lua PlaySound##storm", &s.nativeSound);
             g_api->UiSliderFloat("strike light##storm", &s.strikeLight, 0.0f, 3.0f);
@@ -106,7 +106,7 @@ namespace wxl_livingazeroth::debug
             {
                 const storm::KitInfo& k = storm::Info(plan.layer[i].kit);
                 at += std::snprintf(heard + at, sizeof(heard) - at, "%s%s at %.2f%s", i ? ", then " : "", k.label,
-                                    k.volume * plan.layer[i].gain * s.soundVolume, plan.layer[i].after > 0.0f ? " (rolling after it)" : "");
+                                    storm::LayerVolume(plan.layer[i].kit, plan.layer[i].gain, s.soundVolume), plan.layer[i].after > 0.0f ? " (rolling after it)" : "");
             }
             std::snprintf(line, sizeof(line), "at %.0f yd: the thunder comes %.1f s after the flash: %s%s", g_distance,
                           storm::ThunderDelay(g_distance), heard,
@@ -121,7 +121,7 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiButton("Play it at this distance##stormkit")) storm::TestKit(g_kit, g_distance);
             {
                 const storm::KitInfo& k = storm::kKits[g_kit >= 0 && g_kit < static_cast<int>(storm::Kit::Count) ? g_kit : 0];
-                const float volume = std::fmin(1.0f, k.volume * storm::ThunderGain(g_distance, 1.0e9f) * s.soundVolume);
+                const float volume = storm::LayerVolume(static_cast<storm::Kit>(g_kit), storm::ThunderGain(g_distance, 1.0e9f), s.soundVolume);
                 const char* lua = storm::LuaRowFor(static_cast<storm::Kit>(g_kit), volume);
                 std::snprintf(line, sizeof(line), "  kit %d \"%s\": volume %.2f here (its own %.2f, min distance %.0f yd%s); Lua fallback: %s",
                               k.soundKitId, k.name, volume, k.volume, k.minDistance, k.positional ? ", from the strike's direction" : ", not positional",

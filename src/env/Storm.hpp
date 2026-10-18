@@ -15,6 +15,7 @@
 // calls are checked against the 12340 client's bytes first and stay off, saying why, if anything differs.
 #pragma once
 
+#include "StormModel.hpp"
 #include "WorldQuery.hpp"
 
 #include "wxl/PluginApi.h"
@@ -31,7 +32,7 @@ namespace wxl_livingazeroth::storm
         int   thunder = 1;           // heavy rain: strikes
         int   sounds = 1;            // their cracks
         float soundDistance = 1600.0f; // yd: farther strikes are silent
-        float soundVolume = 1.0f;    // x the thunder's loudness (StormModel ThunderGain)
+        float soundVolume = kThunderVolume;    // x the thunder's loudness (StormModel ThunderGain; each layer at most full: LayerVolume)
         int   rumble = 1;            // the rolling rumble after near and mid cracks, and alone for very far strikes
         int   nativeSound = 1;       // through the client's sound kits (volume per distance, from the strike's
                                      // direction); 0 = Lua PlaySound only (fixed volumes, no direction)
