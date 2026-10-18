@@ -3,6 +3,7 @@
 #include "../features/DoodadLightTable.hpp"
 #include "../features/GrassPerf.hpp"
 #include "../features/Windows.hpp"
+#include "Flame.hpp"
 #include "SceneWalk.hpp"
 
 #include "game/Camera.hpp"
@@ -334,7 +335,8 @@ namespace wxl_livingazeroth::lights
 
         // Flame flicker, 0..1 (how much it dips), each light its own phase from its position so
         // neighbouring torches don't pulse together. Smooth: three sines at unrelated rates (no visible
-        // repeat). Noise: random levels ~6 a second, eased into each other. Steps: the same levels, held.
+        // repeat; env/Flame, the hearths behind frosted glass share them). Noise: random levels ~6 a second,
+        // eased into each other. Steps: the same levels, held.
         float Flicker(int mode, const float pos[3], double time)
         {
             const double phase = std::fmod(std::fabs(pos[0] * 12.9898 + pos[1] * 78.233 + pos[2] * 37.719), 1000.0);
@@ -351,7 +353,8 @@ namespace wxl_livingazeroth::lights
                 f = f * f * (3.0f - 2.0f * f);
                 return a + (b - a) * f;
             }
-            const double s = 0.5 * std::sin(t * 7.13) + 0.3 * std::sin(t * 13.71 + 1.3) + 0.2 * std::sin(t * 23.17 + 2.1);
+            double s = 0.0;
+            for (int k = 0; k < 3; ++k) s += flame::kWeights[k] * std::sin(t * flame::kRates[k] + flame::kOffsets[k]);
             return static_cast<float>(0.5 + 0.5 * s);
         }
 
@@ -944,7 +947,7 @@ namespace wxl_livingazeroth::lights
         // and tilted down (windows::SpotDirection), as its DoodadLightProperties row says (colour, intensity, reach,
         // cone, flicker, baked occlusion), x the row's strength and the panel's, x the night factor if the row is
         // night only (the shipped ones are), x the share of its glass whose room is lit (windows::LitShare: the rooms
-        // go dark as the night goes on; a dark one lights nothing). Glow-only rows cast none. Never merged (spots
+        // go dark as the night goes on, frosted glass too; a dark one lights nothing; a hearth's flicker in it). Glow-only rows cast none. Never merged (spots
         // don't). It ranks as if its rooms were lit, so a cell's choice doesn't change while they fade.
         void AddWindowLights(const world::Snapshot& snap, const float eye[3], float night, std::vector<Candidate>& cands)
         {
@@ -990,6 +993,9 @@ namespace wxl_livingazeroth::lights
                     c.spotScale = inner - c.cosOuter > 1e-4f ? 1.0f / (inner - c.cosOuter) : 1e4f;
                 }
                 c.flickerMode = p->flickerMode; c.flickerSpeed = p->flickerSpeed; c.flickerAmount = p->flickerAmount;
+                // A hearth behind frosted glass (or a lamp in a room, with LampFlicker): its flicker is in `lit`, in time
+                // with the glass's (windows::SyncedFlicker); the row's own would beat against it.
+                if (windows::SyncedFlicker(*w)) c.flickerMode = lighttable::kFlickerOff;
                 c.scale = 1.0f;
                 c.model = nullptr;
                 c.bake = (p->flags & lighttable::kBakeOcclusion) != 0;

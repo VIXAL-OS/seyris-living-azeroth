@@ -27,7 +27,14 @@
 //     a batch's band, origin and fallback seed (1c); and on WARP 96 windows (the origin, Goldshire, Stormwind,
 //     Northrend; origins up to 600 yd away; at rest, fading, cross-fading, all dark, all lit) pixel by pixel against
 //     the CPU's cell, hash and lit value, and each light's share from its cells cut exactly against the pixels'.
+//  8. Frosted glass (lit by the client, no room): which batches, their constants (the band, the glow hidden, the
+//     hearth's flicker; Ironforge always lit; underground no sky), the flicker (env/Flame's rates, its range and mean, a
+//     frame's step, no seam at the clock's wrap, each window its own), the hearth clock; the shipped tables (Ironforge's
+//     groups by sub-zone and their hours at 23:00 and 03:00, the underground and dungeon flags, the panes with no sky,
+//     WindowRooms' frosted cells); and on WARP 48 frosted windows pixel by pixel against the CPU's lit value, dip and
+//     glow hidden, and each light's share with its flicker against the pixels'.
 // Run: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]
+#include "env/Flame.hpp"
 #include "env/GlassModel.hpp"
 #include "features/Glass.hpp"
 #include "features/GlassShader.hpp"
@@ -51,6 +58,7 @@
 #include <fstream>
 #include <map>
 #include <regex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -173,10 +181,10 @@ namespace
     // --- 1b. the rooms behind the glass: who lives there ----------------------------------------------------------
     // A pane at x = 5 facing the eye at the origin (-x), the room behind it; the room's constants for a style.
     gl::RoomConstants RoomFor(const gl::RoomStyle& style, const gl::Building* b, float night, float hour, bool selfLit, const gl::Settings& s,
-                              float dayLight = 1.0f, float seed[4 * gl::kSeedRegisters] = nullptr)
+                              float dayLight = 1.0f, float seed[4 * gl::kSeedRegisters] = nullptr, uint32_t kind = gl::kClear, float clock = 0.0f)
     {
         gl::Material m;
-        m.kind = gl::kClear;
+        m.kind = kind;
         gl::Inputs in;
         in.sun[0] = -0.3f; in.sun[1] = 0.2f; in.sun[2] = 0.9f; Norm(in.sun);
         in.daylight = dayLight; in.night = night;
@@ -185,6 +193,7 @@ namespace
         gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
         gl::RoomInputs ri;
         ri.night = night; ri.hour = hour; ri.selfLit = selfLit; ri.fallbackSeed = 12345;
+        ri.kind = kind; ri.hearthClock = clock;
         gl::RoomBatchConstants(style, b, light, ri, s, c, sd);
         gl::LookConstants(light, look);
         gl::RoomConstants k;
@@ -196,6 +205,7 @@ namespace
             k.c218[i] = look[i]; k.c219[i] = look[4 + i];
         }
         k.c200w = c[35];
+        for (int i = 0; i < 4; ++i) k.c201[i] = c[36 + i];
         if (seed) for (int i = 0; i < 4 * gl::kSeedRegisters; ++i) seed[i] = sd[i];
         return k;
     }
@@ -1008,7 +1018,7 @@ namespace
             // the pixel's footprint on the glass, squared, as the shader's screen gradients have it (an affine quad)
             const float footprint2 = std::max(2.4f * 2.4f, 1.8f * 1.8f) / (kSide * kSide);
             const float n[3] = { -1, 0, 0 };
-            struct Case { const char* name; int layout; float night; bool selfLit; uint32_t flags; float r12[3]; };
+            struct Case { const char* name; int layout; float night; bool selfLit; uint32_t flags; float r12[3]; uint32_t kind = gl::kClear; float lampFlicker = 0; };
             const Case cases[] = {
                 { "plain, by day", gl::kLayoutPlain, 0, false, 0, { 0.2f, 0.2f, 0.2f } },
                 { "shelves, by day", gl::kLayoutShelves, 0, false, 0, { 0.2f, 0.2f, 0.2f } },
@@ -1018,6 +1028,8 @@ namespace
                 { "the house's mix at 23:00, lamp-lit", -1, 1, true, 0, { 0.62f, 0.47f, 0.28f } },
                 { "curtains at 23:00, backlit", gl::kLayoutCurtains, 1, true, 0, { 0.62f, 0.47f, 0.28f } },
                 { "a dark place at night", -1, 1, true, gl::kBuildingDarkPlace, { 0.62f, 0.47f, 0.28f } },
+                { "the house's mix at 23:00, lamp-lit, the lamps flickering (LampFlicker 0.12)", -1, 1, true, 0, { 0.62f, 0.47f, 0.28f }, gl::kClear, 0.12f },
+                { "frosted glass at 02:00 (no room: dark ones hide their glow, lit ones a hearth's flicker)", -1, 1, true, 0, { 0.62f, 0.47f, 0.28f }, gl::kFrosted },
             };
             for (const Case& cs : cases)
             {
@@ -1037,7 +1049,10 @@ namespace
                     float sd[4 * gl::kSeedRegisters];
                     gl::Settings si = s;
                     if (cs.night > 0 && cs.selfLit && !(cs.flags & gl::kBuildingDarkPlace)) si.lightsOut = 0;
-                    gl::RoomConstants k = RoomFor(st, &b, cs.night, 23, cs.selfLit, si, cs.night > 0 ? 0.0f : 1.0f, sd);
+                    si.lampFlicker = cs.lampFlicker;
+                    const bool frosted = cs.kind == gl::kFrosted;
+                    gl::RoomConstants k = RoomFor(st, &b, cs.night, frosted ? 2.0f : 23.0f, cs.selfLit, si, cs.night > 0 ? 0.0f : 1.0f, sd, cs.kind,
+                                                  137.25f + 61.5f * seedNo);
                     k.footprint2 = footprint2;
                     float c[4 * gl::kConstantCount] = {};
                     c[3] = 1;                                     // mask: all glass
@@ -1052,6 +1067,7 @@ namespace
                         c[24 + i] = k.c198[i]; c[28 + i] = k.c199[i]; c[40 + i] = k.c202[i]; c[44 + i] = k.c203[i]; c[48 + i] = k.c204[i]; c[52 + i] = k.c205[i];
                     }
                     c[32] = 1; c[33] = 0.95f; c[34] = 0.85f; c[35] = k.c200w; c[36] = 1;
+                    c[37] = k.c201[1]; c[38] = k.c201[2]; c[39] = k.c201[3];
                     w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
                     UploadLook(w.dev, k);
                     V v[4];
@@ -1071,7 +1087,7 @@ namespace
                             gl::RoomOutside(P, V3, n, k, cs.r12, cs.r12, want, nullptr);
                             const size_t at = (static_cast<size_t>(row) * kSide + col) * 3;
                             float e = 0;
-                            for (int i = 0; i < 3; ++i) e = std::max(e, std::fabs(rgb[at + i] - want[i]));
+                            for (int i = 0; i < 3; ++i) e = std::max(e, std::isfinite(rgb[at + i]) ? std::fabs(rgb[at + i] - want[i]) : 1e9f);
                             // a shelf's or a doorway's edge a hair away is off by a lot at a few points
                             if (e > 0.01f * std::max(1.0f, std::max(want[0], std::max(want[1], want[2])))) ++off;
                             errors.push_back(e);
@@ -2517,6 +2533,494 @@ namespace
     }
 }
 
+namespace
+{
+    // --- 8. frosted glass: lights out without a room, the hearth's flicker, Ironforge --------------------------------
+    // "Give Living Azeroth's frosted window glass (dwarven, vrykul, draenei and similar) a night lights-out schedule and a
+    // hearth-fire flicker" (the user, 2026-10-18).
+    const char* const kIronforgePath = "world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo";
+
+    // A batch's constants as the runtime makes them (BatchConstants, then RoomBatchConstants), no rooms' clock.
+    void FrostBatch(const gl::Settings& s, const gl::RoomStyle& style, const gl::Building* b, float night, float hour, uint32_t kind, bool selfLit,
+                    bool unlit, float inside, float c[4 * gl::kConstantCount], float sd[4 * gl::kSeedRegisters])
+    {
+        gl::Material m;
+        m.kind = kind;
+        gl::Inputs in;
+        in.daylight = 1.0f - night; in.night = night;
+        const gl::Light lt = gl::Evaluate(in);
+        gl::BatchConstants(m, inside, lt, in.sun, in.sunColour, in.sky, s, c);
+        gl::RoomInputs ri;
+        ri.night = night; ri.hour = hour; ri.selfLit = selfLit; ri.unlit = unlit; ri.kind = kind; ri.hearthClock = 321.5f; ri.fallbackSeed = 9;
+        gl::RoomBatchConstants(style, b, lt, ri, s, c, sd);
+    }
+
+    void FrostedRulesTests()
+    {
+        namespace hh = gl::hearth;
+        namespace fl = wxl_livingazeroth::flame;
+        char line[640];
+        // The hearth's rates: env/Flame's (the torches') at half their pace, each a whole number of cycles in the clock's
+        // wrap; its weights twice env/Flame's (f = 0.5 + sum w q (1 - |q|) runs 0..1).
+        bool rates = true;
+        for (int k = 0; k < 3; ++k)
+        {
+            const double want = fl::kRates[k] / fl::kTwoPi * hh::kPace;
+            rates = rates && std::fabs(hh::kRate[k] - want) <= 0.5 / 1024.0 + 1e-7 &&
+                    std::fabs(hh::kRate[k] * hh::kWrap - std::round(hh::kRate[k] * hh::kWrap)) < 1e-4 &&
+                    std::fabs(hh::kWeight[k] - 2.0 * fl::kWeights[k]) < 1e-6;
+        }
+        // The dip over two minutes at 60 frames a second, for a spread of windows: within 0..A, about A / 2 on average,
+        // a frame's step small (a gentle flicker), the same bits every time, no seam where the clock wraps.
+        const float A = 0.08f;
+        float lo = 1, hi = 0, step = 0, seam = 0;
+        double sum = 0;
+        long n = 0;
+        bool same = true;
+        for (int hk = 0; hk < 289; hk += 17)
+        {
+            const float h = (hk + 0.5f) / 289.0f;
+            float last = gl::HearthDip(h, 0.0f, A);
+            for (int f = 1; f <= 60 * 120; ++f)
+            {
+                const float t = f / 60.0f;
+                const float d = gl::HearthDip(h, t, A);
+                lo = std::min(lo, d); hi = std::max(hi, d); sum += d; ++n;
+                step = std::max(step, std::fabs(d - last));
+                last = d;
+                same = same && Bits(d) == Bits(gl::HearthDip(h, t, A));
+            }
+            for (float t : { 0.0f, 3.7f, 500.25f, 1023.9f })
+                seam = std::max(seam, std::fabs(gl::HearthDip(h, t, A) - gl::HearthDip(h, t + hh::kWrap, A)));
+        }
+        const double mean = sum / n;
+        // Two windows' flickers over two minutes: each its own (their correlation low).
+        double sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+        const int m = 7200;
+        for (int f = 0; f < m; ++f)
+        {
+            const float t = f / 60.0f;
+            const double a = gl::HearthDip(10.5f / 289.0f, t, 1.0f), b = gl::HearthDip(200.5f / 289.0f, t, 1.0f);
+            sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b;
+        }
+        const double corr = (sab / m - sa / m * sb / m) / std::sqrt((saa / m - sa * sa / m / m) * (sbb / m - sb * sb / m / m));
+        std::snprintf(line, sizeof(line), "the hearth's flicker: %.4f, %.4f, %.4f Hz (env/Flame's rates x %.1f, whole cycles in %.0f s); the dip %.4f .. %.4f of %.2f, "
+                      "mean %.4f, a frame's step at most %.4f, the same bits every time, %.1e across the wrap; two windows' correlation %.2f",
+                      hh::kRate[0], hh::kRate[1], hh::kRate[2], hh::kPace, hh::kWrap, lo, hi, A, mean, step, seam, corr);
+        Check(rates && lo >= 0.0f && hi <= A && hi > 0.8f * A && lo < 0.2f * A && std::fabs(mean - 0.5 * A) < 0.05 * A && step < 0.07f * A && same &&
+              seam < 1e-3f * A && std::fabs(corr) < 0.5, line);
+
+        // The hearth clock: steady seconds x the speed; a hitch counts a quarter second at most; it wraps.
+        gl::HearthClock hc;
+        hc.Advance(100.0, 1.0f);
+        for (int f = 1; f <= 600; ++f) hc.Advance(100.0 + f / 60.0, 1.0f);
+        const float t10 = hc.Now();
+        for (int f = 1; f <= 600; ++f) hc.Advance(110.0 + f / 60.0, 2.0f);
+        const float t30 = hc.Now();
+        hc.Advance(125.0, 1.0f);
+        const float hitch = hc.Now() - t30;
+        gl::HearthClock wrap;
+        wrap.Advance(0.0, 1.0f);
+        for (int f = 1; f <= 4200; ++f) wrap.Advance(f * 0.25, 1.0f);
+        std::snprintf(line, sizeof(line), "the hearth clock: 10 s at x1 %.3f, 10 more at x2 %.3f, a 5 s hitch counts %.3f s, 1050 s later it reads %.2f (wraps at %.0f)",
+                      t10, t30, hitch, wrap.Now(), hh::kWrap);
+        Check(Near(t10, 10.0f, 1e-3f) && Near(t30, 30.0f, 2e-3f) && Near(hitch, 0.25f, 1e-4f) && wrap.Now() >= 0.0f && wrap.Now() < hh::kWrap &&
+              Near(wrap.Now(), 26.0f, 1e-2f), line);
+
+        // Which batches: lit frosted glass only (the client lights it: SIDN, or unlit), never a dungeon's, with lights out
+        // or the flicker on.
+        gl::Settings s;
+        gl::Settings off = s;
+        off.frostedLightsOut = 0; off.hearthFlicker = 0;
+        gl::Settings flicker = off;
+        flicker.hearthFlicker = 0.08f;
+        Check(gl::FrostedLit(gl::kFrosted, true, false, 0, s) && gl::FrostedLit(gl::kFrosted, false, true, 0, s) &&
+              !gl::FrostedLit(gl::kFrosted, false, false, 0, s) && !gl::FrostedLit(gl::kClear, true, false, 0, s) &&
+              !gl::FrostedLit(gl::kStained, true, true, 0, s) && !gl::FrostedLit(gl::kFrosted, true, false, gl::kBuildingDungeon, s) &&
+              !gl::FrostedLit(gl::kFrosted, true, false, 0, off) && gl::FrostedLit(gl::kFrosted, true, false, 0, flicker),
+              "lit frosted glass: frosted, lit by the client (SIDN or unlit), not a dungeon's, with FrostedLightsOut or HearthFlicker on");
+
+        // A batch's constants.
+        gl::RoomStyle house;
+        gl::Building plain;
+        plain.seed = 77; plain.uniqueId = 5;
+        float c[4 * gl::kConstantCount], sd[4 * gl::kSeedRegisters];
+        const float share3 = gl::LightsOutShare(3.0f, 0.0f, 1.0f);
+        FrostBatch(s, house, &plain, 1, 3, gl::kFrosted, true, false, 0, c, sd);
+        const bool night3 = c[39] == 1 && Near(c[55], hh::kFrostedHidden, 1e-6f) && Near(c[38], 0.08f, 1e-6f) && c[37] == 321.5f &&
+                            Near(c[47], share3, 1e-6f) && Near(c[35], share3, 1e-6f) && c[6] == 0 && c[44] == 0 && sd[0] == 77;
+        const float hidden3 = c[55], amp3 = c[38];
+        FrostBatch(s, house, &plain, 0, 12, gl::kFrosted, true, false, 0, c, sd);
+        const bool noon = c[39] == 1 && c[55] == 0 && c[38] == 0;
+        FrostBatch(s, house, &plain, 1, 3, gl::kFrosted, false, true, 0, c, sd);
+        const bool unlit = c[39] == 1 && Near(c[55], hh::kFrostedHidden, 1e-6f);
+        FrostBatch(s, house, &plain, 1, 3, gl::kFrosted, false, false, 0, c, sd);
+        const bool notLit = c[39] == 0 && c[38] == 0;
+        gl::Building dungeon = plain;
+        dungeon.flags = gl::kBuildingDungeon;
+        FrostBatch(s, house, &dungeon, 1, 3, gl::kFrosted, true, false, 0, c, sd);
+        const bool keeps = c[39] == 0;
+        FrostBatch(flicker, house, &plain, 1, 3, gl::kFrosted, true, false, 0, c, sd);
+        const bool flickerOnly = c[39] == 1 && c[55] == 0 && c[47] == 0 && c[35] == 0 && Near(c[38], 0.08f, 1e-6f);
+        gl::Building dark = plain;
+        dark.flags = gl::kBuildingDarkPlace;
+        FrostBatch(s, house, &dark, 1, 3, gl::kFrosted, true, false, 0, c, sd);
+        const bool darkPlace = c[39] == 1 && c[47] == 1 && c[35] == 1;
+        // Ironforge: its own hours, or with IronforgeAlwaysLit every window lit; underground the street's look, no sky.
+        gl::RoomStyle quarter;
+        quarter.cls = gl::kClassQuarter; quarter.lateHours = 1.0f; quarter.nightCap = 0.45f;
+        gl::Building ironforge = plain;
+        ironforge.path = gl::PathHash(kIronforgePath);
+        ironforge.flags = gl::kBuildingCity | gl::kBuildingUnderground;
+        FrostBatch(s, quarter, &ironforge, 1, 3, gl::kFrosted, false, true, 1, c, sd);
+        const bool ifHours = c[39] == 1 && Near(c[47], 0.45f, 1e-6f) && c[4] == 0 && c[19] == 0 && c[20] == 0 && c[21] == 0;
+        gl::Settings always = s;
+        always.ironforgeAlwaysLit = 1;
+        FrostBatch(always, quarter, &ironforge, 1, 3, gl::kFrosted, false, true, 1, c, sd);
+        const bool ifLit = c[39] == 1 && c[47] == 0 && c[35] == 0 && Near(c[38], 0.08f, 1e-6f);
+        FrostBatch(always, quarter, &plain, 1, 3, gl::kFrosted, false, true, 1, c, sd);
+        const bool othersNot = Near(c[47], 0.45f, 1e-6f) && c[4] == 1;   // not Ironforge, not underground: as before
+        // Rooms: the lamps steady by default (c201.zw 0: the rooms exactly as before), flickering with LampFlicker.
+        FrostBatch(s, house, &plain, 1, 23, gl::kClear, true, false, 0, c, sd);
+        const bool steady = c[38] == 0 && c[39] == 0 && c[37] == 321.5f;
+        gl::Settings lamps = s;
+        lamps.lampFlicker = 0.03f;
+        FrostBatch(lamps, house, &plain, 1, 23, gl::kClear, true, false, 0, c, sd);
+        const bool lampFlicker = Near(c[38], 0.03f, 1e-6f) && c[39] == 0;
+        FrostBatch(lamps, house, &plain, 1, 23, gl::kClear, false, false, 0, c, sd);
+        const bool noLamp = c[38] == 0;
+        std::snprintf(line, sizeof(line), "frosted batches: at 03:00 a house's %.2f dark, a dark one hides %.2f of the glow, the flicker %.2f; at noon none; unlit "
+                      "glass too, not-lit glass not; a dungeon's keeps the client's look; FrostedLightsOut off: all lit, still flickering; a dark place all "
+                      "dark; Ironforge's quarters 0.45 dark, underground (the street's look, no sky), all lit with IronforgeAlwaysLit (others not); rooms' "
+                      "lamps steady by default, flickering with LampFlicker (not where there's no lamp)", share3, hidden3, amp3);
+        Check(night3 && noon && unlit && notLit && keeps && flickerOnly && darkPlace && ifHours && ifLit && othersNot && steady && lampFlicker && noLamp, line);
+
+        // The window light: each cell lit x (1 - its dip); glass with no cell stays lit.
+        gl::LightCell cells[2];
+        cells[0].hash = 0.9f; cells[0].share = 0.6f; cells[0].band = gl::Band(0.5f, 0.5f); cells[0].dip = 0.05f;
+        cells[1].hash = 0.1f; cells[1].share = 0.3f; cells[1].band = cells[0].band; cells[1].dip = 0.05f;
+        std::snprintf(line, sizeof(line), "a window light's share with the flicker: lit 60%% x 0.95, dark 30%%, no cell 10%% -> %.4f", gl::LitShare(cells, 2));
+        Check(Near(gl::LitShare(cells, 2), 0.1f + 0.6f * 0.95f, 1e-6f), line);
+
+        // RoomOutside for frosted glass (no room: k.share 0): the client's colour x (1 - hide), hide = (1 - lit) x 0.85 + lit x dip.
+        gl::RoomConstants k;
+        k.share = 0; k.c205[3] = hh::kFrostedHidden; k.c201[1] = 77.0f; k.c201[2] = 0.1f; k.c201[3] = 1;
+        k.c203[3] = 0.5f; k.c200w = 0.5f; k.c212[0] = 3; k.c212[1] = 900;
+        int frostOk = 0, frostN = 0, darkN = 0;
+        for (int y = -20; y < 20; ++y)
+        {
+            const float r12[3] = { 0.8f, 0.5f, 0.3f };
+            float out[3];
+            gl::RoomSample sm;
+            RoomAt(k, y * 0.9f, 1.7f, r12, out, &sm);
+            const float hide = (1.0f - sm.litValue) * hh::kFrostedHidden + sm.litValue * sm.dip;
+            frostOk += Near(out[0], r12[0] * (1 - hide), 1e-5f) && Near(out[2], r12[2] * (1 - hide), 1e-5f) &&
+                       Near(sm.dip, gl::HearthDip(sm.litHash, 77.0f, 0.1f), 1e-7f) ? 1 : 0;
+            darkN += sm.litValue < 0.5f ? 1 : 0;
+            ++frostN;
+        }
+        std::snprintf(line, sizeof(line), "frosted glass seen from outside (RoomOutside, no room): the client's colour x (1 - hide) at %d of %d points (%d dark)",
+                      frostOk, frostN, darkN);
+        Check(frostOk == frostN && darkN > 5 && darkN < frostN - 5, line);
+    }
+
+    // The shipped tables: Ironforge's groups by sub-zone, their hours, the flags, the panes with no sky, WindowRooms' frosted
+    // cells.
+    void FrostedTableTests(const std::filesystem::path& data)
+    {
+        Table st, bu, pa, wr;
+        if (!ReadTable(data / "RoomStyles.cdbc", st) || !ReadTable(data / "GlassBuildings.cdbc", bu) || !ReadTable(data / "GlassPanes.cdbc", pa) ||
+            !ReadTable(data / "WindowRooms.cdbc", wr))
+        { Check(false, "the shipped tables read (frosted)"); return; }
+        std::map<uint32_t, gl::RoomStyle> styles;
+        for (const auto& r : st.rows)
+        {
+            gl::RoomStyle s;
+            s.id = r[0]; s.cls = r[1]; s.palette = r[2];
+            s.darkShare = F(r[17]); s.lateHours = F(r[22]); s.nightCap = F(r[23]);
+            styles[s.id] = s;
+        }
+        auto text = [](const Table& t, uint32_t at) { return at < t.strings.size() ? std::string(&t.strings[at]) : std::string(); };
+        const uint32_t ironforge = gl::PathHash(kIronforgePath);
+        std::map<uint32_t, uint32_t> groupClass, groupFlags;
+        uint32_t placementFlags = 0;
+        int dungeonRows = 0, tempestKeep = 0, tempestDungeon = 0, goldshireDungeon = 0;
+        for (const auto& r : bu.rows)
+        {
+            const std::string wmo = text(bu, r[11]);
+            if (r[9] & gl::kBuildingDungeon) ++dungeonRows;
+            if (wmo.find("tk_exterior") != std::string::npos) { ++tempestKeep; tempestDungeon += (r[9] & gl::kBuildingDungeon) ? 1 : 0; }
+            if (wmo.find("goldshire") != std::string::npos) goldshireDungeon += (r[9] & gl::kBuildingDungeon) ? 1 : 0;
+            if (gl::PathHash(wmo.c_str()) != ironforge || r[2] == 0) continue;
+            if (r[6] == gl::kWholePlacement) placementFlags = r[9];
+            else { groupClass[r[6]] = styles.count(r[7]) ? styles[r[7]].cls : 99; groupFlags[r[6]] = r[9]; }
+        }
+        // the mapping (WMOAreaTable's sub-zones): the Great Forge's halls and the smithy forge, the ring road, the gates' halls,
+        // the High Seat and the Hall of Explorers the Commons, the wards' homes quarters, the Forlorn Cavern a cavern
+        struct Want { uint32_t group; uint32_t cls; const char* what; };
+        const Want wants[] = {
+            { 65, gl::kClassForge, "the Great Forge's hall" }, { 26, gl::kClassForge, "a Great Forge house" }, { 47, gl::kClassForge, "a smithy" },
+            { 18, gl::kClassCommons, "the ring road" }, { 8, gl::kClassCommons, "a gate's hall" }, { 89, gl::kClassCommons, "the High Seat" },
+            { 12, gl::kClassCommons, "the Hall of Explorers" }, { 15, gl::kClassQuarter, "the Military Ward" }, { 97, gl::kClassQuarter, "the Mystic Ward" },
+            { 37, gl::kClassCavern, "the Forlorn Cavern" }, { 80, gl::kClassCavern, "the Forlorn Cavern's houses" },
+        };
+        int right = 0;
+        std::string wrong;
+        for (const Want& wnt : wants)
+        {
+            if (groupClass.count(wnt.group) && groupClass[wnt.group] == wnt.cls) ++right;
+            else wrong += std::string(" ") + wnt.what;
+        }
+        std::map<uint32_t, int> perClass;
+        int underground = 0;
+        for (const auto& kv : groupClass) perClass[kv.second]++;
+        for (const auto& kv : groupFlags) underground += (kv.second & gl::kBuildingUnderground) ? 1 : 0;
+        char line[700];
+        std::snprintf(line, sizeof(line), "Ironforge's %zu glass groups: forge %d, commons %d, quarter %d, cavern %d (%d of %zu named ones right%s); underground %d "
+                      "(not the gate's outside, group 0: %s; not the placement: %s); dungeon rows %d (Tempest Keep's outside %d of %d, Goldshire's %d)",
+                      groupClass.size(), perClass[gl::kClassForge], perClass[gl::kClassCommons], perClass[gl::kClassQuarter], perClass[gl::kClassCavern],
+                      right, std::size(wants), wrong.c_str(), underground, groupFlags.count(0) && !(groupFlags[0] & gl::kBuildingUnderground) ? "yes" : "NO",
+                      !(placementFlags & gl::kBuildingUnderground) ? "yes" : "NO", dungeonRows, tempestDungeon, tempestKeep, goldshireDungeon);
+        Check(groupClass.size() > 60 && right == static_cast<int>(std::size(wants)) && perClass[gl::kClassForge] > 5 && perClass[gl::kClassCavern] > 2 &&
+              underground == static_cast<int>(groupClass.size()) - 1 && groupFlags.count(0) && !(groupFlags[0] & gl::kBuildingUnderground) &&
+              !(placementFlags & gl::kBuildingUnderground) && tempestKeep > 0 && tempestDungeon == tempestKeep && goldshireDungeon == 0, line);
+
+        // Their hours: the share of lit frosted windows dark at 23:00 and 03:00 (at rest, night 1), and a house's for comparison.
+        gl::Settings s;
+        const gl::RoomToggles t = gl::FrostedToggles(s);
+        auto styleOf = [&](uint32_t cls) { for (const auto& kv : styles) if (kv.second.cls == cls && kv.second.palette != 0xFFFF) return kv.second; return gl::RoomStyle{}; };
+        const uint32_t classes[4] = { gl::kClassForge, gl::kClassCommons, gl::kClassQuarter, gl::kClassCavern };
+        float at23[4], at03[4];
+        for (int i = 0; i < 4; ++i)
+        {
+            const gl::RoomStyle sty = styleOf(classes[i]);
+            at23[i] = gl::DarkShare(sty, 0, t, 1.0f, 23.0f);
+            at03[i] = gl::DarkShare(sty, 0, t, 1.0f, 3.0f);
+        }
+        const float house03 = gl::DarkShare(gl::RoomStyle{}, 0, t, 1.0f, 3.0f), house23 = gl::DarkShare(gl::RoomStyle{}, 0, t, 1.0f, 23.0f);
+        std::snprintf(line, sizeof(line), "Ironforge's hours (dark at 23:00 / 03:00): the forge %.2f / %.2f, the Commons %.2f / %.2f, the wards' homes %.2f / %.2f, "
+                      "the Forlorn Cavern %.2f / %.2f (a house elsewhere %.2f / %.2f)", at23[0], at03[0], at23[1], at03[1], at23[2], at03[2], at23[3], at03[3],
+                      house23, house03);
+        Check(at23[0] <= 0.04f + 1e-6f && at03[0] <= 0.04f + 1e-6f && at23[1] <= 0.1f && at03[1] <= 0.25f + 1e-6f && at03[2] <= 0.45f + 1e-6f &&
+              at03[2] < house03 && at03[0] < at03[1] && at03[1] < at03[2] && at03[2] < at03[3] && at03[3] >= 0.75f && at23[3] > house23, line);
+
+        // The panes: Ironforge's (and the tram's) interior panes have no sky behind them, no other pane is flagged.
+        int noSky = 0, ifPanes = 0, otherFlagged = 0;
+        for (const auto& r : pa.rows)
+        {
+            const std::string comment = text(pa, r[25]);
+            const bool under = comment.rfind("ironforge:", 0) == 0 || comment.rfind("subway:", 0) == 0;
+            ifPanes += comment.rfind("ironforge:", 0) == 0 ? 1 : 0;
+            noSky += (r[24] & gl::kPaneNoSky) ? 1 : 0;
+            otherFlagged += (r[24] & gl::kPaneNoSky) && !under ? 1 : 0;
+        }
+        std::snprintf(line, sizeof(line), "GlassPanes.cdbc: %d panes with no sky behind them (Ironforge's %d, the tram's), none elsewhere (%d)", noSky, ifPanes, otherFlagged);
+        Check(noSky >= ifPanes && ifPanes > 700 && otherFlagged == 0, line);
+
+        // WindowRooms: the Flags column, frosted cells at the lights of dwarven, orcish and taunka towns, each light's cells at
+        // most its glass.
+        std::map<uint32_t, float> perLight;
+        int frostCells = 0;
+        std::set<uint32_t> frostLights;
+        for (const auto& r : wr.rows)
+        {
+            if (wr.fields < 8) break;
+            perLight[r[1]] += F(r[5]);
+            if (r[7] & 1u) { ++frostCells; frostLights.insert(r[1]); }
+        }
+        float most = 0;
+        for (const auto& kv : perLight) most = std::max(most, kv.second);
+        std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u columns, %zu cells, %d of them lit frosted glass at %zu lights; a light's cells at most %.4f of its glass",
+                      wr.fields, wr.rows.size(), frostCells, frostLights.size(), most);
+        Check(wr.fields == 8 && frostCells > 500 && frostLights.size() > 100 && most <= 1.0005f, line);
+    }
+
+    // On WARP: frosted windows (no room) pixel by pixel against the CPU's rules, and each light's share with its flicker.
+    void FrostedAgreementTests()
+    {
+        Warp w;
+        std::string why;
+        if (!InitWarp(w, why)) { std::printf("skip  frosted agreement: %s\n", why.c_str()); return; }
+        // The probe: r0 = (the flicker's dip, the glow hidden, lit, the lit hash).
+        const std::string probe = "\n        mov r0.x, r21.w\n        mov r0.y, r14.y\n        mov r0.z, r20.w\n        mov r0.w, r22.x";
+        const std::string text = "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c176, 0.2126, 0.7152, 0.0722, 0.2\n" + gl::ShaderDefs() +
+                                 "    dcl_texcoord0 v0.xyz\n    dcl_texcoord1 v1.xyz\n    dcl_texcoord2 v2.xy\n    dcl_texcoord3 v3.xyz\n    dcl_2d s0\n"
+                                 "    mov r0, c175.y\n    mov r12.xyz, v3\n    mov r31.xyz, c175.y" + gl::GlassBlock("v0", "v1", "v2", probe) +
+                                 "\n    mov oC0, r0\n";
+        std::vector<uint8_t> code;
+        if (!wxl_livingazeroth::shaderpatch::Assemble(text, "frosted probe", code, why)) { Check(false, "the frosted probe assembles: " + why.substr(0, 300)); return; }
+        IDirect3DPixelShader9* ps = nullptr;
+        constexpr int kS = 96;
+        IDirect3DSurface9 *target = nullptr, *readback = nullptr;
+        if (FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps)) ||
+            FAILED(w.dev->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
+            FAILED(w.dev->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
+        { Check(false, "the frosted probe on WARP"); return; }
+        UploadLook(w.dev, gl::RoomConstants{});
+
+        struct Place { const char* name; float x, y, z; };
+        const Place places[] = { { "the origin", 0, 0, 0 }, { "Kharanos", -5600, -480, 397 }, { "Ironforge", -4900, -950, 501 },
+                                 { "the Storm Peaks", 7800, -2600, 1100 } };
+        uint32_t rng = 777;
+        auto rnd = [&rng]() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; };
+        int windows = 0, cellOff = 0, litOff = 0, nonFinite = 0, repeatOff = 0;
+        long long pixels = 0;
+        float worstDip = 0, worstHide = 0, worstShare = 0, worstWrap = 0;
+        bool drewAll = true;
+        std::string worstAt;
+        for (const Place& pl : places)
+            for (int win = 0; win < 12; ++win)
+            {
+                const float yaw = rnd() * 6.2831853f, pitch = (rnd() - 0.5f) * 0.3f;
+                float N[3] = { std::cos(yaw) * std::cos(pitch), std::sin(yaw) * std::cos(pitch), std::sin(pitch) };
+                const float hw = 0.75f + rnd() * 1.75f, hh = 0.6f + rnd() * 1.4f, dist = 6.0f + rnd() * 30.0f;
+                const float mid[3] = { pl.x + (rnd() - 0.5f) * 60.0f, pl.y + (rnd() - 0.5f) * 60.0f, pl.z + rnd() * 12.0f };
+                float a[3] = { -N[1], N[0], 0 }; Norm(a);
+                const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
+                const float cam[3] = { mid[0] + N[0] * dist, mid[1] + N[1] * dist, mid[2] + N[2] * dist };
+                const float originDist = (win % 3 == 0) ? 0.0f : rnd() * 400.0f, originYaw = rnd() * 6.2831853f;
+                const float origin[3] = { mid[0] + std::cos(originYaw) * originDist, mid[1] + std::sin(originYaw) * originDist, mid[2] - rnd() * 20.0f };
+                float rel[4][3];
+                const float cs[4][2] = { { -hw, hh }, { hw, hh }, { -hw, -hh }, { hw, -hh } };
+                for (int k = 0; k < 4; ++k)
+                    for (int i = 0; i < 3; ++i)
+                        rel[k][i] = static_cast<float>(static_cast<double>(mid[i]) - cam[i] + static_cast<double>(a[i]) * cs[k][0] + static_cast<double>(u[i]) * cs[k][1]);
+                {
+                    double e1[3], e2[3], nn[3];
+                    for (int i = 0; i < 3; ++i) { e1[i] = static_cast<double>(rel[1][i]) - rel[0][i]; e2[i] = static_cast<double>(rel[2][i]) - rel[0][i]; }
+                    nn[0] = e1[1] * e2[2] - e1[2] * e2[1]; nn[1] = e1[2] * e2[0] - e1[0] * e2[2]; nn[2] = e1[0] * e2[1] - e1[1] * e2[0];
+                    const double len = std::sqrt(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]);
+                    const double facing = -(nn[0] * rel[0][0] + nn[1] * rel[0][1] + nn[2] * rel[0][2]) >= 0 ? 1.0 : -1.0;
+                    for (int i = 0; i < 3; ++i) N[i] = static_cast<float>(nn[i] / len * facing);
+                }
+                double poly[4][3];
+                const int order[4] = { 0, 1, 3, 2 };
+                for (int k = 0; k < 4; ++k)
+                    for (int i = 0; i < 3; ++i) poly[k][i] = static_cast<double>(rel[order[k]][i]) + cam[i];
+                const float seed[2] = { std::floor(rnd() * 1024.0f), std::floor(rnd() * 1024.0f) };
+                gl::DarkBand band;
+                switch (win % 6)
+                {
+                case 0: { const float t = rnd(); band = gl::Band(t, t); break; }
+                case 1: { const float t = rnd() * 0.7f; band = gl::Band(t + 0.2f, t); break; }
+                case 2: { const float t = rnd() * 0.3f; band = gl::Crossfade(t, t + 0.5f, rnd()); break; }
+                case 3: band = gl::Band(1.0f, 1.0f); break;
+                case 4: band = gl::Band(0.0f, 0.0f); break;
+                default: { const float t = 0.3f + rnd() * 0.4f; band = gl::Band(t, t); break; }
+                }
+                const float clock = rnd() * gl::hearth::kWrap, amp = 0.05f + rnd() * 0.25f;
+                // lit frosted glass, outside: no room (c193.z 0), c201.w 1, the hearth clock and amplitude, the glow a dark one hides
+                float c[4 * gl::kConstantCount] = {};
+                c[3] = 1; c[5] = 1; c[6] = 0;
+                c[24] = 1 / 3.5f; c[25] = 1 / 3.2f; c[26] = 0.25f;
+                c[35] = band.hi; c[47] = band.lo;
+                c[37] = clock; c[38] = amp; c[39] = 1;
+                c[55] = gl::hearth::kFrostedHidden;
+                const float sd[4 * gl::kSeedRegisters] = { seed[0], seed[1], 0, band.slope, origin[0], origin[1], origin[2], band.base };
+                float view[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+                w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
+                w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
+                // Three draws: as given, again (the same bits), and the clock a wrap later (no seam).
+                std::vector<float> px[3];
+                for (int pass = 0; pass < 3; ++pass)
+                {
+                    struct PV { float x, y, z, rhw, p[3], n[3], uv[2], base[3]; };
+                    PV v[4];
+                    const float e = kS - 0.5f, xy[4][2] = { { -0.5f, -0.5f }, { e, -0.5f }, { -0.5f, e }, { e, e } };
+                    for (int k = 0; k < 4; ++k)
+                        v[k] = { xy[k][0], xy[k][1], 0, 1, { rel[k][0], rel[k][1], rel[k][2] }, { N[0], N[1], N[2] }, { 0.5f, 0.5f }, { 0.5f, 0.4f, 0.3f } };
+                    c[37] = pass == 2 ? clock + gl::hearth::kWrap : clock;
+                    IDirect3DDevice9* d = w.dev;
+                    d->SetRenderTarget(0, target);
+                    D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
+                    d->SetViewport(&vp);
+                    d->SetRenderState(D3DRS_ZENABLE, FALSE); d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+                    d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+                    d->SetVertexShader(nullptr); d->SetPixelShader(ps);
+                    d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
+                    d->SetTexture(0, w.texel);
+                    d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+                    const BOOL on = TRUE, off = FALSE;
+                    d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
+                    d->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
+                    D3DLOCKED_RECT lr{};
+                    bool ok = SUCCEEDED(d->BeginScene());
+                    if (ok) { d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(PV)); d->EndScene(); }
+                    ok = ok && SUCCEEDED(d->GetRenderTargetData(target, readback)) && SUCCEEDED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY));
+                    drewAll = drewAll && ok;
+                    if (!ok) break;
+                    px[pass].resize(static_cast<size_t>(kS) * kS * 4);
+                    for (int row = 0; row < kS; ++row)
+                        std::memcpy(&px[pass][static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
+                    readback->UnlockRect();
+                }
+                if (px[2].empty()) continue;
+                ++windows;
+                double gpuSum = 0;
+                for (int row = 0; row < kS; ++row)
+                    for (int col = 0; col < kS; ++col)
+                    {
+                        const size_t at = (static_cast<size_t>(row) * kS + col) * 4;
+                        const float* g = &px[0][at];
+                        for (int i = 0; i < 4; ++i)
+                        {
+                            nonFinite += std::isfinite(g[i]) ? 0 : 1;
+                            repeatOff += Bits(g[i]) != Bits(px[1][at + i]) ? 1 : 0;
+                        }
+                        worstWrap = std::max(worstWrap, std::fabs(px[2][at] - g[0]) / amp);
+                        // the CPU's cell and hash (a pixel a hair from a cell's edge may land either side: counted, allowed)
+                        const float fu = (col + 0.5f) / kS, fv = (row + 0.5f) / kS;
+                        float P[3];
+                        for (int i = 0; i < 3; ++i) P[i] = rel[0][i] + (rel[1][i] - rel[0][i]) * fu + (rel[2][i] - rel[0][i]) * fv + cam[i];
+                        const float inv[2] = { 1 / 3.5f, 1 / 3.2f };
+                        float cell[2];
+                        gl::RoomCell(P, origin, N, inv, cell);
+                        cellOff += Bits(gl::LitHash(cell[0], cell[1], seed[0], seed[1])) != Bits(g[3]) ? 1 : 0;
+                        // the lit value, the dip and the glow hidden from the GPU's own hash
+                        const float lit = gl::RoomLit(g[3], band);
+                        litOff += Bits(lit) != Bits(g[2]) ? 1 : 0;
+                        const float dip = gl::HearthDip(g[3], clock, amp);
+                        worstDip = std::max(worstDip, std::fabs(dip - g[0]) / amp);
+                        const float hide = (1.0f - lit) * gl::hearth::kFrostedHidden + lit * dip;
+                        worstHide = std::max(worstHide, std::fabs(hide - g[1]));
+                        gpuSum += g[2] * (1.0f - g[0]);
+                        ++pixels;
+                    }
+                // The window light: its cells cut exactly, each lit x (1 - its dip), against the pixels'.
+                std::vector<gl::LightCell> cells;
+                for (const auto& kv : QuadCells(poly, N, origin))
+                {
+                    gl::LightCell lc;
+                    lc.hash = gl::LitHash(static_cast<float>(kv.first.first), static_cast<float>(kv.first.second), seed[0], seed[1]);
+                    lc.share = static_cast<float>(kv.second); lc.band = band; lc.dip = gl::HearthDip(lc.hash, clock, amp);
+                    cells.push_back(lc);
+                }
+                const float cpuShare = gl::LitShare(cells.data(), cells.size()), gpuShare = static_cast<float>(gpuSum / (kS * kS));
+                if (std::fabs(cpuShare - gpuShare) > worstShare)
+                {
+                    worstShare = std::fabs(cpuShare - gpuShare);
+                    char at[160];
+                    std::snprintf(at, sizeof(at), "%s, window %d: %zu cells, %.3f against %.3f", pl.name, win, cells.size(), cpuShare, gpuShare);
+                    worstAt = at;
+                }
+            }
+        char line[700];
+        std::snprintf(line, sizeof(line), "WARP, frosted windows (no room), the shader against the window lights' rules: %d windows (the origin, Kharanos, Ironforge, "
+                      "the Storm Peaks; at rest, fading, cross-fading, all dark, all lit; the flicker 0.05 .. 0.30), %lld pixels: NaN/Inf %d; the hash off its "
+                      "cell at %d (a cell's edge); the lit value's bits differ at %d; the dip off the CPU's by at most %.1e of its amplitude, the glow hidden by "
+                      "%.1e; drawn again the same bits (%d differ); a wrap of the clock later the dip off by %.1e of it; the light's share with its flicker against "
+                      "the pixels' worst %.4f (%s)", windows, pixels, nonFinite, cellOff, litOff, worstDip, worstHide, repeatOff, worstWrap, worstShare, worstAt.c_str());
+        Check(drewAll && windows == 48 && nonFinite == 0 && cellOff < pixels / 1000 && litOff == 0 && worstDip < 2e-3f && worstHide < 1e-3f && repeatOff == 0 &&
+              worstWrap < 2e-3f && worstShare < 0.01f, line);
+        const float zero[16] = {};
+        w.dev->SetPixelShaderConstantF(gl::kViewConstant, zero, 4);
+        w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
+        readback->Release();
+        target->Release();
+        ps->Release();
+    }
+}
+
 int main(int argc, char** argv)
 {
     bool warp = true;
@@ -2538,6 +3042,9 @@ int main(int argc, char** argv)
     if (warp) NightTests(args[1]);
     if (warp) DayRoomTests(args[1]);
     if (warp) LitAgreementTests();
+    FrostedRulesTests();
+    FrostedTableTests(args[1]);
+    if (warp) FrostedAgreementTests();
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     if (const char* preview = std::getenv("ROOM_PREVIEW")) RoomPreview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");

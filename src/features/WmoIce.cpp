@@ -35,14 +35,15 @@ namespace wxl_livingazeroth::wmoice
         //   both loops' function pointers (0x7ABFF0, 0x7AC011), called once per placed instance's visible group by the
         //   scene's WMO pass (0x7967AA: `add edi, 0B0h; push edi` with edi the instance whose root is [edi+0F4h]).
         //   The instance's placement matrix is at +0x70 (row-major, the translation in its last row: +0xA0).
-        //  MOMT +0x00 flags (0x10 SIDN: the client lights it at night), +0x10 its night colour (BGRA).
+        //  MOMT +0x00 flags (0x10 SIDN: the client lights it at night; 0x1 unlit: drawn at its texture's colour, day
+        //  and night), +0x10 its night colour (BGRA).
         //  Root +0x1C: its WMO's path, inline.
         constexpr size_t kGroupRoot = 0x18C;
         constexpr size_t kGroupFlags = 0x30;   // MOGP flags, copied into the group object (offsets/game/WMO.hpp)
         constexpr size_t kRootMotx = 0x124, kRootMotxSize = 0x164, kRootMaterials = 0x160, kRootMaterialCount = 0x19C;
         constexpr size_t kMomtStride = 0x40, kMomtTexture1 = 0x0C, kMobaMaterial = 0x17;
         constexpr size_t kMomtFlags = 0x00, kMomtSidn = 0x10;
-        constexpr uint32_t kMomtFlagSidn = 0x10;
+        constexpr uint32_t kMomtFlagSidn = 0x10, kMomtFlagUnlit = 0x1;
         constexpr size_t kRootPath = 0x1C;
         constexpr size_t kInstanceArg = 0xB0, kInstanceOrigin = 0xA0;
         constexpr uint32_t kMaxMaterials = 4096, kMaxName = 260;
@@ -98,7 +99,8 @@ namespace wxl_livingazeroth::wmoice
             std::vector<uint8_t> ice;     // per material: its modelice::Style (0 = not ice)
             std::vector<uint8_t> sand;    // per material: its texture is a floor with footprint rims (1 sand, 2 snow)
             std::vector<uint16_t> glass;  // per material: its row in the glass table + 1 (features/Glass), 0 = not glass
-            std::vector<uint8_t> selfLit; // per material: the client lights it at night (MOMT SIDN with a colour)
+            std::vector<uint8_t> selfLit; // per material: 1 the client lights it at night (MOMT SIDN with a colour), 2 unlit
+                                          // (MOMT 0x1: at full day and night), 0 neither
             bool any = false, anySand = false, anyGlass = false;
             uint32_t glassGeneration = 0; // the glass table these were looked up in
             uint32_t path = 0;            // glass::PathHash of the root's WMO path (0 unread)
@@ -138,15 +140,18 @@ namespace wxl_livingazeroth::wmoice
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
 
-        // Whether the client lights material i at night: MOMT SIDN, with a night colour.
-        bool ReadSelfLit(const RootView& v, uint32_t i)
+        // Whether the client lights material i at night (MOMT SIDN, with a night colour): 1; else whether it draws it
+        // unlit (MOMT 0x1: its texture's colour day and night, a window that always glows): 2; else 0.
+        uint8_t ReadSelfLit(const RootView& v, uint32_t i)
         {
             __try
             {
                 const uint8_t* m = v.materials + i * kMomtStride;
-                return (*reinterpret_cast<const uint32_t*>(m + kMomtFlags) & kMomtFlagSidn) && (*reinterpret_cast<const uint32_t*>(m + kMomtSidn) & 0xFFFFFFu);
+                const uint32_t flags = *reinterpret_cast<const uint32_t*>(m + kMomtFlags);
+                if ((flags & kMomtFlagSidn) && (*reinterpret_cast<const uint32_t*>(m + kMomtSidn) & 0xFFFFFFu)) return 1;
+                return (flags & kMomtFlagUnlit) ? 2 : 0;
             }
-            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
         }
 
         // The root's WMO path (inline at +0x1C), hashed as GlassBuildings.cdbc's paths are.
@@ -214,7 +219,7 @@ namespace wxl_livingazeroth::wmoice
                         {
                             r.glass[i] = static_cast<uint16_t>(g);
                             r.anyGlass = true;
-                            r.selfLit[i] = ReadSelfLit(v, i) ? 1 : 0;
+                            r.selfLit[i] = ReadSelfLit(v, i);
                         }
                     }
                 ++g_roots;
@@ -315,7 +320,7 @@ namespace wxl_livingazeroth::wmoice
             modelice::Style style = modelice::Style::None;
             uint8_t floor = 0;   // 1 sand, 2 snow
             uint16_t glassRow = 0;
-            bool selfLit = false;
+            bool selfLit = false, unlit = false;
             const RootIce* r = g_rootIce;
             if (r)
             {
@@ -328,7 +333,8 @@ namespace wxl_livingazeroth::wmoice
                         floor = r->sand[index];
                     }
                     glassRow = r->glass[index];
-                    selfLit = r->selfLit[index] != 0;
+                    selfLit = r->selfLit[index] == 1;
+                    unlit = r->selfLit[index] == 2;
                 }
             }
             if (floor) RingsOn(floor == 2);
@@ -340,7 +346,7 @@ namespace wxl_livingazeroth::wmoice
             }
             else SwitchOff();
             // The window glass and the floor light (features/Glass): its material, and whether the rims hold c101..
-            if (r && r->anyGlass) glass::Batch(glassRow, g_ringsOn, selfLit);
+            if (r && r->anyGlass) glass::Batch(glassRow, g_ringsOn, selfLit, unlit);
             return culled;
         }
 

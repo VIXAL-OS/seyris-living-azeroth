@@ -35,10 +35,17 @@ namespace wxl_livingazeroth::windows
     };
     Settings& Config();
 
-    /// How much of the window's glass has a lit room now, 0..1 (features/Glass's rooms, WindowRooms.cdbc): 1 with
-    /// LightsFollowRooms off, while dark rooms don't hide the client's window (glass, its rooms or lamp-lit rooms
-    /// off), and for glass with no room (stained, frosted, not glass). Once per window per frame.
+    /// How much of the window's glass is lit now, 0..1 (features/Glass's rooms and lit frosted glass, WindowRooms.cdbc):
+    /// each room's or frosted cell's lit value x (1 - the flicker's dip: a hearth behind frosted glass, a room's lamp with
+    /// LampFlicker); 1 with LightsFollowRooms off, for cells whose glass doesn't hide its glow now (the glass, its rooms
+    /// or lamp-lit rooms off; FrostedLightsOut off), and for glass with neither (stained, not glass). Once per window per
+    /// frame.
     float LitShare(const Window& w);
+    /// Whether the window light's flicker is in its LitShare, in time with the glass (a hearth's, a lamp's): env/Lights
+    /// then leaves out the light's own.
+    bool SyncedFlicker(const Window& w);
+    /// WindowRooms.Flags: the cell is lit frosted glass (no room behind it: the glass itself goes dark and flickers).
+    constexpr uint32_t kCellFrosted = 0x1;
 
     /// (Re)loads WindowLights.cdbc from DBFilesClient (the lights panel's reload button calls it too).
     void Load(const WXL_SeyrisCdbcApi* cdbc);
@@ -69,6 +76,9 @@ namespace wxl_livingazeroth::windows
         // The rooms (LitShare, last frame): windows near with rooms, of them dimmed (part dark) and dark, the mean lit.
         unsigned roomWindows = 0, roomDimmed = 0, roomDark = 0;
         float    roomMeanLit = 1.0f;
+        // Lit frosted glass (LitShare, last frame, by its lights out alone): windows near with it, dimmed, dark, the mean lit.
+        unsigned frostWindows = 0, frostDimmed = 0, frostDark = 0;
+        float    frostMeanLit = 1.0f;
     };
     Stats& GetStats();
 

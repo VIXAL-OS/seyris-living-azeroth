@@ -156,7 +156,9 @@ dims as its rooms go out one by one (`WindowRooms.cdbc`: which rooms each light'
 out with the shader's own cells, hash and clock, so the light goes out with the room you see). A room
 going dark or lit again fades over 1.5 s, the light and the glow with it; after a jump of the climate
 panel's time every room it crossed fades together, and while its slider is being dragged they wait
-for it to stop. Glass with no room (stained, frosted) keeps its light all night. The lights panel's
+for it to stop. Lit frosted glass goes dark the same way (`[LivingAzeroth.Glass]` FrostedLightsOut),
+and a lit one's light flickers in time with the hearth behind its glass (HearthFlicker). Stained
+glass keeps its light all night. The lights panel's
 **Windows** section changes all of this at runtime and shows the night factor, the client's Full
 Screen Glow, what's drawn, and how many lights near are lit, dimmed or dark now.
 
@@ -171,7 +173,7 @@ Screen Glow, what's drawn, and how many lights near are lit, dimmed or dark now.
 | GlowStrength | 1 | Your multiplier on the window glow. |
 | GlowRange | 220 | Windows farther than this (yards) don't glow; the glow fades out over the last third. |
 | WithClientGlow | 1 | While the client's own Full Screen Glow (`ffxGlow`) is on: 0 = the window glow at full strength, 1 = half, 2 = off. |
-| LightsFollowRooms | 1 | The window lights and their glow follow the rooms behind the glass: a window whose rooms are dark lights nothing, a row dims as its rooms go out (needs `WindowRooms.cdbc`; with the glass, its rooms or `LitRoomsAtNight` off, or `RoomVariety` or `LightsOut` off, every room is lit and so is every light). 0 = every lit window at full all night. |
+| LightsFollowRooms | 1 | The window lights and their glow follow the rooms behind the glass: a window whose rooms are dark lights nothing, a row dims as its rooms go out (needs `WindowRooms.cdbc`; with the glass, its rooms or `LitRoomsAtNight` off, or `RoomVariety` or `LightsOut` off, every room is lit and so is every light). Lit frosted glass the same way (`FrostedLightsOut`), its light flickering in time with the hearth behind the glass (`HearthFlicker`; the row's own flicker then gives way). 0 = every lit window at full all night. |
 
 ## `[LivingAzeroth.Shafts]`: sun shafts
 
@@ -237,6 +239,21 @@ text, the UI, characters).
   panel's time, every room it crossed together), and the window lights and their glow in front of it go with it
   (`[LivingAzeroth.Windows]` LightsFollowRooms). A room's cell is its face's own: smoothed glass no longer bends the
   rooms into a mosaic. The lamp-lit rooms take `RoomShareNight` of the glass, their edges about a pixel soft.
+- **Frosted glass** (the dwarves' glowing panes, the vrykul's icy ones, the draenei's, the winter orcs', the orcs' hide
+  windows...) has no room behind it, but the windows the client lights (its self-lit materials, and the unlit ones drawn
+  at full day and night) go dark through the night the same way (`FrostedLightsOut`): the same cells, hash and fades, each
+  building's hours by its kind (inns late, shops early), the glass's own glow down to 15% when dark (a banked fire), and
+  the window lights in front with it. A lit one flickers gently, a hearth behind it (`HearthFlicker`: by up to 8% at
+  night, three slow waves at the torches' rates at half their pace, each window its own phase), its window light on the
+  ground in time with it. Ruined and abandoned places go dark at night; a dungeon's windows (Tempest Keep, the Caverns
+  of Time, the tram) keep the client's look.
+- **Ironforge** never fully sleeps: each part keeps its own hours (by the client's own sub-zones, WMOAreaTable): the
+  Great Forge and the smithies stay lit (at most 4% dark), the Commons (its shops, the bank, the inn, the halls, the High
+  Seat, the Hall of Explorers, the gates) mostly (a quarter dark at most, late), the homes and quarters of the Military
+  and Mystic Wards dim late and gently (at most 45%), and the Forlorn Cavern is darker (an hour early, up to 90%).
+  Tinker Town has no glass. Its streets are interior groups with no sky: its glass has the street's look whatever the
+  camera, with no daylight, sky or glint in it, and its panes put no sunlight on its floors (`IronforgeAlwaysLit` keeps
+  every window lit).
 - **Indoors, with the sun on the windows**: the panes' light on the room's floor and walls (where the ray toward the sun
   leaves through a pane, in the glass's colour; up to 12 panes, kept inside each pane's room) and **coloured shafts** in
   the room's air (a short march along the view against up to 16 panes whose room you're in, at a quarter of the
@@ -272,3 +289,8 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | LitRoomStrength | 1 | Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window). |
 | LightsOutStrength | 1 | Your multiplier on the share of rooms dark at night. |
 | LayoutStrength | 1 | Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards at night, 10 to 24 by day). |
+| FrostedLightsOut | 1 | Lit frosted windows go dark through the night as rooms do (each building's hours; Ironforge's parts their own), fading over 1.5 s, the window lights with them. 0 = lit all night. |
+| HearthFlicker | 0.08 | How much a lit frosted window's glow (and its window light) dips at night: a hearth behind it, each window its own phase. 0 = steady. |
+| FlickerSpeed | 1 | Your multiplier on the hearths' pace (about 0.6 to 1.8 dips a second). |
+| LampFlicker | 0 | The same flicker for the lamp-lit rooms behind clear and leaded glass and their window lights (0.03 is a candle's breath). 0 = steady lamps: their window lights keep their own faint flicker. |
+| IronforgeAlwaysLit | 0 | Ironforge's windows lit all night (they still flicker). |

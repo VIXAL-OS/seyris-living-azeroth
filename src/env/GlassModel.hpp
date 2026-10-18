@@ -17,6 +17,10 @@
 //    building's class and its place; at night lamp-lit behind the client's own lit windows, more of them dark as the
 //    night goes on (each fading over 1.5 s), the window lights in front of them with them (features/Windows works out
 //    the same rooms: RoomCell, LitHash, the dark band, the rooms' clock, below).
+//  - Frosted glass has no room, but the windows the client lights (self-lit, SIDN, or unlit: always at full) go dark
+//    the same way: the same cells, hash, schedule and fades, the glass's own glow hidden when dark; and a lit one has a
+//    hearth's gentle flicker (HearthDip), its window light in time with it. Ironforge's parts each keep their own hours
+//    (the forge never sleeps), and underground no sky comes through its glass.
 #pragma once
 
 #include <cstddef>
@@ -39,9 +43,12 @@ namespace wxl_livingazeroth::glass
     };
     const char* KindName(uint32_t kind);
 
+    enum PaneFlag : uint32_t { kPaneNoSky = 0x1 };   // GlassPanes.Flags: no sky behind it (underground): no floor light, no shafts
+
     struct Pane
     {
         uint32_t id = 0, map = 0, wmo = 0;     // wmo: the placement's unique ID
+        uint32_t flags = 0;                    // PaneFlag
         float    pos[3] = {};                  // the glass's middle
         float    out[3] = {};                  // out of the building (unit)
         float    along[3] = {};                // along the pane (unit; horizontal for an upright window)
@@ -137,7 +144,11 @@ namespace wxl_livingazeroth::glass
     enum RoomClass : uint32_t
     {
         kClassOther = 0, kClassHouse = 1, kClassFarm = 2, kClassInn = 3, kClassShop = 4, kClassTemple = 5,
-        kClassKeep = 6, kClassTower = 7, kClassCity = 8, kClassShip = 9, kClassCount = 10
+        kClassKeep = 6, kClassTower = 7, kClassCity = 8, kClassShip = 9,
+        // Ironforge's parts (a city that never fully sleeps; tools/gen_glass.py IRONFORGE): the Great Forge and the
+        // smithies, the Commons (shops, the bank, the inn, the halls), the homes and quarters of the wards, the Forlorn
+        // Cavern.
+        kClassForge = 10, kClassCommons = 11, kClassQuarter = 12, kClassCavern = 13, kClassCount = 14
     };
     const char* ClassName(uint32_t cls);
     enum Layout : int { kLayoutShelves = 0, kLayoutCurtains = 1, kLayoutDivider = 2, kLayoutPlain = 3 };
@@ -163,6 +174,8 @@ namespace wxl_livingazeroth::glass
         kBuildingDarkPlace = 0x2,  // ruined, abandoned, haunted (gen_window_lights' DARK_AREAS / DARK_PATHS): no lit rooms
         kBuildingEmpty = 0x4,      // nobody lives here: every room dark
         kBuildingSelfLit = 0x8,    // its WMO has windows the client lights at night (for the editor; not read)
+        kBuildingUnderground = 0x10, // no sky through its glass (Ironforge's interior groups): the street's look, no sky or sun in it
+        kBuildingDungeon = 0x20,   // a dungeon's WMO (its path): its frosted windows keep the client's look (no lights out, no flicker)
     };
     constexpr uint32_t kWholePlacement = 0xFFFFFFFFu;
 
@@ -349,12 +362,45 @@ namespace wxl_livingazeroth::glass
     /// from the share before a jump.
     DarkBand BandOf(const RoomClock& clock, const RoomStyle& style, uint32_t buildingFlags, const RoomToggles& t);
 
-    /// One room cell of a window light (WindowRooms.cdbc): its lit hash, its share of the light's glass, and its
-    /// building's dark band now.
-    struct LightCell { float hash = 0.5f, share = 0.0f; DarkBand band; };
-    /// How much of a window light's glass has a lit room: the glass with no room (stained, frosted, not in
-    /// GlassMaterials: 1 - the cells' shares) always, plus each cell's share x RoomLit. 0..1.
+    /// One cell of a window light's glass (WindowRooms.cdbc: a room's, or lit frosted glass's): its lit hash, its share
+    /// of the light's glass, its building's dark band now, and the flicker's dip now (HearthDip).
+    struct LightCell { float hash = 0.5f, share = 0.0f; DarkBand band; float dip = 0.0f; };
+    /// How much of a window light's glass is lit: the glass with no cell (stained, not in GlassMaterials: 1 - the cells'
+    /// shares) always, plus each cell's share x RoomLit x (1 - its dip). 0..1.
     float LitShare(const LightCell* cells, size_t count);
+
+    // --- the hearth's flicker (lit frosted glass; rooms' lamps with LampFlicker) ----------------------------------------
+    // env/Flame's three rates and weights (env/Lights' flame flicker) at the hearth's pace, each rounded to a whole
+    // number of cycles in kWrap seconds, so the clock (HearthClock) wraps without a seam and the shader only ever sees
+    // small numbers. Each wave a parabola through a cycle (4 q (1 - |q|), q = 2 frac(x) - 1: a sine within 6%), the
+    // same ops on the CPU and in the shader (c201.y the clock, c201.z the amplitude; c220, c221 defined).
+    namespace hearth
+    {
+        constexpr float kWrap = 1024.0f;              // s
+        constexpr double kPace = 0.5;                 // x env/Flame's rates: a hearth through frosted glass, ~0.6 .. 1.8 Hz
+        constexpr float Cycles(double radPerSecond)
+        {
+            return static_cast<float>(static_cast<int>(radPerSecond / 6.283185307179586 * kPace * 1024.0 + 0.5)) / 1024.0f;
+        }
+        constexpr float kRate[3] = { Cycles(7.13), Cycles(13.71), Cycles(23.17) };   // cycles a second (env/Flame kRates)
+        constexpr float kWeight[3] = { 1.0f, 0.6f, 0.4f };   // 2 x env/Flame's 0.5, 0.3, 0.2: f = 0.5 + sum w q (1 - |q|), 0..1
+        constexpr float kSpread = 640.0f;             // s: a window's clock runs its lit hash x this ahead (its own phase)
+        constexpr float kFrostedHidden = 0.85f;       // at night a dark frosted window keeps 15% of its glow (a banked fire)
+    }
+    /// The flicker's dip at a window (its lit hash) on the hearth clock: amplitude x f, f 0..1 (mean 0.5), as the
+    /// shader works it. The glass's glow and its window light go down by it.
+    float HearthDip(float hash, float clock, float amplitude);
+    /// The hearth clock: seconds x the flicker's speed, steady (a speed change doesn't jump it), wrapping at kWrap.
+    class HearthClock
+    {
+    public:
+        void Advance(double seconds, float speed);
+        void Reset() { m_have = false; }
+        float Now() const { return static_cast<float>(m_clock); }
+    private:
+        double m_clock = 0.0, m_last = 0.0;
+        bool m_have = false;
+    };
 
     /// Dave Hoskins' hash42 as the shader works it: four values in 0..1 from two.
     void Hash42(float x, float y, float out[4]);
@@ -391,6 +437,7 @@ namespace wxl_livingazeroth::glass
         float c219[4] = { room::kDetailFar[0] * room::kDetailFar[0] / (room::kDetailFar[0] * room::kDetailFar[0] - room::kDetailNear[0] * room::kDetailNear[0]),
                           -1.0f / (room::kDetailFar[0] * room::kDetailFar[0] - room::kDetailNear[0] * room::kDetailNear[0]),
                           1.0f / room::kEdgeEase, 1 };    // the detail's fade (30 .. 70 yd), the cells' edges (none)
+        float c201[4] = { 0, 0, 0, 0 };               // .y the hearth clock, .z the flicker's amplitude, .w frosted (no room)
         float c200w = 0;                              // the dark band's hi
         float cam[3] = { 0, 0, 0 };
         float footprint2 = 0.0f;                      // the pixel's footprint on the glass, squared (yd^2; the shader's)
@@ -406,7 +453,8 @@ namespace wxl_livingazeroth::glass
         float cell[2] = {};                           // its cell about the building's origin
         float cloth = 0, fold = 0, shelf = 1, falloff = 0, fade = 1, shade = 0, building[2] = {};
         float hit[3] = {};                            // where the ray meets the room (cell units)
-        float hide = 0;                               // the share of the client's glow a dark room hides (c205.w or 0)
+        float hide = 0;                               // the share of the client's glow hidden: a dark room's (c205.w), the flicker's dip
+        float dip = 0;                                // the flicker's dip (HearthDip)
         float edge = 1;                               // 1 .. 0 near its cell's edge on the glass (by day: eased to the mean)
         float light = 0;                              // the room's light (cell light x shade x shelves, eased at the edge)
         float room[3] = {};                           // the room's colour before the share
@@ -421,7 +469,8 @@ namespace wxl_livingazeroth::glass
     /// near a cell's edge on the glass, or its anchor's, the room eases to its mean (c219.zw). `sample` may be null. A
     /// dark room behind the client's lit window hides `sample->hide` of its glow from the whole window: the glass here,
     /// and the shader takes it from the rest of the window too (the lead, the frame: (1 - hide) x r12; seen from
-    /// outside).
+    /// outside); a lit one the flicker's dip (c201: HearthDip), its lamp too. With no room (k.share 0: frosted glass,
+    /// c201.w) only that: the outside colour x (1 - hide).
     void RoomOutside(const float P[3], const float V[3], const float N[3], const RoomConstants& k, const float r12[3],
                      const float outside[3], float out[3], RoomSample* sample);
 }

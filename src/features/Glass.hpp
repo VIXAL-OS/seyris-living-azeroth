@@ -12,6 +12,12 @@
 //    its seed and its origin. A batch whose material the client lights at night (MOMT SIDN) gets a lamp-lit room.
 //    The dark share goes by the rooms' clock (RoomClock: never jumping, so a room fades over 1.5 s); features/Windows
 //    asks for the same band (BandNow) so the window lights dim with the rooms behind them.
+//  - Frosted glass the client lights (SIDN, or unlit: at full day and night) goes dark the same way without a room
+//    (FrostedBand: its building's hours; Ironforge's parts their own), and a lit one flickers like a hearth on the hearth
+//    clock (HearthDip); features/Windows dims and flickers the window lights in front with it (FrostedBandNow,
+//    HearthClockNow, HearthAmplitudeNow). A dungeon's frosted glass keeps the client's look.
+//  - Underground (GlassBuildings' kBuildingUnderground: Ironforge's interior groups) the glass has the street's look
+//    with no sky, sun or glint in it, and its panes (GlassPanes' kPaneNoSky) light no floor and make no shafts.
 #pragma once
 
 #include "../env/GlassModel.hpp"
@@ -53,6 +59,12 @@ namespace wxl_livingazeroth::glass
         float reflectionF0 = 0.1f;      // the sky's share in the glass head on (clear 1.2 x it, leaded 1 x, stained 0.8 x, frosted 0.5 x; to 1 at grazing)
         float roomShareDay = 0.3f;      // by day the room behind clear glass shows this much (leaded 0.77 x it): a hint
         float roomShareNight = 0.65f;   // at night (the lamp-lit rooms) this much (leaded 0.77 x)
+        // Frosted glass (no room behind it): the windows the client lights.
+        int   frostedLightsOut = 1;     // they go dark through the night as rooms do (the building's hours; Ironforge's parts their own)
+        float hearthFlicker = 0.08f;    // a lit one's glow dips by up to this (a hearth behind it), x the night; 0 = steady
+        float flickerSpeed = 1.0f;      // x the hearth's pace (~0.6 .. 1.8 Hz; the lamps' too)
+        float lampFlicker = 0.0f;       // the same for the lamp-lit rooms behind clear and leaded glass (0 = steady lamps)
+        int   ironforgeAlwaysLit = 0;   // Ironforge's windows lit all night (they still flicker)
     };
     Settings& Config();
 
@@ -81,15 +93,34 @@ namespace wxl_livingazeroth::glass
         const RoomClock* clock = nullptr;
         /// The instance's origin (world; the building's when it's a placement in GlassBuildings), null: unknown.
         const float* origin = nullptr;
+        /// The batch's glass kind (GlassMaterials), whether the client draws it unlit (MOMT 0x1: at full day and night),
+        /// and the hearth clock now (HearthClock).
+        uint32_t kind = kNone;
+        bool unlit = false;
+        float hearthClock = 0.0f;
     };
     /// The settings the dark share depends on.
     RoomToggles Toggles(const Settings& s);
     /// A building's dark band (BandOf the clock; without one, the share at `hour` and `night`, at rest).
     DarkBand RoomBand(const RoomStyle& style, uint32_t buildingFlags, const RoomInputs& in, const Settings& s);
-    /// Rewrites the room's part of `out` (c198.w, c199.rgb, c200.w, c202..c205; `out` as BatchConstants left it: the
-    /// day's room light goes by its darkening, c197.x) and fills `seed` (c212: the seed, the block, the dark band's
-    /// slope; c213: the origin the cells are about, the building's else the instance's, and the band's base). The band:
-    /// c203.w lo, c200.w hi.
+    /// Lit frosted glass: frosted, lit by the client at night (SIDN) or unlit, not a dungeon's, and FrostedLightsOut or
+    /// HearthFlicker on.
+    bool FrostedLit(uint32_t kind, bool selfLit, bool unlit, uint32_t buildingFlags, const Settings& s);
+    /// The toggles frosted glass's dark share goes by: FrostedLightsOut, LightsOutStrength (not the rooms' variety).
+    RoomToggles FrostedToggles(const Settings& s);
+    /// Whether a building is Ironforge (its WMO's path).
+    bool IsIronforge(const Building* b);
+    /// The dark band of lit frosted glass in a building (null: the default house): every window lit with
+    /// FrostedLightsOut off, and Ironforge's with IronforgeAlwaysLit; else as a room's, with FrostedToggles.
+    DarkBand FrostedBand(const RoomStyle& style, const Building* building, const RoomInputs& in, const Settings& s);
+    /// The flicker's amplitude at this night factor: `amount` (HearthFlicker, LampFlicker) x the night, 0..1.
+    float FlickerAmplitude(float amount, float night);
+    /// Rewrites the room's part of `out` (c198.w, c199.rgb, c200.w, c201.yzw, c202..c205; `out` as BatchConstants left
+    /// it: the day's room light goes by its darkening, c197.x) and fills `seed` (c212: the seed, the block, the dark
+    /// band's slope; c213: the origin the cells are about, the building's else the instance's, and the band's base). The
+    /// band: c203.w lo, c200.w hi. Lit frosted glass (FrostedLit) gets its band, c201.w 1, the glow a dark one hides at
+    /// night (c205.w) and the hearth's flicker (c201.y the clock, c201.z its amplitude); a lamp-lit room the lamps'
+    /// (LampFlicker). Underground (kBuildingUnderground) the street's look without sky: c193.x, c196.w, c197.xy 0.
     void RoomBatchConstants(const RoomStyle& style, const Building* building, const Light& light, const RoomInputs& in, const Settings& s,
                             float out[4 * kConstantCount], float seed[4 * kSeedRegisters]);
     /// The fallback seed of an instance the tables don't have: its WMO's PathHash when known (the same for every copy,
@@ -100,6 +131,16 @@ namespace wxl_livingazeroth::glass
     /// Whether a dark room hides the client's lit window at night now: the glass on, its blocks in the shaders, the
     /// rooms (FakeInteriors with OutsideReflection) and lamp-lit rooms on.
     bool RoomsHideGlow();
+    /// Whether dark frosted glass hides its glow now (the glass on, its blocks in the shaders, FrostedLightsOut).
+    bool FrostedHideGlow();
+    /// This frame's dark band for lit frosted glass in a building (null: the default house).
+    DarkBand FrostedBandNow(const RoomStyle& style, const Building* building);
+    /// This frame's hearth clock and the flicker's amplitudes (the glass's, as its batches get them): frosted glass's
+    /// (HearthFlicker x the night; 0 with the glass off), and the lamp-lit rooms' (LampFlicker x the night, while dark
+    /// rooms hide the glow).
+    float HearthClockNow();
+    float HearthAmplitudeNow();
+    float LampAmplitudeNow();
     /// This frame's dark band for a building (its style, its flags), as this frame's glass batches get it.
     DarkBand BandNow(const RoomStyle& style, uint32_t buildingFlags);
     /// The rooms' clock (for the panel and the tests).
@@ -132,9 +173,10 @@ namespace wxl_livingazeroth::glass
     void EndInstance();
     /// Around a group's batch loop: its MOGP flags, and whether its root has glass materials.
     void BeginGroup(uint32_t groupFlags, bool rootHasGlass);
-    /// Per batch: its material's glass row (0 none), whether the rims hold c101.. for it, and whether the client
-    /// lights its material at night (MOMT SIDN: the lamp-lit room).
-    void Batch(uint32_t glassMaterial, bool rimsOn, bool selfLit);
+    /// Per batch: its material's glass row (0 none), whether the rims hold c101.. for it, whether the client lights its
+    /// material at night (MOMT SIDN: the lamp-lit room) and whether it draws it unlit (MOMT 0x1: at full day and night;
+    /// frosted glass so is lit).
+    void Batch(uint32_t glassMaterial, bool rimsOn, bool selfLit, bool unlit);
     void EndGroup();
     /// The rims (WmoIce) just wrote c101..c172 (and c180..c189): the panes go up again before the next floor-light batch.
     void PaneRangeTaken();
@@ -153,4 +195,7 @@ namespace wxl_livingazeroth::glass
     void DrawPanelSection(const WXL_Api* api);
     const char* StatusLine();
     const char* RoomLine();
+    /// Frosted glass's line: lights out, the flicker now, the lit frosted and underground batches drawn last frame, and
+    /// Ironforge's parts' dark shares at this hour.
+    const char* FrostLine();
 }

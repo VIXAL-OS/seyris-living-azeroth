@@ -376,10 +376,12 @@ editing, press "Reload light tables from disk" in the lights panel.
 ### WindowRooms.cdbc — `WindowRooms.xml`
 
 Which rooms are behind each window light's glass, so the light and its glow follow the fake rooms'
-night (features/Glass: rooms go dark as the night goes on; `LightsFollowRooms` in config.md).
-Generated with WindowLights.cdbc by `tools/gen_window_lights.py`, from the same panes, and from
-gen_glass.py's GlassMaterials.cdbc (which glass has a room: clear and leaded) and GlassBuildings.cdbc
-(which building, its seed and origin), as installed. One row per room cell a light's glass covers.
+night (features/Glass: rooms go dark as the night goes on; `LightsFollowRooms` in config.md), and
+which cells of it are lit frosted glass (no room: the glass itself goes dark by the same schedule and
+flickers like a hearth; `FrostedLightsOut`, `HearthFlicker`). Generated with WindowLights.cdbc by
+`tools/gen_window_lights.py`, from the same panes, and from gen_glass.py's GlassMaterials.cdbc (which
+glass has a room: clear and leaded; which is frosted) and GlassBuildings.cdbc (which building, its seed
+and origin), as installed. One row per room cell (or frosted cell) a light's glass covers.
 
 The shader's room is a cell of the glass: the pixel's point about its building's origin, in the
 face's own frame (its geometric normal n facing out: along (−n.y, n.x, 0), x for a skylight; up
@@ -396,11 +398,13 @@ dark by the hour (RoomStyles); the runtime works the hash out per cell at load.
 | WindowID | the WindowLights row |
 | BuildingID | the GlassBuildings row (a city's group's row, else the placement's); 0 = none: the built-in house, `Seed` and the cells about the placement's origin |
 | CellX, CellY | the cell (signed; about the building's origin and its anchor, the anchor's offset in) |
-| Share | the share of the light's glass in this cell (0..1). The light's glass with no room (stained, frosted, not glass) is 1 − the light's shares: it always lights |
+| Share | the share of the light's glass in this cell (0..1). The light's glass with no cell (stained, not glass) is 1 − the light's shares: it always lights |
 | Seed | the shader's seed for an instance GlassBuildings doesn't name: PathHash of the WMO's path (bits 0..9 and 10..19, as GlassBuildings.Seed) |
+| Flags | 0x1 **frosted**: the cell is lit frosted glass, not a room (its band is frosted glass's: `FrostedLightsOut`, a dungeon's never; its flicker the hearth's: `HearthFlicker`). 0 = a room behind clear or leaded glass (its lamp flickers only with `LampFlicker`). Appended |
 
 At run time each light's share lit is its no-room share plus each cell's share × how lit that room
-is now: dark (its hash at or below the building's dark share), lit, or part lit while it fades. A
+is now (x 1 − the flicker's dip, in time with the glass: env/GlassModel's HearthDip on the glass's
+hearth clock, each cell's phase from its hash): dark (its hash at or below the building's dark share), lit, or part lit while it fades. A
 room the threshold crosses as the clock runs fades over 1.5 s; after a jump of the time (the climate
 panel's override, the night test) every room it crossed fades together over 1.5 s (a slider being
 dragged holds them until it stops). The shader's rooms fade the same way. Without the file, or with
@@ -455,7 +459,7 @@ Panes with no room behind them (a facade's painted windows) are left out.
 | LightR/G/B | the colour of the light it lets in (its texture's) |
 | Kind | its texture's kind (as GlassMaterials): how much sun gets through (clear 1, leaded 0.85, stained 0.8, frosted 0.55) |
 | RoomMinX/Y/Z, RoomMaxX/Y/Z | the room it lights: the interior group behind it, as a world box. Its light lands only inside (widened by 0.5 yd) |
-| Flags | reserved, 0 |
+| Flags | 0x1 **no sky** behind it: an underground WMO's interior pane (Ironforge's, the tram's): it puts no sunlight on the floor and makes no shafts |
 | Comment | the WMO and the texture; never read |
 
 At run time the sunlit panes nearest the camera (within `Range`) light the floor: the panes whose
@@ -481,7 +485,7 @@ and, with an exact hash the window lights share, whether it's dark or lit.
 | Field | Meaning |
 |---|---|
 | ID | row id (GlassBuildings.Style) |
-| Class | 0 other, 1 house, 2 farm, 3 inn, 4 shop (smithy, bank, lab, trade), 5 temple, 6 keep (barracks, towers, walls, town halls, dungeons), 7 tower (mage towers: books), 8 city (a city's mixed buildings), 9 ship. For the editor; the columns below are what's read |
+| Class | 0 other, 1 house, 2 farm, 3 inn, 4 shop (smithy, bank, lab, trade), 5 temple, 6 keep (barracks, towers, walls, town halls, dungeons), 7 tower (mage towers: books), 8 city (a city's mixed buildings), 9 ship; Ironforge's parts: 10 forge (the Great Forge, the smithies), 11 commons (the ring road's shops, the bank, the inn, the halls, the High Seat, the gates), 12 quarter (the Military and Mystic Wards' homes), 13 cavern (the Forlorn Cavern). For the editor (and the panel's line); the columns below are what's read |
 | Palette | the generator's palette (PALETTES in gen_glass.py); for the editor |
 | TintR/G/B, Tint2R/G/B | the rooms' colour by day at the two ends of a building's range: each building (in a city, each 14-yd block) picks a point between them by its hash |
 | LampR/G/B | the lamp at night (any brightness: the runtime makes a lit room as bright as the client's lit window) |
@@ -503,12 +507,29 @@ light have dark rooms at night. In a dark place every room is dark at night. A r
 again) fades over 1.5 s, and the window lights in front of it with it (WindowRooms.cdbc). With
 RoomVariety off every room is lit all night.
 
-| Hour | house | farm | inn | shop | temple | keep | tower | city |
-|---|---|---|---|---|---|---|---|---|
-| 22:00 | 22% | 29% | 8% | 36% | 8% | 8% | 8% | 15% |
-| 00:00 | 50% | 55% | 15% | 61% | 36% | 29% | 22% | 43% |
-| 03:00 | 74% | 76% | 55% | 77% | 70% | 66% | 60% | 73% |
-| 05:30 | 66% | 60% | 55% | 60% | 70% | 70% | 60% | 72% |
+**Frosted glass** has no room, but the windows the client lights (SIDN, or unlit: drawn at full day and
+night) keep the same hours by their building's style: a dark one keeps 15% of its glow at night, a lit
+one flickers like a hearth (`FrostedLightsOut`, `HearthFlicker` in config.md; with FrostedLightsOut
+the rooms' variety doesn't matter). A dungeon's (GlassBuildings 0x20) keeps the client's look.
+
+**Ironforge** (gen_glass.py IRONFORGE_AREAS): each glass group's class by the client's own sub-zone for
+it (WMOAreaTable.dbc, by the root's wmoID and the group's ID), a smithy by its name:
+
+| Sub-zone (WMOAreaTable) | Class | Glass groups |
+|---|---|---|
+| The Great Forge | forge | 15 (and the smithy `InteriorSmithA01` on the ring road) |
+| Ironforge (the ring road round the forge: Cataclysm's "The Commons"; the gates' halls) | commons | 23 (and the gate's outside, group 0, with no sub-zone) |
+| Hall of Explorers, The High Seat | commons | 5, 1 |
+| The Military Ward, The Mystic Ward | quarter | 7, 10 |
+| The Forlorn Cavern | cavern | 5 |
+| Tinker Town, Hall of Arms, Old Ironforge, Hall of Mysteries, the Vault, the Library | (no glass) | |
+
+| Hour | house | farm | inn | shop | temple | keep | tower | city | forge | commons | quarter | cavern |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 22:00 | 22% | 29% | 8% | 36% | 8% | 8% | 8% | 15% | 4% | 8% | 8% | 36% |
+| 00:00 | 50% | 55% | 15% | 61% | 36% | 29% | 22% | 43% | 4% | 15% | 36% | 61% |
+| 03:00 | 74% | 76% | 55% | 77% | 70% | 66% | 60% | 73% | 4% | 25% | 45% | 77% |
+| 05:30 | 66% | 60% | 55% | 60% | 70% | 70% | 60% | 72% | 4% | 25% | 45% | 60% |
 
 ### GlassBuildings.cdbc — `GlassBuildings.xml`
 
@@ -529,7 +550,7 @@ WMO is the same, then its group's row if it has one, else the WMO's default, els
 | Group | the WMO group's index for a city's group, else 4294967295 (the whole placement) |
 | Style | its RoomStyles row |
 | Seed | its hash seed (a CRC of the map, the unique ID and the group): two numbers 0..1023 (bits 0..9, 10..19) offset the windows' cells |
-| Flags | 0x1 a city (the shader's 14-yd blocks are its buildings: each its own tint and brightness); 0x2 a dark place (gen_window_lights' DARK_AREAS or DARK_PATHS: ruined, abandoned, haunted, dungeons, ships): no lit rooms at night; 0x4 empty: every room dark (a share of each class's buildings whose windows the client doesn't light); 0x8 its WMO has windows the client lights at night (for the editor) |
+| Flags | 0x1 a city (the shader's 14-yd blocks are its buildings: each its own tint and brightness); 0x2 a dark place (gen_window_lights' DARK_AREAS or DARK_PATHS: ruined, abandoned, haunted, dungeons, ships): no lit rooms at night; 0x4 empty: every room dark (a share of each class's buildings whose windows the client doesn't light: SIDN windows, or unlit frosted glass); 0x8 its WMO has windows the client lights at night (for the editor); 0x10 **underground**: no sky behind its glass (Ironforge's interior groups, the tram): the street's look whatever the camera's indoors, no sky, darkening or glint in it; 0x20 a **dungeon's** WMO (its path): its frosted windows keep the client's look (no lights out, no flicker) |
 | AreaID | AreaTable ID at its origin (a city group's: at its middle), for the editor |
 | Wmo | the WMO's path (case and slashes don't matter): the instance must be of this WMO |
 | Comment | the WMO, its class and palette, the area; never read |

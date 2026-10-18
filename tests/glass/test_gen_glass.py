@@ -183,18 +183,19 @@ class Panes(unittest.TestCase):
         self.assertAlmostEqual(w[2], 1.0, places=5)   # up it
 
 
-def root_with_groups(textures, names, lit=()):
-    """A root with MOGI and MOGN (the groups' names), its materials SIDN-lit where `lit` says."""
+def root_with_groups(textures, names, lit=(), unlit=(), wmo_id=0, group_flags=None):
+    """A root with MOGI and MOGN (the groups' names, their flags: exterior unless `group_flags` says), its materials
+    SIDN-lit where `lit` says and unlit (MOMT 0x1) where `unlit` does, MOHD's wmoID."""
     motx, offsets = b"", []
     for t in textures:
         offsets.append(len(motx))
         motx += t.encode("latin1") + b"\0"
-    momt = b"".join(struct.pack("<16I", 0x10 if i in lit else 0, 0, 0, offsets[i], 0x00FFC080 if i in lit else 0, *([0] * 11))
-                    for i in range(len(textures)))
-    mohd = struct.pack("<16I", len(textures), len(names), *([0] * 14))
+    momt = b"".join(struct.pack("<16I", (0x10 if i in lit else 0) | (0x1 if i in unlit else 0), 0, 0, offsets[i],
+                                0x00FFC080 if i in lit else 0, *([0] * 11)) for i in range(len(textures)))
+    mohd = struct.pack("<16I", len(textures), len(names), 0, 0, 0, 0, 0, 0, wmo_id, *([0] * 7))
     mogn, mogi = b"\0\0", b""
-    for n in names:
-        mogi += struct.pack("<I6fi", 0x8, -5, -5, 0, 5, 5, 5, len(mogn))
+    for k, n in enumerate(names):
+        mogi += struct.pack("<I6fi", group_flags[k] if group_flags else 0x8, -5, -5, 0, 5, 5, 5, len(mogn))
         mogn += n.encode("latin1") + b"\0"
     return (chunk("MVER", struct.pack("<I", 17)) + chunk("MOHD", mohd) + chunk("MOTX", motx) + chunk("MOMT", momt) +
             chunk("MOGN", mogn) + chunk("MOGI", mogi))
@@ -326,6 +327,82 @@ class Rooms(unittest.TestCase):
         self.assertNotEqual(by_uid[1][8], by_uid[2][8])         # two houses, two seeds
         self.assertEqual(by_uid[1][11], house)
         self.assertEqual(sorted({r[0] for r in buildings}), list(range(1, len(buildings) + 1)))
+
+    def test_ironforge_classes(self):
+        # the client's sub-zone for a group (WMOAreaTable), a smithy by its name; the Commons when unknown
+        self.assertEqual(g.ironforge_class("Interior_K306", "The Great Forge"), g.FORGE)
+        self.assertEqual(g.ironforge_class("InteriorSmithA01", "Ironforge"), g.FORGE)
+        self.assertEqual(g.ironforge_class("Ironforge", "Ironforge"), g.COMMONS)
+        self.assertEqual(g.ironforge_class("lib_int", "The High Seat"), g.COMMONS)
+        self.assertEqual(g.ironforge_class("Ironforge", "Hall of Explorers"), g.COMMONS)
+        self.assertEqual(g.ironforge_class("B_warriors", "The Military Ward"), g.QUARTER)
+        self.assertEqual(g.ironforge_class("Rogue", "The Mystic Ward"), g.QUARTER)
+        self.assertEqual(g.ironforge_class("Interior_D", "The Forlorn Cavern"), g.CAVERN)
+        self.assertEqual(g.ironforge_class("", ""), g.COMMONS)
+        # their hours: the forge never sleeps, the Commons mostly lit, the wards' homes gently, the cavern darker
+        at3 = [g.lights_out(3, g.CLASSES[c].late, g.CLASSES[c].cap) for c in (g.FORGE, g.COMMONS, g.QUARTER, g.CAVERN)]
+        self.assertEqual([round(x, 2) for x in at3], [0.04, 0.25, 0.45, 0.77])
+        self.assertLess(at3[2], g.lights_out(3))                     # gentler than a house's
+        self.assertGreater(g.lights_out(23, g.CLASSES[g.CAVERN].late, g.CLASSES[g.CAVERN].cap), g.lights_out(23))
+
+    def test_lit_frosted_glass_and_dungeons(self):
+        frosted = "dungeons\\textures\\windows\\mm_irnfg_windows_01.blp"
+        info = g.parse_root_all(root_with_groups([frosted, WINDOW, frosted], ["a"], lit=(2,), unlit=(0, 1)))
+        self.assertEqual(sorted(g.lit_frosted(info)), [0, 2])         # unlit or SIDN frosted; not the unlit leaded one
+        self.assertEqual(g.lit_frosted(g.parse_root_all(root_with_groups([frosted], ["a"]))), {})
+        self.assertTrue(g.is_dungeon("world\\wmo\\dungeon\\ol_tempestkeep\\tk_exterior.wmo"))
+        self.assertFalse(g.is_dungeon("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"))
+
+    def test_ironforge_buildings(self):
+        # a small Ironforge: an interior group (the Great Forge's, by the WMOAreaTable) and an exterior one (the Forlorn
+        # Cavern's, made up: an outside group keeps the sky), its glass frosted and unlit; and a house before it
+        d = Path(tempfile.mkdtemp())
+        (d / "wmo-windows").mkdir()
+        frosted = "dungeons\\textures\\windows\\mm_irnfg_windows_01.blp"
+        house = "world\\wmo\\test\\humantwostory.wmo"
+        city = "world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"
+
+        def group_id(flags, gid):
+            data = bytearray(group(flags, ((-6, -4, 0), (0.5, 4, 5)), [(0, wall_x(0.0, -1, 1, 1, 3, out=True))]))
+            at = data.index(b"PGOM") + 8
+            struct.pack_into("<I", data, at + 56, gid)
+            return bytes(data)
+        files = {
+            house: root_with_groups([WINDOW], ["Room"], lit=(0,)),
+            city: root_with_groups([frosted], ["Interior_K306", "Ironforge"], unlit=(0,), wmo_id=208, group_flags=[0x2000, 0x8]),
+            city[:-4] + "_000.wmo": group_id(0x2000, 13193),
+            city[:-4] + "_001.wmo": group_id(0x8, 3602),
+        }
+        for name, data in files.items():
+            (d / "wmo-windows" / name.replace(BS, "#")).write_bytes(data)
+        (d / "maps.tsv").write_text("0\tAzeroth\n", newline="")
+        rows = ["source\twmo\tuniqueId\tpx\tpy\tpz\trx\try\trz"]
+        for uid, wmo, pos in ((1, house, (17000.0, 50.0, 17100.0)), (7706, city, (16000.0, 60.0, 16000.0))):
+            rows.append("world\\maps\\azeroth\\azeroth_32_32.adt\t%s\t%d\t%.1f\t%.1f\t%.1f\t0\t0\t0" % (wmo, uid, *pos))
+        (d / "adt_wmos.tsv").write_text("\n".join(rows) + "\n", newline="")
+        # WMOAreaTable.dbc: 28 fields; (ID, WMOID, NameSetID, WMOGroupID, ..., AreaTableID [10], AreaName [11])
+        strings = b"\0The Great Forge\0The Forlorn Cavern\0"
+        recs = []
+        for i, (gid, at) in enumerate(((13193, 1), (3602, 17))):
+            r = [0] * 28
+            r[0], r[1], r[3], r[10], r[11] = i + 1, 208, gid, 1537, at
+            recs.append(struct.pack("<28I", *r))
+        (d / "WMOAreaTable.dbc").write_bytes(b"WDBC" + struct.pack("<4I", len(recs), 28, 112, len(strings)) + b"".join(recs) + strings)
+        styles, buildings, report = g.buildings_table(d)
+        cls = {s[0]: s[1] for s in styles}
+        groups = {r[6]: r for r in buildings if r[2] == 7706 and r[6] != g.WHOLE}
+        placed = {r[2]: r for r in buildings if r[2] != 0 and r[6] == g.WHOLE}
+        self.assertEqual(cls[groups[0][7]], g.FORGE)
+        self.assertEqual(cls[groups[1][7]], g.CAVERN)
+        self.assertTrue(groups[0][9] & g.B_UNDERGROUND)              # inside: no sky behind its glass
+        self.assertFalse(groups[1][9] & g.B_UNDERGROUND)             # the outside group keeps it
+        self.assertFalse(placed[7706][9] & g.B_UNDERGROUND)
+        self.assertTrue(placed[7706][9] & g.B_SELF_LIT)              # its frosted glass is unlit: lit windows
+        self.assertFalse(any(r[9] & g.B_DUNGEON for r in buildings))
+        # the styles: the house's first (its ID as before Ironforge's classes), Ironforge's after
+        self.assertEqual(cls[placed[1][7]], g.HOUSE)
+        self.assertEqual(placed[1][7], 1)
+        self.assertTrue(all(sid > max(s for s, c in cls.items() if c < g.FORGE) for sid, c in cls.items() if c >= g.FORGE))
 
 
 if __name__ == "__main__":

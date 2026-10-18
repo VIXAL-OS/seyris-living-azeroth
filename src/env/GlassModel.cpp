@@ -178,7 +178,8 @@ namespace wxl_livingazeroth::glass
     // --- who lives behind the glass ---------------------------------------------------------------------------------
     const char* ClassName(uint32_t cls)
     {
-        static const char* const names[kClassCount] = { "other", "house", "farm", "inn", "shop", "temple", "keep", "tower", "city", "ship" };
+        static const char* const names[kClassCount] = { "other", "house", "farm", "inn", "shop", "temple", "keep", "tower", "city", "ship",
+                                                        "forge", "commons", "quarter", "cavern" };
         return cls < kClassCount ? names[cls] : "?";
     }
 
@@ -553,9 +554,36 @@ namespace wxl_livingazeroth::glass
         {
             const float s = std::max(0.0f, cells[i].share);
             rooms += s;
-            lit += s * RoomLit(cells[i].hash, cells[i].band);
+            lit += s * RoomLit(cells[i].hash, cells[i].band) * (1.0f - Clamp01(cells[i].dip));
         }
         return Clamp01(1.0f - std::min(1.0f, rooms) + lit);
+    }
+
+    float HearthDip(float hash, float clock, float amplitude)
+    {
+        // As the shader: t = hash x spread + clock (mad); x = t x rate; q = 2 frac(x) - 1 (mad); q (1 - |q|);
+        // f = sum w q (1 - |q|) + 0.5 (dp3, add); x the amplitude.
+        using namespace hearth;
+        const float t = hash * kSpread + clock;
+        float f = 0.0f;
+        for (int k = 0; k < 3; ++k)
+        {
+            const float x = t * kRate[k];
+            const float q = (x - std::floor(x)) * 2.0f + -1.0f;
+            f += q * (1.0f - std::fabs(q)) * kWeight[k];
+        }
+        return (f + 0.5f) * amplitude;
+    }
+
+    void HearthClock::Advance(double seconds, float speed)
+    {
+        // A step of at most a quarter second (a hitch, a loading screen: the fire doesn't race to catch up).
+        const double dt = m_have ? std::min(0.25, std::max(0.0, seconds - m_last)) : 0.0;
+        m_last = seconds;
+        m_have = true;
+        const double s = std::isfinite(speed) ? std::max(0.0f, speed) : 1.0;
+        m_clock += dt * s;
+        m_clock -= hearth::kWrap * std::floor(m_clock / hearth::kWrap);
     }
 
     void RoomLook(float day, float out[8])
@@ -614,6 +642,8 @@ namespace wxl_livingazeroth::glass
         DarkBand band;
         band.lo = k.c203[3]; band.hi = k.c200w; band.base = k.c213[3]; band.slope = k.c212[3];
         const float lit = RoomLit(litHash, band);
+        // (the flicker's dip: the hearth clock c201.y, its amplitude c201.z)
+        const float dip = HearthDip(litHash, k.c201[1], k.c201[2]);
         // The soft widths at the point the ray meets (cells): the walls' and the layouts' plus the pixel's footprint
         // there (on the glass x (1 + the ray's depth over the eye's distance)), never below 1e-4.
         const float e[3] = { P[0] - k.cam[0], P[1] - k.cam[1], P[2] - k.cam[2] };
@@ -703,7 +733,8 @@ namespace wxl_livingazeroth::glass
         const float darkDay = Lerp(edge, lit * (1.0f - kDarkDay) + kDarkDay, kDarkDayMean);
         const float day = bright * k.c198[3] * darkDay;
         const float dayLum = day * lum;
-        const float lamp = lum * lit;
+        float lamp = lum * lit;
+        lamp = lamp * -dip + lamp;
         float room[3], cloth3[3];
         for (int i = 0; i < 3; ++i)
         {
@@ -712,12 +743,13 @@ namespace wxl_livingazeroth::glass
             room[i] = Lerp(cloth, cloth3[i], room[i]);
         }
         // Dark rooms behind the client's lit windows at night hide most of its glow (from the whole window: the
-        // shader takes it from the rest of the window too).
-        const float hide = (1.0f - lit) * k.c205[3];
+        // shader takes it from the rest of the window too); lit ones the flicker's dip.
+        float hide = (1.0f - lit) * k.c205[3];
+        hide = lit * dip + hide;
         for (int i = 0; i < 3; ++i) out[i] = Lerp(k.share, room[i], outside[i] * -hide + outside[i]);
         if (sample)
         {
-            sample->hide = hide;
+            sample->hide = hide; sample->dip = dip;
             sample->layout = shelves > 0 ? kLayoutShelves : curtains > 0 ? kLayoutCurtains : divider > 0 ? kLayoutDivider : kLayoutPlain;
             sample->lit = lit >= 0.5f; sample->litValue = lit; sample->litHash = litHash;
             sample->cell[0] = cell[0]; sample->cell[1] = cell[1];

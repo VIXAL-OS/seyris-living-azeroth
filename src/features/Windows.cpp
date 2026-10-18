@@ -41,9 +41,9 @@ namespace wxl_livingazeroth::windows
         constexpr WXL_SeyrisCdbcField kRoomFields[] = {
             {"ID", 0, WXL_CDBC_FIELD_VALUE},    {"WindowID", 1, WXL_CDBC_FIELD_VALUE}, {"BuildingID", 2, WXL_CDBC_FIELD_VALUE},
             {"CellX", 3, WXL_CDBC_FIELD_VALUE}, {"CellY", 4, WXL_CDBC_FIELD_VALUE},    {"Share", 5, WXL_CDBC_FIELD_VALUE},
-            {"Seed", 6, WXL_CDBC_FIELD_VALUE},
+            {"Seed", 6, WXL_CDBC_FIELD_VALUE},  {"Flags", 7, WXL_CDBC_FIELD_VALUE},
         };
-        constexpr WXL_SeyrisCdbcDefinition kRoomDef = { "WindowRooms", kRoomsFile, kRoomFields, 7 };
+        constexpr WXL_SeyrisCdbcDefinition kRoomDef = { "WindowRooms", kRoomsFile, kRoomFields, 8 };
 
         Settings    g_settings;
         Stats       g_stats;
@@ -51,10 +51,14 @@ namespace wxl_livingazeroth::windows
         std::string g_status = "not loaded yet", g_roomStatus = "WindowRooms.cdbc: not loaded yet";
         uint32_t    g_generation = 1;
 
-        // A light's room cell as the table has it, and resolved against features/Glass's tables (its style, flags
-        // and lit hash: again whenever those reload).
-        struct RoomRef { uint32_t building = 0; float cell[2] = {}; float share = 0.0f; uint32_t seed = 0; };
-        struct RoomCell { const glass::RoomStyle* style = nullptr; uint32_t flags = 0; float hash = 0.5f, share = 0.0f; };
+        // A light's room cell as the table has it (Flags: kCellFrosted, lit frosted glass with no room), and resolved
+        // against features/Glass's tables (its style, building, flags and lit hash: again whenever those reload).
+        struct RoomRef { uint32_t building = 0; float cell[2] = {}; float share = 0.0f; uint32_t seed = 0, flags = 0; };
+        struct RoomCell
+        {
+            const glass::RoomStyle* style = nullptr; const glass::Building* building = nullptr;
+            uint32_t flags = 0; float hash = 0.5f, share = 0.0f; bool frosted = false;
+        };
         std::vector<RoomRef>  g_refs;
         std::vector<RoomCell> g_cells;
         uint32_t g_resolvedFor = 0;        // glass::Generation() g_cells were resolved for (0: never)
@@ -65,6 +69,8 @@ namespace wxl_livingazeroth::windows
         uint32_t g_frame = 1;
         unsigned g_roomWindows = 0, g_roomDimmed = 0, g_roomDark = 0;
         double   g_roomSum = 0.0;
+        unsigned g_frostWindows = 0, g_frostDimmed = 0, g_frostDark = 0;   // windows with lit frosted glass (lights out alone)
+        double   g_frostSum = 0.0;
 
         float       g_night = 0.0f;
         const char* g_nightSource = "not read yet";
@@ -133,12 +139,13 @@ namespace wxl_livingazeroth::windows
                 r.cell[1] = static_cast<float>(static_cast<int32_t>(cdbc->Value(t, row, "CellY", 0)));
                 r.share = cdbcload::Float(cdbc, t, row, "Share", 0.0f);
                 r.seed = cdbcload::Has(cdbc, t, "Seed") ? cdbc->Value(t, row, "Seed", 0) : 0;
+                r.flags = cdbcload::Has(cdbc, t, "Flags") ? cdbc->Value(t, row, "Flags", 0) : 0;
                 if (!(r.share > 0.0f) || !std::isfinite(r.share)) continue;
                 byWindow[cdbc->Value(t, row, "WindowID", 0)].push_back(r);
                 ++cells;
             }
             cdbc->Release(t);
-            unsigned windows = 0;
+            unsigned windows = 0, frostWindows = 0, frostCells = 0;
             for (Window& w : rows)
             {
                 auto it = byWindow.find(w.id);
@@ -146,10 +153,14 @@ namespace wxl_livingazeroth::windows
                 w.roomFirst = static_cast<uint32_t>(g_refs.size());
                 w.roomCount = static_cast<uint32_t>(it->second.size());
                 g_refs.insert(g_refs.end(), it->second.begin(), it->second.end());
+                bool frost = false;
+                for (const RoomRef& r : it->second) { frost = frost || (r.flags & kCellFrosted); frostCells += (r.flags & kCellFrosted) ? 1u : 0u; }
                 ++windows;
+                frostWindows += frost ? 1u : 0u;
             }
-            char line[192];
-            std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u room cells behind %u of the windows' glass", cells, windows);
+            char line[256];
+            std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u cells behind %u of the windows' glass (%u of them lit frosted glass, at %u windows)",
+                          cells, windows, frostCells, frostWindows);
             g_roomStatus = line;
         }
 
@@ -171,40 +182,93 @@ namespace wxl_livingazeroth::windows
                 const glass::RoomStyle* style = b ? glass::StyleById(b->style) : nullptr;
                 RoomCell& c = g_cells[i];
                 uint32_t seed = r.seed;
-                if (style) { c.style = style; c.flags = b->flags; seed = b->seed; }
-                else { c.style = &glass::DefaultStyle(); c.flags = 0; ++g_unresolved; }
+                if (style) { c.style = style; c.building = b; c.flags = b->flags; seed = b->seed; }
+                else { c.style = &glass::DefaultStyle(); c.building = nullptr; c.flags = 0; ++g_unresolved; }
                 c.hash = glass::LitHash(r.cell[0], r.cell[1], static_cast<float>(seed & 1023u), static_cast<float>((seed >> 10) & 1023u));
                 c.share = r.share;
+                c.frosted = (r.flags & kCellFrosted) != 0;
             }
         }
     }
 
     float LitShare(const Window& w)
     {
-        if (!g_settings.lightsFollowRooms || !w.roomCount || !glass::RoomsHideGlow()) return 1.0f;
+        if (!g_settings.lightsFollowRooms || !w.roomCount) return 1.0f;
+        // What follows the glass now: the rooms (dark ones, a lamp's flicker), lit frosted glass (dark, a hearth's flicker).
+        const bool rooms = glass::RoomsHideGlow(), frost = glass::FrostedHideGlow();
+        const float lampA = glass::LampAmplitudeNow(), hearthA = glass::HearthAmplitudeNow();
+        if (!rooms && !frost && lampA <= 0.0f && hearthA <= 0.0f) return 1.0f;
         const std::vector<Window>& all = g_index.All();
         if (all.empty() || &w < all.data() || &w >= all.data() + all.size()) return 1.0f;
         const size_t at = static_cast<size_t>(&w - all.data());
         if (g_share.size() != all.size()) { g_share.assign(all.size(), 1.0f); g_shareFrame.assign(all.size(), 0); }
         if (g_shareFrame[at] == g_frame) return g_share[at];
         ResolveRooms();
-        static std::vector<glass::LightCell> cells;
+        static std::vector<glass::LightCell> cells, frostCells;
         cells.clear();
+        frostCells.clear();
+        const float clock = glass::HearthClockNow();
+        const glass::DarkBand allLit = glass::Band(0.0f, 0.0f);
+        bool anyRoom = false;
         for (uint32_t i = w.roomFirst; i < w.roomFirst + w.roomCount && i < g_cells.size(); ++i)
         {
             const RoomCell& c = g_cells[i];
             glass::LightCell lc;
-            lc.hash = c.hash; lc.share = c.share; lc.band = glass::BandNow(*c.style, c.flags);
+            lc.hash = c.hash; lc.share = c.share;
+            if (c.frosted)
+            {
+                // lit frosted glass, as its batch (features/Glass: FrostedLit) gets it: a dungeon's keeps the client's look
+                const bool dungeon = (c.flags & glass::kBuildingDungeon) != 0;
+                lc.band = frost && !dungeon ? glass::FrostedBandNow(*c.style, c.building) : allLit;
+                lc.dip = dungeon ? 0.0f : glass::HearthDip(c.hash, clock, hearthA);
+                glass::LightCell still = lc;
+                still.dip = 0.0f;
+                frostCells.push_back(still);
+            }
+            else
+            {
+                lc.band = rooms ? glass::BandNow(*c.style, c.flags) : allLit;
+                lc.dip = rooms ? glass::HearthDip(c.hash, clock, lampA) : 0.0f;
+                anyRoom = true;
+            }
             cells.push_back(lc);
         }
         const float share = glass::LitShare(cells.data(), cells.size());
         g_share[at] = share;
         g_shareFrame[at] = g_frame;
-        ++g_roomWindows;
-        g_roomDimmed += share < 0.999f && share > 0.002f ? 1u : 0u;
-        g_roomDark += share <= 0.002f ? 1u : 0u;
-        g_roomSum += share;
+        if (anyRoom && rooms)
+        {
+            ++g_roomWindows;
+            g_roomDimmed += share < 0.999f && share > 0.002f ? 1u : 0u;
+            g_roomDark += share <= 0.002f ? 1u : 0u;
+            g_roomSum += share;
+        }
+        if (!frostCells.empty())
+        {
+            // lit, dimmed or dark by the lights out alone (the flicker dims every lit one a little)
+            float s = 0.0f, lit = 0.0f;
+            for (const glass::LightCell& c : frostCells) { s += c.share; lit += c.share * glass::RoomLit(c.hash, c.band); }
+            const float f = s > 0.0f ? lit / s : 1.0f;
+            ++g_frostWindows;
+            g_frostDimmed += f < 0.999f && f > 0.002f ? 1u : 0u;
+            g_frostDark += f <= 0.002f ? 1u : 0u;
+            g_frostSum += f;
+        }
         return share;
+    }
+
+    bool SyncedFlicker(const Window& w)
+    {
+        if (!g_settings.lightsFollowRooms || !w.roomCount) return false;
+        const float lampA = glass::LampAmplitudeNow(), hearthA = glass::HearthAmplitudeNow();
+        if (lampA <= 0.0f && hearthA <= 0.0f) return false;
+        ResolveRooms();
+        for (uint32_t i = w.roomFirst; i < w.roomFirst + w.roomCount && i < g_cells.size(); ++i)
+        {
+            const RoomCell& c = g_cells[i];
+            if (c.frosted ? hearthA > 0.0f && !(c.flags & glass::kBuildingDungeon) : lampA > 0.0f) return true;
+        }
+        return false;
     }
 
     Settings& Config() { return g_settings; }
@@ -276,6 +340,10 @@ namespace wxl_livingazeroth::windows
         g_stats.roomMeanLit = g_roomWindows ? static_cast<float>(g_roomSum / g_roomWindows) : 1.0f;
         g_roomWindows = g_roomDimmed = g_roomDark = 0;
         g_roomSum = 0.0;
+        g_stats.frostWindows = g_frostWindows; g_stats.frostDimmed = g_frostDimmed; g_stats.frostDark = g_frostDark;
+        g_stats.frostMeanLit = g_frostWindows ? static_cast<float>(g_frostSum / g_frostWindows) : 1.0f;
+        g_frostWindows = g_frostDimmed = g_frostDark = 0;
+        g_frostSum = 0.0;
         if (++g_frame == 0) g_frame = 1;
 
         if (!g_nightGuards) g_nightGuards = Check(kNightGuards, g_nightWhy);
@@ -344,6 +412,15 @@ namespace wxl_livingazeroth::windows
                               hh, mm, g_stats.roomWindows, g_stats.roomWindows - g_stats.roomDimmed - g_stats.roomDark, g_stats.roomDimmed,
                               g_stats.roomDark, 100.0f * g_stats.roomMeanLit, glass::Clock().Fading() ? "; the time jumped: cross-fading" : "",
                               g_unresolved ? "; some rooms not in GlassBuildings (the default house)" : "");
+            api->UiText(line);
+            if (!s.lightsFollowRooms) std::snprintf(line, sizeof(line), "frosted windows: the lights don't follow the glass (switched off)");
+            else if (!glass::FrostedHideGlow() && glass::HearthAmplitudeNow() <= 0.0f)
+                std::snprintf(line, sizeof(line), "frosted windows: lights out and flicker off (FrostedLightsOut, HearthFlicker; or the glass off): lights at full");
+            else if (!g_stats.frostWindows) std::snprintf(line, sizeof(line), "frosted windows: none near with lit frosted glass");
+            else
+                std::snprintf(line, sizeof(line), "frosted windows near (lit frosted glass): %u lit, %u dimmed, %u dark; lit %.0f%% on the whole; hearth flicker %.0f%% now",
+                              g_stats.frostWindows - g_stats.frostDimmed - g_stats.frostDark, g_stats.frostDimmed, g_stats.frostDark,
+                              100.0f * g_stats.frostMeanLit, 100.0f * glass::HearthAmplitudeNow());
             api->UiText(line);
         }
         std::snprintf(line, sizeof(line), "night factor %.2f, from %s (the client's windows: 1 at 06:00, 0 from 07:00 to 20:30, 1 from 21:30)%s%s",

@@ -157,7 +157,11 @@ namespace wxl_livingazeroth::glass
         unsigned g_instances = 0, g_matched = 0, g_byWmo = 0, g_defaulted = 0;   // instance groups with glass: placed, by WMO, neither
         float g_hour = 12.0f, g_night = 0.0f;    // this frame's
         RoomClock g_clock;                       // the rooms' lights out: the hour and night as they show them
-        std::string g_roomLine;
+        HearthClock g_hearth;                    // the hearths' flicker (frosted glass; the rooms' lamps)
+        std::string g_roomLine, g_frostLine;
+        // Lit frosted glass drawn: batches this frame and last (of them Ironforge's, underground ones).
+        unsigned g_frostBatches = 0, g_frostIronforge = 0, g_underground = 0;
+        unsigned g_lastFrost = 0, g_lastIronforge = 0, g_lastUnderground = 0;
 
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : (v == v ? v : 0.0f)); }
         float Lum(const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; }
@@ -231,7 +235,7 @@ namespace wxl_livingazeroth::glass
         }
 
         // One glass batch's constants: its material's look, inside or outside, and the room of the building drawn.
-        void GlassConstants(const Material& m, bool selfLit, float out[4 * kConstantCount], float seed[4 * kSeedRegisters])
+        void GlassConstants(const Material& m, bool selfLit, bool unlit, float out[4 * kConstantCount], float seed[4 * kSeedRegisters])
         {
             BatchConstants(m, InsideWeight(m.flags, g_groupFlags, g_indoors), g_light, g_sun, g_sunColour, g_sky, g_settings, out);
             const Building* b = g_inInstance ? g_building : nullptr;
@@ -239,7 +243,10 @@ namespace wxl_livingazeroth::glass
             RoomInputs in = FrameInputs();
             in.selfLit = selfLit; in.fallbackSeed = g_fallbackSeed;
             in.origin = g_inInstance && g_hasOrigin ? g_origin : nullptr;
+            in.kind = m.kind; in.unlit = unlit; in.hearthClock = g_hearth.Now();
             RoomBatchConstants(style ? *style : DefaultStyle(), style ? b : nullptr, g_light, in, g_settings, out, seed);
+            if (out[39] > 0.0f) { ++g_frostBatches; g_frostIronforge += IsIronforge(b) ? 1 : 0; }
+            g_underground += b && (b->flags & kBuildingUnderground) ? 1 : 0;
         }
     }
 
@@ -283,6 +290,41 @@ namespace wxl_livingazeroth::glass
 
     uint32_t FallbackSeed(uint32_t path, uint32_t hookSeed) { return path ? path : hookSeed; }
 
+    bool FrostedLit(uint32_t kind, bool selfLit, bool unlit, uint32_t buildingFlags, const Settings& s)
+    {
+        return kind == kFrosted && (selfLit || unlit) && !(buildingFlags & kBuildingDungeon) &&
+               (s.frostedLightsOut || s.hearthFlicker > 0.0f);
+    }
+
+    RoomToggles FrostedToggles(const Settings& s)
+    {
+        RoomToggles t;
+        t.variety = true; t.lightsOut = s.frostedLightsOut != 0;
+        t.varietyStrength = 1.0f; t.lightsOutStrength = s.lightsOutStrength;
+        return t;
+    }
+
+    bool IsIronforge(const Building* b)
+    {
+        static const uint32_t ironforge = PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo");
+        return b && b->path == ironforge;
+    }
+
+    DarkBand FrostedBand(const RoomStyle& style, const Building* b, const RoomInputs& in, const Settings& s)
+    {
+        if (!s.frostedLightsOut || (s.ironforgeAlwaysLit && IsIronforge(b))) return Band(0.0f, 0.0f);   // every window lit
+        const RoomToggles t = FrostedToggles(s);
+        const uint32_t flags = b ? b->flags : 0;
+        if (in.clock) return BandOf(*in.clock, style, flags, t);
+        const float now = DarkShare(style, flags, t, in.night, in.hour);
+        return Band(now, now);
+    }
+
+    float FlickerAmplitude(float amount, float night)
+    {
+        return std::isfinite(amount) ? Clamp01(amount) * Clamp01(night) : 0.0f;
+    }
+
     void RoomBatchConstants(const RoomStyle& style, const Building* b, const Light& light, const RoomInputs& in, const Settings& s,
                             float out[4 * kConstantCount], float seed[4 * kSeedRegisters])
     {
@@ -310,7 +352,9 @@ namespace wxl_livingazeroth::glass
         // The dark band (c203.w lo, c200.w hi; c212.w its slope, c213.w its base): the share of rooms dark (DarkShare:
         // by day the style's few, at night by the hour, inns late, shops early; every room in an empty building, and at
         // night in a dark place) by the rooms' clock, so a room the threshold crosses, or a jump of the time, fades.
-        const DarkBand band = RoomBand(style, flags, in, s);
+        // Lit frosted glass (no room behind it): its own band (FrostedBand), the cell and hash run for it (c201.w).
+        const bool frosted = in.kind == kFrosted && FrostedLit(in.kind, in.selfLit, in.unlit, flags, s);
+        const DarkBand band = frosted ? FrostedBand(style, b, in, s) : RoomBand(style, flags, in, s);
         c[47] = band.lo;
         c[35] = band.hi;
         // c203.rgb the lamp at night, behind the windows the client lights (SIDN): its colour at luminance 1 over the
@@ -330,6 +374,22 @@ namespace wxl_livingazeroth::glass
         c[51] = s.roomLayouts ? std::max(0.0f, s.layoutStrength) : 0.0f;
         for (int k = 0; k < 3; ++k) c[52 + k] = style.curtain[k];
         c[55] = s.litRooms && in.selfLit ? kGlowHidden * night : 0.0f;
+        // c201: the hearth clock (.y), the flicker's amplitude at night (.z: a lit frosted window's hearth, HearthFlicker;
+        // a lamp-lit room's lamp, LampFlicker), lit frosted glass (.w). A dark frosted window hides kFrostedHidden of its
+        // glow at night (c205.w).
+        c[37] = in.hearthClock;
+        c[38] = lamp ? FlickerAmplitude(s.lampFlicker, night) : 0.0f;
+        c[39] = 0.0f;
+        if (frosted)
+        {
+            for (int k = 44; k < 47; ++k) c[k] = 0.0f;
+            c[55] = s.frostedLightsOut ? hearth::kFrostedHidden * night : 0.0f;
+            c[38] = FlickerAmplitude(s.hearthFlicker, night);
+            c[39] = 1.0f;
+        }
+        // Underground (Ironforge's streets are its interior groups: what's behind its glass is more of the city, not the
+        // sky): the street's look whatever the camera's indoors blend, with no sky, darkening or glint in it.
+        if (flags & kBuildingUnderground) { c[4] = 0.0f; c[19] = 0.0f; c[20] = 0.0f; c[21] = 0.0f; }
         // c212 the seed (two numbers 0..1023), the block (a city's buildings), the band's slope; c213 the origin the
         // cells are about: a placement's from the table (features/Windows' cells are about the same numbers), else the
         // instance's (a WMO's default row has none), else the world's; the band's base.
@@ -494,6 +554,7 @@ namespace wxl_livingazeroth::glass
                 p.halfWidth = F(row, "HalfWidth", 1.0f);
                 p.halfHeight = F(row, "HalfHeight", 1.0f);
                 p.kind = cdbc->Value(t, row, "Kind", 0);
+                p.flags = cdbcload::Has(cdbc, t, "Flags") ? cdbc->Value(t, row, "Flags", 0) : 0;
                 const float lo = std::sqrt(p.out[0] * p.out[0] + p.out[1] * p.out[1] + p.out[2] * p.out[2]);
                 const float la = std::sqrt(p.along[0] * p.along[0] + p.along[1] * p.along[1] + p.along[2] * p.along[2]);
                 if (!(lo > 0.5f) || !(la > 0.5f)) continue;
@@ -604,12 +665,15 @@ namespace wxl_livingazeroth::glass
         // seconds (a loading screen's gap snaps it).
         g_hour = HourNow();
         g_night = Clamp01(windows::Night());
+        g_lastFrost = g_frostBatches; g_lastIronforge = g_frostIronforge; g_lastUnderground = g_underground;
+        g_frostBatches = g_frostIronforge = g_underground = 0;
         if (g_inWorld)
         {
             const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
             g_clock.Advance(now, g_hour, g_night);
+            g_hearth.Advance(now, g_settings.flickerSpeed);
         }
-        else g_clock.Reset();
+        else { g_clock.Reset(); g_hearth.Reset(); }
         if (!g_settings.enabled || !g_inWorld) { g_near.clear(); g_floorPanes = 0; return; }
 
         // The light of the moment.
@@ -648,8 +712,9 @@ namespace wxl_livingazeroth::glass
         wxl::game::camera::GetPosition(cam);
         static std::vector<const Pane*> candidates;
         g_panes.Near(static_cast<uint32_t>(snap.mapId), cam, g_settings.range, 256, candidates);
+        // (not an underground pane: no sky behind it, Ironforge's)
         for (const Pane* p : candidates)
-            if (p->out[0] * g_sun[0] + p->out[1] * g_sun[1] + p->out[2] * g_sun[2] > 0.05f) g_near.push_back(p);
+            if (!(p->flags & kPaneNoSky) && p->out[0] * g_sun[0] + p->out[1] * g_sun[1] + p->out[2] * g_sun[2] > 0.05f) g_near.push_back(p);
         // The floor light: the panes whose room holds the camera first (the room you stand in), then the nearest.
         if (!g_settings.floorLight) return;
         for (int pass = 0; pass < 2; ++pass)
@@ -747,9 +812,33 @@ namespace wxl_livingazeroth::glass
         return RoomBand(style, buildingFlags, FrameInputs(), g_settings);
     }
 
+    bool FrostedHideGlow()
+    {
+        const Settings& s = g_settings;
+        return s.enabled && g_patched > 0 && s.frostedLightsOut;
+    }
+
+    DarkBand FrostedBandNow(const RoomStyle& style, const Building* building)
+    {
+        return FrostedBand(style, building, FrameInputs(), g_settings);
+    }
+
+    float HearthClockNow() { return g_hearth.Now(); }
+
+    float HearthAmplitudeNow()
+    {
+        const Settings& s = g_settings;
+        return s.enabled && g_patched > 0 ? FlickerAmplitude(s.hearthFlicker, g_night) : 0.0f;
+    }
+
+    float LampAmplitudeNow()
+    {
+        return RoomsHideGlow() ? FlickerAmplitude(g_settings.lampFlicker, g_night) : 0.0f;
+    }
+
     const RoomClock& Clock() { return g_clock; }
 
-    void Batch(uint32_t glassMaterial, bool rimsOn, bool selfLit)
+    void Batch(uint32_t glassMaterial, bool rimsOn, bool selfLit, bool unlit)
     {
         auto* dev = Device();
         if (!dev) return;
@@ -758,7 +847,7 @@ namespace wxl_livingazeroth::glass
         if (m)
         {
             float c[4 * kConstantCount], seed[4 * kSeedRegisters], look[4 * kLookRegisters];
-            GlassConstants(*m, selfLit, c, seed);
+            GlassConstants(*m, selfLit, unlit, c, seed);
             LookConstants(g_light, look);
             UploadFrame(dev);
             dev->SetPixelShaderConstantF(kFirstConstant, c, kConstantCount);
@@ -847,6 +936,11 @@ namespace wxl_livingazeroth::glass
         api->UiSliderFloat("rooms: lamp-lit brightness (1 = the client's window)##gllits", &s.litRoomStrength, 0.0f, 2.0f);
         api->UiCheckbox("rooms: lights go out as the night goes on##glout2", &s.lightsOut);
         api->UiSliderFloat("rooms: share dark at night##glouts2", &s.lightsOutStrength, 0.0f, 1.5f);
+        api->UiCheckbox("frosted glass: lit windows go dark through the night (each building's hours)##glfro", &s.frostedLightsOut);
+        api->UiSliderFloat("frosted glass: hearth flicker (how much a lit window's glow dips at night)##glfrf", &s.hearthFlicker, 0.0f, 0.3f);
+        api->UiSliderFloat("hearth flicker speed (x)##glfrs", &s.flickerSpeed, 0.0f, 3.0f);
+        api->UiSliderFloat("rooms: lamp flicker behind clear and leaded glass (0 = steady lamps)##gllpf", &s.lampFlicker, 0.0f, 0.3f);
+        api->UiCheckbox("Ironforge: every window lit all night (they still flicker)##glifl", &s.ironforgeAlwaysLit);
         api->UiCheckbox("rooms: shelves, curtains, a dividing wall##gllay", &s.roomLayouts);
         api->UiSliderFloat("rooms: the furniture's detail##gllays", &s.layoutStrength, 0.0f, 2.0f);
         api->UiCheckbox("coloured shafts in the room's air##glsh", &s.colouredShafts);
@@ -862,6 +956,27 @@ namespace wxl_livingazeroth::glass
                       g_light.sunGain, g_light.skyGain, g_light.day, g_light.dim, g_indoors);
         api->UiText(line);
         api->UiText(RoomLine());
+        api->UiText(FrostLine());
+    }
+
+    const char* FrostLine()
+    {
+        // Ironforge's parts (their styles' hours, RoomStyles.cdbc): the share of their lit windows dark now, at rest.
+        auto dark = [](uint32_t cls) {
+            for (const RoomStyle& st : g_styles)
+                if (st.cls == cls)
+                    return 100.0f * DarkShare(st, 0, FrostedToggles(g_settings), g_night, g_hour);
+            return -1.0f;
+        };
+        char line[480];
+        std::snprintf(line, sizeof(line), "frosted glass: lights out %s, hearth flicker %.0f%% now (x%.1f); lit frosted batches drawn %u (Ironforge's %u), "
+                      "underground batches %u; dark now in Ironforge (-1: no such style loaded): the forge %.0f%%, the Commons %.0f%%, the wards' homes "
+                      "%.0f%%, the Forlorn Cavern %.0f%%%s",
+                      g_settings.frostedLightsOut ? "on" : "off", 100.0f * HearthAmplitudeNow(), g_settings.flickerSpeed, g_lastFrost, g_lastIronforge,
+                      g_lastUnderground, dark(kClassForge), dark(kClassCommons), dark(kClassQuarter), dark(kClassCavern),
+                      g_settings.ironforgeAlwaysLit ? " (IronforgeAlwaysLit: all lit)" : "");
+        g_frostLine = line;
+        return g_frostLine.c_str();
     }
 
     const char* RoomLine()

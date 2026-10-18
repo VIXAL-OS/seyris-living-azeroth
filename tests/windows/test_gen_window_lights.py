@@ -324,15 +324,44 @@ class Rooms(unittest.TestCase):
         same = lambda v: v
         rows = g.light_rooms(C, same, same, 0, 777, "World\\wmo\\X\\House.wmo", glass)
         by = {}
-        for b, x, y, share, seed in rows:
+        for b, x, y, share, seed, flags in rows:
             by[b] = by.get(b, 0.0) + share
             self.assertEqual(seed, g.path_hash("world/wmo/x/house.wmo"))
+            self.assertEqual(flags, 0)
         self.assertEqual(sorted(by), [40, 41])
         self.assertAlmostEqual(by[41], 1.0 / 3.0, places=5)   # the clear pane: its group's row
         self.assertAlmostEqual(by[40], 1.0 / 3.0, places=5)   # the leaded one: the placement's
         # no building at all: 0, about the placement's origin
         rows = g.light_rooms(C, same, same, 0, 999, "World\\wmo\\X\\House.wmo", glass)
         self.assertEqual({r[0] for r in rows}, {0})
+
+    def test_frosted_glass_cells_are_flagged(self):
+        # a light of two panes: frosted glass (a lit window's: no room, the glass itself goes dark and flickers) and clear
+        # glass in the same building; each 2 x 1 yd
+        frosted, clear = "glass_frosted.blp", "glass_clear.blp"
+        glass = {"kinds": {frosted: 3, clear: 1}, "buildings": {(0, 777, g.WHOLE): (40, (0.0, 0.0, 0.0))}}
+
+        class P:
+            def __init__(self, texture, a0):
+                self.texture, self.group, self.normal = texture, 0, (1.0, 0.0, 0.0)
+                self.points = [p for t in Rooms.quad((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), a0, a0 + 2.0, 0.5, 1.5) for p in t]
+
+        class C:
+            panes = [P(frosted, 0.2), P(clear, 7.2)]
+
+        same = lambda v: v
+        rows = g.light_rooms(C, same, same, 0, 777, "World\\wmo\\X\\snow_inn.wmo", glass)
+        by = {}
+        for b, x, y, share, seed, flags in rows:
+            self.assertEqual(b, 40)
+            by[flags] = by.get(flags, 0.0) + share
+        self.assertEqual(sorted(by), [0, g.CELL_FROSTED])
+        self.assertAlmostEqual(by[g.CELL_FROSTED], 0.5, places=5)   # the frosted pane's cells, flagged
+        self.assertAlmostEqual(by[0], 0.5, places=5)                 # the clear pane's rooms
+        # the same cells as a room's would be: the frame and the cut are the shader's
+        frost_cells = sorted((x, y) for b, x, y, s, seed, f in rows if f)
+        room_like = sorted(g.room_cells([[q for q in C.panes[0].points[k:k + 3]] for k in range(0, 6, 3)], (1.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
+        self.assertEqual(frost_cells, room_like)
 
     def test_path_hash_is_the_runtimes(self):
         self.assertEqual(g.path_hash("World/WMO/Azeroth/Buildings/Stormwind/Stormwind.wmo"), 4036435193)

@@ -4,7 +4,8 @@
 // WindowLights.cdbc (inside the budget, its lights night only). No game.
 // Following the rooms behind the glass (env/GlassModel, as features/Windows uses it): a merged light's lit share, a
 // room fading over 1.5 s going dark and lit again (the clock, the time override's jumps, the night factor), the
-// toggles, and the shipped WindowRooms.cdbc (against WindowLights, GlassBuildings, RoomStyles).
+// toggles, lit frosted glass going dark and flickering (the hearth: in time with the glass), and the shipped
+// WindowRooms.cdbc (against WindowLights, GlassBuildings, RoomStyles; its frosted cells).
 //
 // Usage:  windows_tests [<Wow.exe>] [<repo data folder>]
 #include "env/GlassModel.hpp"
@@ -428,6 +429,36 @@ int main(int argc, char** argv)
                   gl::DarkShare(house, gl::kBuildingEmpty, noVariety, 1.0f, 23.0f) == 0.0f);
         });
 
+        Test("following frosted glass: dark by its building's hours, a lit window's light flickering with its hearth", []
+        {
+            // A light over two windows of frosted glass and a sliver of stained: one cell dark, one lit and flickering.
+            const gl::DarkBand band = gl::Band(0.5f, 0.5f);
+            const float A = 0.08f;
+            float lo = 1, hi = 0, step = 0, last = -1;
+            double sum = 0;
+            int n = 0;
+            for (int f = 0; f < 60 * 60; ++f)   // a minute at 60 frames a second
+            {
+                const float clock = 300.0f + f / 60.0f;
+                gl::LightCell c[2];
+                c[0].hash = 200.5f / 289.0f; c[0].share = 0.55f; c[0].band = band; c[0].dip = gl::HearthDip(c[0].hash, clock, A);
+                c[1].hash = 30.5f / 289.0f; c[1].share = 0.4f; c[1].band = band; c[1].dip = gl::HearthDip(c[1].hash, clock, A);
+                const float s = gl::LitShare(c, 2);
+                lo = std::min(lo, s); hi = std::max(hi, s); sum += s; ++n;
+                if (last >= 0) step = std::max(step, std::fabs(s - last));
+                last = s;
+            }
+            // lit 0.05 (the stained sliver) + 0.55 x (1 - dip): 0.05 + 0.55 x 0.92 .. 0.6
+            std::printf("  a frosted light: %.4f .. %.4f (mean %.4f), a frame's step at most %.4f\n", lo, hi, sum / n, step);
+            CHECK(lo >= 0.05f + 0.55f * (1 - A) - 1e-5f && hi <= 0.6f + 1e-6f && hi - lo > 0.6f * 0.55f * A && step < 0.07f * A);
+            CHECK(std::fabs(sum / n - (0.05 + 0.55 * (1 - A / 2))) < 0.05 * 0.55 * A);
+            // No flicker (amplitude 0): exactly the lights out's share.
+            gl::LightCell still[2];
+            still[0].hash = 200.5f / 289.0f; still[0].share = 0.55f; still[0].band = band; still[0].dip = gl::HearthDip(still[0].hash, 12.0f, 0.0f);
+            still[1] = still[0]; still[1].hash = 30.5f / 289.0f; still[1].share = 0.4f;
+            CHECK(Close(gl::LitShare(still, 2), 0.05f + 0.55f, 1e-6f) && still[0].dip == 0.0f);
+        });
+
         if (argc > 1 && argv[1][0])
         {
             const std::string name = std::string("guards and the night keys against ") + argv[1];
@@ -515,14 +546,15 @@ int main(int argc, char** argv)
                 const Table w = ReadTable(dir + "\\WindowLights.cdbc");
                 const Table b = ReadTable(dir + "\\GlassBuildings.cdbc");
                 const Table st = ReadTable(dir + "\\RoomStyles.cdbc");
-                CHECK(r.fields == 7 && r.rows.size() > 1000 && b.fields == 13 && st.fields == 25);
+                CHECK(r.fields == 8 && r.rows.size() > 1000 && b.fields == 13 && st.fields == 25);
                 std::map<uint32_t, size_t> window, building, style;
                 for (size_t i = 0; i < w.rows.size(); ++i) window[w.rows[i][0]] = i;
                 for (size_t i = 0; i < b.rows.size(); ++i) building[b.rows[i][0]] = i;
                 for (size_t i = 0; i < st.rows.size(); ++i) style[st.rows[i][0]] = i;
                 std::map<uint32_t, std::vector<size_t>> cells;   // per window, its rows
+                std::map<uint32_t, bool> frosted;                // per window: it has lit frosted glass
                 uint32_t lastId = 0;
-                unsigned noBuilding = 0;
+                unsigned noBuilding = 0, frostCells = 0;
                 for (size_t i = 0; i < r.rows.size(); ++i)
                 {
                     const auto& row = r.rows[i];
@@ -531,6 +563,8 @@ int main(int argc, char** argv)
                     CHECK(window.count(row[1]));
                     const float share = r.F(i, 5);
                     CHECK(share > 0.0f && share <= 1.0f);
+                    CHECK(row[7] <= 1u);   // Flags: 0x1 lit frosted glass
+                    if (row[7] & 1u) { ++frostCells; frosted[row[1]] = true; }
                     const int32_t cx = static_cast<int32_t>(row[3]), cy = static_cast<int32_t>(row[4]);
                     CHECK(cx > -200000 && cx < 200000 && cy > -200000 && cy < 200000);   // a cell about its anchor, its offset in
                     if (!row[2]) { ++noBuilding; continue; }
@@ -561,12 +595,13 @@ int main(int argc, char** argv)
                     return s;
                 };
                 const float hours[] = { 21.0f, 22.0f, 23.0f, 0.0f, 1.0f, 2.0f, 3.0f, 4.5f, 6.0f };
-                float mean[9] = {}, place[2][9] = {};
-                unsigned placeLights[2] = {};
+                float mean[9] = {}, place[2][9] = {}, frostPlace[3][9] = {};
+                unsigned placeLights[2] = {}, frostLights[3] = {};
+                const char* const frostTowns[3] = { "Kharanos:", "Thelsamar:", "Orgrimmar:" };
                 const gl::RoomToggles on;
                 for (int k = 0; k < 9; ++k)
                 {
-                    double sum = 0, sumPlace[2] = {};
+                    double sum = 0, sumPlace[2] = {}, sumFrost[3] = {};
                     for (const auto& c : cells)
                     {
                         std::vector<gl::LightCell> lc;
@@ -587,15 +622,24 @@ int main(int argc, char** argv)
                         const std::string comment = w.S(window[c.first], 16);
                         for (int p = 0; p < 2; ++p)
                             if (comment.rfind(p ? "Goldshire:" : "Stormwind City:", 0) == 0) { sumPlace[p] += share; if (k == 0) ++placeLights[p]; }
+                        for (int p = 0; p < 3; ++p)
+                            if (frosted.count(c.first) && comment.rfind(frostTowns[p], 0) == 0) { sumFrost[p] += share; if (k == 0) ++frostLights[p]; }
                     }
                     mean[k] = static_cast<float>(sum / cells.size());
                     for (int p = 0; p < 2; ++p) place[p][k] = placeLights[p] ? static_cast<float>(sumPlace[p] / placeLights[p]) : 0.0f;
+                    for (int p = 0; p < 3; ++p) frostPlace[p][k] = frostLights[p] ? static_cast<float>(sumFrost[p] / frostLights[p]) : 0.0f;
                 }
                 std::printf("  %zu room cells behind %zu lights (%u without a building), at most %zu a light\n", r.rows.size(), cells.size(), noBuilding, most);
                 std::printf("  the lights with rooms, lit on average:");
                 for (int k = 0; k < 9; ++k) std::printf(" %02d:%02d %.0f%%", static_cast<int>(hours[k]), static_cast<int>((hours[k] - std::floor(hours[k])) * 60), 100 * mean[k]);
                 std::printf("\n  Stormwind (%u lights) at 23:00 %.0f%%, 02:00 %.0f%%; Goldshire (%u) at 23:00 %.0f%%, 02:00 %.0f%%\n",
                             placeLights[0], 100 * place[0][2], 100 * place[0][5], placeLights[1], 100 * place[1][2], 100 * place[1][5]);
+                std::printf("  lit frosted glass: %u cells at %zu lights; Kharanos (%u lights) at 23:00 %.0f%%, 02:00 %.0f%%; Thelsamar (%u) %.0f%%, %.0f%%; "
+                            "Orgrimmar (%u) %.0f%%, %.0f%%\n", frostCells, frosted.size(), frostLights[0], 100 * frostPlace[0][2], 100 * frostPlace[0][5],
+                            frostLights[1], 100 * frostPlace[1][2], 100 * frostPlace[1][5], frostLights[2], 100 * frostPlace[2][2], 100 * frostPlace[2][5]);
+                // the dwarves' and the orcs' frosted windows follow the night too; none at Stormwind's or Goldshire's (leaded)
+                for (int p = 0; p < 3; ++p) CHECK(frostLights[p] > 0 && frostPlace[p][0] > frostPlace[p][5]);
+                CHECK(frostCells > 500 && frosted.size() > 100);
                 // dimming through the night to the small hours, early risers lighting some again at dawn
                 CHECK(mean[0] > 0.8f && mean[0] > mean[2] && mean[2] > mean[3] && mean[3] > mean[5] && mean[7] < 0.45f && mean[8] > mean[7]);
                 CHECK(noBuilding == 0 && placeLights[0] > 50 && placeLights[1] > 10);

@@ -6,4 +6,5 @@
     <Field Name="CellY" Type="int" />
     <Field Name="Share" Type="float" />
     <Field Name="Seed" Type="int" />
+    <Field Name="Flags" Type="int" />
   </Table>

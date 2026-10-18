@@ -26,7 +26,8 @@
 // Behind b9 and b10, after the rims, on the buildings' variants only: the window glass and the light through sunlit
 // panes on a room's floor (features/GlassShader has their register map: c192..c205, c212, c213, c218, c219 per batch,
 // c87..c100, c206..c211 defined, and the rims' c101..c172 for the panes; features/Glass switches them per batch, from
-// features/WmoIce's hooks). Taken in the buildings' variants so far: c87..c223 except c220, c221; c0..c14 stock.
+// features/WmoIce's hooks). Taken in the buildings' variants so far: c87..c223 (c220, c221 defined: the terrain's ice
+// uploads its own there, which the buildings' shaders don't see); c0..c14 stock.
 //
 // Frozen waterfalls get their own style: brighter, glassier ice whose detail is streaked along the
 // flow, at a scale that still reads from a distance (Bor's Fall in the Storm Peaks is 366 yd tall).

@@ -44,7 +44,9 @@ lighting the street"): features/Glass's fake rooms go dark as the night goes on,
 light, which cells (about its building's origin, in the pane's frame, as the shader finds them: room_cells) its clear
 and leaded glass covers, of which building (GlassBuildings: a city's group's row, else the placement's), and what share
 of the light's glass each is. The runtime hashes each cell with the building's seed as the shader does and dims the
-light and its glow by the share whose room is lit. The glass tables are gen_glass.py's (read, not rebuilt).
+light and its glow by the share whose room is lit. Frosted glass has no room, but a lit window's frosted glass goes dark
+by the same schedule and flickers like a hearth (the user, 2026-10-18): its cells too, flagged frosted (Flags 0x1), so
+the light goes dark and flickers with the glass. The glass tables are gen_glass.py's (read, not rebuilt).
 
 Usage:
   python gen_window_lights.py <scan> --group-list <out.txt>   the group files to extract (after the roots)
@@ -531,12 +533,15 @@ def light_of(c):
 # the pixel's point about the building's origin, in the face's own frame (its geometric normal n facing out: along
 # (-n.y, n.x, 0), x for a skylight; up n x along), over CELL_W x CELL_H. A light's glass is the glass of its panes; for
 # each it says which cells its room glass covers (clear and leaded: GlassMaterials kinds with a room) and how much of
-# the light's glass each is, so the runtime dims the light as those rooms go dark. Stained and frosted glass, and glass
-# not in GlassMaterials, has no room: the share it leaves stays lit.
+# the light's glass each is, so the runtime dims the light as those rooms go dark. Frosted glass has no room, but its
+# cells go dark the same way (the glass itself) and flicker: they're listed too, flagged CELL_FROSTED. Stained glass,
+# and glass not in GlassMaterials, has neither: the share it leaves stays lit.
 CELL_W, CELL_H = 3.5, 3.2                          # features/Glass kCellWidth, kCellHeight
 INV_W = struct.unpack("<f", struct.pack("<f", 1.0 / CELL_W))[0]   # the shader's c198.xy (floats)
 INV_H = struct.unpack("<f", struct.pack("<f", 1.0 / CELL_H))[0]
 ROOM_KINDS = (1, 4)                                # GlassMaterials.Kind clear, leaded (stained 2, frosted 3: no room)
+FROSTED_KIND = 3                                   # ... frosted: no room, the glass itself goes dark (a lit window's)
+CELL_FROSTED = 0x1                                 # WindowRooms.Flags: the cell is frosted glass
 MIN_SHARE = 0.004                                  # a cell with less of the light's glass is folded into the others
 WHOLE = 0xFFFFFFFF                                 # GlassBuildings.Group of a whole placement
 # Farther than ANCHOR / 2 from the origin on an axis (a city's one big WMO), the cells are about the nearest
@@ -666,15 +671,17 @@ def room_cells(tris, out, origin):
 
 
 def light_rooms(c, point, direction, map_id, uid, wmo, glass):
-    """A light's room cells: [(GlassBuildings ID or 0, cell x, cell y, share of the light's glass, seed)]. Each pane's
-    building is its group's row (a city's group), else its placement's; with neither, 0 and the cells about the
-    placement's origin (the runtime then takes the shader's default: the built-in house, the WMO's path as the seed).
-    Cells under MIN_SHARE are folded into the building's others (the rooms keep their share of the glass)."""
+    """A light's room cells: [(GlassBuildings ID or 0, cell x, cell y, share of the light's glass, seed, flags)], its
+    frosted glass's flagged CELL_FROSTED. Each pane's building is its group's row (a city's group), else its placement's;
+    with neither, 0 and the cells about the placement's origin (the runtime then takes the shader's default: the
+    built-in house, the WMO's path as the seed). Cells under MIN_SHARE are folded into the building's others of the same
+    kind (the rooms keep their share of the glass)."""
     total = 0.0
-    per = collections.defaultdict(lambda: collections.defaultdict(float))
+    per = collections.defaultdict(lambda: collections.defaultdict(float))   # (building, flags) -> cells
     seed = path_hash(wmo)
     for p in c.panes:
-        room = glass["kinds"].get(norm_path(p.texture), 0) in ROOM_KINDS
+        kind = glass["kinds"].get(norm_path(p.texture), 0)
+        room, frosted = kind in ROOM_KINDS, kind == FROSTED_KIND
         b = glass["buildings"].get((map_id, uid, p.group)) or glass["buildings"].get((map_id, uid, WHOLE))
         bid, origin = b if b else (0, point((0.0, 0.0, 0.0)))
         out = unit(direction(p.normal))
@@ -682,16 +689,16 @@ def light_rooms(c, point, direction, map_id, uid, wmo, glass):
         for t in range(0, len(p.points) - 2, 3):
             corners = [point(q) for q in p.points[t:t + 3]]
             total += 0.5 * length(cross(sub(corners[1], corners[0]), sub(corners[2], corners[0])))
-            if room:
+            if room or frosted:
                 tris.append(corners)
         if tris:
             for key, a in room_cells(tris, out, origin).items():
-                per[bid][key] += a
+                per[(bid, CELL_FROSTED if frosted else 0)][key] += a
     out_rows = []
     if total <= 0.0:
         return out_rows
-    for bid in sorted(per):
-        cells = per[bid]
+    for bid, flags in sorted(per):
+        cells = per[(bid, flags)]
         whole = sum(cells.values())
         kept = {k: a for k, a in cells.items() if a / total >= MIN_SHARE}
         if not kept:
@@ -699,7 +706,7 @@ def light_rooms(c, point, direction, map_id, uid, wmo, glass):
         scale = whole / sum(kept.values())
         for (x, y), a in sorted(kept.items()):
             share = struct.unpack("<f", struct.pack("<f", a * scale / total))[0]
-            out_rows.append((bid, x, y, share, seed))
+            out_rows.append((bid, x, y, share, seed, flags))
     return out_rows
 
 
@@ -793,8 +800,8 @@ WINDOW_LIGHTS = ["u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f"
 #  ID MapID AreaID PosX PosY PosZ FacingX FacingY FacingZ Back HalfWidth HalfHeight Radius LightID Strength Flags Comment
 GLOW_ONLY = 0x1      # Flags: the window glows (WindowGlow) but casts no light (thin() left it out of a full cell)
 R_X, R_Y, R_HW, R_HH, R_RADIUS, R_FLAGS = 3, 4, 10, 11, 12, 15
-WINDOW_ROOMS = ["u", "u", "u", "i", "i", "f", "u"]
-#  ID WindowID BuildingID CellX CellY Share Seed
+WINDOW_ROOMS = ["u", "u", "u", "i", "i", "f", "u", "u"]
+#  ID WindowID BuildingID CellX CellY Share Seed Flags
 
 
 def cells_reached(x, y, radius, size=CELL):
@@ -893,8 +900,8 @@ def build(scan, survey=False, glass=None):
         r[0] = i + 1
     if glass is not None:
         for r in rows:
-            for building, cx, cy, share, seed in rooms.get(id(r), ()):
-                room_rows.append([len(room_rows) + 1, r[0], building, cx, cy, share, seed])
+            for building, cx, cy, share, seed, flags in rooms.get(id(r), ()):
+                room_rows.append([len(room_rows) + 1, r[0], building, cx, cy, share, seed, flags])
     if survey:
         print("lit:")
         for k, n in sorted(lit_by_area.items()):
@@ -950,16 +957,23 @@ def main():
     casting = [r for r in rows if not r[R_FLAGS] & GLOW_ONLY]
     print(f"{len(rows)} lit windows in {len(report)} places: {len(casting)} cast light, {len(rows) - len(casting)} only glow; "
           f"busiest 16-yd cell: {max(cells.values()) if cells else 0} window lights")
-    with_rooms = collections.Counter(r[1] for r in room_rows)
+    frost_rows = [r for r in room_rows if r[7] & CELL_FROSTED]
+    frost_lights = collections.Counter(r[1] for r in frost_rows)
+    by_name = {r[0]: r[16].split(":")[0] for r in rows}
+    frost_places = collections.Counter(by_name[w] for w in frost_lights)
+    print(f"lit frosted glass: {len(frost_rows)} cells at {len(frost_lights)} lights: " +
+          ", ".join(f"{n} {p}" for p, n in frost_places.most_common()))
+    room_rows_only = [r for r in room_rows if not r[7] & CELL_FROSTED]
+    with_rooms = collections.Counter(r[1] for r in room_rows_only)
     per_light = sorted(with_rooms.values())
     room_share = collections.defaultdict(float)
-    for r in room_rows:
+    for r in room_rows_only:
         room_share[r[1]] += r[5]
-    print(f"rooms behind the glass (glass tables from {glass_dir}): {len(room_rows)} room cells for {len(with_rooms)} of the "
+    print(f"rooms behind the glass (glass tables from {glass_dir}): {len(room_rows_only)} room cells for {len(with_rooms)} of the "
           f"{len(rows)} lights ({len(rows) - len(with_rooms)} have no room glass: stained, frosted, not glass); cells per light: "
           f"median {per_light[len(per_light) // 2] if per_light else 0}, most {per_light[-1] if per_light else 0}; "
           f"room glass {100.0 * sum(room_share.values()) / max(1, len(with_rooms)):.0f}% of those lights' glass on average; "
-          f"{sum(1 for r in room_rows if r[2] == 0)} cells with no GlassBuildings row (the default house)")
+          f"{sum(1 for r in room_rows_only if r[2] == 0)} cells with no GlassBuildings row (the default house)")
     by_place = collections.Counter()
     for r in rows:
         by_place[(r[16].split(":")[0], r[1], not r[R_FLAGS] & GLOW_ONLY)] += 1

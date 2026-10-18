@@ -250,7 +250,7 @@ namespace wxl_livingazeroth::config
             w.glowStrength = In(s, f, "GlowStrength", "Your multiplier on the window glow.", w.glowStrength);
             w.glowRange = In(s, f, "GlowRange", "Windows farther than this from the camera (yards) don't glow; the glow fades out over the last third.", w.glowRange);
             w.withClientGlow = Whole(s, f, "WithClientGlow", "While the client's own Full Screen Glow (ffxGlow) is on: 0 = the window glow at full strength, 1 = half, 2 = off.", w.withClientGlow);
-            w.lightsFollowRooms = In(s, f, "LightsFollowRooms", "The window lights and their glow follow the rooms behind the glass ([LivingAzeroth.Glass] RoomVariety, LightsOut): as the rooms go dark through the night, a window whose rooms are dark stops lighting the street, a row of windows dims as its rooms go out, each fading over a second or two (WindowRooms.cdbc). 0 = every lit window at full all night.", w.lightsFollowRooms);
+            w.lightsFollowRooms = In(s, f, "LightsFollowRooms", "The window lights and their glow follow the rooms behind the glass ([LivingAzeroth.Glass] RoomVariety, LightsOut): as the rooms go dark through the night, a window whose rooms are dark stops lighting the street, a row of windows dims as its rooms go out, each fading over a second or two (WindowRooms.cdbc); lit frosted glass the same way ([LivingAzeroth.Glass] FrostedLightsOut), its light flickering with the hearth behind it (HearthFlicker). 0 = every lit window at full all night.", w.lightsFollowRooms);
         }
 
         // Sun shafts: light through trees, fog and the cloud deck.
@@ -294,6 +294,11 @@ namespace wxl_livingazeroth::config
             g.litRoomStrength = In(s, f, "LitRoomStrength", "Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window).", g.litRoomStrength);
             g.lightsOutStrength = In(s, f, "LightsOutStrength", "Your multiplier on the share of rooms dark at night.", g.lightsOutStrength);
             g.layoutStrength = In(s, f, "LayoutStrength", "Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards at night, 10 to 24 by day).", g.layoutStrength);
+            g.frostedLightsOut = In(s, f, "FrostedLightsOut", "Frosted glass (the dwarves', the vrykul's, the draenei's, the orcs' hide windows...) has no room behind it, but the windows the client lights go dark through the night the same way: each building's hours (inns late, shops early), each window fading over a second and a half, the window lights in front with them ([LivingAzeroth.Windows] LightsFollowRooms). Ironforge never fully sleeps: the Great Forge and the smithies stay lit, the Commons mostly, the wards' homes dim late, the Forlorn Cavern is darker. Ruined places go dark; a dungeon's windows keep the client's look. 0 = lit all night.", g.frostedLightsOut);
+            g.hearthFlicker = In(s, f, "HearthFlicker", "How much a lit frosted window's glow dips at night, a hearth fire behind it (0.08 = by up to 8%; each window its own phase, the window light in front with it). 0 = steady.", g.hearthFlicker);
+            g.flickerSpeed = In(s, f, "FlickerSpeed", "Your multiplier on the hearths' pace (about 0.6 to 1.8 dips a second; the torches' flicker, at half their pace).", g.flickerSpeed);
+            g.lampFlicker = In(s, f, "LampFlicker", "The same flicker for the lamp-lit rooms behind clear and leaded glass and their window lights (0.03 is a candle's breath). 0 = steady lamps.", g.lampFlicker);
+            g.ironforgeAlwaysLit = In(s, f, "IronforgeAlwaysLit", "Ironforge's windows lit all night (its parts' hours off; they still flicker).", g.ironforgeAlwaysLit);
         }
 
         api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass);

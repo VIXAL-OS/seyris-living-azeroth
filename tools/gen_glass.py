@@ -54,9 +54,20 @@ brightness from the building's identity ... Room types that follow the building 
   light at night), self-lit (its WMO has windows the client lights at night). And one default per WMO and map for its
   instances the table doesn't place (transports).
 - The night's schedule is the runtime's (env/GlassModel LightsOutShare; lights_out here is the same, for the report).
+- Frosted glass has no room, but the windows the client lights (SIDN, or unlit: at full day and night) go dark by the
+  same schedule ("Give Living Azeroth's frosted window glass ... a night lights-out schedule and a hearth-fire flicker",
+  the user, 2026-10-18): a WMO with such glass counts as lit (never empty). A dungeon's WMO (its path) is flagged so
+  its frosted windows keep the client's look.
+- Ironforge, underground and never fully asleep: each glass group's class by the client's own sub-zone for it
+  (WMOAreaTable.dbc: the Great Forge and smithies a forge, always lit; the ring road, the halls and the gates the
+  Commons, mostly lit; the Military and Mystic Wards' homes quarters, dimming late and gently; the Forlorn Cavern a
+  cavern, darker), and its interior groups flagged underground (no sky behind their glass: the street's look, and
+  their panes light no floor). IRONFORGE_AREAS below is the mapping.
 
 Inputs (the map scan in waterfall-scan, see its README; nothing here opens an MPQ):
   <scan>/adt_wmos.tsv, <scan>/maps.tsv, <scan>/AreaTable.dbc, <scan>/terrain-scan/ (areas)
+  <scan>/WMOAreaTable.dbc   (the client's DBFilesClient/WMOAreaTable.dbc, from patch-enUS-3.MPQ: Ironforge's sub-zones;
+                            without it Ironforge's groups are classed by their names, as a city's)
   <scan>/wmo-windows/     WMO roots and groups (waterscan --extract-list <Data> <list> <scan>/wmo-windows)
   <textures>/             the candidate textures (waterscan --extract-list <Data> <this tool's --texture-list>)
 Usage:
@@ -558,8 +569,9 @@ def wmo_panes(scan, wmo):
 # (RoomStyles.cdbc); every placement of a WMO with glass gets one and a seed (GlassBuildings.cdbc). features/Glass's
 # shader then picks, per window, the layout (by the style's weights), whether the room is dark, its light and the rest
 # from a hash of the window's cell and the seed.
-OTHER, HOUSE, FARM, INN, SHOP, TEMPLE, KEEP, TOWER, CITY, SHIP = range(10)
-CLASS_NAMES = ["other", "house", "farm", "inn", "shop", "temple", "keep", "tower", "city", "ship"]
+OTHER, HOUSE, FARM, INN, SHOP, TEMPLE, KEEP, TOWER, CITY, SHIP, FORGE, COMMONS, QUARTER, CAVERN = range(14)
+CLASS_NAMES = ["other", "house", "farm", "inn", "shop", "temple", "keep", "tower", "city", "ship",
+               "forge", "commons", "quarter", "cavern"]
 SHELVES, CURTAINS, DIVIDER, PLAIN = range(4)
 
 
@@ -582,6 +594,11 @@ CLASSES = {
     CITY: Klass((0.30, 0.30, 0.15, 0.25), 1.0, 0.08, 0.0, 0.5, 0.9),
     SHIP: Klass((0.15, 0.35, 0.10, 0.40), 0.9, 0.10, 0.0, 1.0, 0.7),
     OTHER: Klass((0.20, 0.20, 0.20, 0.40), 1.0, 0.10, 0.05, 0.0, 1.0),
+    # Ironforge's parts (IRONFORGE_AREAS): a city that never fully sleeps.
+    FORGE: Klass((0.55, 0.10, 0.15, 0.20), 1.1, 0.02, 0.0, 4.0, 0.04),     # the Great Forge, the smithies: never sleep
+    COMMONS: Klass((0.45, 0.15, 0.15, 0.25), 1.05, 0.04, 0.0, 2.5, 0.25),  # shops, the bank, the inn, the halls: mostly lit
+    QUARTER: Klass((0.25, 0.35, 0.15, 0.25), 1.0, 0.08, 0.0, 1.0, 0.45),   # the wards' homes: late, and gently
+    CAVERN: Klass((0.20, 0.25, 0.20, 0.35), 0.8, 0.25, 0.0, -1.0, 0.9),    # the Forlorn Cavern: darker, and earlier
 }
 
 
@@ -656,6 +673,78 @@ DISTRICTS = {
     "Walk of Elders": HOUSE, "The Eventide": HOUSE, "Stormwind Keep": KEEP, "Valley of Heroes": KEEP,
     "Farstriders' Square": KEEP, "Valley of Honor": KEEP,
 }
+# Ironforge: each glass group's class by the client's own sub-zone for it (WMOAreaTable.dbc's name for the root's wmoID
+# and the group's MOGP ID), a group named for a smithy the forge's. "Ironforge" itself is the ring road round the Great
+# Forge (the Commons, as Cataclysm names it: the shops, the bank, the Stonefire Tavern) and the gates' halls. Tinker
+# Town, the Hall of Arms, Old Ironforge and the Hall of Mysteries have no glass.
+IRONFORGE = "ironforge.wmo"
+IRONFORGE_AREAS = {
+    "The Great Forge": FORGE,
+    "Ironforge": COMMONS, "The Commons": COMMONS, "Vault of Ironforge": COMMONS, "The High Seat": COMMONS,
+    "Hall of Explorers": COMMONS, "The Library": COMMONS,
+    "The Military Ward": QUARTER, "The Mystic Ward": QUARTER, "Tinker Town": QUARTER, "Hall of Arms": QUARTER,
+    "Hall of Mysteries": QUARTER, "Old Ironforge": QUARTER,
+    "The Forlorn Cavern": CAVERN,
+}
+IRONFORGE_SMITHY = ("smith",)
+# Underground: no sky behind the glass of their interior groups (the Undercity has no glass).
+UNDERGROUND_WMOS = {"ironforge.wmo", "subway.wmo"}
+
+
+def ironforge_class(group_name, subzone):
+    """An Ironforge glass group's class: a smithy the forge's, else its sub-zone's (the Commons when unknown)."""
+    if any(w in (group_name or "").lower() for w in IRONFORGE_SMITHY):
+        return FORGE
+    return IRONFORGE_AREAS.get(subzone, COMMONS)
+
+
+def is_dungeon(wmo):
+    """A dungeon's WMO (its path): its frosted windows keep the client's look."""
+    return BS + "dungeon" + BS in wmo.lower().replace("/", BS)
+
+
+def lit_frosted(info):
+    """The frosted glass materials the client lights: SIDN with a colour, or unlit (MOMT 0x1: at full day and night)."""
+    out = {}
+    for i, m in enumerate(info["materials"]):
+        t = wl.texture_name(info, m["texture"])
+        if t and classify(t)[0] == FROSTED and ((m["flags"] & wl.SIDN and m["sidn"] & 0xFFFFFF) or m["flags"] & 0x1):
+            out[i] = t
+    return out
+
+
+def read_wmo_areas(scan):
+    """{(wmoID, MOGP group ID): sub-zone name} from <scan>/WMOAreaTable.dbc (name set 0), or {} without it."""
+    p = scan / "WMOAreaTable.dbc"
+    if not p.exists():
+        return {}
+    b = p.read_bytes()
+    n, f, rs, _ss = struct.unpack_from("<4I", b, 4)
+    strings = 20 + n * rs
+    out = {}
+    for i in range(n):
+        r = struct.unpack_from("<%dI" % f, b, 20 + i * rs)
+        if r[2] == 0 and r[11]:
+            out[(r[1], r[3])] = b[strings + r[11]:b.index(b"\0", strings + r[11])].decode("utf-8", "replace")
+    return out
+
+
+def root_wmo_id(b):
+    """MOHD's wmoID (WMOAreaTable's WMOID)."""
+    for tag, p, size in wl.chunks(b):
+        if tag == "MOHD":
+            return struct.unpack_from("<I", b, p + 32)[0] if size >= 36 else 0
+    return 0
+
+
+def group_id(b):
+    """MOGP's ID (WMOAreaTable's WMOGroupID), 0 when the header is short."""
+    for tag, p, size in wl.chunks(b):
+        if tag == "MOGP":
+            return struct.unpack_from("<I", b, p + 56)[0] if size >= 60 else 0
+    return 0
+
+
 # Class by words in a path's file name (or a group's name), in this order. The first match wins.
 CLASS_WORDS = [
     (SHIP, ("transport", "pirateship", "zeppelin", "_ship", "ship_")),
@@ -821,8 +910,10 @@ def empty_building(seed, cls, lived_in, dark):
 
 
 # Flags (GlassBuildings.Flags)
-B_CITY, B_DARK_PLACE, B_EMPTY, B_SELF_LIT = 0x1, 0x2, 0x4, 0x8
+B_CITY, B_DARK_PLACE, B_EMPTY, B_SELF_LIT, B_UNDERGROUND, B_DUNGEON = 0x1, 0x2, 0x4, 0x8, 0x10, 0x20
 WHOLE = 0xFFFFFFFF
+# Flags (GlassPanes.Flags)
+PANE_NO_SKY = 0x1   # no sky behind it (an underground WMO's interior group): no floor light, no shafts
 
 
 def group_infos(b):
@@ -863,31 +954,40 @@ def buildings_table(scan, areas=None, amap=None):
     styles, rows = {}, []
     report = collections.Counter()
     per_wmo = {}
+    wmo_areas = read_wmo_areas(scan)
 
+    # Styles in the order they're first used, those of the classes added later (Ironforge's) after all the others, so
+    # the earlier styles keep their IDs: style_id gives a key, the IDs are made at the end.
     def style_id(cls, pal):
         if (cls, pal) not in styles:
-            styles[(cls, pal)] = len(styles) + 1
-        return styles[(cls, pal)]
+            styles[(cls, pal)] = len(styles)
+        return (cls, pal)
 
     def wmo_info(wmo):
         if wmo not in per_wmo:
             rp = flat(scan, wmo)
-            info, glass_groups, groups, lit = None, set(), [], False
+            info, glass_groups, groups, lit, subzones = None, set(), [], False, {}
             if rp.exists():
                 b = rp.read_bytes()
                 info = parse_root_all(b)
                 mats = glass_materials(info)
                 if mats:
-                    lit = bool(wl.window_materials(info))
+                    # lit: the client lights its windows at night (SIDN), or draws its frosted glass at full (unlit)
+                    lit = bool(wl.window_materials(info)) or bool(lit_frosted(info))
                     groups = group_infos(b)
+                    wid = root_wmo_id(b)
                     if wmo.split(BS)[-1] in CITY_WMOS:
                         for gi in range(info["groups"]):
                             gp = flat(scan, "%s_%03d.wmo" % (wmo[:-4], gi))
-                            if gp.exists() and any(bt[5] in mats for bt in wl.parse_group(gp.read_bytes())["batches"]):
+                            if not gp.exists():
+                                continue
+                            gb = gp.read_bytes()
+                            if any(bt[5] in mats for bt in wl.parse_group(gb)["batches"]):
                                 glass_groups.add(gi)
+                                subzones[gi] = wmo_areas.get((wid, group_id(gb)), "")
                 else:
                     info = None
-            per_wmo[wmo] = (info, sorted(glass_groups), groups, lit)
+            per_wmo[wmo] = (info, sorted(glass_groups), groups, lit, subzones)
         return per_wmo[wmo]
 
     town_area = {}
@@ -895,7 +995,7 @@ def buildings_table(scan, areas=None, amap=None):
         town_area[wmo] = next((a for a, v in areas.items() if v[0] == town and v[3] == mid), 0)
     defaults = set()
     for (mapdir, uid_s), (map_id, md, wmo, pos, rot) in sorted(placements(scan).items(), key=lambda kv: (kv[1][0], int(kv[0][1]))):
-        info, glass_groups, groups, lit = wmo_info(wmo)
+        info, glass_groups, groups, lit, subzones = wmo_info(wmo)
         if info is None:
             continue
         uid = int(uid_s)
@@ -912,7 +1012,9 @@ def buildings_table(scan, areas=None, amap=None):
         cls, pal = room_class(wmo), palette_of(wmo, map_id, names)
         dark = dark_place(names, wmo)
         seed = seed_of(map_id, uid)
-        flags = (B_CITY if cls == CITY else 0) | (B_DARK_PLACE if dark else 0) | (B_SELF_LIT if lit else 0)
+        # (a dungeon's; underground as a whole when it isn't a city: a city's groups say which are)
+        where = (B_DUNGEON if is_dungeon(wmo) else 0) | (B_UNDERGROUND if base in UNDERGROUND_WMOS and cls != CITY else 0)
+        flags = (B_CITY if cls == CITY else 0) | (B_DARK_PLACE if dark else 0) | (B_SELF_LIT if lit else 0) | where
         if empty_building(seed, cls, lit, dark):
             flags |= B_EMPTY
         rows.append([0, map_id, uid, *o, WHOLE, style_id(cls, pal), seed, flags, area, wmo,
@@ -929,25 +1031,37 @@ def buildings_table(scan, areas=None, amap=None):
             c = point(tuple(0.5 * (a + b) for a, b in zip(lo, hi)))
             garea = area_at(c[0], c[1])
             gnames = area_chain(areas, garea)
-            gcls = group_class(gname, gnames[0] if gnames else "", CITY)
+            subzone = subzones.get(gi, "")
+            if base == IRONFORGE and wmo_areas:
+                gcls = ironforge_class(gname, subzone)
+            else:
+                gcls = group_class(gname, gnames[0] if gnames else "", CITY)
             gpal = palette_of(wmo, map_id, gnames or names)
             gdark = dark_place(gnames or names, wmo)
             gseed = seed_of(map_id, uid, gi)
-            gflags = B_CITY | (B_DARK_PLACE if gdark else 0) | (B_SELF_LIT if lit else 0)
+            under = base in UNDERGROUND_WMOS and (fl & INDOOR) and not (fl & EXTERIOR)
+            gflags = B_CITY | (B_DARK_PLACE if gdark else 0) | (B_SELF_LIT if lit else 0) | (B_UNDERGROUND if under else 0) | \
+                (B_DUNGEON if is_dungeon(wmo) else 0)
             rows.append([0, map_id, uid, *o, gi, style_id(gcls, gpal), gseed, gflags, garea, wmo,
-                         "%s group %d %s (%s): %s" % (base[:-4], gi, gname or "-", CLASS_NAMES[gcls], gnames[0] if gnames else "?")])
+                         "%s group %d %s (%s%s): %s" % (base[:-4], gi, gname or "-", CLASS_NAMES[gcls],
+                                                       ", " + subzone if subzone else "", gnames[0] if gnames else "?")])
             report[("group", gcls)] += 1
         # One default per WMO and map, for its instances not placed in the map (transports) or not found.
         if (map_id, wmo) not in defaults:
             defaults.add((map_id, wmo))
             dpal = palette_of(wmo, map_id)
             rows.append([0, map_id, 0, 0.0, 0.0, 0.0, WHOLE, style_id(cls, dpal), seed_of(map_id, 0, abs(hash_path(wmo)) % 100000),
-                         (B_CITY if cls == CITY else 0) | (B_SELF_LIT if lit else 0), 0, wmo, "%s: the default (%s)" % (base[:-4], CLASS_NAMES[cls])])
+                         (B_CITY if cls == CITY else 0) | (B_SELF_LIT if lit else 0) | where, 0, wmo,
+                         "%s: the default (%s)" % (base[:-4], CLASS_NAMES[cls])])
     rows.sort(key=lambda r: (r[2] == 0, r[1], r[2], r[6] if r[6] != WHOLE else -1, r[11]))
     for i, r in enumerate(rows):
         r[0] = i + 1
+    # The styles' IDs: first used first, Ironforge's classes after the rest.
+    ids = {k: i + 1 for i, k in enumerate(sorted(styles, key=lambda k: (k[0] >= FORGE, styles[k])))}
+    for r in rows:
+        r[7] = ids[r[7]]
     style_rows = []
-    for (cls, pal), sid in sorted(styles.items(), key=lambda kv: kv[1]):
+    for (cls, pal), sid in sorted(ids.items(), key=lambda kv: kv[1]):
         style_rows.append([sid, cls, pal, *style_values(cls, pal), "%s, %s" % (CLASS_NAMES[cls], PALETTES[pal].name)])
     return style_rows, rows, report
 
@@ -1089,7 +1203,9 @@ def panes_table(scan, light_of):
             rlo = [min(q[i] for q in corners) for i in range(3)]
             rhi = [max(q[i] for q in corners) for i in range(3)]
             kind, light = light_of[p.texture]
-            rows.append([0, map_id, uid, *c, *out, *along, p.hw, p.hh, *light, kind, *rlo, *rhi, 0,
+            # an underground WMO's interior pane: no sky behind it (no floor light, no shafts)
+            no_sky = PANE_NO_SKY if wmo.split(BS)[-1] in UNDERGROUND_WMOS and not p.exterior else 0
+            rows.append([0, map_id, uid, *c, *out, *along, p.hw, p.hh, *light, kind, *rlo, *rhi, no_sky,
                          "%s: %s" % (wmo.split(BS)[-1][:-4], base_name(p.texture))])
             by_map[map_id] += 1
     rows.sort(key=lambda r: (r[1], math.floor(r[3] / 64), math.floor(r[4] / 64), r[3], r[4], r[5]))
@@ -1151,6 +1267,11 @@ def write_rooms(scan, folder):
                                                  if report[("group", c)]))
     print("  placements by palette: " + ", ".join(f"{PALETTES[p].name.split(':')[0]} {report[('palette', p)]}"
                                                   for p in sorted(PALETTES) if report[("palette", p)]))
+    ironforge = collections.Counter((CLASS_NAMES[next(s[1] for s in srows if s[0] == r[7])], r[12].split("(")[1].split(")")[0].split(", ", 1)[-1])
+                                    for r in brows if r[11].split(BS)[-1] == IRONFORGE and r[6] != WHOLE)
+    if ironforge:
+        print("  Ironforge's glass groups (class, sub-zone): " + ", ".join("%s %s %d" % (c, z, n) for (c, z), n in sorted(ironforge.items())))
+    print("  underground rows %d, dungeon rows %d" % (sum(1 for r in brows if r[9] & B_UNDERGROUND), sum(1 for r in brows if r[9] & B_DUNGEON)))
     for c in sorted(CLASSES):
         k = CLASSES[c]
         total = sum(k.weights)
