@@ -10,6 +10,10 @@
 //    leaded glass a room (interior mapping in the pane's own frame); at night the client's own lit windows.
 //  - Light through sunlit panes onto the floors and walls of the room behind them, and coloured shafts in the room's
 //    air (the panes' rectangles, GlassPanes.cdbc), kept inside that room.
+//  - The rooms behind the glass differ by building (RoomStyles.cdbc, GlassBuildings.cdbc): tint, brightness, a few
+//    dark; per window a layout (shelves, curtains half drawn, a dividing wall with a doorway, plain) weighted by the
+//    building's class and its place; at night lamp-lit behind the client's own lit windows, more of them dark as the
+//    night goes on.
 #pragma once
 
 #include <cstddef>
@@ -120,4 +124,149 @@ namespace wxl_livingazeroth::glass
     /// A ray entering the glass at `pos` (in the pane's frame: along, up, in yd) going `dir` (along, up, into the
     /// room; dir[2] > 0) meets the room's cell (cellW x cellH, `depth` deep): which face, after how many yd.
     RoomFace RoomHit(const float pos[2], const float dir[3], float cellW, float cellH, float depth, float& distance);
+
+    // --- who lives behind the glass (RoomStyles.cdbc, GlassBuildings.cdbc: tools/gen_glass.py) --------------------
+    // A building's class (from its WMO's path and, in a city, its group's name or district) and its place's palette
+    // (culture and region) make a style: its rooms' tints, brightness, lamp, curtains, how many are dark, the layouts'
+    // weights and how late its lights stay on. Each placement (and each group of a city's one big WMO) has a style
+    // and a seed. Per window (cell) a hash of the cell and the seed picks the layout, whether the room is dark, its
+    // light, the lamp's place, the curtains' gap, the things on the shelves.
+    enum RoomClass : uint32_t
+    {
+        kClassOther = 0, kClassHouse = 1, kClassFarm = 2, kClassInn = 3, kClassShop = 4, kClassTemple = 5,
+        kClassKeep = 6, kClassTower = 7, kClassCity = 8, kClassShip = 9, kClassCount = 10
+    };
+    const char* ClassName(uint32_t cls);
+    enum Layout : int { kLayoutShelves = 0, kLayoutCurtains = 1, kLayoutDivider = 2, kLayoutPlain = 3 };
+
+    struct RoomStyle
+    {
+        uint32_t id = 0, cls = kClassHouse, palette = 0;
+        float tint[3] = { 0.85f, 0.72f, 0.55f };     // the rooms' colour by day (one end of the building's range)
+        float tint2[3] = { 0.85f, 0.72f, 0.55f };    // ... and the other end
+        float lamp[3] = { 1.0f, 0.66f, 0.36f };      // the lamp at night
+        float curtain[3] = { 0.55f, 0.2f, 0.16f };   // the curtains' cloth
+        float brightness = 1.0f;                     // x the rooms' light by day
+        float spread = 0.15f;                        // buildings brighter or dimmer by up to this share
+        float darkShare = 0.1f;                      // rooms dark by day
+        float weights[4] = { 0.25f, 0.35f, 0.15f, 0.25f };  // shelves, curtains, divider, plain (Layout order)
+        float lateHours = 0.0f;                      // its lights go out this much later (inns) or earlier (shops)
+        float nightCap = 1.0f;                       // at most this share of its rooms dark at night
+    };
+
+    enum BuildingFlag : uint32_t
+    {
+        kBuildingCity = 0x1,       // a city's one big WMO: the building is the block (kBlock yd) within its group
+        kBuildingDarkPlace = 0x2,  // ruined, abandoned, haunted (gen_window_lights' DARK_AREAS / DARK_PATHS): no lit rooms
+        kBuildingEmpty = 0x4,      // nobody lives here: every room dark
+        kBuildingSelfLit = 0x8,    // its WMO has windows the client lights at night (for the editor; not read)
+    };
+    constexpr uint32_t kWholePlacement = 0xFFFFFFFFu;
+
+    struct Building
+    {
+        uint32_t map = 0, uniqueId = 0, group = kWholePlacement, style = 0, seed = 0, flags = 0, area = 0;
+        float    pos[3] = {};          // the placement's origin (its WMO's 0, 0, 0 in the world)
+        uint32_t path = 0;             // PathHash of its WMO's path (0: any)
+    };
+    /// FNV-1a of a path, lower case with backslashes (so "World/wmo/X.wmo" and "world\wmo\x.wmo" are the same).
+    uint32_t PathHash(const char* path);
+
+    /// The buildings by where they stand (a placement's origin within kNear yd, and its WMO's path), a city's groups
+    /// under its placement, and a default per WMO (its path, on a map or any map) for instances not in the table
+    /// (transports, a placement the scan missed).
+    class BuildingIndex
+    {
+    public:
+        static constexpr float kNear = 1.5f;
+        void Build(std::vector<Building> rows);
+        /// The building drawn by an instance at `pos` (its origin) of the WMO with `path` (0: unknown), group `group`.
+        const Building* Find(uint32_t map, const float pos[3], uint32_t path, uint32_t group) const;
+        size_t Placements() const { return m_placements; }
+        size_t Size() const { return m_rows.size(); }
+
+    private:
+        std::vector<Building> m_rows;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> m_grid;   // (map, 8-yd cell) -> placement rows
+        std::unordered_map<uint64_t, uint32_t> m_groups;              // (placement row, group) -> row
+        std::unordered_map<uint64_t, uint32_t> m_defaults;            // (map, path) -> row; (any map, path) too
+        size_t m_placements = 0;
+    };
+
+    // The shader's room (features/GlassShader), its numbers. The cell runs 0..1 across, up and deep.
+    namespace room
+    {
+        constexpr float kHashK[4] = { 0.1031f, 0.1030f, 0.0973f, 0.1099f };  // the hash (Dave Hoskins' hash42)
+        constexpr float kHashAdd = 33.33f;
+        constexpr float kDividerDepth = 0.5f;                     // the dividing wall: half way back
+        constexpr float kDoorSpan = 0.4f, kDoorBase = 0.3f;       // the doorway's middle: 0.3 .. 0.7 across
+        constexpr float kDoorHalfWidth = 0.13f, kDoorHeight = 0.72f, kDoorDim = 0.45f;  // ... the room beyond 45% dimmer
+        constexpr float kDividerShade = 0.9f;
+        constexpr float kCurtainDepth = 0.08f;                    // the cloth just behind the glass
+        constexpr float kGapSpan = 0.3f, kGapBase = 0.35f;        // the gap's middle: 0.35 .. 0.65 across
+        constexpr float kGapMinHalf = 0.08f, kGapHalfSpan = 0.2f, kGapHash = 7.13f;  // its half width 0.08 .. 0.28
+        constexpr float kClothEdge = 25.0f;                       // the cloth's edge: soft over 1/25 of the cell
+        constexpr float kFolds = 9.0f, kFoldAmp = 0.76f, kFoldBase = 0.62f, kFoldMean = 0.81f;
+        constexpr float kSlots = 9.0f, kShelves = 4.0f;           // things per shelf, shelves per wall
+        constexpr float kPlank = 0.12f, kThingMax = 0.85f, kThingGap = 0.4f;
+        constexpr float kShelfCentre[2] = { 0.5f, 0.52f }, kShelfHalf[2] = { 0.38f, 0.33f };
+        constexpr float kShelfHashShelf = 7.0f, kShelfHashRoom = 31.0f, kThingHash = 7.7f;
+        constexpr float kThingSpan = 0.9f, kThingBase = 0.45f, kShelfBack = 0.8f, kPlankLight = 1.35f;
+        constexpr float kLamp[4] = { 0.25f, 0.5f, 0.42f, 0.72f }; // across 0.25 .. 0.75 (hashed), up, deep
+        constexpr float kLampK = 6.0f, kLampGain = 1.2f, kLampBase = 0.4f;  // base + gain / (1 + k d^2)
+        constexpr float kFadeA = 1.225f, kFadeB = -1.0f / 4000.0f;  // detail: 1 within 30 yd .. 0 from 70 yd (d^2)
+        constexpr float kClothFar = 0.6f;                         // the curtains' cover far away
+        constexpr float kDarkDay = 0.12f;                         // a dark room by day keeps this much light
+        constexpr float kCurtainDay = 1.5f, kCurtainGain = 0.8f;  // cloth: 1.2 x the day in front, 0.8 x the lamp behind
+        constexpr float kBlock = 14.0f;                           // yd: a city's blocks (one building each)
+        constexpr float kCellLight[2] = { 0.6f, 0.55f };          // each room's light: 0.55 .. 1.15 (hashed)
+        constexpr float kFace[4] = { 0.7f, 0.55f, 0.4f, 1.0f };   // side wall, floor, ceiling, back wall
+        constexpr float kFar = 0.12f;                             // farther is darker: 1 / (1 + 0.12 t)
+        /// The lamp-lit room's mean light (cell light x face x falloff over many rooms and views), measured with
+        /// RoomOutside: the lamp's colour is divided by it so a lit room is about as bright as the client's window.
+        constexpr float kNightMean = 0.32f;
+    }
+
+    /// Dave Hoskins' hash42 as the shader works it: four values in 0..1 from two.
+    void Hash42(float x, float y, float out[4]);
+
+    /// The layouts' cumulative thresholds from their weights (shelves, curtains, divider, plain; normalised): a
+    /// room's hash below t[0] has shelves, below t[1] curtains, below t[2] a dividing wall, else it's plain.
+    void LayoutThresholds(const float weights[4], float t[3]);
+    Layout PickLayout(float hash, const float t[3]);
+
+    /// The share of rooms dark at night by the hour (0..24, the client's clock): 8% in the evening, rising from 21:00
+    /// to half at midnight, 72% at 02:00 and 78% at 04:30; early risers bring it back to 60% by 06:00. `lateHours`
+    /// shifts the evening rise later (an inn) or earlier (a shop), `cap` caps it (an inn stays mostly lit).
+    float LightsOutShare(float hour, float lateHours, float cap);
+
+    /// The room's constants for one glass batch (c193.z, c198, c199, c202..c205, c212: GlassShader.hpp) and the camera
+    /// (c180), as RoomOutside reads them.
+    struct RoomConstants
+    {
+        float share = 0.65f;                          // c193.z
+        float c198[4] = { 1 / 3.5f, 1 / 3.2f, 0.25f, 0.32f };
+        float c199[4] = { 0.85f, 0.72f, 0.55f, 1.0f };
+        float c202[4] = { 0.85f, 0.72f, 0.55f, 0.0f };
+        float c203[4] = { 0, 0, 0, 0 };
+        float c204[4] = { 0, 0, 0, 1 };
+        float c205[4] = { 0.55f, 0.2f, 0.16f, 0 };
+        float c212[4] = { 0, 0, 0, 0 };
+        float cam[3] = { 0, 0, 0 };
+    };
+
+    /// What RoomOutside found (for the tests).
+    struct RoomSample
+    {
+        int layout = kLayoutPlain;
+        bool lit = true, door = false, wall = false;  // through the doorway; the dividing wall
+        float cloth = 0, fold = 0, shelf = 1, falloff = 0, fade = 1, shade = 0, building[2] = {};
+        float hit[3] = {};                            // where the ray meets the room (cell units)
+    };
+
+    /// The room seen through clear glass from outside as the shader works it (GlassShader's room part, op for op):
+    /// the point P (world), toward the eye V, the normal N facing the eye (world, unit), the client's colour r12 and
+    /// the outside colour so far (r23): the outside colour after the room. `sample` may be null.
+    void RoomOutside(const float P[3], const float V[3], const float N[3], const RoomConstants& k, const float r12[3],
+                     const float outside[3], float out[3], RoomSample* sample);
 }

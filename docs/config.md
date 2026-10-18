@@ -181,6 +181,20 @@ text, the UI, characters).
 - **Seen from outside by day**: darker glass with the sky in it at a slant (Fresnel) and the sun's glint; behind clear and
   leaded panes a room (interior mapping: rooms a few yards wide and deep behind the glass, each lit a little differently).
   At night the client's own lit windows.
+- **The rooms behind the glass differ by building** (`RoomStyles.cdbc`, `GlassBuildings.cdbc`, docs/cdbc-tables.md): each
+  building's tint and brightness from its own seed and its style, the style from its kind (inn, house, farm, shop, temple,
+  keep, mage tower, ship; in a city's one big WMO each group, and each 14-yd block, its own) and its place's palette
+  (human warm, Duskwood dim, Northrend's humans colder, elven gold and crimson, Dalaran violet, night elf moonlit, draenei,
+  vrykul firelit wood and furs, goblin cluttered and warm, Forsaken dim green, orc firelight, dwarf forge-warm, Outland's
+  outposts ruddy, Zangarmarsh teal...). A few rooms are dark, and nobody lives in a few buildings. Each window is a room
+  with a layout picked by its hash, weighted by the building's kind and place: a back wall with shelves and things on
+  them, curtains half drawn, a dividing wall with a doorway through to a second, dimmer room, or plain. The detail fades
+  from 30 to 70 yards. Stained and frosted glass has no room, as before.
+- **At night** the windows the client lights (self-lit materials) show a lamp-lit room, about as bright as the client's own
+  lit window it replaces, the lamp's light falling off across the room and the curtains glowing with it behind them. More
+  of them go dark as the night goes on: 8% in the evening, half at midnight, three quarters by 03:00, a few early risers
+  before dawn; inns stay lit late, shops close early. Ruined, abandoned and haunted places (and ships and dungeons: the
+  window lights' dark places) stay dark. The window lights and their glow (`[LivingAzeroth.Windows]`) stay as they are.
 - **Indoors, with the sun on the windows**: the panes' light on the room's floor and walls (where the ray toward the sun
   leaves through a pane, in the glass's colour; up to 12 panes, kept inside each pane's room) and **coloured shafts** in
   the room's air (a short march along the view against up to 16 panes whose room you're in, at a quarter of the
@@ -204,3 +218,11 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | ShaftStrength | 1 | Your multiplier on the coloured shafts. |
 | FloorStrength | 1 | Your multiplier on the light on the floor. |
 | Range | 70 | Yards from the camera: panes farther away give no floor light or shafts. |
+| RoomVariety | 1 | The rooms differ by building: tint, brightness, a few dark, by the building's kind and place. 0 = one warm room everywhere. |
+| LitRoomsAtNight | 1 | At night a lamp-lit room behind the windows the client lights. 0 = dark rooms at night. |
+| LightsOut | 1 | More of those rooms go dark as the night goes on (inns late, shops early). 0 = all lit all night. |
+| RoomLayouts | 1 | Shelves, curtains half drawn, a dividing wall with a doorway, or plain, per window. 0 = all plain. |
+| RoomVarietyStrength | 1 | Your multiplier on how far the buildings' tints and brightness differ and on the rooms dark by day. |
+| LitRoomStrength | 1 | Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window). |
+| LightsOutStrength | 1 | Your multiplier on the share of rooms dark at night. |
+| LayoutStrength | 1 | Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds. |

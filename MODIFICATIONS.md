@@ -35,6 +35,10 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   panes on the room's floor, and coloured shafts in its air (`GlassMaterials.cdbc`, `GlassPanes.cdbc`,
   `tools/gen_glass.py`, `env/GlassModel`, `features/Glass`, `features/GlassShafts`, `[LivingAzeroth.Glass]`). The
   buildings' pixel edit (`features/ModelIce`) no longer reads its matches after changing the text they point into.
+- **Rooms behind the glass** (17 October 2026): each building's rooms its own tint and brightness by its kind and
+  place, per window a layout (shelves, curtains, a dividing wall with a doorway, plain), and at night lamp-lit rooms
+  behind the client's lit windows that go dark as the night goes on (`RoomStyles.cdbc`, `GlassBuildings.cdbc`,
+  `tools/gen_glass.py`, a hook on `Wmo.RenderGroup` in `features/WmoIce`).
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

@@ -59,6 +59,29 @@ namespace wxl_livingazeroth::glass
             {"Flags", 24, WXL_CDBC_FIELD_VALUE},     {"Comment", 25, WXL_CDBC_FIELD_STRING},
         };
         constexpr WXL_SeyrisCdbcDefinition kPaneDef = { "GlassPanes", kPanesFile, kPaneFields, 26 };
+        // The rooms behind the glass (tools/gen_glass.py ROOM_STYLES, GLASS_BUILDINGS).
+        constexpr const char* kStylesFile = "DBFilesClient\\RoomStyles.cdbc";
+        constexpr const char* kBuildingsFile = "DBFilesClient\\GlassBuildings.cdbc";
+        constexpr WXL_SeyrisCdbcField kStyleFields[] = {
+            {"ID", 0, WXL_CDBC_FIELD_VALUE},          {"Class", 1, WXL_CDBC_FIELD_VALUE},       {"Palette", 2, WXL_CDBC_FIELD_VALUE},
+            {"TintR", 3, WXL_CDBC_FIELD_VALUE},       {"TintG", 4, WXL_CDBC_FIELD_VALUE},       {"TintB", 5, WXL_CDBC_FIELD_VALUE},
+            {"Tint2R", 6, WXL_CDBC_FIELD_VALUE},      {"Tint2G", 7, WXL_CDBC_FIELD_VALUE},      {"Tint2B", 8, WXL_CDBC_FIELD_VALUE},
+            {"LampR", 9, WXL_CDBC_FIELD_VALUE},       {"LampG", 10, WXL_CDBC_FIELD_VALUE},      {"LampB", 11, WXL_CDBC_FIELD_VALUE},
+            {"CurtainR", 12, WXL_CDBC_FIELD_VALUE},   {"CurtainG", 13, WXL_CDBC_FIELD_VALUE},   {"CurtainB", 14, WXL_CDBC_FIELD_VALUE},
+            {"Brightness", 15, WXL_CDBC_FIELD_VALUE}, {"Spread", 16, WXL_CDBC_FIELD_VALUE},     {"DarkShare", 17, WXL_CDBC_FIELD_VALUE},
+            {"Shelves", 18, WXL_CDBC_FIELD_VALUE},    {"Curtains", 19, WXL_CDBC_FIELD_VALUE},   {"Divider", 20, WXL_CDBC_FIELD_VALUE},
+            {"Plain", 21, WXL_CDBC_FIELD_VALUE},      {"LateHours", 22, WXL_CDBC_FIELD_VALUE},  {"NightCap", 23, WXL_CDBC_FIELD_VALUE},
+            {"Comment", 24, WXL_CDBC_FIELD_STRING},
+        };
+        constexpr WXL_SeyrisCdbcDefinition kStyleDef = { "RoomStyles", kStylesFile, kStyleFields, 25 };
+        constexpr WXL_SeyrisCdbcField kBuildingFields[] = {
+            {"ID", 0, WXL_CDBC_FIELD_VALUE},     {"MapID", 1, WXL_CDBC_FIELD_VALUE},  {"UniqueID", 2, WXL_CDBC_FIELD_VALUE},
+            {"PosX", 3, WXL_CDBC_FIELD_VALUE},   {"PosY", 4, WXL_CDBC_FIELD_VALUE},   {"PosZ", 5, WXL_CDBC_FIELD_VALUE},
+            {"Group", 6, WXL_CDBC_FIELD_VALUE},  {"Style", 7, WXL_CDBC_FIELD_VALUE},  {"Seed", 8, WXL_CDBC_FIELD_VALUE},
+            {"Flags", 9, WXL_CDBC_FIELD_VALUE},  {"AreaID", 10, WXL_CDBC_FIELD_VALUE}, {"Wmo", 11, WXL_CDBC_FIELD_STRING},
+            {"Comment", 12, WXL_CDBC_FIELD_STRING},
+        };
+        constexpr WXL_SeyrisCdbcDefinition kBuildingDef = { "GlassBuildings", kBuildingsFile, kBuildingFields, 13 };
 
         // Each kind's look (features/GlassShader's constants): the room behind it (its share), the glass's thickness
         // (yd), saturation seen from inside, Fresnel strength, darkening outside, glint, F0, diffusion (frosted: the
@@ -81,9 +104,11 @@ namespace wxl_livingazeroth::glass
             }
         }
 
-        // The room behind clear glass: cells 3.5 x 3.2 yd, 4 yd deep, a warm tint, lit by the day.
+        // The room behind clear glass: cells 3.5 x 3.2 yd, 4 yd deep, a warm tint, lit by the day (a building's style
+        // changes the tint and the light: RoomBatchConstants).
         constexpr float kCellWidth = 3.5f, kCellHeight = 3.2f, kRoomDepth = 4.0f, kRoomLight = 0.32f;
         constexpr float kRoomTint[3] = { 0.85f, 0.72f, 0.55f };
+        constexpr float kGlowHidden = 0.75f;   // at night a dark room hides this much of the client's lit window behind it
         // The floor light: the reach along the sun's ray behind a pane, the soft edges (1 / the share of the half
         // sizes), the far end's softness, and the gain.
         constexpr float kReach = 30.0f, kSoft = 6.0f, kFarSoft = 4.0f, kFloorGain = 1.2f;
@@ -115,6 +140,17 @@ namespace wxl_livingazeroth::glass
         bool g_loopFloor = false, g_glassOn = false, g_floorOn = false;
         bool g_floorConstsUp = false;            // the floor light's c180..c183, c192..c201 are up for this loop
         unsigned g_patched = 0, g_glassBatches = 0, g_floorBatches = 0, g_paneUploads = 0;
+
+        // The rooms: the styles, the buildings, the instance being drawn.
+        std::vector<RoomStyle> g_styles;
+        std::unordered_map<uint32_t, uint32_t> g_styleById;
+        BuildingIndex g_buildings;
+        const Building* g_building = nullptr;    // the current instance's (null: not in the tables)
+        uint32_t g_fallbackSeed = 0;
+        bool g_inInstance = false;
+        unsigned g_instances = 0, g_matched = 0, g_byWmo = 0, g_defaulted = 0;   // instance groups with glass: placed, by WMO, neither
+        float g_hour = 12.0f, g_night = 0.0f;    // this frame's
+        std::string g_roomLine;
 
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : (v == v ? v : 0.0f)); }
 
@@ -159,11 +195,96 @@ namespace wxl_livingazeroth::glass
             ++g_paneUploads;
         }
 
-        // One glass batch's constants: its material's look, inside or outside.
-        void GlassConstants(const Material& m, float out[4 * kConstantCount])
+        const RoomStyle* StyleOf(const Building* b)
+        {
+            if (!b) return nullptr;
+            auto it = g_styleById.find(b->style);
+            return it == g_styleById.end() ? nullptr : &g_styles[it->second];
+        }
+
+        // One glass batch's constants: its material's look, inside or outside, and the room of the building drawn.
+        void GlassConstants(const Material& m, bool selfLit, float out[4 * kConstantCount], float seed[4])
         {
             BatchConstants(m, InsideWeight(m.flags, g_groupFlags, g_indoors), g_light, g_sun, g_sunColour, g_sky, g_settings, out);
+            const Building* b = g_inInstance ? g_building : nullptr;
+            const RoomStyle* style = StyleOf(b);
+            RoomInputs in;
+            in.night = g_night; in.hour = g_hour; in.selfLit = selfLit; in.fallbackSeed = g_fallbackSeed;
+            RoomBatchConstants(style ? *style : DefaultStyle(), style ? b : nullptr, g_light, in, g_settings, out, seed);
         }
+    }
+
+    const RoomStyle& DefaultStyle()
+    {
+        static const RoomStyle s{};
+        return s;
+    }
+
+    const BuildingIndex& Buildings() { return g_buildings; }
+
+    const RoomStyle* StyleById(uint32_t id)
+    {
+        auto it = g_styleById.find(id);
+        return it == g_styleById.end() ? nullptr : &g_styles[it->second];
+    }
+
+    float HourNow()
+    {
+        const float o = climate::TimeOverride();
+        if (o >= 0.0f) return o * 24.0f;
+        const climate::Clock& c = climate::Now();
+        return c.valid ? c.dayFraction * 24.0f : 12.0f;
+    }
+
+    void RoomBatchConstants(const RoomStyle& style, const Building* b, const Light& light, const RoomInputs& in, const Settings& s,
+                            float out[4 * kConstantCount], float seed[4])
+    {
+        float* c = out;
+        const bool variety = s.roomVariety != 0;
+        const float v = variety ? std::max(0.0f, s.varietyStrength) : 0.0f;
+        const float night = Clamp01(in.night);
+        const uint32_t flags = b ? b->flags : 0;
+        const bool empty = variety && (flags & kBuildingEmpty);
+        const bool darkPlace = (flags & kBuildingDarkPlace) != 0;
+        // c198.w the day's light in the room (x the style's brightness); c199.rgb and c202.rgb the building's tints
+        // (its hash picks between them), c202.w how far buildings differ in brightness.
+        const float* tint = variety ? style.tint : kRoomTint;
+        c[27] = kRoomLight * s.interiorStrength * light.day * light.dim * (variety ? std::max(0.0f, style.brightness) : 1.0f);
+        for (int k = 0; k < 3; ++k)
+        {
+            c[28 + k] = tint[k];
+            c[40 + k] = variety ? tint[k] + (style.tint2[k] - tint[k]) * std::min(1.0f, v) : tint[k];
+        }
+        c[43] = variety ? Clamp01(style.spread * v) : 0.0f;
+        // c203.w the share of rooms dark: by day the style's few, at night by the hour (inns late, shops early);
+        // every room in an empty building, and at night in a dark place.
+        const float dayDark = empty ? 1.0f : (variety ? Clamp01(style.darkShare * v) : 0.0f);
+        float nightDark = s.lightsOut ? Clamp01(LightsOutShare(in.hour, style.lateHours, style.nightCap) * std::max(0.0f, s.lightsOutStrength)) : 0.0f;
+        if (darkPlace || empty) nightDark = 1.0f;
+        c[47] = dayDark + (nightDark - dayDark) * night;
+        // c203.rgb the lamp at night, behind the windows the client lights (SIDN): its colour at luminance 1 over the
+        // room's mean light, so a lit room is about as bright as the client's window (the shader x its luminance).
+        const bool lamp = s.litRooms && in.selfLit && !darkPlace && !empty;
+        float lampN[3];
+        const float ll = std::max(1e-3f, 0.2126f * style.lamp[0] + 0.7152f * style.lamp[1] + 0.0722f * style.lamp[2]);
+        for (int k = 0; k < 3; ++k) lampN[k] = std::max(0.0f, style.lamp[k]) / ll;
+        const float lit = std::max(1e-3f, 0.2126f * tint[0] * lampN[0] + 0.7152f * tint[1] * lampN[1] + 0.0722f * tint[2] * lampN[2]);
+        const float gain = lamp ? night * std::max(0.0f, s.litRoomStrength) / (lit * room::kNightMean) : 0.0f;
+        for (int k = 0; k < 3; ++k) c[44 + k] = lampN[k] * gain;
+        // c204 the layouts' thresholds and the detail's strength; c205 the curtains, and how much of the client's lit
+        // window a dark room hides at night.
+        float t[3] = { 0, 0, 0 };
+        if (s.roomLayouts) LayoutThresholds(style.weights, t);
+        for (int k = 0; k < 3; ++k) c[48 + k] = t[k];
+        c[51] = s.roomLayouts ? std::max(0.0f, s.layoutStrength) : 0.0f;
+        for (int k = 0; k < 3; ++k) c[52 + k] = style.curtain[k];
+        c[55] = s.litRooms && in.selfLit ? kGlowHidden * night : 0.0f;
+        // c212 the seed (two numbers 0..1023) and the block (a city's buildings).
+        const uint32_t sd = b ? b->seed : in.fallbackSeed;
+        seed[0] = static_cast<float>(sd & 1023u);
+        seed[1] = static_cast<float>((sd >> 10) & 1023u);
+        seed[2] = b && variety && (flags & kBuildingCity) ? 1.0f / room::kBlock : 0.0f;
+        seed[3] = 0.0f;
     }
 
     void BatchConstants(const Material& m, float inside, const Light& light, const float sun[3], const float sunColour[3], const float sky[3],
@@ -203,6 +324,11 @@ namespace wxl_livingazeroth::glass
         for (int k = 0; k < 3; ++k) c[32 + k] = sunColour[k];
         c[35] = 0.0f;
         c[36] = kFloorGain * s.floorStrength; c[37] = c[38] = c[39] = 0.0f;
+        // c202..c205 the plain room: one tint, no spread, none dark, no lamp, no layouts (RoomBatchConstants: a building's)
+        for (int k = 0; k < 3; ++k) { c[40 + k] = kRoomTint[k]; c[52 + k] = DefaultStyle().curtain[k]; }
+        c[43] = 0.0f;
+        for (int k = 44; k < 52; ++k) c[k] = 0.0f;
+        c[55] = 0.0f;
     }
 
     namespace
@@ -241,7 +367,10 @@ namespace wxl_livingazeroth::glass
         ++g_generation;
         g_materials.clear();
         g_byTexture.clear();
-        if (!cdbc || !cdbc->HasFeature("cdbc-load")) { g_status = "wxl-seyris-tools (cdbc) not available"; g_panes.Build({}); return; }
+        g_styles.clear();
+        g_styleById.clear();
+        g_building = nullptr;
+        if (!cdbc || !cdbc->HasFeature("cdbc-load")) { g_status = "wxl-seyris-tools (cdbc) not available"; g_panes.Build({}); g_buildings.Build({}); return; }
         char err[256] = {};
         std::string status;
         if (void* t = cdbcload::LoadAppendOnly(cdbc, kMaterialDef, err, sizeof(err)))
@@ -316,6 +445,72 @@ namespace wxl_livingazeroth::glass
             status += line;
         }
         else status += std::string("; GlassPanes.cdbc: ") + (err[0] ? err : "not found") + " (no floor light, no coloured shafts)";
+
+        // The rooms: their styles and the buildings.
+        g_styles.clear();
+        g_styleById.clear();
+        err[0] = 0;
+        if (void* t = cdbcload::LoadAppendOnly(cdbc, kStyleDef, err, sizeof(err)))
+        {
+            auto F = [&](const void* row, const char* f, float missing) { return cdbcload::Float(cdbc, t, row, f, missing); };
+            for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
+            {
+                const void* row = cdbc->RowAt(t, i);
+                if (!row) continue;
+                RoomStyle s;
+                s.id = cdbc->Value(t, row, "ID", 0);
+                s.cls = cdbc->Value(t, row, "Class", kClassHouse);
+                s.palette = cdbc->Value(t, row, "Palette", 0);
+                const char* cols[4][3] = { { "TintR", "TintG", "TintB" }, { "Tint2R", "Tint2G", "Tint2B" }, { "LampR", "LampG", "LampB" },
+                                           { "CurtainR", "CurtainG", "CurtainB" } };
+                float* dst[4] = { s.tint, s.tint2, s.lamp, s.curtain };
+                for (int a = 0; a < 4; ++a)
+                    for (int k = 0; k < 3; ++k) dst[a][k] = F(row, cols[a][k], dst[a][k]);
+                s.brightness = F(row, "Brightness", s.brightness);
+                s.spread = F(row, "Spread", s.spread);
+                s.darkShare = F(row, "DarkShare", s.darkShare);
+                const char* w[4] = { "Shelves", "Curtains", "Divider", "Plain" };
+                for (int k = 0; k < 4; ++k) s.weights[k] = F(row, w[k], s.weights[k]);
+                s.lateHours = F(row, "LateHours", s.lateHours);
+                s.nightCap = F(row, "NightCap", s.nightCap);
+                g_styleById[s.id] = static_cast<uint32_t>(g_styles.size());
+                g_styles.push_back(s);
+            }
+            cdbc->Release(t);
+            char line[96];
+            std::snprintf(line, sizeof(line), "; RoomStyles.cdbc: %u styles", static_cast<unsigned>(g_styles.size()));
+            status += line;
+        }
+        else status += std::string("; RoomStyles.cdbc: ") + (err[0] ? err : "not found") + " (every room the same)";
+        std::vector<Building> buildings;
+        err[0] = 0;
+        if (void* t = g_styles.empty() ? nullptr : cdbcload::LoadAppendOnly(cdbc, kBuildingDef, err, sizeof(err)))
+        {
+            auto F = [&](const void* row, const char* f, float missing) { return cdbcload::Float(cdbc, t, row, f, missing); };
+            for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
+            {
+                const void* row = cdbc->RowAt(t, i);
+                if (!row) continue;
+                Building b;
+                b.map = cdbc->Value(t, row, "MapID", 0);
+                b.uniqueId = cdbc->Value(t, row, "UniqueID", 0);
+                b.pos[0] = F(row, "PosX", 0.0f); b.pos[1] = F(row, "PosY", 0.0f); b.pos[2] = F(row, "PosZ", 0.0f);
+                b.group = cdbc->Value(t, row, "Group", kWholePlacement);
+                b.style = cdbc->Value(t, row, "Style", 0);
+                b.seed = cdbc->Value(t, row, "Seed", 0);
+                b.flags = cdbc->Value(t, row, "Flags", 0);
+                b.area = cdbc->Value(t, row, "AreaID", 0);
+                b.path = PathHash(cdbc->GetString(t, row, "Wmo"));
+                buildings.push_back(b);
+            }
+            cdbc->Release(t);
+            char line[128];
+            std::snprintf(line, sizeof(line), "; GlassBuildings.cdbc: %u rows", static_cast<unsigned>(buildings.size()));
+            status += line;
+        }
+        else if (!g_styles.empty()) status += std::string("; GlassBuildings.cdbc: ") + (err[0] ? err : "not found") + " (every building the default house)";
+        g_buildings.Build(std::move(buildings));
+        g_building = nullptr;
         g_status = status;
         g_panes.Build(std::move(panes));
         g_near.clear();
@@ -365,6 +560,8 @@ namespace wxl_livingazeroth::glass
         g_light = Evaluate(in);
         for (int k = 0; k < 3; ++k) { g_sun[k] = in.sun[k]; g_sunColour[k] = in.sunColour[k]; g_sky[k] = in.sky[k]; }
         g_indoors = Clamp01(ReadFloat(kInteriorBlend));
+        g_night = Clamp01(in.night);
+        g_hour = HourNow();
 
         // The panes near the camera that the sun shines through: the floor light's and the shafts' (GlassShafts picks
         // those whose room holds the camera). Their rows about the camera are made at the frame's first batch
@@ -445,7 +642,25 @@ namespace wxl_livingazeroth::glass
         g_loopFloor = g_settings.enabled && g_settings.floorLight && g_patched > 0 && g_floorPanes > 0 && interior && rootHasGlass;
     }
 
-    void Batch(uint32_t glassMaterial, bool rimsOn)
+    void BeginInstance(const float pos[3], uint32_t path, uint32_t group, uint32_t fallbackSeed)
+    {
+        g_inInstance = true;
+        g_fallbackSeed = fallbackSeed;
+        const world::Snapshot& snap = world::Current();
+        g_building = g_buildings.Size() ? g_buildings.Find(static_cast<uint32_t>(snap.mapId), pos, path, group) : nullptr;
+        ++g_instances;
+        if (!g_building) ++g_defaulted;
+        else if (g_building->uniqueId) ++g_matched;
+        else ++g_byWmo;
+    }
+
+    void EndInstance()
+    {
+        g_inInstance = false;
+        g_building = nullptr;
+    }
+
+    void Batch(uint32_t glassMaterial, bool rimsOn, bool selfLit)
     {
         auto* dev = Device();
         if (!dev) return;
@@ -453,10 +668,11 @@ namespace wxl_livingazeroth::glass
         if (m || g_loopFloor) RenderView();
         if (m)
         {
-            float c[4 * kConstantCount];
-            GlassConstants(*m, c);
+            float c[4 * kConstantCount], seed[4];
+            GlassConstants(*m, selfLit, c, seed);
             UploadFrame(dev);
             dev->SetPixelShaderConstantF(kFirstConstant, c, kConstantCount);
+            dev->SetPixelShaderConstantF(kSeedConstant, seed, 1);
             g_floorConstsUp = false;   // c192..c201 are this batch's now
             if (!g_glassOn) { SetBool(kSwitch, true); g_glassOn = true; }
             ++g_glassBatches;
@@ -530,6 +746,14 @@ namespace wxl_livingazeroth::glass
         api->UiSliderFloat("outside: reflection strength##glouts", &s.reflectionStrength, 0.0f, 3.0f);
         api->UiCheckbox("fake rooms behind clear glass##glroom", &s.fakeInteriors);
         api->UiSliderFloat("fake rooms: light##glrooms", &s.interiorStrength, 0.0f, 3.0f);
+        api->UiCheckbox("rooms: each building its own (tint, brightness, a few dark)##glvar", &s.roomVariety);
+        api->UiSliderFloat("rooms: how far buildings differ##glvars", &s.varietyStrength, 0.0f, 2.0f);
+        api->UiCheckbox("rooms: lamp-lit at night behind the lit windows##gllit", &s.litRooms);
+        api->UiSliderFloat("rooms: lamp-lit brightness (1 = the client's window)##gllits", &s.litRoomStrength, 0.0f, 2.0f);
+        api->UiCheckbox("rooms: lights go out as the night goes on##glout2", &s.lightsOut);
+        api->UiSliderFloat("rooms: share dark at night##glouts2", &s.lightsOutStrength, 0.0f, 1.5f);
+        api->UiCheckbox("rooms: shelves, curtains, a dividing wall##gllay", &s.roomLayouts);
+        api->UiSliderFloat("rooms: the furniture's detail##gllays", &s.layoutStrength, 0.0f, 2.0f);
         api->UiCheckbox("coloured shafts in the room's air##glsh", &s.colouredShafts);
         api->UiSliderFloat("coloured shafts: strength##glshs", &s.shaftStrength, 0.0f, 3.0f);
         api->UiCheckbox("light through the panes on the floor##glfl", &s.floorLight);
@@ -542,6 +766,19 @@ namespace wxl_livingazeroth::glass
         std::snprintf(line, sizeof(line), "light: sun through %.2f, sky %.2f, day %.2f, dim %.2f; camera indoors %.2f",
                       g_light.sunGain, g_light.skyGain, g_light.day, g_light.dim, g_indoors);
         api->UiText(line);
+        api->UiText(RoomLine());
+    }
+
+    const char* RoomLine()
+    {
+        char line[320];
+        const int hh = static_cast<int>(g_hour) % 24, mm = static_cast<int>((g_hour - std::floor(g_hour)) * 60.0f);
+        std::snprintf(line, sizeof(line), "rooms: %u styles, %zu placements (%zu rows); instances drawn with glass %u: placed %u, by WMO %u, default %u; "
+                      "%02d:%02d night %.2f, dark at night: house %.0f%%, inn %.0f%%",
+                      static_cast<unsigned>(g_styles.size()), g_buildings.Placements(), g_buildings.Size(), g_instances, g_matched, g_byWmo,
+                      g_defaulted, hh, mm, g_night, 100.0f * LightsOutShare(g_hour, 0.0f, 1.0f), 100.0f * LightsOutShare(g_hour, 2.5f, 0.55f));
+        g_roomLine = line;
+        return g_roomLine.c_str();
     }
 
     const char* StatusLine()

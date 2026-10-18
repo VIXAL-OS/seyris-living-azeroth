@@ -31,10 +31,20 @@ namespace wxl_livingazeroth::wmoice
         //   path alike, each batch passes it right before its material, effect bind and draw.
         //  MOBA +0x17: the material index (u8). MOMT: 0x40-byte records at root+0x160 (count root+0x19C);
         //   texture_1 at +0x0C is a byte offset into MOTX (root+0x124, byte size root+0x164).
+        //  Wmo.RenderGroup (0x7ABF50): __thiscall(root, groupIndex, instance + 0xB0, list), ret 0Ch; the only caller of
+        //   both loops' function pointers (0x7ABFF0, 0x7AC011), called once per placed instance's visible group by the
+        //   scene's WMO pass (0x7967AA: `add edi, 0B0h; push edi` with edi the instance whose root is [edi+0F4h]).
+        //   The instance's placement matrix is at +0x70 (row-major, the translation in its last row: +0xA0).
+        //  MOMT +0x00 flags (0x10 SIDN: the client lights it at night), +0x10 its night colour (BGRA).
+        //  Root +0x1C: its WMO's path, inline.
         constexpr size_t kGroupRoot = 0x18C;
         constexpr size_t kGroupFlags = 0x30;   // MOGP flags, copied into the group object (offsets/game/WMO.hpp)
         constexpr size_t kRootMotx = 0x124, kRootMotxSize = 0x164, kRootMaterials = 0x160, kRootMaterialCount = 0x19C;
         constexpr size_t kMomtStride = 0x40, kMomtTexture1 = 0x0C, kMobaMaterial = 0x17;
+        constexpr size_t kMomtFlags = 0x00, kMomtSidn = 0x10;
+        constexpr uint32_t kMomtFlagSidn = 0x10;
+        constexpr size_t kRootPath = 0x1C;
+        constexpr size_t kInstanceArg = 0xB0, kInstanceOrigin = 0xA0;
         constexpr uint32_t kMaxMaterials = 4096, kMaxName = 260;
         constexpr DWORD kSampler = 14;
 
@@ -68,9 +78,11 @@ namespace wxl_livingazeroth::wmoice
 
         using RenderLeafFn = void(__fastcall*)(void* root, void* edx, void* group, int flag);
         using CullBatchFn = char(__cdecl*)(void* record);
+        using RenderGroupFn = void(__fastcall*)(void* root, void* edx, int group, void* instanceArg, void* list);
         RenderLeafFn g_origInt = nullptr, g_origExt = nullptr;
         CullBatchFn  g_origCull = nullptr;
-        bool g_hookedInt = false, g_hookedExt = false, g_hookedCull = false;
+        RenderGroupFn g_origGroup = nullptr;
+        bool g_hookedInt = false, g_hookedExt = false, g_hookedCull = false, g_hookedGroup = false;
 
         bool g_enabled = true;
         int  g_depth = 0;                 // inside a batch loop
@@ -86,8 +98,10 @@ namespace wxl_livingazeroth::wmoice
             std::vector<uint8_t> ice;     // per material: its modelice::Style (0 = not ice)
             std::vector<uint8_t> sand;    // per material: its texture is a floor with footprint rims (1 sand, 2 snow)
             std::vector<uint16_t> glass;  // per material: its row in the glass table + 1 (features/Glass), 0 = not glass
+            std::vector<uint8_t> selfLit; // per material: the client lights it at night (MOMT SIDN with a colour)
             bool any = false, anySand = false, anyGlass = false;
             uint32_t glassGeneration = 0; // the glass table these were looked up in
+            uint32_t path = 0;            // glass::PathHash of the root's WMO path (0 unread)
         };
         std::unordered_map<const void*, RootIce> g_cache;
         const RootIce* g_rootIce = nullptr;  // the current group's root, when it has ice materials
@@ -124,6 +138,44 @@ namespace wxl_livingazeroth::wmoice
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
 
+        // Whether the client lights material i at night: MOMT SIDN, with a night colour.
+        bool ReadSelfLit(const RootView& v, uint32_t i)
+        {
+            __try
+            {
+                const uint8_t* m = v.materials + i * kMomtStride;
+                return (*reinterpret_cast<const uint32_t*>(m + kMomtFlags) & kMomtFlagSidn) && (*reinterpret_cast<const uint32_t*>(m + kMomtSidn) & 0xFFFFFFu);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        // The root's WMO path (inline at +0x1C), hashed as GlassBuildings.cdbc's paths are.
+        uint32_t ReadPathHash(const uint8_t* root)
+        {
+            char path[kMaxName];
+            __try
+            {
+                uint32_t n = 0;
+                for (; n < kMaxName - 1 && root[kRootPath + n]; ++n) path[n] = static_cast<char>(root[kRootPath + n]);
+                path[n] = 0;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+            return glass::PathHash(path);
+        }
+
+        // Where an instance stands: its placement matrix's translation (finite, within the world).
+        bool ReadOrigin(const uint8_t* instance, float pos[3])
+        {
+            __try
+            {
+                for (int k = 0; k < 3; ++k) pos[k] = reinterpret_cast<const float*>(instance + kInstanceOrigin)[k];
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+            for (int k = 0; k < 3; ++k)
+                if (!std::isfinite(pos[k]) || std::fabs(pos[k]) > 40000.0f) return false;
+            return true;
+        }
+
         bool ReadMaterialIndex(const void* record, uint8_t& index)
         {
             __try { index = static_cast<const uint8_t*>(record)[kMobaMaterial]; return true; }
@@ -146,8 +198,10 @@ namespace wxl_livingazeroth::wmoice
             if (r.motx != v.motx || r.materials != v.materials || r.ice.size() != v.count || r.glassGeneration != glass::Generation())
             {
                 r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.sand.assign(v.count, 0); r.glass.assign(v.count, 0);
+                r.selfLit.assign(v.count, 0);
                 r.any = r.anySand = r.anyGlass = false;
                 r.glassGeneration = glass::Generation();
+                r.path = ReadPathHash(root);
                 char name[kMaxName];
                 for (uint32_t i = 0; i < v.count; ++i)
                     if (ReadName(v, i, name))
@@ -156,7 +210,12 @@ namespace wxl_livingazeroth::wmoice
                         { r.ice[i] = static_cast<uint8_t>(style); r.any = true; }
                         if (IsSandTexture(name)) { r.sand[i] = 1; r.anySand = true; }
                         else if (IsSnowFloorTexture(name)) { r.sand[i] = 2; r.anySand = true; }
-                        if (const uint32_t g = glass::MaterialOf(name)) { r.glass[i] = static_cast<uint16_t>(g); r.anyGlass = true; }
+                        if (const uint32_t g = glass::MaterialOf(name))
+                        {
+                            r.glass[i] = static_cast<uint16_t>(g);
+                            r.anyGlass = true;
+                            r.selfLit[i] = ReadSelfLit(v, i) ? 1 : 0;
+                        }
                     }
                 ++g_roots;
                 g_iceRoots += r.any ? 1 : 0;
@@ -256,6 +315,7 @@ namespace wxl_livingazeroth::wmoice
             modelice::Style style = modelice::Style::None;
             uint8_t floor = 0;   // 1 sand, 2 snow
             uint16_t glassRow = 0;
+            bool selfLit = false;
             const RootIce* r = g_rootIce;
             if (r)
             {
@@ -268,6 +328,7 @@ namespace wxl_livingazeroth::wmoice
                         floor = r->sand[index];
                     }
                     glassRow = r->glass[index];
+                    selfLit = r->selfLit[index] != 0;
                 }
             }
             if (floor) RingsOn(floor == 2);
@@ -279,8 +340,28 @@ namespace wxl_livingazeroth::wmoice
             }
             else SwitchOff();
             // The window glass and the floor light (features/Glass): its material, and whether the rims hold c101..
-            if (r && r->anyGlass) glass::Batch(glassRow, g_ringsOn);
+            if (r && r->anyGlass) glass::Batch(glassRow, g_ringsOn, selfLit);
             return culled;
+        }
+
+        // Around one placed instance's group (both loops run inside): which building it is, for the rooms behind its
+        // glass (features/Glass). Only for roots with glass.
+        void __fastcall hkRenderGroup(void* root, void* edx, int group, void* instanceArg, void* list)
+        {
+            bool began = false;
+            if (glass::Config().enabled && glass::PatchedVariants() > 0 && g_depth == 0)
+                if (const RootIce* r = IceOf(static_cast<const uint8_t*>(root)); r && r->anyGlass)
+                {
+                    const uint8_t* instance = instanceArg ? static_cast<const uint8_t*>(instanceArg) - kInstanceArg : nullptr;
+                    float pos[3];
+                    const bool have = instance && ReadOrigin(instance, pos);
+                    const uintptr_t address = reinterpret_cast<uintptr_t>(instance);
+                    glass::BeginInstance(have ? pos : nullptr, r->path, static_cast<uint32_t>(group),
+                                         static_cast<uint32_t>(address ^ (address >> 16)) * 2654435761u);
+                    began = true;
+                }
+            g_origGroup(root, edx, group, instanceArg, list);
+            if (began) glass::EndInstance();
         }
 
         uint32_t ReadGroupFlags(const void* group)
@@ -371,9 +452,11 @@ namespace wxl_livingazeroth::wmoice
         g_hookedInt = attach("Wmo.IntRender", reinterpret_cast<void*>(&hkLoop<&g_origInt>), reinterpret_cast<void**>(&g_origInt));
         g_hookedExt = attach("Wmo.ExtRender", reinterpret_cast<void*>(&hkLoop<&g_origExt>), reinterpret_cast<void**>(&g_origExt));
         g_hookedCull = attach("Wmo.CullBatch", reinterpret_cast<void*>(&hkCull), reinterpret_cast<void**>(&g_origCull));
-        if (!g_hookedInt || !g_hookedExt || !g_hookedCull)
-            api->Log(WXL_LOG_WARN, "wxl-seyris-living-azeroth", "wmo ice: hook missing (interior loop %d, exterior loop %d, batch cull %d)",
-                     g_hookedInt ? 1 : 0, g_hookedExt ? 1 : 0, g_hookedCull ? 1 : 0);
+        // The rooms' buildings (without it every building's rooms are the default house's).
+        g_hookedGroup = attach("Wmo.RenderGroup", reinterpret_cast<void*>(&hkRenderGroup), reinterpret_cast<void**>(&g_origGroup));
+        if (!g_hookedInt || !g_hookedExt || !g_hookedCull || !g_hookedGroup)
+            api->Log(WXL_LOG_WARN, "wxl-seyris-living-azeroth", "wmo ice: hook missing (interior loop %d, exterior loop %d, batch cull %d, group %d)",
+                     g_hookedInt ? 1 : 0, g_hookedExt ? 1 : 0, g_hookedCull ? 1 : 0, g_hookedGroup ? 1 : 0);
     }
 
     void SetEnabled(bool enabled) { g_enabled = enabled; }
@@ -384,7 +467,7 @@ namespace wxl_livingazeroth::wmoice
         char line[256];
         std::snprintf(line, sizeof(line), "ice in buildings: %s; buildings seen %u, with ice %u; ice batches drawn so far %u; footprint rims on sand floors %u%s",
                       g_enabled ? "on" : "off", g_roots, g_iceRoots, g_iceBatches, g_ringBatches,
-                      g_hookedInt && g_hookedExt && g_hookedCull ? "" : "; a hook is missing");
+                      g_hookedInt && g_hookedExt && g_hookedCull ? (g_hookedGroup ? "" : "; the group hook is missing (rooms: the default house)") : "; a hook is missing");
         g_status = line;
         return g_status.c_str();
     }

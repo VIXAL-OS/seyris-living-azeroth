@@ -7,7 +7,9 @@
 // group, hence the root and its materials; each batch passes Wmo.CullBatch right before its material,
 // effect and draw, and the block goes on when that batch's material's first texture is an ice texture.
 // The same hooks drive the window glass (features/Glass): a root's glass materials are looked up with its ice, the
-// group's MOGP flags go to glass::BeginGroup, and each batch to glass::Batch (the glass look, the floor light).
+// group's MOGP flags go to glass::BeginGroup, and each batch to glass::Batch (the glass look, the floor light). One
+// more, Wmo.RenderGroup (around a placed instance's visible group), tells glass::BeginInstance which building it is:
+// the instance's origin, its WMO's path and the group, for the rooms behind its glass.
 #pragma once
 
 #include "ModelIce.hpp"

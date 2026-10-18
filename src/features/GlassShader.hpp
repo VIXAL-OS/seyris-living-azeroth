@@ -12,7 +12,14 @@
 //  the client's own lit windows at night); seen from outside, darker glass with the sky in it (Schlick's Fresnel; the
 //  sky deeper toward the zenith along the reflected ray),
 //  the sun's glint, and behind clear glass a room (interior mapping in the pane's own frame: cells c198.xy wide and
-//  high, 1 / c198.z deep, lit by c198.w, tinted c199, each cell its own brightness); the two mixed by c193.x.
+//  high, 1 / c198.z deep, lit by c198.w); the two mixed by c193.x.
+//  The room (env/GlassModel's RoomOutside works it out the same way, op for op): its building (a hash of the seed
+//  c212.xy, in a city of its 14-yd block too: c212.z) picks its tint between c199 and c202 and its brightness (c202.w);
+//  each room (a hash of its cell and the seed) its layout (c204.xyz: the class's cumulative weights for shelves,
+//  curtains half drawn, a dividing wall with a doorway, else plain), whether it's dark (below c203.w), its light, the
+//  lamp's place, the curtains' gap, the things on its shelves. At night the lit rooms behind the client's lit windows
+//  have a lamp (c203.rgb, as bright as the client's window: x its luminance); dark ones there hide most of its glow
+//  (c205.w). The detail fades from 30 to 70 yd (x c204.w). Curtains c205.rgb.
 // Floor light (b10: on for the batches of a building's interior groups while sunlit panes are near): up to
 //  kFloorPanes panes, each as three rows taking the point (camera-relative, world axes) to where the ray toward the
 //  sun crosses the pane (|a|, |b| < 1) and how far (0 < t < 1), with soft edges, kept inside its room's box; x the
@@ -25,10 +32,17 @@
 //  rgb, the sun's gain); c195 (toward the sun, world xyz; saturation inside); c196 (the reflected sky rgb, Fresnel
 //  strength); c197 (darkening outside, glint, F0, diffusion); c198 (1 / the room's cell width, height, depth;
 //  its daylight); c199 (its tint rgb; the inside's brightness); c200 the sun's colour; c201 (the floor light's gain);
-//  c206..c211 defined; the floor light's panes c101..c172 (six registers each; the rims' range: a batch has one or
-//  the other, features/Glass re-uploads when the rims took it).
+//  c202 (the room's other tint rgb, the buildings' spread in brightness); c203 (the lamp rgb, the share of rooms
+//  dark); c204 (the layouts' thresholds, the detail's strength); c205 (the curtains rgb, the glow dark rooms hide);
+//  c212 (the building's seed xy, 1 / its block (0: one building), 0); c206..c211 and c87..c100 (the room's numbers,
+//  env/GlassModel's glass::room) defined; the floor light's panes c101..c172 (six registers each; the rims' range: a
+//  batch has one or the other, features/Glass re-uploads when the rims took it). ps_3_0 has c0..c223, and an
+//  instruction reads at most one constant register.
 #pragma once
 
+#include "../env/GlassModel.hpp"
+
+#include <cstdio>
 #include <string>
 
 namespace wxl_livingazeroth::glass
@@ -36,20 +50,40 @@ namespace wxl_livingazeroth::glass
     constexpr int kSwitch = 9;           // PS b9: the glass
     constexpr int kFloorSwitch = 10;     // PS b10: the floor light
     constexpr int kViewConstant = 180;   // c180..c183 (FillModelConstants' first four)
-    constexpr int kFirstConstant = 192;  // c192..c201
-    constexpr int kConstantCount = 10;
+    constexpr int kFirstConstant = 192;  // c192..c205
+    constexpr int kConstantCount = 14;
+    constexpr int kSeedConstant = 212;   // c212: the building's seed, its block
     constexpr int kPaneConstant = 101;   // c101..c172
     constexpr int kPaneRegisters = 6;
     constexpr int kFloorPanes = 12;
 
     inline std::string ShaderDefs()
     {
-        return "    def c206, 0.0001, 0.05, 0, 300\n"
-               "    def c207, -1, 1, 0.12, 0\n"
-               "    def c208, 0.1031, 0.1103, 19.19, 0\n"
-               "    def c209, 0.7, 0.55, 0.4, 1\n"
-               "    def c210, 0.9, 0.35, 0, 0\n"
-               "    def c211, 0.7, 0.85, 1.25, 0\n";
+        using namespace room;
+        auto def = [](int reg, float a, float b, float c, float d) {
+            char line[128];
+            std::snprintf(line, sizeof(line), "    def c%d, %.9g, %.9g, %.9g, %.9g\n", reg, a, b, c, d);
+            return std::string(line);
+        };
+        return "    def c206, 0.0001, 0.05, 0, 300\n" +
+               def(207, -1.0f, 1.0f, kFar, 0.0f) +
+               def(209, kFace[0], kFace[1], kFace[2], kFace[3]) +
+               def(210, kCellLight[0], kCellLight[1], 0.0f, 0.0f) +
+               "    def c211, 0.7, 0.85, 1.25, 0\n" +
+               def(87, 1.0f - kDarkDay, kDarkDay, kCurtainGain, 0.0f) +
+               def(88, kHashK[0], kHashK[1], kHashK[2], kHashK[3]) +
+               def(89, kHashAdd, kDividerDepth, kDoorSpan, kDoorBase) +
+               def(90, 2.0f, -1.0f, kDoorHalfWidth, kDoorHeight) +
+               def(91, kCurtainDepth, kGapSpan, kGapBase, kClothEdge) +
+               def(92, kGapMinHalf, kGapHalfSpan, kGapHash, kFolds) +
+               def(93, kSlots, kShelves, kPlank, kThingMax) +
+               def(94, kLamp[0], kLamp[1], kLamp[2], kLamp[3]) +
+               def(95, 1.0f / kLampK, kLampGain / kLampK, kLampBase, kDividerShade) +
+               def(96, kShelfCentre[0], kShelfCentre[1], kShelfHalf[0], kShelfHalf[1]) +
+               def(97, kFoldAmp, kFoldBase, kFoldMean, kThingGap) +
+               def(98, kShelfHashShelf, kShelfHashRoom, kThingHash, kDoorDim) +
+               def(99, kThingSpan, kThingBase, kShelfBack, kPlankLight) +
+               def(100, kFadeB, kFadeA, kClothFar, kCurtainDay);
     }
 
     inline std::string GlassBlock(const std::string& vP, const std::string& vN, const std::string& vT)
@@ -162,25 +196,167 @@ namespace wxl_livingazeroth::glass
             "\n        add r24.y, r30.x, -r30.w"
             "\n        cmp r24.z, -r24.y, c209.x, r24.z"
             "\n        cmp r24.z, -r24.x, c209.w, r24.z"
+            "\n        cmp r24.x, -r24.x, c175.x, c175.y"
             "\n        mul r24.w, r30.w, c207.z"
             "\n        add r24.w, r24.w, c175.x"
             "\n        rcp r24.w, r24.w"
             "\n        mul r24.z, r24.z, r24.w"
-            // each cell its own light (a hash of the cell)
-            "\n        mul r24.xy, r29, c208"
-            "\n        frc r24.xy, r24"
-            "\n        add r25.xy, r24.yxxx, c208.z"
-            "\n        dp2add r25.w, r24, r25, c175.y"
-            "\n        add r24.xy, r24, r25.w"
-            "\n        add r25.x, r24.x, r24.y"
-            "\n        mul r25.x, r25.x, r24.x"
-            "\n        frc r25.x, r25.x"
-            "\n        mad r25.x, r25.x, c210.x, c210.y"
-            "\n        mul r24.z, r24.z, r25.x"
-            "\n        mul r24.z, r24.z, c198.w"
-            "\n        mul r28.xyz, r24.z, c199"
+            // each room its own: a hash of the cell and the building's seed (layout, dark, light and lamp, the rest)
+            "\n        add r13.xy, r29, c212"
+            "\n        mul r13, r13.xyxy, c88"
+            "\n        frc r13, r13"
+            "\n        add r25, r13.wzxy, c89.x"
+            "\n        dp4 r25.x, r13, r25"
+            "\n        add r13, r13, r25.x"
+            "\n        add r25, r13.xxyz, r13.yzzw"
+            "\n        mul r25, r25, r13.zywx"
+            "\n        frc r13, r25"
+            // the building (in a city, its block): a hash of the seed; its tint and its brightness
+            "\n        mul r25.xy, r15, c212.z"
+            "\n        frc r25.zw, r25.xxxy"
+            "\n        add r25.xy, r25, -r25.zwww"
+            "\n        add r25.xy, r25.yxzw, c212"
+            "\n        mul r25, r25.xyxy, c88"
+            "\n        frc r25, r25"
+            "\n        add r26, r25.wzxy, c89.x"
+            "\n        dp4 r26.x, r25, r26"
+            "\n        add r25, r25, r26.x"
+            "\n        add r26, r25.xxyz, r25.yzzw"
+            "\n        mul r26, r26, r25.zywx"
+            "\n        frc r26.xy, r26"
+            "\n        mov r25.xyz, c202"
+            "\n        add r25.xyz, r25, -c199"
+            "\n        mad r25.xyz, r25, r26.x, c199"
+            "\n        mad r25.w, r26.y, c90.x, c90.y"
+            "\n        mul r25.w, r25.w, c202.w"
+            "\n        add r25.w, r25.w, c175.x"
+            // the layout (the class's weights): shelves, curtains, a dividing wall, else plain
+            "\n        add r19.xyz, r13.x, -c204"
+            "\n        cmp r19.xyz, r19, c175.y, c175.x"
+            "\n        add r19.yz, r19, -r19.xxyy"
+            // where the ray meets the room (across, up, deep); lit or dark
+            "\n        mad r20.xy, r27, r30.w, r28.zwzw"
+            "\n        mul r20.z, r27.z, r30.w"
+            "\n        add r20.w, r13.y, -c203.w"
+            "\n        cmp r20.w, r20.w, c175.x, c175.y"
+            // a dividing wall half way back, a doorway through it to a second, dimmer room
+            "\n        mul r22.x, c89.y, r30.z"
+            "\n        mad r22.yz, r27.xxyw, r22.x, r28.zzww"
+            "\n        add r22.w, r30.w, -r22.x"
+            "\n        cmp r22.w, r22.w, r19.z, c175.y"
+            "\n        mad r29.x, r13.w, c89.z, c89.w"
+            "\n        add r29.x, r22.y, -r29.x"
+            "\n        add r29.x, -r29_abs.x, c90.z"
+            "\n        add r29.y, -r22.z, c90.w"
+            "\n        min r29.x, r29.x, r29.y"
+            "\n        cmp r29.x, r29.x, r22.w, c175.y"
+            "\n        add r29.y, r22.w, -r29.x"
+            "\n        mul r29.z, r22.x, c207.z"
+            "\n        add r29.z, r29.z, c175.x"
+            "\n        rcp r29.z, r29.z"
+            "\n        mul r29.z, r29.z, c95.w"
+            "\n        lrp r30.y, r29.y, r29.z, r24.z"
+            "\n        mul r29.z, r29.x, c98.w"
+            "\n        add r29.z, c175.x, -r29.z"
+            "\n        mul r24.z, r30.y, r29.z"
+            "\n        mov r22.w, c89.y"
+            "\n        lrp r26.xyz, r29.y, r22.yzww, r20"
+            "\n        mov r20.xyz, r26"
+            // curtains half drawn: cloth just behind the glass at the sides, in folds, a gap between them
+            "\n        mul r26.x, c91.x, r30.z"
+            "\n        mad r26.x, r27.x, r26.x, r28.z"
+            "\n        mul r26.y, r13.w, c92.z"
+            "\n        frc r26.y, r26.y"
+            "\n        mad r26.y, r26.y, c92.y, c92.x"
+            "\n        mad r26.z, r13.w, c91.y, c91.z"
+            "\n        add r26.z, r26.x, -r26.z"
+            "\n        add r26.z, r26_abs.z, -r26.y"
+            "\n        mul_sat r26.z, r26.z, c91.w"
+            "\n        mul r26.z, r26.z, r19.y"
+            "\n        mul r26.x, r26.x, c92.w"
+            "\n        frc r26.x, r26.x"
+            "\n        add r26.x, r26.x, -c175.z"
+            "\n        mad r26.x, r26_abs.x, c97.x, c97.y"
+            // shelves on the back wall: planks, and things on them (a hash per place on a shelf)
+            "\n        add r27.xy, r20, -c96"
+            "\n        add r27.xy, -r27_abs, c96.zwzw"
+            "\n        min r27.x, r27.x, r27.y"
+            "\n        cmp r27.x, r27.x, r24.x, c175.y"
+            "\n        mul r27.x, r27.x, r19.x"
+            "\n        mul r27.yz, r20.xxyw, c93.xxyw"
+            "\n        frc r28.yz, r27"
+            "\n        add r27.yz, r27, -r28"
+            "\n        mad r27.y, r27.z, c98.x, r27.y"
+            "\n        mad r27.y, r13.w, c98.y, r27.y"
+            "\n        mul r27.y, r27.y, c88.x"
+            "\n        frc r27.y, r27.y"
+            "\n        add r27.z, r27.y, c89.x"
+            "\n        mul r27.y, r27.y, r27.z"
+            "\n        mul r27.z, r27.y, r27.y"
+            "\n        add r27.y, r27.z, r27.z"
+            "\n        frc r27.y, r27.y"
+            "\n        add r28.w, r28.z, -c93.z"
+            "\n        mul r29.x, r27.y, c93.w"
+            "\n        add r29.x, r29.x, -r28.w"
+            "\n        add r29.y, r28.y, -c175.z"
+            "\n        add r29.y, -r29_abs.y, c97.w"
+            "\n        min r29.x, r29.x, r29.y"
+            "\n        cmp r29.x, r28.w, r29.x, -c175.x"
+            "\n        mul r29.z, r27.y, c98.z"
+            "\n        frc r29.z, r29.z"
+            "\n        mad r29.z, r29.z, c99.x, c99.y"
+            "\n        cmp r29.w, r29.x, r29.z, c99.z"
+            "\n        cmp r29.w, r28.w, r29.w, c99.w"
+            "\n        add r29.w, r29.w, -c175.x"
+            "\n        mul r29.w, r29.w, r27.x"
+            // the lamp: its light falls off from where it stands (across by the room's hash, up, toward the back)
+            "\n        mad r22.x, r13.z, c94.y, c94.x"
+            "\n        add r22.x, r20.x, -r22.x"
+            "\n        add r22.yz, r20.xyzz, -c94.xzww"
+            "\n        dp3 r22.x, r22, r22"
+            "\n        add r22.x, r22.x, c95.x"
+            "\n        rcp r22.x, r22.x"
+            "\n        mad r20.x, r22.x, c95.y, c95.z"
+            // the detail fades with distance (x the layouts' strength): the curtains and folds to their average
+            "\n        add r28.xyz, r15, -c180"
+            "\n        dp3 r28.x, r28, r28"
+            "\n        mad_sat r28.x, r28.x, c100.x, c100.y"
+            "\n        mul r28.x, r28.x, c204.w"
+            "\n        mad r29.w, r29.w, r28.x, c175.x"
+            "\n        mul r28.y, r19.y, c100.z"
+            "\n        add r26.z, r26.z, -r28.y"
+            "\n        mad r26.z, r26.z, r28.x, r28.y"
+            "\n        add r26.x, r26.x, -c97.z"
+            "\n        mad r26.x, r26.x, r28.x, c97.z"
+            // the light: the day's (x the building's tint and brightness; a dark room keeps a little), and at night
+            // the lamp's in lit rooms behind the client's lit windows, as bright as the window (x its luminance)
+            "\n        dp3 r22.x, r12, c176"
+            "\n        mad r22.y, r13.z, c210.x, c210.y"
+            "\n        mul r22.y, r22.y, r24.z"
+            "\n        mul r22.y, r22.y, r29.w"
+            "\n        mul r22.z, r25.w, c198.w"
+            "\n        mad r22.w, r20.w, c87.x, c87.y"
+            "\n        mul r22.z, r22.z, r22.w"
+            "\n        mul r30.xyz, r25, r22.z"
+            "\n        mul r22.w, r22.x, r20.w"
+            "\n        mul r29.xyz, r25, c203"
+            "\n        mul r28.w, r22.w, r20.x"
+            "\n        mad r30.xyz, r29, r28.w, r30"
+            "\n        mul r30.xyz, r30, r22.y"
+            // the curtains: lit from the window by day, by the lamp behind them at night
+            "\n        mul r29.xyz, r22.w, c203"
+            "\n        mul r29.w, r22.z, c100.w"
+            "\n        add r29.xyz, r29, r29.w"
+            "\n        mul r29.xyz, r29, c205"
+            "\n        mul r29.xyz, r29, r26.x"
+            "\n        mul r29.xyz, r29, c87.z"
+            "\n        lrp r28.xyz, r26.z, r29, r30"
+            // dark rooms behind the client's lit windows at night hide most of its glow; then the room behind the glass
+            "\n        add r22.w, c175.x, -r20.w"
+            "\n        mul r22.w, r22.w, c205.w"
             "\n        mov r29.w, c193.z"
-            "\n        lrp r30.xyz, r29.w, r28, r23"
+            "\n        lrp r26.w, r22.w, c175.x, r29.w"
+            "\n        lrp r30.xyz, r26.w, r28, r23"
             "\n        mov r23.xyz, r30"
             "\n      endif"
             // the sky in it (deeper toward the zenith: the reflected ray's height, 2 cos N.z - V.z) and the sun's

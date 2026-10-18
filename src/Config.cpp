@@ -272,6 +272,14 @@ namespace wxl_livingazeroth::config
             g.shaftStrength = In(s, f, "ShaftStrength", "Your multiplier on the coloured shafts.", g.shaftStrength);
             g.floorStrength = In(s, f, "FloorStrength", "Your multiplier on the light on the floor.", g.floorStrength);
             g.range = In(s, f, "Range", "Panes farther than this from the camera (yards) give no floor light or shafts.", g.range);
+            g.roomVariety = In(s, f, "RoomVariety", "The rooms behind clear glass differ by building: warmer or cooler, brighter or dimmer, by the building's kind and its place (an elven, vrykul, goblin or Forsaken palette...), and a few dark (RoomStyles.cdbc, GlassBuildings.cdbc).", g.roomVariety);
+            g.litRooms = In(s, f, "LitRoomsAtNight", "At night the windows the client lights show a lamp-lit room behind them, about as bright as the client's own lit window. 0 = dark rooms at night.", g.litRooms);
+            g.lightsOut = In(s, f, "LightsOut", "At night more of those rooms go dark as the night goes on: lights out around midnight, a few early risers before dawn; inns stay lit late. Places that are ruined or abandoned stay dark.", g.lightsOut);
+            g.roomLayouts = In(s, f, "RoomLayouts", "Each room a layout, weighted by the building's kind and place: a back wall with shelves, curtains half drawn, a dividing wall with a doorway to a second room, or plain.", g.roomLayouts);
+            g.varietyStrength = In(s, f, "RoomVarietyStrength", "Your multiplier on how far the buildings' tints and brightness differ and on the share of dark rooms by day.", g.varietyStrength);
+            g.litRoomStrength = In(s, f, "LitRoomStrength", "Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window).", g.litRoomStrength);
+            g.lightsOutStrength = In(s, f, "LightsOutStrength", "Your multiplier on the share of rooms dark at night.", g.lightsOutStrength);
+            g.layoutStrength = In(s, f, "LayoutStrength", "Your multiplier on the layouts' detail: the things on the shelves, the curtains' folds (they fade from 30 to 70 yards).", g.layoutStrength);
         }
 
         api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass);
