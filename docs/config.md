@@ -180,17 +180,24 @@ Screen Glow, what's drawn, and how many lights near are lit, dimmed or dark now.
 Light shafts through trees, fog and the gaps of the cloud deck: a post pass right after the ground fog (before rain,
 see-through models, name text and the UI, so those never take part), at a quarter of the resolution. Each pixel
 gathers the sunlit air along the line toward the sun's place on the screen: the sky and lit air far off are bright, a
-trunk or a wall near you shades the line behind it. Snow and other bright surfaces don't glow: what lights up comes
-from the scene's depth and the sun's direction, not from how bright the picture is.
+trunk or a wall near you shades the line behind it, and where branches break that line into gaps the shafts come a
+little brighter. Snow and other bright surfaces don't glow: what lights up comes from the scene's depth and the sun's
+direction, not from how bright the picture is.
+
+They radiate from the sun you see in the sky (or at night the moon), read from the client's sky each frame. That's not
+where the client's light comes from: it lights the world from a fixed north-west bearing 20 to 37 degrees up, while it
+draws the sun climbing to near the zenith at noon (at 15:00 the sun is 54 degrees up, the light 28). What lights the
+world (the shafts under a cloud deck, the glass) keeps the light's direction, so it agrees with the scene's shading.
 
 How strong they are follows what's in the air where you are (the place's fogginess, the ground fog's area fog, mist and
-haze) and the time of day: strongest in fog or mist in the low sun of morning and evening, about half that at noon,
-faint in clear air, fading with the sky in the evening (gone by about 22:00). Less in rain, none in heavy rain, a storm,
-under water or indoors. They fade as the sun leaves the screen. Under a cloud deck (mountain zones with an AreaClimate
-CloudBase) its gaps let the shafts through, and below it shafts fall from its gaps along your view, worked out from the
-deck's own density, with the sun off the screen too. The fog panel's **Sun shafts** section changes all of this at
-runtime and shows the strength's parts, the sun on the screen and the cost; the frame profiler has a row for their GPU
-time ("ours: sun shafts").
+haze) and the time of day: strongest in fog or mist in the low sun of morning and evening, about three quarters of
+that at noon, faint in clear air, fading with the sky in the evening (gone by about 22:00). Less in rain, none in heavy
+rain, a storm, under water or indoors. They fade as the sun leaves the screen or sets (the sky's sun is up from about
+06:10 to 20:30, the moon from about 22:20 to 03:25). Under a cloud deck (mountain zones with an AreaClimate CloudBase)
+its gaps let the shafts through, and below it shafts fall from its gaps along your view, worked out from the deck's own
+density, with the sun off the screen too. The fog panel's **Sun shafts** section changes all of this at runtime and
+shows the strength's parts, the visible sun and the light on the screen, which one the shafts radiate from, and the
+cost; the frame profiler has a row for their GPU time ("ours: sun shafts").
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -200,7 +207,7 @@ time ("ours: sun shafts").
 | Samples | 32 | Taps per pixel along the line toward the sun (8 .. 64): more = smoother, longer shafts, slower. |
 | Length | 0.85 | How far the shafts reach: the share of the way to the sun each pixel looks (0.2 .. 1). |
 | ThroughCloudDeck | 1 | Under a cloud deck: the shafts come through its gaps, and below it shafts fall from its gaps (a short march through its density toward the sun). Needs the deck's smooth mode (`[LivingAzeroth.Fog]` CloudDeckSmooth 1) for the gaps; without it the deck dims them evenly. |
-| Moon | 0 | Faint shafts from the night light at night: your multiplier, 0 = none. The client's night light doesn't always sit where the sky shows the moon, so it's off by default. |
+| Moon | 0 | Faint shafts from the moon at night, radiating from where the sky shows it (up from about 22:20 to 03:25): your multiplier, 0 = none. |
 
 ## `[LivingAzeroth.Glass]`: window glass
 

@@ -29,7 +29,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   soft glow on the glass, following the client's own window fade (`WindowLights.cdbc`,
   `tools/gen_window_lights.py`, `[LivingAzeroth.Windows]`).
 - **Sun shafts** (17 October 2026): light shafts through trees, fog and the cloud deck's gaps, by what's in the air,
-  the time of day and the weather (`env/ShaftModel`, `features/SunShafts`, `[LivingAzeroth.Shafts]`).
+  the time of day and the weather (`env/ShaftModel`, `features/SunShafts`, `[LivingAzeroth.Shafts]`). From 18 October
+  they radiate from the sun (or moon) the client draws in the sky, read from its sky each frame, not from its lower,
+  stylized light direction (`env/SkyPath`).
 - **Window glass** (17 October 2026): every glass window looks like glass (lit by the day from inside, stained glass
   glowing in its colours; darker with the sky in it from outside, a room behind clear panes), the sun through sunlit
   panes on the room's floor, and coloured shafts in its air (`GlassMaterials.cdbc`, `GlassPanes.cdbc`,

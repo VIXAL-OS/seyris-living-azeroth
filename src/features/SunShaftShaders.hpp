@@ -7,8 +7,10 @@
 //     (its own result's transmittance, so its gaps let light through); g = the light scattered in under the cloud
 //     deck along the view ray, each step lit by the deck's transmittance toward the sun (a short march through LA's
 //     own density field: shafts below its gaps, with the sun off the screen too).
+//     b = the source before that lobe (how open the pixel is toward the sun).
 //  2. Radial blur (kShaftBlurHlsl): r gathered along the line toward the sun's place on the screen, each tap weighed
-//     less than the one before (the shafts); a second, short pass smooths the taps' steps. g a small blur.
+//     less than the one before (the shafts), and a little more where that line is broken into gaps (b open and shut
+//     along it: a canopy); a second, short pass smooths the taps' steps. g a small blur.
 //  3. Composite (kShaftCompositeHlsl): added over the frame in the light's colour; less over near surfaces (little
 //     air in front of them) and over the sky; never more than a cap.
 #pragma once
@@ -119,7 +121,8 @@ float4 main(float2 vpos : VPOS) : COLOR
         float ph = 0.35 + 0.65 * pow(saturate(dot(dir, cSunW.xyz) * 0.5 + 0.5), 6);
         lit = sum / n * (1 - exp(-cNoise.w * far)) * ph * cCam.w;
     }
-    return float4(saturate(shaft), saturate(lit), 0, 1);
+    // b: the source before the lobe round the sun (how open the pixel is toward it), for the blur's gaps.
+    return float4(saturate(shaft), saturate(lit), saturate(src * T * cSunV.w), 1);
 }
 )";
 
@@ -127,6 +130,7 @@ float4 main(float2 vpos : VPOS) : COLOR
 sampler2D srcTex : register(s0);
 float4 cSun  : register(c0); // xy = the sun in this target's uv, z = how far toward it the taps reach (share of the way), w = taps (up to 64)
 float4 cBlur : register(c1); // x = each tap's weight after the one before, y = 1: the taps start at a random offset per pixel, zw = 1 / the target's size
+float4 cGap  : register(c2); // x = how much more where the line toward the sun is broken into gaps (a canopy), 0 = none
 
 float4 main(float2 vpos : VPOS) : COLOR
 {
@@ -142,14 +146,28 @@ float4 main(float2 vpos : VPOS) : COLOR
     }
     float2 p = uv + dstep * j;
     float sum = 0, wsum = 0, w = 1;
+    // How the line flickers between open and shut from tap to tap (b; on the screen only): branches breaking the sun
+    // into gaps, not a slope's smooth change nor a lone trunk's one edge.
+    float flick = 0, wflick = 0, prev = 0, prevOn = 0;
     [loop] for (int i = 0; i < 64; ++i)
     {
         if (i >= n) break;
-        sum += tex2Dlod(srcTex, float4(p, 0, 0)).r * w;
+        float2 t = tex2Dlod(srcTex, float4(p, 0, 0)).rb;
+        sum += t.x * w;
         wsum += w;
+        float on = all(abs(p - 0.5) <= 0.5) ? 1 : 0;
+        float both = on * prevOn * w;
+        float d = t.y - prev;
+        flick += d * d * both;
+        wflick += both;
+        prev = t.y;
+        prevOn = on;
         w *= cBlur.x;
         p += dstep;
     }
+    // 0 steady .. 1 open and shut at random, half and half.
+    float broken = saturate(2 * flick / max(wflick, 1e-4));
+    sum *= 1 + cGap.x * broken;
     // The in-scatter (g): a small blur (its steps were jittered per pixel).
     float g = tex2Dlod(srcTex, float4(uv, 0, 0)).g * 2
             + tex2Dlod(srcTex, float4(uv + float2(cBlur.z, 0), 0, 0)).g + tex2Dlod(srcTex, float4(uv - float2(cBlur.z, 0), 0, 0)).g

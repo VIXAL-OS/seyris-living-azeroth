@@ -1,11 +1,15 @@
 #include "Climate.hpp"
 
 #include "CdbcLoad.hpp"
+#include "SkyPath.hpp"
 #include "TerrainHeight.hpp"
+
+#include <windows.h>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -57,11 +61,47 @@ namespace wxl_livingazeroth::climate
         // the day has run, 0..1.
         constexpr uintptr_t kDayNightGetInfo = 0x007ECEF0;
         constexpr size_t    kInfoDayFraction = 0x04;
-        // +0x19C: vec3, the direction of the active celestial light, world space (core
-        // offsets/engine/Sky.hpp: the vector the engine hands its own model lighting). [believed:
-        // whether it points toward the light or away from it -- either is turned to point up.]
+        // +0x19C: vec3, the direction of the day-night light, world space (m_light1.m_dir, set each
+        // frame by DayNight::SetDirection 0x7EEA90: env/SkyPath), pointing away from the light;
+        // turned to point up. Not where the sky draws the sun (env/SkyPath).
         constexpr size_t    kInfoLightDir = 0x19C;
         using DayNightGetInfoFn = void*(__cdecl*)();
+
+        // The sky's sun and moon (env/SkyPath): the client code behind the read, checked once.
+        int         g_skyGuards = 0;  // 0 not yet, 1 hold, 2 differ
+        const char* g_skyWhy = "";
+        char        g_skyDiffers[200] = "";
+
+        int CheckSkyGuardsUnsafe()
+        {
+            const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleA(nullptr));
+            if (reinterpret_cast<uintptr_t>(base) != 0x00400000u) { g_skyWhy = "not the 3.3.5a (12340) client"; return 2; }
+            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE || nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.TimeDateStamp != 0x4C2452FEu)
+            { g_skyWhy = "not the 3.3.5a (12340) client"; return 2; }
+            const sky::Guard* bad = sky::FirstMismatch(sky::kPlanetGuards, [](uintptr_t a, uint32_t) { return reinterpret_cast<const void*>(a); });
+            if (bad) { g_skyWhy = bad->what; return 2; }
+            return 1;
+        }
+        int CheckSkyGuards()
+        {
+            __try { return CheckSkyGuardsUnsafe(); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { g_skyWhy = "a fault reading the client's code"; return 2; }
+        }
+
+        // The sun's, the moon's and the camera's positions as SetPlanets wrote them this frame.
+        bool ReadSkyPositions(float out[3][3])
+        {
+            __try
+            {
+                std::memcpy(out[0], reinterpret_cast<const void*>(sky::kSunPosition), 12);
+                std::memcpy(out[1], reinterpret_cast<const void*>(sky::kMoonPosition), 12);
+                std::memcpy(out[2], reinterpret_cast<const void*>(sky::kCameraPosition), 12);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
 
         Clock   g_clock;
         Sun     g_sun;
@@ -196,15 +236,28 @@ namespace wxl_livingazeroth::climate
                 fromClient = true;
             }
         }
-        if (!fromClient)
-        {
-            // East (-y) at 06:00, south (-x) at noon, west (+y) at 18:00; up to ~60 degrees high.
-            const float a = 2.0f * kPi * (c.dayFraction - 0.5f);
-            const float up = 0.85f * (s > 0.0f ? s : 0.0f);
-            const float flat = std::sqrt(1.0f - up * up);
-            sun.dir[0] = -std::cos(a) * flat; sun.dir[1] = std::sin(a) * flat; sun.dir[2] = up;
-        }
+        // Otherwise (the time override, or no block) the client's own rule at the time of day.
+        if (!fromClient) sky::LightToward(c.dayFraction, sun.dir);
         sun.fromClient = fromClient;
+
+        // Where the sky draws the sun and the moon (not where the light comes from): read from the
+        // client once its code checks out; with the time override, the client's rule at that hour
+        // (both directions from the same hour); else the light's direction.
+        const bool overridden = g_timeOverride >= 0.0f;
+        if (info && !overridden && g_skyGuards == 0)
+        {
+            g_skyGuards = CheckSkyGuards();
+            std::snprintf(g_skyDiffers, sizeof(g_skyDiffers), "the light's direction (the client's sky code differs: %s)", g_skyWhy);
+        }
+        float positions[3][3];
+        const bool read = info && !overridden && g_skyGuards == 1 && ReadSkyPositions(positions);
+        const sky::From from = sky::Resolve(overridden, c.dayFraction, read ? positions : nullptr, sun.dir, sun.sky, sun.moon);
+        sun.skyRead = from == sky::From::Read;
+        sun.skyFrom = from == sky::From::Read ? "the client's sky"
+                    : from == sky::From::Clock ? "the time override (the client's rule at that hour)"
+                    : !info ? "the light's direction (not in the world)"
+                    : g_skyGuards == 2 ? g_skyDiffers
+                    : "the light's direction (the sky's positions didn't check out this frame)";
         g_sun = sun;
 
         if (g_overrideType >= 0) { g_weather.type = g_overrideType; g_weather.intensity = g_overrideIntensity; }

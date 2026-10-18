@@ -1,29 +1,38 @@
-// Offline tests for the sun shafts (env/ShaftModel, features/SunShaftShaders.hpp): the strength model (the air, the
-// time of day, rain and storms, indoors, the moon), the sun's place on the screen and its fade, the view ray and its
-// world direction as the shaders work them out, the cloud deck's helpers; the three pixel shaders compiled for
-// ps_3_0 (instruction slots under the budget); and on the GPU, if one can be had: an occluder between a pixel and the
-// sun darkens its shaft and nothing beside it, the deck's shadow only ever darkens the in-scatter, the composite
-// adds nothing when the parts are off, never more than its cap and less over near surfaces -- and what the pass
-// costs at 1920 x 1080. No game.
+// Offline tests for the sun shafts (env/ShaftModel, env/SkyPath, features/SunShaftShaders.hpp): the strength model
+// (the air, the time of day, rain and storms, indoors, the moon), the sky's sun and moon against the client's light
+// (their paths, the screenshot's camera, where the directions come from and the fallback), the sun's place on the
+// screen and its fades, the view ray and its world direction as the shaders work them out, the cloud deck's helpers;
+// the three pixel shaders compiled for ps_3_0 (instruction slots under the budget); given the client's exe, the sky
+// read's guards and the client's tables (its set-up code run here) against its bytes; and drawn on the GPU, or with
+// --no-gpu on WARP (the CPU rasterizer behind D3D9On12): an occluder between a pixel and the sun darkens its shaft and
+// nothing beside it, branches breaking the line into gaps brighten it a little and the open sky not at all, the
+// deck's shadow only ever darkens the in-scatter, the composite adds nothing when the parts are off, never more than
+// its cap and less over near surfaces -- and on the GPU what the pass costs at 1920 x 1080. No game.
 //
-// Usage:  shafts_tests [--no-gpu]
+// Usage:  shafts_tests [<Wow.exe>] [--no-gpu] [--no-warp]
 #include "env/ShaftModel.hpp"
+#include "env/SkyPath.hpp"
 #include "features/SunShaftShaders.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
+#include <d3d9on12.h>
+#include <d3d12.h>
 #include <d3dcompiler.h>
+#include <dxgi1_4.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace sm = wxl_livingazeroth::shafts;
+namespace sky = wxl_livingazeroth::sky;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__)); } while (false)
 
@@ -112,6 +121,165 @@ namespace
         return true;
     }
 
+    float Degrees(float radians) { return radians * 57.2957795f; }
+    float Up(const float d[3]) { return Degrees(std::asin(std::clamp(d[2], -1.0f, 1.0f))); }
+    float Bearing(const float d[3]) { const float b = Degrees(std::atan2(-d[1], d[0])); return b < 0.0f ? b + 360.0f : b; } // +x north, +y west
+
+    // --- the client's file: virtual addresses to bytes through its section table (as tests/storm) ---------------
+    struct Image
+    {
+        std::vector<uint8_t> bytes;
+        uint32_t base = 0, timestamp = 0;
+        struct Section { uint32_t rva, size, raw, rawSize; };
+        std::vector<Section> sections;
+
+        const void* At(uintptr_t va, uint32_t size) const
+        {
+            if (va < base) return nullptr;
+            const uint32_t rva = static_cast<uint32_t>(va - base);
+            for (const Section& s : sections)
+                if (rva >= s.rva && rva + size <= s.rva + s.rawSize && s.raw + (rva - s.rva) + size <= bytes.size())
+                    return bytes.data() + s.raw + (rva - s.rva);
+            return nullptr;
+        }
+    };
+
+    Image LoadImage(const char* path)
+    {
+        Image im;
+        FILE* f = std::fopen(path, "rb");
+        if (!f) throw std::runtime_error(std::string("can't open ") + path);
+        std::fseek(f, 0, SEEK_END);
+        const long size = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        im.bytes.resize(size > 0 ? static_cast<size_t>(size) : 0);
+        const size_t got = im.bytes.empty() ? 0 : std::fread(im.bytes.data(), 1, im.bytes.size(), f);
+        std::fclose(f);
+        CHECK(got == im.bytes.size() && got > 0x400);
+        auto u32 = [&](size_t at) { uint32_t v; CHECK(at + 4 <= im.bytes.size()); std::memcpy(&v, im.bytes.data() + at, 4); return v; };
+        auto u16 = [&](size_t at) { return static_cast<uint32_t>(im.bytes.at(at) | (im.bytes.at(at + 1) << 8)); };
+        const uint32_t pe = u32(0x3C);
+        CHECK(u32(pe) == 0x00004550); // "PE\0\0"
+        im.timestamp = u32(pe + 8);
+        const uint32_t count = u16(pe + 6), optional = u16(pe + 20);
+        im.base = u32(pe + 24 + 28);
+        const size_t table = pe + 24 + optional;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const size_t s = table + 40 * i;
+            im.sections.push_back({ u32(s + 12), u32(s + 8), u32(s + 20), u32(s + 16) });
+        }
+        return im;
+    }
+
+    template <size_t N> void CheckGuards(const Image& im, const sky::Guard (&guards)[N])
+    {
+        const sky::Guard* bad = sky::FirstMismatch(guards, [&](uintptr_t va, uint32_t size) { return im.At(va, size); });
+        if (bad) throw std::runtime_error(std::string("differs: ") + bad->what);
+        for (const sky::Guard& g : guards)
+        {
+            Image changed = im;
+            auto* at = static_cast<uint8_t*>(const_cast<void*>(changed.At(g.address, g.size)));
+            CHECK(at);
+            at[g.size - 1] ^= 0x01;
+            CHECK(sky::FirstMismatch(guards, [&](uintptr_t va, uint32_t size) { return changed.At(va, size); }) == &g);
+        }
+    }
+
+    // Just enough x87 and integer code to run the client's first-use blocks that build its sky tables (SetDirection's
+    // and SetPlanets'): loads of constants, stores into the tables, the flags that say they're built. What they write
+    // is kept; the rest of memory reads as the file has it (the tables' own .data is zero until then).
+    struct Emulator
+    {
+        const Image& im;
+        std::map<uint32_t, uint32_t> written;
+        double st[8] = {};
+        int depth = 0; // st(0) = st[depth - 1]
+        uint32_t eax = 0, ebx = 0;
+        bool zf = false, sf = false;
+
+        explicit Emulator(const Image& image) : im(image) {}
+        uint32_t Read32(uint32_t va) const
+        {
+            auto it = written.find(va);
+            if (it != written.end()) return it->second;
+            uint32_t v = 0;
+            if (const void* p = im.At(va, 4)) std::memcpy(&v, p, 4);
+            return v;
+        }
+        float ReadF(uint32_t va) const { const uint32_t v = Read32(va); float f; std::memcpy(&f, &v, 4); return f; }
+        void WriteF(uint32_t va, double d) { const float f = static_cast<float>(d); uint32_t v; std::memcpy(&v, &f, 4); written[va] = v; }
+        double& St(int i) { CHECK(i < depth); return st[depth - 1 - i]; }
+        void Push(double v) { CHECK(depth < 8); st[depth++] = v; }
+        void Pop() { CHECK(depth > 0); --depth; }
+        void Flags(uint8_t r) { zf = r == 0; sf = (r & 0x80) != 0; }
+
+        void Run(uint32_t from, uint32_t until)
+        {
+            uint32_t ip = from;
+            for (int steps = 0; steps < 4000 && ip != until; ++steps)
+            {
+                const auto* c = static_cast<const uint8_t*>(im.At(ip, 8));
+                CHECK(c);
+                auto imm = [&](int at) { uint32_t v; std::memcpy(&v, c + at, 4); return v; };
+                if (c[0] == 0x55 || c[0] == 0x53 || c[0] == 0x56 || c[0] == 0x57 || c[0] == 0x51) { ip += 1; continue; } // push
+                if (c[0] == 0x8B && c[1] == 0xEC) { ip += 2; continue; }                                              // mov ebp, esp
+                if (c[0] == 0x83 && c[1] == 0xEC) { ip += 3; continue; }                                              // sub esp, imm8
+                if (c[0] == 0xA1) { eax = Read32(imm(1)); ip += 5; continue; }
+                if (c[0] == 0xA3) { written[imm(1)] = eax; ip += 5; continue; }
+                if (c[0] == 0xBB) { ebx = imm(1); ip += 5; continue; }
+                if (c[0] == 0x84 && c[1] == 0xC3) { Flags(static_cast<uint8_t>(eax & ebx)); ip += 2; continue; }      // test bl, al
+                if (c[0] == 0x84 && c[1] == 0xC0) { Flags(static_cast<uint8_t>(eax)); ip += 2; continue; }            // test al, al
+                if (c[0] == 0xA8) { Flags(static_cast<uint8_t>(eax & c[1])); ip += 2; continue; }                     // test al, imm8
+                if (c[0] == 0x0B && c[1] == 0xC3) { eax |= ebx; ip += 2; continue; }
+                if (c[0] == 0x83 && c[1] == 0xC8) { eax |= static_cast<uint32_t>(static_cast<int8_t>(c[2])); ip += 3; continue; }
+                if (c[0] == 0x0D) { eax |= imm(1); ip += 5; continue; }
+                if (c[0] == 0x75) { ip += 2; if (!zf) ip += static_cast<int8_t>(c[1]); continue; }                  // jne
+                if (c[0] == 0x78) { ip += 2; if (sf) ip += static_cast<int8_t>(c[1]); continue; }                   // js
+                if (c[0] == 0xEB) { ip += 2 + static_cast<int8_t>(c[1]); continue; }
+                if (c[0] == 0x0F && c[1] == 0x85) { ip += 6; if (!zf) ip += static_cast<int32_t>(imm(2)); continue; }
+                if (c[0] == 0xE9) { ip += 5 + static_cast<int32_t>(imm(1)); continue; }
+                if (c[0] == 0xD9 && c[1] == 0xEE) { Push(0.0); ip += 2; continue; }                                   // fldz
+                if (c[0] == 0xD9 && c[1] == 0xE8) { Push(1.0); ip += 2; continue; }                                   // fld1
+                if (c[0] == 0xD9 && c[1] == 0x05) { Push(ReadF(imm(2))); ip += 6; continue; }                         // fld m32
+                if (c[0] == 0xD9 && c[1] == 0x15) { WriteF(imm(2), St(0)); ip += 6; continue; }                       // fst m32
+                if (c[0] == 0xD9 && c[1] == 0x1D) { WriteF(imm(2), St(0)); Pop(); ip += 6; continue; }                // fstp m32
+                if (c[0] == 0xD9 && (c[1] & 0xF8) == 0xC8) { std::swap(St(0), St(c[1] & 7)); ip += 2; continue; }     // fxch st(i)
+                if (c[0] == 0xDD && (c[1] & 0xF8) == 0xD8) { St(c[1] & 7) = St(0); Pop(); ip += 2; continue; }        // fstp st(i)
+                char what[96];
+                std::snprintf(what, sizeof(what), "the table set-up: an instruction not emulated at 0x%08X (%02X %02X)", ip, c[0], c[1]);
+                throw std::runtime_error(what);
+            }
+            CHECK(ip == until);
+        }
+        void CheckTable(uint32_t va, const sky::Key* want, int count) const
+        {
+            for (int k = 0; k < count; ++k)
+                if (ReadF(va + 8 * k) != want[k].time || ReadF(va + 8 * k + 4) != want[k].value)
+                {
+                    char what[160];
+                    std::snprintf(what, sizeof(what), "the client's table at 0x%08X, key %d: (%.9g, %.9g), ours (%.9g, %.9g)", va, k,
+                                  ReadF(va + 8 * k), ReadF(va + 8 * k + 4), want[k].time, want[k].value);
+                    throw std::runtime_error(what);
+                }
+        }
+    };
+
+    // "mov esi, count; ... mov edi, table; ... call InterpTable" at those addresses.
+    void CheckInterpCall(const Image& im, uintptr_t movEsi, uint32_t count, uintptr_t movEdi, uint32_t table, uintptr_t call)
+    {
+        const auto* a = static_cast<const uint8_t*>(im.At(movEsi, 5));
+        const auto* b = static_cast<const uint8_t*>(im.At(movEdi, 5));
+        const auto* c = static_cast<const uint8_t*>(im.At(call, 5));
+        CHECK(a && b && c && a[0] == 0xBE && b[0] == 0xBF && c[0] == 0xE8);
+        uint32_t n = 0, t = 0;
+        int32_t rel = 0;
+        std::memcpy(&n, a + 1, 4);
+        std::memcpy(&t, b + 1, 4);
+        std::memcpy(&rel, c + 1, 4);
+        CHECK(n == count && t == table && static_cast<uintptr_t>(call + 5 + rel) == 0x007ED3B0u);
+    }
+
     // --- shaders -------------------------------------------------------------------------------------------------
     struct Compiled { std::vector<DWORD> code; int slots = -1; std::string error; };
 
@@ -143,6 +311,8 @@ namespace
 
     struct Gpu
     {
+        bool warp = false;            // WARP (the CPU), not the GPU
+        ID3D12Device* d12 = nullptr;  // (WARP's)
         IDirect3D9* d3d = nullptr;
         IDirect3DDevice9* dev = nullptr;
         IDirect3DPixelShader9* source = nullptr, *blur = nullptr, *composite = nullptr;
@@ -179,6 +349,32 @@ namespace
         return ok;
     }
 
+    // D3D9 on WARP through D3D9On12, its DLLs loaded here (nothing more to link).
+    IDirect3D9* CreateWarp9(ID3D12Device*& d12)
+    {
+        using CreateFactoryFn = HRESULT(WINAPI*)(REFIID, void**);
+        using CreateDeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+        using Create9On12Fn = IDirect3D9*(WINAPI*)(UINT, D3D9ON12_ARGS*, UINT);
+        HMODULE dxgi = LoadLibraryW(L"dxgi.dll"), d3d12 = LoadLibraryW(L"d3d12.dll"), d9 = LoadLibraryW(L"d3d9.dll");
+        auto createFactory = dxgi ? reinterpret_cast<CreateFactoryFn>(GetProcAddress(dxgi, "CreateDXGIFactory1")) : nullptr;
+        auto createDevice = d3d12 ? reinterpret_cast<CreateDeviceFn>(GetProcAddress(d3d12, "D3D12CreateDevice")) : nullptr;
+        auto create9 = d9 ? reinterpret_cast<Create9On12Fn>(GetProcAddress(d9, "Direct3DCreate9On12")) : nullptr;
+        if (!createFactory || !createDevice || !create9) return nullptr;
+        IDXGIFactory4* factory = nullptr;
+        if (FAILED(createFactory(__uuidof(IDXGIFactory4), reinterpret_cast<void**>(&factory))) || !factory) return nullptr;
+        IDXGIAdapter* adapter = nullptr;
+        const HRESULT ha = factory->EnumWarpAdapter(__uuidof(IDXGIAdapter), reinterpret_cast<void**>(&adapter));
+        factory->Release();
+        if (FAILED(ha) || !adapter) return nullptr;
+        const HRESULT hd = createDevice(adapter, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), reinterpret_cast<void**>(&d12));
+        adapter->Release();
+        if (FAILED(hd) || !d12) return nullptr;
+        D3D9ON12_ARGS a{};
+        a.Enable9On12 = TRUE;
+        a.pD3D12Device = d12;
+        return create9(D3D_SDK_VERSION, &a, 1);
+    }
+
     bool InitGpu(Gpu& g, const Compiled& source, const Compiled& blur, const Compiled& composite)
     {
         WNDCLASSW wc{};
@@ -187,7 +383,7 @@ namespace
         wc.lpszClassName = L"ShaftTests";
         RegisterClassW(&wc);
         HWND window = CreateWindowW(wc.lpszClassName, L"shafts", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);
-        g.d3d = Direct3DCreate9(D3D_SDK_VERSION);
+        g.d3d = g.warp ? CreateWarp9(g.d12) : Direct3DCreate9(D3D_SDK_VERSION);
         if (!g.d3d || !window) return false;
         D3DPRESENT_PARAMETERS pp{};
         pp.Windowed = TRUE; pp.SwapEffect = D3DSWAPEFFECT_DISCARD; pp.hDeviceWindow = window;
@@ -243,14 +439,16 @@ namespace
         for (auto* ps : { g.source, g.blur, g.composite }) if (ps) ps->Release();
         if (g.dev) g.dev->Release();
         if (g.d3d) g.d3d->Release();
+        if (g.d12) g.d12->Release();
         g = Gpu{};
     }
 
     // The scene's depth: 0..kMaxZ for the world (OpenGL-style: ndc = m22 + m32 / z), 1 for the sky.
     float DepthOf(const float proj[16], float z) { return kMaxZ * ((proj[10] + proj[14] / z) * 0.5f + 0.5f); }
 
-    // A depth picture: `rows(y)` gives each row's view depth (<= 0: the sky); `box` (x0, y0, x1, y1, z) an occluder over it.
-    IDirect3DTexture9* DepthTexture(IDirect3DDevice9* dev, const float proj[16], float groundFrom, const float* box)
+    // A depth picture: the sky above `groundFrom` (share of the height), the ground below; `box` (x0, y0, x1, y1, z)
+    // an occluder over it; `canopy`: branches 6 yd off across the top (rows 120 .. 400), 30 px wide with 30 px gaps.
+    IDirect3DTexture9* DepthTexture(IDirect3DDevice9* dev, const float proj[16], float groundFrom, const float* box, bool canopy = false)
     {
         IDirect3DTexture9* t = nullptr;
         if (FAILED(dev->CreateTexture(kW, kH, 1, 0, D3DFMT_R32F, D3DPOOL_MANAGED, &t, nullptr))) throw std::runtime_error("no R32F texture");
@@ -266,6 +464,7 @@ namespace
             {
                 float d = rowDepth;
                 if (box && x >= box[0] && x < box[2] && y >= box[1] && y < box[3]) d = DepthOf(proj, box[4]);
+                if (canopy && y >= 120 && y < 400 && (x / 30) % 2 == 0) d = DepthOf(proj, 6.0f);
                 row[x] = d;
             }
         }
@@ -285,7 +484,8 @@ namespace
         float deckDensity = 0.0f;
         int   samples = 32;
         bool  smooth = true;
-        float shaftGain = 0.6f, volumeGain = 0.5f, cap = 0.4f;
+        float gapBoost = 0.5f;   // features/SunShafts kGapBoost
+        float shaftGain = 0.6f, volumeGain = 0.5f, cap = 0.6f;
     };
 
     // The source, the blurs and (optionally) the composite, constants packed as features/SunShafts packs them.
@@ -339,9 +539,10 @@ namespace
         {
             Target(dev, g.quarter[(p + 1) & 1]);
             dev->SetViewport(&tv);
-            const float b[8] = { s.sunU, s.sunV, p == 0 ? 0.85f : 2.5f * 0.85f / s.samples, p == 0 ? static_cast<float>(s.samples) : 8.0f,
-                                 p == 0 ? 0.985f : 1.0f, p == 0 ? 1.0f : 0.0f, 1.0f / tw, 1.0f / th };
-            dev->SetPixelShaderConstantF(0, b, 2);
+            const float b[12] = { s.sunU, s.sunV, p == 0 ? 0.85f : 2.5f * 0.85f / s.samples, p == 0 ? static_cast<float>(s.samples) : 8.0f,
+                                  p == 0 ? 0.985f : 1.0f, p == 0 ? 1.0f : 0.0f, 1.0f / tw, 1.0f / th,
+                                  p == 0 ? s.gapBoost : 0.0f, 0.0f, 0.0f, 0.0f };
+            dev->SetPixelShaderConstantF(0, b, 3);
             dev->SetTexture(0, g.quarter[p & 1]);
             Quad(dev, static_cast<float>(tw), static_cast<float>(th));
             result = g.quarter[(p + 1) & 1];
@@ -415,8 +616,14 @@ namespace
 
 int main(int argc, char** argv)
 {
-    bool gpu = true;
-    for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--no-gpu") == 0) gpu = false;
+    bool gpu = true, warp = true;
+    const char* exe = nullptr;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--no-gpu") == 0) gpu = false;
+        else if (std::strcmp(argv[i], "--no-warp") == 0) warp = false;
+        else if (argv[i][0]) exe = argv[i];
+    }
     try
     {
         // ---------------------------------------------------------------- the strength model
@@ -434,6 +641,13 @@ int main(int argc, char** argv)
             CHECK(Close(sm::GoldenHour(31.0f), 1.0f, 1e-5f) && Close(sm::GoldenHour(-5.0f), 1.0f, 1e-5f));
             CHECK(sm::GoldenHour(8.0f) > 0.5f && sm::GoldenHour(17.5f) > 0.4f);
         });
+        Test("the time of day: midday three quarters of the low sun's strength (it was half), the curve in between", [] {
+            const float low = sm::Evaluate(Place(0.6f, 7.0f, 0.5f)).total, noon = sm::Evaluate(Place(0.6f, 12.0f, 0.5f)).total;
+            const float at10 = sm::Evaluate(Place(0.6f, 10.0f, 0.5f)).total, at15 = sm::Evaluate(Place(0.6f, 15.0f, 0.5f)).total;
+            std::printf("     07:00 %.3f, 10:00 %.3f, 12:00 %.3f, 15:00 %.3f (x the air 0.80)\n", low, at10, noon, at15);
+            CHECK(Close(noon / low, 0.75f, 0.005f)); // (sm::kMidday)
+            CHECK(at10 > noon && at10 < low && at15 > noon && at15 < low);
+        });
         Test("Duskwood's fog in the morning and evening is strong; a forest at noon is subtle, a few times fainter", [] {
             sm::Inputs dusk = Place(0.6f, 7.0f, 0.3f);
             dusk.areaFog = 0.6f;
@@ -444,15 +658,15 @@ int main(int argc, char** argv)
             std::printf("     Duskwood 07:00 %.2f, 19:00 %.2f; a forest at noon %.2f\n", morning.total, evening.total, forestNoon.total);
             CHECK(morning.total > 0.75f && !morning.why);
             CHECK(evening.total > 0.6f);
-            CHECK(forestNoon.total > 0.12f && forestNoon.total < 0.3f && !forestNoon.why);
-            CHECK(morning.total > 3.0f * forestNoon.total);
+            CHECK(forestNoon.total > 0.2f && forestNoon.total < 0.4f && !forestNoon.why);
+            CHECK(morning.total > 2.4f * forestNoon.total);
             CHECK(morning.airPerYard > forestNoon.airPerYard);
         });
         Test("a misty forest morning (Ashenvale) is well above its own noon", [] {
             sm::Inputs in = Place(0.15f, 7.5f, 0.25f);
             in.mist = 0.6f;
             const float misty = sm::Evaluate(in).total, noon = sm::Evaluate(Place(0.15f, 12.0f, 0.85f)).total;
-            CHECK(misty > 2.5f * noon);
+            CHECK(misty > 2.0f * noon);
         });
         Test("rain and storms: light rain barely, heavy rain or a storm nothing", [] {
             sm::Inputs in = Place(0.6f, 7.0f, 0.3f);
@@ -491,6 +705,125 @@ int main(int argc, char** argv)
         Test("a light on the horizon gives nothing; just above it, the full low sun", [] {
             CHECK(sm::Evaluate(Place(0.6f, 7.0f, 0.0f)).total == 0.0f);
             CHECK(sm::Evaluate(Place(0.6f, 7.0f, 0.1f)).total > 0.7f);
+        });
+
+        // ---------------------------------------------------------------- the sky's sun and moon, and the light
+        Test("the client's interpolator: between keys, held flat, round the clock across midnight, clamped", [] {
+            const sky::Key k[3] = { { 0.25f, 1.0f }, { 0.5f, 3.0f }, { 0.75f, 2.0f } };
+            CHECK(Close(sky::Interp(k, 3, 0.375f), 2.0f, 1e-6f) && Close(sky::Interp(k, 3, 0.625f), 2.5f, 1e-6f));
+            CHECK(Close(sky::Interp(k, 3, 0.875f), 1.75f, 1e-6f) && Close(sky::Interp(k, 3, 0.125f), 1.25f, 1e-6f)); // 0.75 -> 1.25 wraps
+            CHECK(sky::Interp(k, 3, -3.0f) == sky::Interp(k, 3, 0.0f) && sky::Interp(k, 3, 7.0f) == sky::Interp(k, 3, 1.0f));
+            CHECK(Close(sky::Interp(sky::kSunTheta, 5, 0.498f), 0.087266468f, 1e-7f)); // the noon plateau
+        });
+        Test("15:09 (the screenshot): the sky's sun 54 deg up, the light 28 deg, on one north-west bearing", [] {
+            const float f = (15.0f + 9.0f / 60.0f) / 24.0f;
+            float sun[3], light[3], moon[3];
+            sky::SunToward(f, sun);
+            sky::LightToward(f, light);
+            sky::MoonToward(f, moon);
+            std::printf("     sun %.1f deg up, bearing %.1f; light %.1f deg up, bearing %.1f; the moon %.1f deg up\n", Up(sun), Bearing(sun), Up(light), Bearing(light), Up(moon));
+            CHECK(Close(Up(sun), 54.06f, 0.1f) && Close(Up(light), 28.08f, 0.1f));
+            CHECK(Close(Bearing(sun), 315.0f, 0.01f) && Close(Bearing(light), 315.0f, 0.01f));
+            CHECK(Up(moon) < 0.0f);
+            CHECK(Close(Dot(sun, sun), 1.0f, 1e-5f) && Close(Dot(light, light), 1.0f, 1e-5f));
+        });
+        Test("the sky's sun is up 06:10 .. 20:30 (5 deg off the zenith at noon), the moon 22:20 .. 03:25; the light never below 20 deg", [] {
+            auto sunUp = [](float hour) { float d[3]; sky::SunToward(hour / 24.0f, d); return Up(d); };
+            auto moonUp = [](float hour) { float d[3]; sky::MoonToward(hour / 24.0f, d); return Up(d); };
+            CHECK(sunUp(6.0f) < 0.0f && sunUp(6.3f) > 0.0f && sunUp(20.4f) > 0.0f && sunUp(20.6f) < 0.0f);
+            CHECK(Close(sunUp(12.0f), 85.0f, 0.01f) && Close(sunUp(2.0f), -10.0f, 0.01f));
+            CHECK(moonUp(22.2f) < 0.0f && moonUp(22.4f) > 0.0f && moonUp(3.3f) > 0.0f && moonUp(3.5f) < 0.0f);
+            CHECK(Close(moonUp(0.0f), 55.0f, 0.01f) && moonUp(12.0f) < 0.0f);
+            float lo = 90.0f, hi = -90.0f;
+            for (int m = 0; m < 1440; m += 5)
+            {
+                float d[3];
+                sky::LightToward(m / 1440.0f, d);
+                lo = std::min(lo, Up(d)); hi = std::max(hi, Up(d));
+                CHECK(Close(Bearing(d), 315.0f, 0.01f));
+            }
+            std::printf("     the light between %.1f and %.1f deg up\n", lo, hi);
+            CHECK(Close(lo, 20.0f, 0.05f) && Close(hi, 37.0f, 0.05f));
+        });
+        Test("the screenshot's camera (the light's point at 0.44, 0.75; the client's 90 deg field of view at 16:9): the sky's sun up near the gaps at 0.45, 0.27", [] {
+            // The client's projection: its 90 deg is the diagonal's (GxuXformCreateProjection_SG: fovy = fov / sqrt(1 + aspect^2)).
+            const float aspect = 1920.0f / 1080.0f, fovY = 1.5707964f / std::sqrt(1.0f + aspect * aspect);
+            const float f = (15.0f + 9.0f / 60.0f) / 24.0f;
+            float sun[3], light[3];
+            sky::SunToward(f, sun);
+            sky::LightToward(f, light);
+            const float pos[3] = { 0.0f, 0.0f, 0.0f };
+            const float bearing = std::atan2(light[1], light[0]);
+            // Find the yaw and pitch that put the light's point where the panel showed it (the client's view: right = forward x up).
+            float bestYaw = 0.0f, bestPitch = 0.0f, bestErr = 1e9f;
+            for (int i = -200; i <= 200; ++i)
+            {
+                const float yaw = bearing + i * 0.001f;
+                float lo = -1.2f, hi = 1.5f;
+                for (int k = 0; k < 50; ++k)
+                {
+                    const float mid = 0.5f * (lo + hi);
+                    Camera c = MakeCamera(pos, yaw, mid, true, true);
+                    Projection(fovY, aspect, 0.2f, 1000.0f, 0.0f, 0.0f, c.proj);
+                    const sm::SunScreen s = sm::ProjectSun(c.view, c.proj, light, 0.35f);
+                    if (!s.inFront || s.v > 0.75f) hi = mid; else lo = mid;
+                }
+                Camera c = MakeCamera(pos, yaw, lo, true, true);
+                Projection(fovY, aspect, 0.2f, 1000.0f, 0.0f, 0.0f, c.proj);
+                const sm::SunScreen s = sm::ProjectSun(c.view, c.proj, light, 0.35f);
+                const float err = std::fabs(s.u - 0.44f) + std::fabs(s.v - 0.75f);
+                if (s.inFront && err < bestErr) { bestErr = err; bestYaw = yaw; bestPitch = lo; }
+            }
+            Camera c = MakeCamera(pos, bestYaw, bestPitch, true, true);
+            Projection(fovY, aspect, 0.2f, 1000.0f, 0.0f, 0.0f, c.proj);
+            const sm::SunScreen l = sm::ProjectSun(c.view, c.proj, light, 0.35f), s = sm::ProjectSun(c.view, c.proj, sun, 0.35f);
+            const float off = std::hypot(s.u - 0.45f, s.v - 0.27f), lightOff = std::hypot(l.u - 0.45f, l.v - 0.27f);
+            std::printf("     camera pitched up %.1f deg: the light at %.3f, %.3f; the sky's sun at %.3f, %.3f (%.3f from the gaps; the light %.3f)\n",
+                        Degrees(bestPitch), l.u, l.v, s.u, s.v, off, lightOff);
+            CHECK(bestErr < 0.003f);
+            CHECK(s.inFront && s.fade == 1.0f && Close(s.u, 0.45f, 0.03f) && s.v < 0.3f && s.v > 0.1f);
+            CHECK(off < 0.12f && lightOff > 0.4f);
+        });
+        Test("where the sun and moon come from: read when the client's positions check out, else the light's direction; the hour under the override", [] {
+            float light[3] = { 0.62f, 0.62f, 0.47f };
+            Norm(light);
+            const float cam[3] = { -8949.5f, -132.25f, 83.5f };
+            float sunDir[3], moonDir[3];
+            sky::SunToward(0.63f, sunDir);
+            sky::MoonToward(0.02f, moonDir);
+            float pos[3][3];
+            for (int k = 0; k < 3; ++k) { pos[0][k] = cam[k] + 12.0f * sunDir[k]; pos[1][k] = cam[k] + 12.0f * moonDir[k]; pos[2][k] = cam[k]; }
+            float sun[3], moon[3];
+            CHECK(sky::Resolve(false, 0.63f, pos, light, sun, moon) == sky::From::Read);
+            CHECK(Dot(sun, sunDir) > 0.99999f && Dot(moon, moonDir) > 0.99999f);
+            // A position that isn't 12 from the camera (stale, or something else there): both fall back to the light.
+            float bad[3][3];
+            std::memcpy(bad, pos, sizeof(bad));
+            bad[0][2] += 1.0f;
+            CHECK(sky::Resolve(false, 0.63f, bad, light, sun, moon) == sky::From::Light);
+            CHECK(Dot(sun, light) > 0.99999f && Dot(moon, light) > 0.99999f);
+            std::memcpy(bad, pos, sizeof(bad));
+            bad[1][0] = std::nanf("");
+            CHECK(sky::Resolve(false, 0.63f, bad, light, sun, moon) == sky::From::Light);
+            CHECK(sky::Resolve(false, 0.63f, nullptr, light, sun, moon) == sky::From::Light && Dot(sun, light) > 0.99999f);
+            // The time override: both from its hour, by the client's rule, whatever was read.
+            CHECK(sky::Resolve(true, 0.3f, pos, light, sun, moon) == sky::From::Clock);
+            float want[3];
+            sky::SunToward(0.3f, want);
+            CHECK(Dot(sun, want) > 0.99999f);
+            sky::MoonToward(0.3f, want);
+            CHECK(Dot(moon, want) > 0.99999f);
+            CHECK(sky::FromPositions(pos[0], cam, sun) && !sky::FromPositions(cam, cam, sun));
+        });
+        Test("the disc at the horizon: nothing a degree below it, all from two degrees above", [] {
+            CHECK(sm::HorizonFade(-0.02f) == 0.0f && sm::HorizonFade(-0.5f) == 0.0f);
+            CHECK(sm::HorizonFade(0.04f) == 1.0f && sm::HorizonFade(0.8f) == 1.0f);
+            CHECK(sm::HorizonFade(0.0f) > 0.0f && sm::HorizonFade(0.0f) < 0.5f && sm::HorizonFade(0.02f) > 0.5f);
+            float d[3];
+            sky::SunToward(20.0f / 24.0f, d);
+            CHECK(sm::HorizonFade(d[2]) == 1.0f); // 20:00, 5 deg up
+            sky::SunToward(21.0f / 24.0f, d);
+            CHECK(sm::HorizonFade(d[2]) == 0.0f); // 21:00, set
         });
 
         // ---------------------------------------------------------------- the sun on the screen
@@ -603,12 +936,59 @@ int main(int argc, char** argv)
             std::printf("     instruction slots: source %d, blur %d, composite %d\n", source.slots, blur.slots, composite.slots);
         });
 
-        if (gpu)
+        // ---------------------------------------------------------------- against the client's exe
+        if (exe)
+        {
+            const std::string name = std::string("the sky read's guards and the client's sky tables against ") + exe;
+            Test(name.c_str(), [&] {
+                const Image im = LoadImage(exe);
+                CHECK(im.base == 0x00400000u && im.timestamp == 0x4C2452FEu);
+                CheckGuards(im, sky::kPlanetGuards);
+                // The tables as the client builds them on first use (its own set-up code, run here), against ours.
+                Emulator light(im);
+                light.Run(0x007EEA90, 0x007EEB5C);
+                light.CheckTable(0x00D390E4, sky::kLightElevation, 4);
+                light.CheckTable(0x00D390C4, sky::kLightAzimuth, 4);
+                Emulator planets(im);
+                planets.Run(0x007EECC0, 0x007EEFEE);
+                planets.CheckTable(0x00D391E0, sky::kSunTheta, 5);
+                planets.CheckTable(0x00D391C8, sky::kSunPhi, 3);
+                planets.CheckTable(0x00D391A0, sky::kMoonTheta, 5);
+                planets.CheckTable(0x00D39188, sky::kMoonPhi, 3);
+                // ... and the interpolator gets them, with their counts.
+                CheckInterpCall(im, 0x007EEB65, 4, 0x007EEB6D, 0x00D390E4, 0x007EEB72);  // the light's elevation
+                CheckInterpCall(im, 0x007EEB65, 4, 0x007EEB80, 0x00D390C4, 0x007EEB88);  // its bearing (esi still 4)
+                CheckInterpCall(im, 0x007EEFF5, 5, 0x007EEFFD, 0x00D391E0, 0x007EF002);  // the sun's theta
+                CheckInterpCall(im, 0x007EF010, 3, 0x007EF015, 0x00D391C8, 0x007EF01D);  // its phi
+                CheckInterpCall(im, 0x007EF1B4, 5, 0x007EF1BF, 0x00D391A0, 0x007EF1D8);  // the moon's theta
+                CheckInterpCall(im, 0x007EF1E6, 3, 0x007EF1EB, 0x00D39188, 0x007EF1F3);  // its phi
+                // The light's direction lands in the day-night block's +0x19C (what env/Climate reads).
+                for (uint32_t k = 0; k < 3; ++k)
+                {
+                    const auto* st = static_cast<const uint8_t*>(im.At(0x007EECA0 + 9 * k, 6));
+                    uint32_t to = 0;
+                    std::memcpy(&to, st + 2, 4);
+                    CHECK(st[0] == 0xD9 && st[1] == 0x1D && to == 0x00D38B00u + 0x19C + 4 * k);
+                }
+                // UpdateLighting's calls are SetColors, SetDirection and SetPlanets.
+                const auto* up = static_cast<const uint8_t*>(im.At(0x007F399B, 15));
+                int32_t r0 = 0, r1 = 0, r2 = 0;
+                std::memcpy(&r0, up + 1, 4); std::memcpy(&r1, up + 6, 4); std::memcpy(&r2, up + 11, 4);
+                CHECK(0x007F39A0u + r0 == 0x007F3230u && 0x007F39A5u + r1 == 0x007EEA90u && 0x007F39AAu + r2 == 0x007EECC0u);
+                std::printf("  %zu guards; 6 tables\n", sizeof(sky::kPlanetGuards) / sizeof(sky::kPlanetGuards[0]));
+            });
+        }
+        else std::printf("SKIP the guards and tables (no Wow.exe given)\n");
+
+        // ---------------------------------------------------------------- drawn: on the GPU, or on WARP (the CPU)
+        if (gpu || warp)
         {
             Gpu g;
+            g.warp = !gpu;
+            auto named = [&](const char* what) { return std::string(g.warp ? "WARP: " : "GPU: ") + what; };
             if (!InitGpu(g, source, blur, composite))
             {
-                std::printf("SKIP the GPU checks: no D3D9 device\n");
+                std::printf("SKIP the drawn checks: no D3D9 device on %s\n", g.warp ? "WARP" : "the GPU");
                 ReleaseGpu(g);
             }
             else
@@ -627,7 +1007,7 @@ int main(int argc, char** argv)
                 IDirect3DTexture9* blocked = DepthTexture(g.dev, proj, 0.55f, trunk);
                 IDirect3DTexture9* nearer = DepthTexture(g.dev, proj, 0.55f, nearBox);
                 UINT w = 0, h = 0;
-                Test("GPU: a trunk between the ground and the sun shades the ground behind it; beside it nothing changes", [&] {
+                Test(named("a trunk between the ground and the sun shades the ground behind it; beside it nothing changes").c_str(), [&] {
                     const std::vector<uint32_t> a = Run(g, open, s, false, w, h), b = Run(g, blocked, s, false, w, h);
                     // Behind the trunk (960, 650) and well to the side (300, 500), in quarter-resolution pixels.
                     const size_t behind = (650 / 4) * w + 960 / 4, side = (500 / 4) * w + 300 / 4, nearSun = (300 / 4) * w + 960 / 4;
@@ -638,7 +1018,7 @@ int main(int argc, char** argv)
                     CHECK(Close(R(b[side]), R(a[side]), 0.02f));
                     CHECK(R(a[nearSun]) > R(a[behind])); // the shafts grow toward the sun
                 });
-                Test("GPU: the cloud deck's shadow only darkens the light scattered in under it, in shafts, not evenly", [&] {
+                Test(named("the cloud deck's shadow only darkens the light scattered in under it, in shafts, not evenly").c_str(), [&] {
                     PassSetup v = s;
                     v.source = false; v.volume = true;
                     v.deckDensity = 0.0f;
@@ -660,7 +1040,7 @@ int main(int argc, char** argv)
                     CHECK(sumCloud < 0.95f * sumClear && sumCloud > 0.0f);
                     CHECK(hi - lo > 0.3f); // lit and shadowed air side by side
                 });
-                Test("GPU: the composite adds nothing with both parts off, never more than its cap, less over near things", [&] {
+                Test(named("the composite adds nothing with both parts off, never more than its cap, less over near things").c_str(), [&] {
                     PassSetup off = s;
                     off.source = false;
                     const std::vector<uint32_t> none = Run(g, open, off, true, w, h);
@@ -668,12 +1048,16 @@ int main(int argc, char** argv)
                     hot.shaftGain = 4.0f;
                     const std::vector<uint32_t> capped = Run(g, open, hot, true, w, h);
                     bool untouched = true, underCap = true;
+                    float most = 0.0f;
                     for (size_t i = 0; i < none.size(); ++i)
                     {
                         if ((none[i] & 0xFFFFFF) != 0x404040) untouched = false;
-                        if (R(capped[i]) > 64 / 255.0f + 0.4f + 1.5f / 255.0f) underCap = false;
+                        if (R(capped[i]) > 64 / 255.0f + hot.cap + 1.5f / 255.0f) underCap = false;
+                        most = std::max(most, R(capped[i]) - 64 / 255.0f);
                     }
+                    std::printf("     the most added with the gain x4: %.3f (the cap %.2f)\n", most, hot.cap);
                     CHECK(untouched && underCap);
+                    CHECK(hot.cap == 0.6f && most > 0.5f); // it reaches up to the cap (it was 0.4)
                     // The same shafts over the ground 280 yd off and over something 2 yd in front of you.
                     const std::vector<uint32_t> overFar = Run(g, open, s, true, w, h), overNear = Run(g, open, s, true, w, h, nearer);
                     const size_t at = 600 * w + 960;
@@ -681,7 +1065,38 @@ int main(int argc, char** argv)
                     std::printf("     added over the far ground %.3f, over the thing in front of you %.3f\n", addFar, addNear);
                     CHECK(addFar > 0.01f && addNear < 0.25f * addFar);
                 });
-                Test("GPU: the cost at 1920 x 1080 (timestamps; medium quality, 32 samples)", [&] {
+                Test(named("branches breaking the line to the sun into gaps brighten the shafts by up to half; the open sky and ground hardly").c_str(), [&] {
+                    IDirect3DTexture9* canopy = DepthTexture(g.dev, proj, 0.55f, nullptr, true);
+                    PassSetup plain = s;
+                    plain.gapBoost = 0.0f;
+                    const std::vector<uint32_t> under = Run(g, canopy, s, false, w, h), underPlain = Run(g, canopy, plain, false, w, h);
+                    const std::vector<uint32_t> openSky = Run(g, open, s, false, w, h), openPlain = Run(g, open, plain, false, w, h);
+                    canopy->Release();
+                    // Below the canopy (rows 420 .. 580, the sky between the branches and the ground): lines up to the sun
+                    // cross the branches.
+                    double sumOn = 0, sumOff = 0, worst = 1;
+                    size_t n = 0;
+                    for (UINT y = 420 / 4; y < 580 / 4; ++y)
+                        for (UINT x = 200 / 4; x < 1720 / 4; ++x, ++n)
+                        {
+                            const float on = R(under[y * w + x]), off = R(underPlain[y * w + x]);
+                            sumOn += on; sumOff += off;
+                            if (off > 0.1f) worst = std::max(worst, static_cast<double>(on / off));
+                        }
+                    float openWorst = 0.0f;
+                    double openOn = 0, openOff = 0;
+                    for (size_t i = 0; i < openSky.size(); ++i)
+                    {
+                        openOn += R(openSky[i]); openOff += R(openPlain[i]);
+                        openWorst = std::max(openWorst, R(openSky[i]) - R(openPlain[i]));
+                    }
+                    std::printf("     under the branches: mean %.3f with the gaps' boost, %.3f without (x%.2f; a pixel at most x%.2f); the open sky x%.3f, a pixel at most +%.3f\n",
+                                sumOn / n, sumOff / n, sumOn / sumOff, worst, openOn / openOff, openWorst);
+                    CHECK(sumOn > 1.05 * sumOff && worst > 1.25 && worst <= 1.5 + 0.03);
+                    CHECK(openOn < 1.03 * openOff && openWorst < 0.03f);
+                });
+                if (g.warp) std::printf("SKIP the cost (WARP is the CPU; the GPU's is measured without --no-gpu)\n");
+                else Test(named("the cost at 1920 x 1080 (timestamps; medium quality, 32 samples)").c_str(), [&] {
                     IDirect3DQuery9* disjoint = nullptr, *freq = nullptr, *t0 = nullptr, *t1 = nullptr;
                     if (FAILED(g.dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &disjoint)) || FAILED(g.dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &freq)) ||
                         FAILED(g.dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &t0)) || FAILED(g.dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &t1)))

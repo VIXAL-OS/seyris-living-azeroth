@@ -263,7 +263,7 @@ namespace wxl_livingazeroth::config
             h.samples = Whole(s, f, "Samples", "Taps per pixel along the line toward the sun (8 .. 64): more = smoother, longer shafts, slower.", h.samples);
             h.length = In(s, f, "Length", "How far the shafts reach: the share of the way to the sun each pixel looks (0.2 .. 1).", h.length);
             h.throughDeck = In(s, f, "ThroughCloudDeck", "In mountain zones with a cloud deck: the shafts come through its gaps, and below it shafts fall from its gaps even with the sun off the screen.", h.throughDeck);
-            h.moon = In(s, f, "Moon", "Faint shafts from the night light at night: your multiplier, 0 = none.", h.moon);
+            h.moon = In(s, f, "Moon", "Faint shafts from the moon at night, from where the sky shows it: your multiplier, 0 = none.", h.moon);
         }
 
         // Window glass: its look, the coloured shafts and the light on the floor.

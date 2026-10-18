@@ -41,7 +41,8 @@ namespace wxl_livingazeroth::sunshafts
         constexpr float kScreenGain = 0.6f;    // the screen-space shafts' brightness at strength 1 and a full model
         constexpr float kSkyShare = 0.6f;      // ... over the sky itself (round the sun they'd be a glow, not shafts)
         constexpr float kVolumeGain = 0.5f;    // the in-scatter under the deck at strength 1 and a full model
-        constexpr float kMostAdded = 0.4f;     // never more than this added to a pixel's colour
+        constexpr float kMostAdded = 0.6f;     // never more than this added to a pixel's colour
+        constexpr float kGapBoost = 0.5f;      // up to this much more where branches break the line to the sun into gaps
         constexpr float kNearYards = 20.0f;    // a surface needs about this much air in front of it for the full shafts
         constexpr float kDecay = 0.985f;       // each tap's weight after the one before (the 32nd: 0.63)
         constexpr float kVolumeReach = 600.0f; // yd the in-scatter is marched
@@ -70,7 +71,10 @@ namespace wxl_livingazeroth::sunshafts
         {
             const char*       inactive = "not drawn yet";
             shafts::Strength  model;
-            shafts::SunScreen sun;
+            shafts::SunScreen sun;              // the disc the shafts radiate from (the sky's sun, or the moon)
+            bool              moonLeads = false;
+            float             horizon = 1.0f;   // the disc's horizon fade
+            shafts::SunScreen skySun, light;     // the sky's sun and the light's direction on the screen (the panel)
             float             screen = 0.0f, volume = 0.0f; // this frame's two parts, after the strength setting
             const char*       deck = "";
             float             colour[3] = {};
@@ -259,12 +263,21 @@ namespace wxl_livingazeroth::sunshafts
             dev->GetViewport(&vp);
             if (!vp.Width || !vp.Height || vp.MaxZ <= vp.MinZ) { screen->Release(); g_stats.inactive = "unexpected viewport"; return; }
 
-            // Where the sun is, and the two parts: the screen-space shafts (fading as it leaves the screen) and the
-            // in-scatter under the deck (with the sun anywhere above the horizon).
+            // Where they radiate from, and the two parts. The screen-space shafts radiate from the disc the player
+            // sees -- the sky's sun, or the moon when the moon's part leads -- and fade as it leaves the screen or
+            // sinks below the horizon; the light's direction (the client sets it lower and apart: env/SkyPath) would
+            // put their centre half a screen off the sun. The in-scatter under the deck is a march through the air
+            // lit along the light's direction, as the scene is shaded (its shadows fall with the world's), with the
+            // light anywhere above the horizon.
             const climate::Sun& sunNow = climate::SunNow();
-            g_stats.sun = shafts::ProjectSun(view, proj, sunNow.dir, kScreenMargin);
+            g_stats.moonLeads = g_stats.model.moon > g_stats.model.sun;
+            const float* disc = g_stats.moonLeads ? sunNow.moon : sunNow.sky;
+            g_stats.skySun = shafts::ProjectSun(view, proj, sunNow.sky, kScreenMargin);
+            g_stats.light = shafts::ProjectSun(view, proj, sunNow.dir, kScreenMargin);
+            g_stats.sun = g_stats.moonLeads ? shafts::ProjectSun(view, proj, disc, kScreenMargin) : g_stats.skySun;
+            g_stats.horizon = shafts::HorizonFade(disc[2]);
             const float total = g_stats.model.total * g_settings.strength;
-            const float screenPart = total * g_stats.sun.fade;
+            const float screenPart = total * g_stats.sun.fade * g_stats.horizon;
             const groundfog::DeckFrame& deck = groundfog::DeckThisFrame();
             const bool deckOn = g_settings.throughDeck && deck.drawn && deck.density > 0.0f;
             float volume = 0.0f;
@@ -279,7 +292,10 @@ namespace wxl_livingazeroth::sunshafts
             if (screenPart < 0.003f && volume < 0.003f)
             {
                 screen->Release();
-                g_stats.inactive = !g_stats.sun.inFront ? "the sun is behind you" : "the sun is off the screen";
+                const bool moon = g_stats.moonLeads;
+                g_stats.inactive = g_stats.horizon < 0.01f ? (moon ? "the moon is below the horizon" : "the sun is below the horizon")
+                                 : !g_stats.sun.inFront ? (moon ? "the moon is behind you" : "the sun is behind you")
+                                                        : (moon ? "the moon is off the screen" : "the sun is off the screen");
                 g_stats.ms = grassperf::Now() - t0;
                 return;
             }
@@ -384,11 +400,12 @@ namespace wxl_livingazeroth::sunshafts
                     ok = Target(dev, to);
                     if (!ok) break;
                     dev->SetViewport(&tv);
-                    const float c[8] = {
+                    const float c[12] = {
                         su, sv, p == 0 ? reach : 2.5f * reach / n, p == 0 ? static_cast<float>(n) : 8.0f,
                         p == 0 ? kDecay : 1.0f, p == 0 ? 1.0f : 0.0f, 1.0f / tw, 1.0f / th,
+                        p == 0 ? kGapBoost : 0.0f, 0.0f, 0.0f, 0.0f,
                     };
-                    dev->SetPixelShaderConstantF(0, c, 2);
+                    dev->SetPixelShaderConstantF(0, c, 3);
                     dev->SetTexture(0, from);
                     Quad(dev, 0.0f, 0.0f, static_cast<float>(tw), static_cast<float>(th));
                     dev->SetTexture(0, nullptr);
@@ -489,12 +506,37 @@ namespace wxl_livingazeroth::sunshafts
         std::snprintf(line, sizeof(line), "strength %.2f = (sun %.2f [low sun %.2f] + moon %.2f) x air %.2f (in the air %.2f) x weather %.2f x outdoors %.2f",
                       m.total, m.sun, m.golden, m.moon, m.airFactor, m.air, m.weather, m.indoor);
         api->UiText(line);
-        const shafts::SunScreen& sun = g_stats.sun;
-        std::snprintf(line, sizeof(line), "the sun on the screen: %s at %.2f, %.2f, fade %.2f; screen-space part %.2f, under the deck %.2f",
-                      sun.inFront ? "in front" : "behind", sun.u, sun.v, sun.fade, g_stats.screen, g_stats.volume);
+        // Both directions: where the sky draws the sun (and the moon), and where the light comes from.
+        const climate::Sun& now = climate::SunNow();
+        auto bearing = [](const float d[3]) { // compass degrees (+x north, +y west)
+            const float b = std::atan2(-d[1], d[0]) * 57.29578f;
+            return b < 0.0f ? b + 360.0f : b;
+        };
+        auto up = [](const float d[3]) { return std::asin(std::clamp(d[2], -1.0f, 1.0f)) * 57.29578f; };
+        auto at = [](char* out, size_t n, const shafts::SunScreen& s) {
+            if (s.inFront) std::snprintf(out, n, "(%.2f, %.2f)", s.u, s.v);
+            else std::snprintf(out, n, "behind you");
+        };
+        char skyAt[32], lightAt[32];
+        at(skyAt, sizeof(skyAt), g_stats.skySun);
+        at(lightAt, sizeof(lightAt), g_stats.light);
+        std::snprintf(line, sizeof(line), "visible sun at %s, %.0f deg up, bearing %.0f; moon %.0f deg up (from %s)",
+                      skyAt, up(now.sky), bearing(now.sky), up(now.moon), now.skyFrom);
         api->UiText(line);
-        std::snprintf(line, sizeof(line), "the cloud deck: %s; light colour %.2f %.2f %.2f (the light's direction: %s)", g_stats.deck,
-                      g_stats.colour[0], g_stats.colour[1], g_stats.colour[2], climate::SunNow().fromClient ? "the client's" : "from the clock");
+        std::snprintf(line, sizeof(line), "light from bearing %.0f, %.0f deg up, at %s on the screen (%s): shades the world, the glass, the deck's in-scatter",
+                      bearing(now.dir), up(now.dir), lightAt, now.fromClient ? "the client's" : "the client's rule at the hour");
+        api->UiText(line);
+        const shafts::SunScreen& sun = g_stats.sun;
+        char discAt[32];
+        at(discAt, sizeof(discAt), sun);
+        const char* centre = now.skyRead ? (g_stats.moonLeads ? "the visible moon" : "the visible sun")
+                           : climate::TimeOverride() >= 0.0f ? (g_stats.moonLeads ? "the moon at the override's hour" : "the sun at the override's hour")
+                                                             : "the light's direction (standing in for the sky's)";
+        std::snprintf(line, sizeof(line), "the centre: %s at %s, fade %.2f x horizon %.2f; screen-space part %.2f, under the deck %.2f",
+                      centre, discAt, sun.fade, g_stats.horizon, g_stats.screen, g_stats.volume);
+        api->UiText(line);
+        std::snprintf(line, sizeof(line), "the cloud deck: %s; light colour %.2f %.2f %.2f", g_stats.deck,
+                      g_stats.colour[0], g_stats.colour[1], g_stats.colour[2]);
         api->UiText(line);
     }
 }

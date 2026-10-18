@@ -4,12 +4,15 @@
 // A post pass at the weather render's entry, right after the ground fog (so name text, the UI, rain and snow, drawn
 // later, never take part): a source at a quarter of the resolution -- the sunlit air each pixel shows toward the sun,
 // from the scene depth (the sky full, a near trunk nothing), x what the cloud deck lets through there -- blurred
-// radially toward the sun's place on the screen and added over the frame in the light's colour. Under the cloud deck
-// (GroundFog, AreaClimate CloudBase) the light scattered in along the view ray is added too, each step lit by the
-// deck's own density toward the sun: shafts below its gaps, with the sun off the screen as well.
+// radially toward the place on the screen of the sun the player sees in the sky (or the moon; climate::SunNow().sky,
+// .moon: env/SkyPath), a little brighter where branches break the line into gaps, and added over the frame in the
+// light's colour. Under the cloud deck (GroundFog, AreaClimate CloudBase) the light scattered in along the view ray is
+// added too, each step lit by the deck's own density toward the light (climate::SunNow().dir, as the scene is
+// shaded): shafts below its gaps, with the sun off the screen as well.
 //
 // How strong: by what's in the air (the place's fogginess and the ground fog around the player), the time of day (the
-// low sun most), the weather (none in heavy rain or a storm) and indoors (none); fading as the sun leaves the screen.
+// low sun most), the weather (none in heavy rain or a storm) and indoors (none); fading as the sun leaves the screen
+// or sets.
 #pragma once
 
 #include "wxl/PluginApi.h"

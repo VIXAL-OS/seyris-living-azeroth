@@ -81,11 +81,24 @@ namespace wxl_livingazeroth::climate
     float WaterTemperature(const Row& row);
     float     TemperatureAt(uint32_t areaId, int mapId);
 
-    /// The sun: the direction toward it (world space, z up) and how much it shines (0 at night .. 1
-    /// by day, from the time of day). The direction is the client's active celestial light (the
-    /// day-night block the sky and model lighting use); without it, a sun computed from the time of
-    /// day (east at 06:00, south at noon).
-    struct Sun { float dir[3] = { 0.0f, 0.0f, 1.0f }; float daylight = 0.0f; bool fromClient = false; };
+    /// The sun: the direction toward its light (world space, z up) and how much it shines (0 at night
+    /// .. 1 by day, from the time of day). The direction is the client's day-night light (what the
+    /// world and its models are shaded with); without it (or with the time override) the client's
+    /// own rule for it at the time of day (env/SkyPath: a fixed north-west bearing, 20..37 deg up).
+    /// It is not where the sky draws the sun: that is `sky` (and the moon `moon`), the sprites the
+    /// client draws (env/SkyPath), read from the client each frame once its code checks out; with
+    /// the time override from the clock by the client's rule; else (`skyRead` false and no
+    /// override) the light's direction, with `skyFrom` saying why.
+    struct Sun
+    {
+        float dir[3] = { 0.0f, 0.0f, 1.0f };
+        float daylight = 0.0f;
+        bool  fromClient = false;
+        float sky[3] = { 0.0f, 0.0f, 1.0f };   // toward the sun's disc in the sky
+        float moon[3] = { 0.0f, 0.0f, 1.0f };  // toward the moon's disc
+        bool  skyRead = false;                  // read from the client this frame
+        const char* skyFrom = "not read yet";   // where sky and moon came from (the panels)
+    };
     const Sun& SunNow();
 
     /// degC the sun adds on ground with this (unit, world) normal, open to the sky by `open` (0..1):

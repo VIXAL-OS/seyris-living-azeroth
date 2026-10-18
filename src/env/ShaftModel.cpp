@@ -49,7 +49,7 @@ namespace wxl_livingazeroth::shafts
         // Above the horizon (the client's light never goes below it: env/Climate turns it up; this is for a sun on it).
         const float up = Smooth(0.0f, 0.06f, in.sunHeight);
         const float night = Clamp01(in.night);
-        s.sun = (1.0f - night) * (0.5f + 0.5f * s.golden) * up;
+        s.sun = (1.0f - night) * (kMidday + (1.0f - kMidday) * s.golden) * up;
         s.moon = 0.3f * Clamp01(in.moon) * night * up;
         s.weather = (1.0f - Smooth(0.15f, 0.6f, in.precipitation)) * (1.0f - Smooth(0.2f, 0.7f, in.storminess));
         s.indoor = 1.0f - Clamp01(in.interior);
@@ -59,6 +59,11 @@ namespace wxl_livingazeroth::shafts
         else if (s.sun + s.moon < 0.01f) s.why = night > 0.5f ? (in.moon > 0.0f ? "night (and the light is below the horizon)" : "night (Moon is off)") : "the sun is on the horizon";
         else if (s.total < 0.003f) s.why = "too faint here and now";
         return s;
+    }
+
+    float HorizonFade(float discZ)
+    {
+        return Smooth(-0.02f, 0.04f, discZ);
     }
 
     float ScreenFade(float u, float v, float margin)
