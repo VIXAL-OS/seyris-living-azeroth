@@ -236,6 +236,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 if (e[0] * w->facing[0] + e[1] * w->facing[1] + e[2] * w->facing[2] <= 0.05f * dist) continue; // seen from behind or edge-on
                 const float fade = dist <= fadeFrom ? 1.0f : std::max(0.0f, 1.0f - (dist - fadeFrom) / (s.glowRange - fadeFrom));
                 if (fade <= 0.0f) continue;
+                // The share of its glass whose room is lit (the rooms go dark as the night goes on).
+                const float lit = windows::LitShare(*w);
+                if (lit <= 0.002f) continue;
                 float corner[4][3];
                 windows::GlassCorners(*w, kMargin, corner);
                 Vtx v[4];
@@ -251,7 +254,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                     const float nx = clip[0] / clip[3], ny = clip[1] / clip[3];
                     const float px = vp.X + (nx * 0.5f + 0.5f) * vp.Width, py = vp.Y + (0.5f - ny * 0.5f) * vp.Height;
                     x0 = std::min(x0, px); x1 = std::max(x1, px); y0 = std::min(y0, py); y1 = std::max(y1, py);
-                    v[c] = { px * 0.5f - 0.5f, py * 0.5f - 0.5f, 0.0f, 1.0f / clip[3], clip[3], fade * std::max(0.5f, std::min(1.5f, w->strength)) };
+                    v[c] = { px * 0.5f - 0.5f, py * 0.5f - 0.5f, 0.0f, 1.0f / clip[3], clip[3], fade * lit * std::max(0.5f, std::min(1.5f, w->strength)) };
                 }
                 if (!ok) continue; // (a window past the screen's edge still glows onto it: the rasterizer clips its quad)
                 quads.push_back(v[0]); quads.push_back(v[1]); quads.push_back(v[2]);

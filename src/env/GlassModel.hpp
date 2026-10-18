@@ -13,7 +13,8 @@
 //  - The rooms behind the glass differ by building (RoomStyles.cdbc, GlassBuildings.cdbc): tint, brightness, a few
 //    dark; per window a layout (shelves, curtains half drawn, a dividing wall with a doorway, plain) weighted by the
 //    building's class and its place; at night lamp-lit behind the client's own lit windows, more of them dark as the
-//    night goes on.
+//    night goes on (each fading over 1.5 s), the window lights in front of them with them (features/Windows works out
+//    the same rooms: RoomCell, LitHash, the dark band, the rooms' clock, below).
 #pragma once
 
 #include <cstddef>
@@ -168,6 +169,7 @@ namespace wxl_livingazeroth::glass
         uint32_t map = 0, uniqueId = 0, group = kWholePlacement, style = 0, seed = 0, flags = 0, area = 0;
         float    pos[3] = {};          // the placement's origin (its WMO's 0, 0, 0 in the world)
         uint32_t path = 0;             // PathHash of its WMO's path (0: any)
+        uint32_t id = 0;               // its GlassBuildings row ID (WindowRooms.cdbc names it)
     };
     /// FNV-1a of a path, lower case with backslashes (so "World/wmo/X.wmo" and "world\wmo\x.wmo" are the same).
     uint32_t PathHash(const char* path);
@@ -182,11 +184,14 @@ namespace wxl_livingazeroth::glass
         void Build(std::vector<Building> rows);
         /// The building drawn by an instance at `pos` (its origin) of the WMO with `path` (0: unknown), group `group`.
         const Building* Find(uint32_t map, const float pos[3], uint32_t path, uint32_t group) const;
+        /// The row with this GlassBuildings ID (null: none).
+        const Building* ById(uint32_t id) const;
         size_t Placements() const { return m_placements; }
         size_t Size() const { return m_rows.size(); }
 
     private:
         std::vector<Building> m_rows;
+        std::unordered_map<uint32_t, uint32_t> m_byId;
         std::unordered_map<uint64_t, std::vector<uint32_t>> m_grid;   // (map, 8-yd cell) -> placement rows
         std::unordered_map<uint64_t, uint32_t> m_groups;              // (placement row, group) -> row
         std::unordered_map<uint64_t, uint32_t> m_defaults;            // (map, path) -> row; (any map, path) too
@@ -228,7 +233,102 @@ namespace wxl_livingazeroth::glass
         /// The lamp-lit room's mean light (cell light x face x falloff over many rooms and views), measured with
         /// RoomOutside: the lamp's colour is divided by it so a lit room is about as bright as the client's window.
         constexpr float kNightMean = 0.32f;
+        /// Lit or dark: an exact hash (LitHash) of the cell and the seed, mod 289 (every step a whole number below
+        /// 2^22, so any GPU, WARP and the CPU give the same bits), against the dark band (DarkBand).
+        constexpr float kLitMod = 289.0f, kLitInv = 1.0f / 289.0f, kLitPoly = 34.0f;
+        /// The narrowest band a moving threshold makes (1 / this: the steepest slope).
+        constexpr float kBandMin = 1e-6f;
+        /// The cells are about the building's origin within kAnchor yd (an anchor box centred on it); farther (a city's
+        /// one big WMO) about the nearest anchor on a kAnchor-yd grid from it, its whole-number index (k . the keys)
+        /// added to the cell, so the face normal's noise (from the screen gradients, ~1e-4) moves a cell's edge by at
+        /// most ~8 mm anywhere.
+        constexpr float kAnchor = 64.0f;
+        constexpr float kAnchorKeyX[3] = { 211.0f, 97.0f, 53.0f }, kAnchorKeyY[3] = { 59.0f, 173.0f, 31.0f };
     }
+
+    // --- lit or dark, shared by the shader and the window lights (features/Windows) ---------------------------------
+    /// The room's cell as the shader finds it: the point P (world) relative to the building's origin (and its anchor,
+    /// room::kAnchor), in the face's own frame from its normal N facing the eye (along (-N.y, N.x, 0), x for a
+    /// skylight; up N x along), over the cell's width and height (1 / those: inv[2]); floor of each, plus the anchor's
+    /// offset. Camera-independent: a city's -8800 yd coordinates don't reach it.
+    void RoomCell(const float P[3], const float origin[3], const float N[3], const float inv[2], float cell[2]);
+
+    /// The room's lit hash (0..1, never 0 or 1: (k + 0.5) / 289) for the cell (whole numbers, about the building's
+    /// origin) and the seed (two whole numbers 0..1023), as the shader works it, op for op.
+    float LitHash(float cellX, float cellY, float seedX, float seedY);
+    /// The same with whole numbers (the reference: k in 0..288).
+    uint32_t LitHashIndex(int64_t x, int64_t y);
+
+    /// Which rooms are lit: a room is dark when its hash is at or below `lo`, lit above `hi`, and in between (the
+    /// rooms the threshold crossed in the last kFadeSeconds) part lit, saturate((hash - lo) x slope + base). At rest
+    /// lo = hi: a plain threshold.
+    struct DarkBand { float lo = 0.0f, hi = 0.0f, base = 0.0f, slope = 0.0f; };
+    /// The clock running: the share of rooms dark now and kFadeSeconds ago. A room the threshold crossed in between
+    /// fades by when it did (base 0, slope 1 / (hi - lo)): going dark at night, lit again at dawn, each over the
+    /// same real seconds.
+    DarkBand Band(float shareNow, float sharePast);
+    /// After a jump (the time override set, the night test): every room between the share it jumped from and the
+    /// one it jumped to fades together, `progress` 0..1 of the way (base 1 - progress going dark, progress lit again).
+    DarkBand Crossfade(float shareFrom, float shareTo, float progress);
+    /// How lit a room is in a band, as the shader works it (add, mul, add_sat, cmp, add, cmp).
+    float RoomLit(float hash, const DarkBand& band);
+
+    /// The settings the dark share depends on (features/Glass's Settings).
+    struct RoomToggles
+    {
+        bool  variety = true, lightsOut = true;
+        float varietyStrength = 1.0f, lightsOutStrength = 1.0f;
+    };
+    /// The share of a building's rooms dark (the shader's c203.w, before the band): by day the style's few (x the
+    /// variety's strength), at night by the hour (LightsOutShare, x its strength; with room variety and lights out
+    /// on), blended by the night factor; every room in an empty building (with variety), and at night in a dark place.
+    float DarkShare(const RoomStyle& style, uint32_t buildingFlags, const RoomToggles& t, float night, float hour);
+
+    /// The rooms' clock for lights out: the hour (0..24) and the night factor as the rooms show them. Running (a game
+    /// second a real second; the night factor fading with the client's windows over a game hour) it keeps the last
+    /// kFadeSeconds, so each room the threshold crosses fades over them (Band). A step faster than kJumpRate times that
+    /// (the climate panel's time set or dragged, the night test) is a jump: the rooms cross-fade from the time shown to
+    /// the new one over kFadeSeconds (Crossfade); while the jumps keep coming (a slider dragged) they stay as they were
+    /// until it settles. After kSnapSeconds without a step (a loading screen), or at the first, it snaps (no fade).
+    class RoomClock
+    {
+    public:
+        static constexpr double kFadeSeconds = 1.5;   // a room going dark or lit fades over this
+        static constexpr double kJumpRate = 20.0;     // faster than this many game seconds a real second is a jump
+        static constexpr double kSnapSeconds = 2.0;
+        /// One step at `seconds` (real, steady) to the hour and night factor of the moment.
+        void Advance(double seconds, float hour, float night);
+        void Reset() { m_count = 0; m_fading = false; }
+        float Hour() const { return m_hour; }      // now (cross-fading: where it's going)
+        float Night() const { return m_night; }
+        float HourPast() const;                    // kFadeSeconds ago (running)
+        float NightPast() const;
+        bool  Fading() const { return m_fading; }  // cross-fading after a jump
+        float Progress() const { return m_progress; }
+        float FromHour() const { return m_fromHour; }
+        float FromNight() const { return m_fromNight; }
+
+    private:
+        struct Sample { double t, hour; float night; };   // hour unwrapped (keeps counting past 24)
+        void Past(double& hour, float& night) const;
+        void Restart(double seconds);
+        static constexpr int kSamples = 512;
+        Sample m_ring[kSamples] = {};
+        int m_first = 0, m_count = 0;
+        float m_hour = 12.0f, m_night = 0.0f, m_fromHour = 12.0f, m_fromNight = 0.0f, m_progress = 1.0f;
+        bool m_fading = false;
+    };
+
+    /// A building's dark band now (its style, its flags): Band of the share now and kFadeSeconds ago, or Crossfade
+    /// from the share before a jump.
+    DarkBand BandOf(const RoomClock& clock, const RoomStyle& style, uint32_t buildingFlags, const RoomToggles& t);
+
+    /// One room cell of a window light (WindowRooms.cdbc): its lit hash, its share of the light's glass, and its
+    /// building's dark band now.
+    struct LightCell { float hash = 0.5f, share = 0.0f; DarkBand band; };
+    /// How much of a window light's glass has a lit room: the glass with no room (stained, frosted, not in
+    /// GlassMaterials: 1 - the cells' shares) always, plus each cell's share x RoomLit. 0..1.
+    float LitShare(const LightCell* cells, size_t count);
 
     /// Dave Hoskins' hash42 as the shader works it: four values in 0..1 from two.
     void Hash42(float x, float y, float out[4]);
@@ -243,18 +343,20 @@ namespace wxl_livingazeroth::glass
     /// shifts the evening rise later (an inn) or earlier (a shop), `cap` caps it (an inn stays mostly lit).
     float LightsOutShare(float hour, float lateHours, float cap);
 
-    /// The room's constants for one glass batch (c193.z, c198, c199, c202..c205, c212: GlassShader.hpp) and the camera
-    /// (c180), as RoomOutside reads them.
+    /// The room's constants for one glass batch (c193.z, c198, c199, c202..c205, c212, c213: GlassShader.hpp) and the
+    /// camera (c180), as RoomOutside reads them.
     struct RoomConstants
     {
         float share = 0.65f;                          // c193.z
         float c198[4] = { 1 / 3.5f, 1 / 3.2f, 0.25f, 0.32f };
         float c199[4] = { 0.85f, 0.72f, 0.55f, 1.0f };
         float c202[4] = { 0.85f, 0.72f, 0.55f, 0.0f };
-        float c203[4] = { 0, 0, 0, 0 };
+        float c203[4] = { 0, 0, 0, 0 };               // .w: the dark band's lo
         float c204[4] = { 0, 0, 0, 1 };
         float c205[4] = { 0.55f, 0.2f, 0.16f, 0 };
-        float c212[4] = { 0, 0, 0, 0 };
+        float c212[4] = { 0, 0, 0, 0 };               // seed xy, 1 / the block, the dark band's slope
+        float c213[4] = { 0, 0, 0, 0 };               // the building's origin (world), the dark band's base
+        float c200w = 0;                              // the dark band's hi
         float cam[3] = { 0, 0, 0 };
         float footprint2 = 0.0f;                      // the pixel's footprint on the glass, squared (yd^2; the shader's)
     };
@@ -263,7 +365,10 @@ namespace wxl_livingazeroth::glass
     struct RoomSample
     {
         int layout = kLayoutPlain;
-        bool lit = true, door = false, wall = false;  // through the doorway; the dividing wall
+        bool lit = true, door = false, wall = false;  // lit: more than half (litValue); through the doorway; the dividing wall
+        float litValue = 1;                           // how lit, 0..1 (RoomLit: part lit while it fades)
+        float litHash = 0;                            // LitHash of its cell
+        float cell[2] = {};                           // its cell about the building's origin
         float cloth = 0, fold = 0, shelf = 1, falloff = 0, fade = 1, shade = 0, building[2] = {};
         float hit[3] = {};                            // where the ray meets the room (cell units)
         float hide = 0;                               // the share of the client's glow a dark room hides (c205.w or 0)

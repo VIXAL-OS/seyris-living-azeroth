@@ -4,15 +4,18 @@
 #include "../env/Climate.hpp"
 #include "../env/Lights.hpp"
 #include "../wxl_seyris/CdbcApi.hpp"
+#include "Glass.hpp"
 
 #include "wxl/PluginApi.h"
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 
 namespace wxl_livingazeroth::windows
 {
@@ -33,11 +36,35 @@ namespace wxl_livingazeroth::windows
         };
         constexpr WXL_SeyrisCdbcDefinition kDef = { "WindowLights", kFile, kFields, 17 };
 
+        // The rooms behind each light's glass (tools/gen_window_lights.py WINDOW_ROOMS, docs/cdbc-tables.md).
+        constexpr const char* kRoomsFile = "DBFilesClient\\WindowRooms.cdbc";
+        constexpr WXL_SeyrisCdbcField kRoomFields[] = {
+            {"ID", 0, WXL_CDBC_FIELD_VALUE},    {"WindowID", 1, WXL_CDBC_FIELD_VALUE}, {"BuildingID", 2, WXL_CDBC_FIELD_VALUE},
+            {"CellX", 3, WXL_CDBC_FIELD_VALUE}, {"CellY", 4, WXL_CDBC_FIELD_VALUE},    {"Share", 5, WXL_CDBC_FIELD_VALUE},
+            {"Seed", 6, WXL_CDBC_FIELD_VALUE},
+        };
+        constexpr WXL_SeyrisCdbcDefinition kRoomDef = { "WindowRooms", kRoomsFile, kRoomFields, 7 };
+
         Settings    g_settings;
         Stats       g_stats;
         Index       g_index;
-        std::string g_status = "not loaded yet";
+        std::string g_status = "not loaded yet", g_roomStatus = "WindowRooms.cdbc: not loaded yet";
         uint32_t    g_generation = 1;
+
+        // A light's room cell as the table has it, and resolved against features/Glass's tables (its style, flags
+        // and lit hash: again whenever those reload).
+        struct RoomRef { uint32_t building = 0; float cell[2] = {}; float share = 0.0f; uint32_t seed = 0; };
+        struct RoomCell { const glass::RoomStyle* style = nullptr; uint32_t flags = 0; float hash = 0.5f, share = 0.0f; };
+        std::vector<RoomRef>  g_refs;
+        std::vector<RoomCell> g_cells;
+        uint32_t g_resolvedFor = 0;        // glass::Generation() g_cells were resolved for (0: never)
+        unsigned g_unresolved = 0;         // cells whose building isn't in GlassBuildings: the default house
+        // This frame's shares (each window once), and the counters behind Stats' room fields.
+        std::vector<float>    g_share;
+        std::vector<uint32_t> g_shareFrame;
+        uint32_t g_frame = 1;
+        unsigned g_roomWindows = 0, g_roomDimmed = 0, g_roomDark = 0;
+        double   g_roomSum = 0.0;
 
         float       g_night = 0.0f;
         const char* g_nightSource = "not read yet";
@@ -80,6 +107,104 @@ namespace wxl_livingazeroth::windows
         }
 
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+
+        // Reads WindowRooms.cdbc into g_refs, each window's run of cells into its roomFirst / roomCount.
+        void LoadRooms(const WXL_SeyrisCdbcApi* cdbc, std::vector<Window>& rows)
+        {
+            g_refs.clear();
+            g_cells.clear();
+            g_resolvedFor = 0;
+            char err[256] = {};
+            void* t = cdbcload::LoadAppendOnly(cdbc, kRoomDef, err, sizeof(err));
+            if (!t)
+            {
+                g_roomStatus = std::string("WindowRooms.cdbc: ") + (err[0] ? err : "not found") + " (the window lights don't follow the rooms)";
+                return;
+            }
+            std::unordered_map<uint32_t, std::vector<RoomRef>> byWindow;
+            unsigned cells = 0;
+            for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
+            {
+                const void* row = cdbc->RowAt(t, i);
+                if (!row) continue;
+                RoomRef r;
+                r.building = cdbc->Value(t, row, "BuildingID", 0);
+                r.cell[0] = static_cast<float>(static_cast<int32_t>(cdbc->Value(t, row, "CellX", 0)));
+                r.cell[1] = static_cast<float>(static_cast<int32_t>(cdbc->Value(t, row, "CellY", 0)));
+                r.share = cdbcload::Float(cdbc, t, row, "Share", 0.0f);
+                r.seed = cdbcload::Has(cdbc, t, "Seed") ? cdbc->Value(t, row, "Seed", 0) : 0;
+                if (!(r.share > 0.0f) || !std::isfinite(r.share)) continue;
+                byWindow[cdbc->Value(t, row, "WindowID", 0)].push_back(r);
+                ++cells;
+            }
+            cdbc->Release(t);
+            unsigned windows = 0;
+            for (Window& w : rows)
+            {
+                auto it = byWindow.find(w.id);
+                if (it == byWindow.end()) continue;
+                w.roomFirst = static_cast<uint32_t>(g_refs.size());
+                w.roomCount = static_cast<uint32_t>(it->second.size());
+                g_refs.insert(g_refs.end(), it->second.begin(), it->second.end());
+                ++windows;
+            }
+            char line[192];
+            std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u room cells behind %u of the windows' glass", cells, windows);
+            g_roomStatus = line;
+        }
+
+        // The cells against features/Glass's tables as they are now: the building's style, flags and seed (one not in
+        // GlassBuildings, or without its style, is the shader's default: the built-in house, its WMO's seed), and the
+        // lit hash of each cell with that seed.
+        void ResolveRooms()
+        {
+            const uint32_t gen = glass::Generation();
+            if (g_resolvedFor == gen && g_cells.size() == g_refs.size()) return;
+            g_resolvedFor = gen;
+            g_cells.resize(g_refs.size());
+            g_unresolved = 0;
+            const glass::BuildingIndex& buildings = glass::Buildings();
+            for (size_t i = 0; i < g_refs.size(); ++i)
+            {
+                const RoomRef& r = g_refs[i];
+                const glass::Building* b = r.building ? buildings.ById(r.building) : nullptr;
+                const glass::RoomStyle* style = b ? glass::StyleById(b->style) : nullptr;
+                RoomCell& c = g_cells[i];
+                uint32_t seed = r.seed;
+                if (style) { c.style = style; c.flags = b->flags; seed = b->seed; }
+                else { c.style = &glass::DefaultStyle(); c.flags = 0; ++g_unresolved; }
+                c.hash = glass::LitHash(r.cell[0], r.cell[1], static_cast<float>(seed & 1023u), static_cast<float>((seed >> 10) & 1023u));
+                c.share = r.share;
+            }
+        }
+    }
+
+    float LitShare(const Window& w)
+    {
+        if (!g_settings.lightsFollowRooms || !w.roomCount || !glass::RoomsHideGlow()) return 1.0f;
+        const std::vector<Window>& all = g_index.All();
+        if (all.empty() || &w < all.data() || &w >= all.data() + all.size()) return 1.0f;
+        const size_t at = static_cast<size_t>(&w - all.data());
+        if (g_share.size() != all.size()) { g_share.assign(all.size(), 1.0f); g_shareFrame.assign(all.size(), 0); }
+        if (g_shareFrame[at] == g_frame) return g_share[at];
+        ResolveRooms();
+        static std::vector<glass::LightCell> cells;
+        cells.clear();
+        for (uint32_t i = w.roomFirst; i < w.roomFirst + w.roomCount && i < g_cells.size(); ++i)
+        {
+            const RoomCell& c = g_cells[i];
+            glass::LightCell lc;
+            lc.hash = c.hash; lc.share = c.share; lc.band = glass::BandNow(*c.style, c.flags);
+            cells.push_back(lc);
+        }
+        const float share = glass::LitShare(cells.data(), cells.size());
+        g_share[at] = share;
+        g_shareFrame[at] = g_frame;
+        ++g_roomWindows;
+        g_roomDimmed += share < 0.999f && share > 0.002f ? 1u : 0u;
+        g_roomDark += share <= 0.002f ? 1u : 0u;
+        g_roomSum += share;
+        return share;
     }
 
     Settings& Config() { return g_settings; }
@@ -94,6 +219,8 @@ namespace wxl_livingazeroth::windows
     {
         std::vector<Window> rows;
         ++g_generation;
+        g_refs.clear(); g_cells.clear(); g_resolvedFor = 0;
+        g_share.clear(); g_shareFrame.clear();
         if (!cdbc || !cdbc->HasFeature("cdbc-load")) { g_status = "wxl-seyris-tools (cdbc) not available"; g_index.Build({}); return; }
         char err[256] = {};
         void* t = cdbcload::LoadAppendOnly(cdbc, kDef, err, sizeof(err));
@@ -133,6 +260,7 @@ namespace wxl_livingazeroth::windows
         std::snprintf(line, sizeof(line), "WindowLights.cdbc: %u lit window(s), %u of them only glow (their light cell was full)",
                       static_cast<unsigned>(rows.size()), glowOnly);
         g_status = line;
+        LoadRooms(cdbc, rows);
         g_index.Build(std::move(rows));
     }
 
@@ -143,6 +271,13 @@ namespace wxl_livingazeroth::windows
 
     void Update()
     {
+        // Last frame's rooms for the panel, then a new frame for LitShare.
+        g_stats.roomWindows = g_roomWindows; g_stats.roomDimmed = g_roomDimmed; g_stats.roomDark = g_roomDark;
+        g_stats.roomMeanLit = g_roomWindows ? static_cast<float>(g_roomSum / g_roomWindows) : 1.0f;
+        g_roomWindows = g_roomDimmed = g_roomDark = 0;
+        g_roomSum = 0.0;
+        if (++g_frame == 0) g_frame = 1;
+
         if (!g_nightGuards) g_nightGuards = Check(kNightGuards, g_nightWhy);
         if (!g_glowGuards) g_glowGuards = Check(kGlowGuards, g_glowWhy);
 
@@ -188,12 +323,29 @@ namespace wxl_livingazeroth::windows
         api->UiSliderFloat("window glow: range from the camera (yd)##wgr", &s.glowRange, 50.0f, 500.0f);
         static const char* const kWith[] = { "full", "half (default)", "off" };
         api->UiCombo("window glow while the client's Full Screen Glow is on##wgc", &s.withClientGlow, kWith, 3);
+        api->UiCheckbox("window lights and glow follow the rooms behind the glass (a dark room lights nothing)##wlfr", &s.lightsFollowRooms);
         int test = s.nightTest >= 0.0f ? 1 : 0;
         if (api->UiCheckbox("test: set the night factor here (instead of the time of day)##wnt", &test)) s.nightTest = test ? 1.0f : -1.0f;
         if (s.nightTest >= 0.0f) api->UiSliderFloat("test: night factor (0 day .. 1 night)##wntv", &s.nightTest, 0.0f, 1.0f);
 
         char line[384];
         api->UiText(g_status.c_str());
+        api->UiText(g_roomStatus.c_str());
+        {
+            const float ch = glass::Clock().Hour();
+            const int hh = static_cast<int>(ch) % 24, mm = static_cast<int>((ch - std::floor(ch)) * 60.0f);
+            if (!s.lightsFollowRooms) std::snprintf(line, sizeof(line), "rooms: the lights don't follow them (switched off): all at full");
+            else if (!glass::RoomsHideGlow())
+                std::snprintf(line, sizeof(line), "rooms: none hide the client's windows now (glass, its rooms or lamp-lit rooms off, or no shader variants): lights at full");
+            else if (!g_stats.roomWindows)
+                std::snprintf(line, sizeof(line), "rooms: no window with rooms behind its glass near (the rooms' clock %02d:%02d)", hh, mm);
+            else
+                std::snprintf(line, sizeof(line), "rooms (the rooms' clock %02d:%02d): %u window(s) near with rooms: %u lit, %u dimmed, %u dark; lit %.0f%% on the whole%s%s",
+                              hh, mm, g_stats.roomWindows, g_stats.roomWindows - g_stats.roomDimmed - g_stats.roomDark, g_stats.roomDimmed,
+                              g_stats.roomDark, 100.0f * g_stats.roomMeanLit, glass::Clock().Fading() ? "; the time jumped: cross-fading" : "",
+                              g_unresolved ? "; some rooms not in GlassBuildings (the default house)" : "");
+            api->UiText(line);
+        }
         std::snprintf(line, sizeof(line), "night factor %.2f, from %s (the client's windows: 1 at 06:00, 0 from 07:00 to 20:30, 1 from 21:30)%s%s",
                       g_night, g_nightSource, g_nightGuards == 2 ? "; guard: " : "", g_nightGuards == 2 ? g_nightWhy : "");
         api->UiText(line);

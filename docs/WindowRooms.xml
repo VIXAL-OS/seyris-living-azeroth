@@ -1,0 +1,9 @@
+  <Table Name="WindowRooms" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="WindowID" Type="int" />
+    <Field Name="BuildingID" Type="int" />
+    <Field Name="CellX" Type="int" />
+    <Field Name="CellY" Type="int" />
+    <Field Name="Share" Type="float" />
+    <Field Name="Seed" Type="int" />
+  </Table>

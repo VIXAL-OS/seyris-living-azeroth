@@ -943,7 +943,9 @@ namespace wxl_livingazeroth::lights
         // The windows near the camera (WindowLights.cdbc, features/Windows), at night: a spot light each, facing out
         // and tilted down (windows::SpotDirection), as its DoodadLightProperties row says (colour, intensity, reach,
         // cone, flicker, baked occlusion), x the row's strength and the panel's, x the night factor if the row is
-        // night only (the shipped ones are). Glow-only rows cast none. Never merged (spots don't).
+        // night only (the shipped ones are), x the share of its glass whose room is lit (windows::LitShare: the rooms
+        // go dark as the night goes on; a dark one lights nothing). Glow-only rows cast none. Never merged (spots
+        // don't). It ranks as if its rooms were lit, so a cell's choice doesn't change while they fade.
         void AddWindowLights(const world::Snapshot& snap, const float eye[3], float night, std::vector<Candidate>& cands)
         {
             windows::Stats& ws = windows::GetStats();
@@ -965,10 +967,12 @@ namespace wxl_livingazeroth::lights
                 }();
                 if (!p) p = &kFallback;
                 const float nightScale = (p->flags & lighttable::kNightOnly) ? night : 1.0f;
-                const float k = p->intensity * w->strength * cfg.lightStrength * nightScale;
+                const float lit = windows::LitShare(*w);
+                if (lit <= kNightOff) continue;   // every room behind it dark
+                const float k = p->intensity * w->strength * cfg.lightStrength * nightScale * lit;
                 if (k <= 0.0f) continue;
                 Candidate c{};
-                c.night = nightScale;
+                c.night = nightScale * lit;
                 std::memcpy(c.pos, w->pos, sizeof(c.pos));
                 c.color[0] = ((p->color >> 16) & 0xFF) / 255.0f * k;
                 c.color[1] = ((p->color >> 8) & 0xFF) / 255.0f * k;

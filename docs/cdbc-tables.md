@@ -369,8 +369,43 @@ day/night"). Each row puts a light where that glass is and says how big the glas
 At run time (the lights panel's **Windows** section, `[LivingAzeroth.Windows]` in config.md) the
 nearest window lights within the range join the light list at night. In a full cell of the lights'
 grid they rank below torches and lanterns (×0.35), and at most `LightsPerCell` of them take a place,
-so the cells already full in Stormwind, Booty Bay and the Undercity keep their lights. After editing,
-press "Reload light tables from disk" in the lights panel.
+so the cells already full in Stormwind, Booty Bay and the Undercity keep their lights. Each light
+and its glow are scaled by the share of its glass whose room is lit (WindowRooms.cdbc, below). After
+editing, press "Reload light tables from disk" in the lights panel.
+
+### WindowRooms.cdbc — `WindowRooms.xml`
+
+Which rooms are behind each window light's glass, so the light and its glow follow the fake rooms'
+night (features/Glass: rooms go dark as the night goes on; `LightsFollowRooms` in config.md).
+Generated with WindowLights.cdbc by `tools/gen_window_lights.py`, from the same panes, and from
+gen_glass.py's GlassMaterials.cdbc (which glass has a room: clear and leaded) and GlassBuildings.cdbc
+(which building, its seed and origin), as installed. One row per room cell a light's glass covers.
+
+The shader's room is a cell of the glass: the pixel's point about its building's origin, in the
+face's own frame (its geometric normal n facing out: along (−n.y, n.x, 0), x for a skylight; up
+n × along), over 3.5 × 3.2 yd. Farther than 32 yd from the origin on an axis (a city's one big WMO),
+the point is about the nearest 64-yd step from the origin (its anchor) and the anchor's index k adds
+k · (211, 97, 53) to the cell's x and k · (59, 173, 31) to its y. Each light's triangles are cut
+exactly by the anchors and the cells. Whether a room is lit is an exact hash of its cell and the
+building's seed (whole numbers mod 289: the same on the GPU and the CPU) against the share of rooms
+dark by the hour (RoomStyles); the runtime works the hash out per cell at load.
+
+| Field | Meaning |
+|---|---|
+| ID | row id (by window, then building and cell) |
+| WindowID | the WindowLights row |
+| BuildingID | the GlassBuildings row (a city's group's row, else the placement's); 0 = none: the built-in house, `Seed` and the cells about the placement's origin |
+| CellX, CellY | the cell (signed; about the building's origin and its anchor, the anchor's offset in) |
+| Share | the share of the light's glass in this cell (0..1). The light's glass with no room (stained, frosted, not glass) is 1 − the light's shares: it always lights |
+| Seed | the shader's seed for an instance GlassBuildings doesn't name: PathHash of the WMO's path (bits 0..9 and 10..19, as GlassBuildings.Seed) |
+
+At run time each light's share lit is its no-room share plus each cell's share × how lit that room
+is now: dark (its hash at or below the building's dark share), lit, or part lit while it fades. A
+room the threshold crosses as the clock runs fades over 1.5 s; after a jump of the time (the climate
+panel's override, the night test) every room it crossed fades together over 1.5 s (a slider being
+dragged holds them until it stops). The shader's rooms fade the same way. Without the file, or with
+`LightsFollowRooms` 0, the lights stay as WindowLights has them. If GlassBuildings changes, rerun
+gen_window_lights.py (the building IDs and origins come from it).
 
 ## Window glass: four tables
 
@@ -439,8 +474,9 @@ or district) sets the layouts' weights, the brightness, the rooms dark by day an
 stay on; the palette (the culture by the path: vrykul, blood elf, Dalaran, goblin, Forsaken, orc...,
 else the place: Duskwood, the Scarlet Crusade's towns, Forsaken zones, goblin ports, Northrend's and
 Outland's humans) the colours, x the layouts' weights. Per window the shader hashes the window's cell
-with the building's seed to pick the layout, dark or lit, its light, the lamp's place, the curtains'
-gap and the things on the shelves.
+(about the building's origin, in the face's own frame: WindowRooms.cdbc says how) with the building's
+seed to pick the layout, its light, the lamp's place, the curtains' gap and the things on the shelves;
+and, with an exact hash the window lights share, whether it's dark or lit.
 
 | Field | Meaning |
 |---|---|
@@ -463,7 +499,9 @@ behind the windows the client lights at night (their material is SIDN, self-lit)
 unless it's one of the dark ones. 8% are dark through the evening; from 21:00 the share rises to half
 at midnight, 72% at 02:00 and 78% at 04:30; early risers bring it back to 60% by 06:00, when the
 day takes over. LateHours shifts the evening's rise, NightCap caps it. Windows the client doesn't
-light have dark rooms at night. In a dark place every room is dark at night.
+light have dark rooms at night. In a dark place every room is dark at night. A room going dark (or lit
+again) fades over 1.5 s, and the window lights in front of it with it (WindowRooms.cdbc). With
+RoomVariety off every room is lit all night.
 
 | Hour | house | farm | inn | shop | temple | keep | tower | city |
 |---|---|---|---|---|---|---|---|---|
@@ -487,7 +525,7 @@ WMO is the same, then its group's row if it has one, else the WMO's default, els
 | ID | row id (placements by map and unique ID, their city groups after them, the defaults last) |
 | MapID | Map.dbc ID |
 | UniqueID | the placement's unique ID (MODF); 0 for a WMO's default |
-| PosX/Y/Z | the placement's origin (its WMO's 0, 0, 0) in world coordinates |
+| PosX/Y/Z | the placement's origin (its WMO's 0, 0, 0) in world coordinates; its windows' room cells are about it (a WMO's default: the instance's own origin) |
 | Group | the WMO group's index for a city's group, else 4294967295 (the whole placement) |
 | Style | its RoomStyles row |
 | Seed | its hash seed (a CRC of the map, the unique ID and the group): two numbers 0..1023 (bits 0..9, 10..19) offset the windows' cells |

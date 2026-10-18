@@ -208,8 +208,10 @@ namespace wxl_livingazeroth::glass
     void BuildingIndex::Build(std::vector<Building> rows)
     {
         m_rows = std::move(rows);
-        m_grid.clear(); m_groups.clear(); m_defaults.clear();
+        m_grid.clear(); m_groups.clear(); m_defaults.clear(); m_byId.clear();
         m_placements = 0;
+        for (uint32_t i = 0; i < m_rows.size(); ++i)
+            if (m_rows[i].id) m_byId.emplace(m_rows[i].id, i);
         // Placement rows first (the groups name theirs by unique ID and position), then a city's groups.
         std::unordered_map<uint64_t, uint32_t> byUid;   // (map, unique ID) -> its placement row
         for (uint32_t i = 0; i < m_rows.size(); ++i)
@@ -272,6 +274,12 @@ namespace wxl_livingazeroth::glass
         return it == m_defaults.end() ? nullptr : &m_rows[it->second];
     }
 
+    const Building* BuildingIndex::ById(uint32_t id) const
+    {
+        auto it = m_byId.find(id);
+        return it == m_byId.end() ? nullptr : &m_rows[it->second];
+    }
+
     namespace
     {
         float Frac(float v) { return v - std::floor(v); }
@@ -331,6 +339,225 @@ namespace wxl_livingazeroth::glass
         return std::min(share, Clamp01(cap));
     }
 
+    // --- lit or dark, shared by the shader and the window lights --------------------------------------------------
+    namespace
+    {
+        // The point about the building's origin, then about its anchor (the nearest kAnchor-yd step from the origin:
+        // within kAnchor / 2 on each axis), and the anchor's offset to the cell (whole numbers), as the shader.
+        void Anchored(const float P[3], const float origin[3], float R[3], float offset[2])
+        {
+            using namespace room;
+            float k[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                R[i] = P[i] - origin[i];
+                const float q = R[i] * (1.0f / kAnchor) + 0.5f;
+                k[i] = q - (q - std::floor(q));
+                R[i] = k[i] * -kAnchor + R[i];
+            }
+            offset[0] = k[0] * kAnchorKeyX[0] + k[1] * kAnchorKeyX[1] + k[2] * kAnchorKeyX[2];
+            offset[1] = k[0] * kAnchorKeyY[0] + k[1] * kAnchorKeyY[1] + k[2] * kAnchorKeyY[2];
+        }
+    }
+
+    void RoomCell(const float P[3], const float origin[3], const float N[3], const float inv[2], float cell[2])
+    {
+        // As the shader: along (-N.y, N.x, 0) (x for a skylight), normalised; up N x along; the point about the
+        // origin's anchor; the cell, plus the anchor's offset.
+        float a[3] = { -N[1], N[0], 0.0f };
+        if (a[0] * a[0] + a[1] * a[1] - 0.0001f < 0.0f) { a[0] = 1; a[1] = 0; a[2] = 0; }
+        const float al = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        for (float& v : a) v /= al;
+        const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
+        float R[3], offset[2];
+        Anchored(P, origin, R, offset);
+        const float pos[2] = { Dot(R, a) * inv[0], Dot(R, u) * inv[1] };
+        for (int k = 0; k < 2; ++k) cell[k] = pos[k] - (pos[k] - std::floor(pos[k])) + offset[k];
+    }
+
+    namespace
+    {
+        // Mod 289 of a whole number below 2^22: floor((v + 0.5) / 289) is never within the product's rounding of a
+        // whole number (it's at least 0.5 / 289 away), so every step is exact.
+        float LitMod(float v)
+        {
+            const float q = (v + 0.5f) * room::kLitInv;
+            const float f = q - std::floor(q);
+            return (q - f) * -room::kLitMod + v;
+        }
+        // The permutation (34 v + 1) v mod 289 of 0..288 (webgl-noise's), as the shader: 34 v, then x v + v.
+        float LitPermute(float v)
+        {
+            const float t = v * room::kLitPoly;
+            return LitMod(t * v + v);
+        }
+    }
+
+    float LitHash(float cellX, float cellY, float seedX, float seedY)
+    {
+        const float x = LitMod(cellX + seedX), y = LitMod(cellY + seedY);
+        const float s = LitMod(LitPermute(x) + y);
+        return (LitPermute(s) + 0.5f) * room::kLitInv;
+    }
+
+    uint32_t LitHashIndex(int64_t x, int64_t y)
+    {
+        auto mod = [](int64_t v) { const int64_t r = v % 289; return r < 0 ? r + 289 : r; };
+        auto permute = [&](int64_t v) { return mod((34 * v + 1) * v); };
+        return static_cast<uint32_t>(permute(mod(permute(mod(x)) + mod(y))));
+    }
+
+    float RoomLit(float hash, const DarkBand& b)
+    {
+        // As the shader: add r20.w; mul; add_sat; cmp (at or below lo: dark); add; cmp (above hi: lit).
+        const float d = hash - b.lo;
+        float v = d * b.slope;
+        v = Clamp01(v + b.base);
+        if (-d >= 0.0f) v = 0.0f;
+        const float e = hash - b.hi;
+        return -e >= 0.0f ? v : 1.0f;
+    }
+
+    DarkBand Band(float shareNow, float sharePast)
+    {
+        DarkBand b;
+        if (!std::isfinite(shareNow)) shareNow = 0.0f;
+        if (!std::isfinite(sharePast)) sharePast = shareNow;
+        b.lo = std::min(shareNow, sharePast);
+        b.hi = std::max(shareNow, sharePast);
+        b.base = 0.0f;
+        b.slope = 1.0f / std::max(b.hi - b.lo, room::kBandMin);
+        return b;
+    }
+
+    DarkBand Crossfade(float shareFrom, float shareTo, float progress)
+    {
+        DarkBand b;
+        if (!std::isfinite(shareTo)) shareTo = 0.0f;
+        if (!std::isfinite(shareFrom)) shareFrom = shareTo;
+        const float p = Clamp01(progress);
+        b.lo = std::min(shareFrom, shareTo);
+        b.hi = std::max(shareFrom, shareTo);
+        b.base = shareTo > shareFrom ? 1.0f - p : p;   // going dark: lit fading out; lit again: fading in
+        b.slope = 0.0f;
+        return b;
+    }
+
+    float DarkShare(const RoomStyle& style, uint32_t flags, const RoomToggles& t, float night, float hour)
+    {
+        const float v = t.variety ? std::max(0.0f, t.varietyStrength) : 0.0f;
+        const bool empty = t.variety && (flags & kBuildingEmpty);
+        const bool darkPlace = (flags & kBuildingDarkPlace) != 0;
+        // By day the style's few; at night by the hour (inns late, shops early) -- the night's schedule is the rooms'
+        // variety too: with it off every room is the same lit one -- every room in an empty building, and at night in
+        // a dark place.
+        const float dayDark = empty ? 1.0f : (t.variety ? Clamp01(style.darkShare * v) : 0.0f);
+        float nightDark = t.variety && t.lightsOut
+                              ? Clamp01(LightsOutShare(hour, style.lateHours, style.nightCap) * std::max(0.0f, t.lightsOutStrength))
+                              : 0.0f;
+        if (darkPlace || empty) nightDark = 1.0f;
+        return dayDark + (nightDark - dayDark) * Clamp01(night);
+    }
+
+    void RoomClock::Restart(double seconds)
+    {
+        m_first = 0; m_count = 1;
+        m_ring[0] = { seconds, static_cast<double>(m_hour), m_night };
+    }
+
+    void RoomClock::Advance(double seconds, float hour, float night)
+    {
+        if (!std::isfinite(hour)) hour = 12.0f;
+        hour = std::fmod(std::fmod(hour, 24.0f) + 24.0f, 24.0f);
+        night = Clamp01(night);
+        const Sample* last = m_count ? &m_ring[(m_first + m_count - 1) % kSamples] : nullptr;
+        const double dt = last ? seconds - last->t : 0.0;
+        if (!last || !(dt >= 0.0) || dt > kSnapSeconds)
+        {
+            m_hour = hour; m_night = night;
+            m_fading = false; m_progress = 1.0f;
+            Restart(seconds);
+            return;
+        }
+        if (dt == 0.0) return;
+        // How far the moment moved since the last step, the shorter way round; faster than kJumpRate x the running
+        // clock is a jump (a hair over for the float hour's own steps).
+        double dh = static_cast<double>(hour) - m_hour;
+        dh -= 24.0 * std::floor((dh + 12.0) / 24.0);
+        const float dn = night - m_night;
+        const double most = kJumpRate * dt / 3600.0;
+        if (std::fabs(dh) > most + 1e-5 || std::fabs(dn) > most + 1e-4)
+        {
+            // A jump: cross-fade from the time shown (past half way through a cross-fade, from where it was going;
+            // short of that, from where it came: a slider dragged keeps the rooms as they were until it settles).
+            if (!m_fading || m_progress >= 0.5f) { m_fromHour = m_hour; m_fromNight = m_night; }
+            m_fading = true;
+            m_progress = 0.0f;
+        }
+        else if (m_fading)
+        {
+            m_progress = static_cast<float>(m_progress + dt / kFadeSeconds);
+            if (m_progress >= 1.0f) { m_fading = false; m_progress = 1.0f; }
+        }
+        const double unwrapped = last->hour + dh;
+        m_hour = hour; m_night = night;
+        if (m_fading) { Restart(seconds); return; }   // running again from rest once the cross-fade is done
+        if (m_count == kSamples) { m_first = (m_first + 1) % kSamples; --m_count; }
+        m_ring[(m_first + m_count) % kSamples] = { seconds, unwrapped, night };
+        ++m_count;
+        // Keep one sample at or before kFadeSeconds ago (for Past), none older.
+        while (m_count > 2 && m_ring[(m_first + 1) % kSamples].t <= seconds - kFadeSeconds) { m_first = (m_first + 1) % kSamples; --m_count; }
+    }
+
+    void RoomClock::Past(double& hour, float& night) const
+    {
+        if (!m_count) { hour = 12.0; night = 0.0f; return; }
+        const Sample& newest = m_ring[(m_first + m_count - 1) % kSamples];
+        const double at = newest.t - kFadeSeconds;
+        const Sample& oldest = m_ring[m_first];
+        if (m_count == 1 || at <= oldest.t) { hour = oldest.hour; night = oldest.night; return; }
+        for (int i = 0; i + 1 < m_count; ++i)
+        {
+            const Sample& a = m_ring[(m_first + i) % kSamples];
+            const Sample& b = m_ring[(m_first + i + 1) % kSamples];
+            if (at <= b.t)
+            {
+                const double f = b.t > a.t ? (at - a.t) / (b.t - a.t) : 1.0;
+                hour = a.hour + (b.hour - a.hour) * f;
+                night = static_cast<float>(a.night + (b.night - a.night) * f);
+                return;
+            }
+        }
+        hour = newest.hour; night = newest.night;
+    }
+
+    namespace
+    {
+        float Wrap24(double h) { return static_cast<float>(h - 24.0 * std::floor(h / 24.0)); }
+    }
+
+    float RoomClock::HourPast() const { double h; float n; Past(h, n); return Wrap24(h); }
+    float RoomClock::NightPast() const { double h; float n; Past(h, n); return n; }
+
+    DarkBand BandOf(const RoomClock& clock, const RoomStyle& style, uint32_t flags, const RoomToggles& t)
+    {
+        const float now = DarkShare(style, flags, t, clock.Night(), clock.Hour());
+        if (clock.Fading()) return Crossfade(DarkShare(style, flags, t, clock.FromNight(), clock.FromHour()), now, clock.Progress());
+        return Band(now, DarkShare(style, flags, t, clock.NightPast(), clock.HourPast()));
+    }
+
+    float LitShare(const LightCell* cells, size_t count)
+    {
+        float rooms = 0.0f, lit = 0.0f;
+        for (size_t i = 0; i < count; ++i)
+        {
+            const float s = std::max(0.0f, cells[i].share);
+            rooms += s;
+            lit += s * RoomLit(cells[i].hash, cells[i].band);
+        }
+        return Clamp01(1.0f - std::min(1.0f, rooms) + lit);
+    }
+
     void RoomOutside(const float P[3], const float V[3], const float N[3], const RoomConstants& k, const float r12[3],
                      const float outside[3], float out[3], RoomSample* sample)
     {
@@ -342,11 +569,13 @@ namespace wxl_livingazeroth::glass
         for (float& v : a) v /= al;
         const float u[3] = { N[1] * a[2] - N[2] * a[1], N[2] * a[0] - N[0] * a[2], N[0] * a[1] - N[1] * a[0] };
         const float cosine = std::max(0.0f, std::min(1.0f, Dot(N, V)));
-        // The ray (cell units), where it enters (cells), the cell, the walls it heads for.
+        // The ray (cell units), where it enters (cells, about the building's origin), the cell, the walls it heads for.
         const float d[3] = { -Dot(V, a) * k.c198[0], -Dot(V, u) * k.c198[1], std::max(cosine, 0.0001f) * k.c198[2] };
-        const float pos[2] = { Dot(P, a) * k.c198[0], Dot(P, u) * k.c198[1] };
+        float R[3], offset[2];
+        Anchored(P, k.c213, R, offset);
+        const float pos[2] = { Dot(R, a) * k.c198[0], Dot(R, u) * k.c198[1] };
         const float f[2] = { Frac(pos[0]), Frac(pos[1]) };
-        const float cell[2] = { pos[0] - f[0], pos[1] - f[1] };
+        const float cell[2] = { pos[0] - f[0] + offset[0], pos[1] - f[1] + offset[1] };
         // (the way to the wall over the step, both as sizes: a step of 0 or -0 never divides)
         const float tx = std::fabs(Ge(d[0]) - f[0]) * (1.0f / std::max(std::fabs(d[0]), 0.0001f));
         const float ty = std::fabs(Ge(d[1]) - f[1]) * (1.0f / std::max(std::fabs(d[1]), 0.0001f)), tz = 1.0f / d[2];
@@ -370,7 +599,11 @@ namespace wxl_livingazeroth::glass
         for (int i = 0; i < 3; ++i) mask[i] = h[0] - k.c204[i] >= 0.0f ? 0.0f : 1.0f;
         const float shelves = mask[0], curtains = mask[1] - mask[0], divider = mask[2] - mask[1];
         float hit[3] = { d[0] * t + f[0], d[1] * t + f[1], d[2] * t };
-        const float lit = h[1] - k.c203[3] >= 0.0f ? 1.0f : 0.0f;
+        // (lit or dark: the exact hash against the dark band, part lit while it fades)
+        const float litHash = LitHash(cell[0], cell[1], k.c212[0], k.c212[1]);
+        DarkBand band;
+        band.lo = k.c203[3]; band.hi = k.c200w; band.base = k.c213[3]; band.slope = k.c212[3];
+        const float lit = RoomLit(litHash, band);
         // The dividing wall with its doorway.
         const float td = kDividerDepth * tz;
         const float hd[2] = { d[0] * td + f[0], d[1] * td + f[1] };
@@ -436,7 +669,9 @@ namespace wxl_livingazeroth::glass
         {
             sample->hide = hide;
             sample->layout = shelves > 0 ? kLayoutShelves : curtains > 0 ? kLayoutCurtains : divider > 0 ? kLayoutDivider : kLayoutPlain;
-            sample->lit = lit > 0; sample->door = door > 0; sample->wall = wall > 0;
+            sample->lit = lit >= 0.5f; sample->litValue = lit; sample->litHash = litHash;
+            sample->cell[0] = cell[0]; sample->cell[1] = cell[1];
+            sample->door = door > 0; sample->wall = wall > 0;
             sample->cloth = cloth; sample->fold = fold; sample->shelf = shelf; sample->falloff = falloff; sample->fade = fade;
             sample->shade = shade; sample->building[0] = bh[0]; sample->building[1] = bh[1];
             for (int i = 0; i < 3; ++i) sample->hit[i] = hit[i];

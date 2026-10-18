@@ -82,6 +82,7 @@ namespace wxl_livingazeroth::windows
         uint32_t lightId = 0;          // DoodadLightProperties
         float    strength = 1.0f;      // x the light's intensity
         uint32_t flags = 0;            // RowFlag
+        uint32_t roomFirst = 0, roomCount = 0;   // its room cells (WindowRooms.cdbc) in features/Windows' list
     };
 
     /// The windows of every map, bucketed in kTile-yd squares for "near the camera".

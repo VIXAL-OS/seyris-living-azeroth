@@ -13,14 +13,21 @@
 //  sky deeper toward the zenith along the reflected ray),
 //  the sun's glint, and behind clear glass a room (interior mapping in the pane's own frame: cells c198.xy wide and
 //  high, 1 / c198.z deep, lit by c198.w); the two mixed by c193.x.
-//  The room (env/GlassModel's RoomOutside works it out the same way, op for op): its building (a hash of the seed
-//  c212.xy, in a city of its 14-yd block too: c212.z) picks its tint between c199 and c202 and its brightness (c202.w);
-//  each room (a hash of its cell and the seed) its layout (c204.xyz: the class's cumulative weights for shelves,
-//  curtains half drawn, a dividing wall with a doorway, else plain), whether it's dark (below c203.w), its light, the
-//  lamp's place, the curtains' gap, the things on its shelves. At night the lit rooms behind the client's lit windows
-//  have a lamp (c203.rgb, as bright as the client's window: x its luminance); dark ones there hide most of its glow
-//  (c205.w) from the whole window, lead and frame too (the client lights all of it). The detail fades from 30 to 70 yd
-//  (x c204.w) and where a pixel's footprint on the glass passes 0.05 .. 0.15 yd. Curtains c205.rgb.
+//  The room (env/GlassModel's RoomOutside works it out the same way, op for op): its cell is the point about the
+//  building's origin (c213; farther than 32 yd on an axis, about the nearest 64-yd anchor from it, the anchor's index
+//  in the cell: c215..c217) in the face's own frame, so it doesn't depend on the camera or on a city's -8800 yd
+//  coordinates. Its building (a hash of the seed c212.xy, in a city of its 14-yd block too: c212.z) picks its tint
+//  between c199 and c202 and its brightness (c202.w); each room (a hash of its cell and the seed) its layout (c204.xyz:
+//  the class's cumulative weights for shelves, curtains half drawn, a dividing wall with a doorway, else plain), its
+//  light, the lamp's place, the curtains' gap, the things on its shelves; and whether it's lit: an exact hash of the
+//  cell and the seed (env/GlassModel's LitHash: whole numbers mod 289, the same bits on any GPU and on the CPU, so the
+//  window lights know which rooms are dark) against the dark band (env/GlassModel's DarkBand: c203.w lo, c200.w hi,
+//  c212.w slope, c213.w base: a room the threshold crossed in the last 1.5 s, or every room a jump of the time
+//  crossed, is part lit, so it fades). The cell's frame is the face's own normal (from P's screen gradients), not the
+//  vertex normal: smoothed glass doesn't bend the cells. At night the lit rooms behind the client's lit
+//  windows have a lamp (c203.rgb, as bright as the client's window: x its luminance); dark ones there hide most of its
+//  glow (c205.w) from the whole window, lead and frame too (the client lights all of it). The detail fades from 30 to
+//  70 yd (x c204.w) and where a pixel's footprint on the glass passes 0.05 .. 0.15 yd. Curtains c205.rgb.
 // Floor light (b10: on for the batches of a building's interior groups while sunlit panes are near): up to
 //  kFloorPanes panes, each as three rows taking the point (camera-relative, world axes) to where the ray toward the
 //  sun crosses the pane (|a|, |b| < 1) and how far (0 < t < 1), with soft edges, kept inside its room's box; x the
@@ -32,10 +39,13 @@
 //  c192 mask plane; c193 (inside weight, strength, the room's share, thickness yd); c194 (the sky through the glass
 //  rgb, the sun's gain); c195 (toward the sun, world xyz; saturation inside); c196 (the reflected sky rgb, Fresnel
 //  strength); c197 (darkening outside, glint, F0, diffusion); c198 (1 / the room's cell width, height, depth;
-//  its daylight); c199 (its tint rgb; the inside's brightness); c200 the sun's colour; c201 (the floor light's gain);
+//  its daylight); c199 (its tint rgb; the inside's brightness); c200 (the sun's colour; the dark band's hi); c201 (the
+//  floor light's gain);
 //  c202 (the room's other tint rgb, the buildings' spread in brightness); c203 (the lamp rgb, the share of rooms
-//  dark); c204 (the layouts' thresholds, the detail's strength); c205 (the curtains rgb, the glow dark rooms hide);
-//  c212 (the building's seed xy, 1 / its block (0: one building), 0); c206..c211 and c87..c100 (the room's numbers,
+//  dark band's lower end); c204 (the layouts' thresholds, the detail's strength); c205 (the curtains rgb, the glow dark
+//  rooms hide); c212 (the building's seed xy, 1 / its block (0: one building), the dark band's slope); c213 (the
+//  building's origin, world xyz; the dark band's base); c206..c211, c214 (the lit hash's numbers), c215..c217 (the
+//  anchors' step and keys) and c87..c100 (the room's numbers,
 //  env/GlassModel's glass::room; c208 the footprint's fade) defined; the floor light's panes c101..c172 (six registers each; the rims' range: a
 //  batch has one or the other, features/Glass re-uploads when the rims took it). ps_3_0 has c0..c223, and an
 //  instruction reads at most one constant register.
@@ -53,7 +63,8 @@ namespace wxl_livingazeroth::glass
     constexpr int kViewConstant = 180;   // c180..c183 (FillModelConstants' first four)
     constexpr int kFirstConstant = 192;  // c192..c205
     constexpr int kConstantCount = 14;
-    constexpr int kSeedConstant = 212;   // c212: the building's seed, its block
+    constexpr int kSeedConstant = 212;   // c212: the building's seed, its block, the dark band; c213: its origin
+    constexpr int kSeedRegisters = 2;
     constexpr int kPaneConstant = 101;   // c101..c172
     constexpr int kPaneRegisters = 6;
     constexpr int kFloorPanes = 12;
@@ -85,11 +96,28 @@ namespace wxl_livingazeroth::glass
                def(97, kFoldAmp, kFoldBase, kFoldMean, kThingGap) +
                def(98, kShelfHashShelf, kShelfHashRoom, kThingHash, kDoorDim) +
                def(99, kThingSpan, kThingBase, kShelfBack, kPlankLight) +
-               def(100, kFadeB, kFadeA, kClothFar, kCurtainDay);
+               def(100, kFadeB, kFadeA, kClothFar, kCurtainDay) +
+               def(214, kLitInv, kLitMod, 0.5f, kLitPoly) +
+               def(215, 1.0f / kAnchor, 0.5f, kAnchor, 0.0f) +
+               def(216, kAnchorKeyX[0], kAnchorKeyX[1], kAnchorKeyX[2], 0.0f) +
+               def(217, kAnchorKeyY[0], kAnchorKeyY[1], kAnchorKeyY[2], 0.0f);
     }
 
-    inline std::string GlassBlock(const std::string& vP, const std::string& vN, const std::string& vT)
+    /// `probe` (the tests'): instructions put right after the room's lit value is worked out (r20.w lit, r22.x the
+    /// lit hash, r29.xy the cell about the building's origin).
+    inline std::string GlassBlock(const std::string& vP, const std::string& vN, const std::string& vT, const std::string& probe = std::string())
     {
+        // Mod 289 of r22.x (a whole number below 2^22) in place, exactly: v - floor((v + 0.5) / 289) 289.
+        const std::string mod =
+            "\n        add r22.z, r22.x, c214.z"
+            "\n        mul r22.z, r22.z, c214.x"
+            "\n        frc r22.w, r22.z"
+            "\n        add r22.z, r22.z, -r22.w"
+            "\n        mad r22.x, r22.z, -c214.y, r22.x";
+        // The permutation (34 v + 1) v mod 289 of r22.x in place.
+        const std::string permute =
+            "\n        mul r22.z, r22.x, c214.w"
+            "\n        mad r22.x, r22.z, r22.x, r22.x" + mod;
         return
             "\n    if b9"
             // the texel, its glass mask
@@ -118,6 +146,8 @@ namespace wxl_livingazeroth::glass
             // them a few bits); the pixel's footprint on the glass, squared (r14.x: the room's detail fades by it)
             "\n      dsx r19.xyz, r15"
             "\n      dsy r20.xyz, r15"
+            // (the face's own normal, unscaled: the rooms' cells go by it, not the vertex normal's wobble)
+            "\n      crs r17.xyz, r19, r20"
             "\n      add r15.xyz, r15, c180"
             "\n      dp3 r14.x, r19, r19"
             "\n      dp3 r14.z, r20, r20"
@@ -178,22 +208,38 @@ namespace wxl_livingazeroth::glass
             "\n      mov r14.y, c175.y"
             "\n      mov r19.x, c193.z"
             "\n      if_gt r19.x, c175.y"
-            "\n        mul r24.xy, r18.yxxx, c207"
+            // the pane's frame from the face's normal (no gradients: the vertex normal's), facing the eye
+            "\n        dp3 r22.w, r17, r17"
+            "\n        cmp r22.xyz, -r22.w, r18, r17"
+            "\n        nrm r26.xyz, r22"
+            "\n        dp3 r22.w, r26, r16"
+            "\n        cmp r22.xyz, r22.w, r26, -r26"
+            "\n        mul r24.xy, r22.yxxx, c207"
             "\n        mov r24.z, c175.y"
             "\n        dp3 r24.w, r24, r24"
             "\n        add r25.x, r24.w, -c206.x"
             "\n        cmp r24.xyz, r25.x, r24, c175.xyyy"
             "\n        nrm r25.xyz, r24"
-            "\n        crs r26.xyz, r18, r25"
+            "\n        crs r26.xyz, r22, r25"
             "\n        dp3 r27.x, -r16, r25"
             "\n        dp3 r27.y, -r16, r26"
             "\n        max r27.z, r17.w, c206.x"
             "\n        mul r27.xyz, r27, c198"
-            "\n        dp3 r28.x, r15, r25"
-            "\n        dp3 r28.y, r15, r26"
+            // (the point about the building's origin, then its anchor's: no camera in it, never far, so the face
+            // normal's noise barely moves the cells; the anchor's offset to the cell, whole numbers)
+            "\n        add r29.xyz, r15, -c213"
+            "\n        mad r28.xyz, r29, c215.x, c215.y"
+            "\n        frc r30.xyz, r28"
+            "\n        add r28.xyz, r28, -r30"
+            "\n        mad r29.xyz, r28, -c215.z, r29"
+            "\n        dp3 r30.x, r28, c216"
+            "\n        dp3 r30.y, r28, c217"
+            "\n        dp3 r28.x, r29, r25"
+            "\n        dp3 r28.y, r29, r26"
             "\n        mul r28.xy, r28, c198"
             "\n        frc r28.zw, r28.xxxy"
             "\n        add r29.xy, r28, -r28.zwww"
+            "\n        add r29.xy, r29, r30"
             "\n        cmp r29.zw, r27.xxxy, c175.x, c175.y"
             "\n        add r29.zw, r29, -r28"
             // (the way to the wall over the ray's step, both as sizes: a step of 0 or -0 never divides)
@@ -248,11 +294,28 @@ namespace wxl_livingazeroth::glass
             "\n        add r19.xyz, r13.x, -c204"
             "\n        cmp r19.xyz, r19, c175.y, c175.x"
             "\n        add r19.yz, r19, -r19.xxyy"
-            // where the ray meets the room (across, up, deep); lit or dark
+            // where the ray meets the room (across, up, deep)
             "\n        mad r20.xy, r27, r30.w, r28.zwzw"
             "\n        mul r20.z, r27.z, r30.w"
-            "\n        add r20.w, r13.y, -c203.w"
-            "\n        cmp r20.w, r20.w, c175.x, c175.y"
+            // lit or dark: the exact hash of the cell and the seed, P(M(P(M(x)) + M(y))) with M mod 289 and P the
+            // permutation (34 v + 1) v (every step a whole number below 2^22: the same bits everywhere), then
+            // h = (k + 0.5) / 289 against the dark band: at or below lo (c203.w) dark, above hi (c200.w) lit, between
+            // part lit, saturate((h - lo) slope + base) (c212.w, c213.w): a room fading
+            "\n        add r22.xy, r29, c212"
+            "\n        add r22.zw, r22.xxxy, c214.z"
+            "\n        mul r22.zw, r22, c214.x"
+            "\n        frc r28.xy, r22.zwzw"
+            "\n        add r22.zw, r22, -r28.xxxy"
+            "\n        mad r22.xy, r22.zwzw, -c214.y, r22" + permute +
+            "\n        add r22.x, r22.x, r22.y" + mod + permute +
+            "\n        add r22.x, r22.x, c214.z"
+            "\n        mul r22.x, r22.x, c214.x"
+            "\n        add r20.w, r22.x, -c203.w"
+            "\n        mul r22.y, r20.w, c212.w"
+            "\n        add_sat r22.y, r22.y, c213.w"
+            "\n        cmp r22.y, -r20.w, c175.y, r22.y"
+            "\n        add r22.z, r22.x, -c200.w"
+            "\n        cmp r20.w, -r22.z, r22.y, c175.x" + probe +
             // a dividing wall half way back, a doorway through it to a second, dimmer room
             "\n        mul r22.x, c89.y, r30.z"
             "\n        mad r22.yz, r27.xxyw, r22.x, r28.zzww"

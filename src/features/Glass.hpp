@@ -8,8 +8,10 @@
 //  - The coloured shafts: features/GlassShafts marches the room's air with the panes whose room holds the camera.
 //  - The rooms behind clear glass, per building (RoomStyles.cdbc, GlassBuildings.cdbc): features/WmoIce's group hook
 //    (Wmo.RenderGroup: the placed instance and the group) names the building before its batches draw; each glass
-//    batch then gets its style (tints, brightness, lamp, curtains, the layouts' weights, the dark share by the hour)
-//    and its seed. A batch whose material the client lights at night (MOMT SIDN) gets a lamp-lit room.
+//    batch then gets its style (tints, brightness, lamp, curtains, the layouts' weights, the dark share by the hour),
+//    its seed and its origin. A batch whose material the client lights at night (MOMT SIDN) gets a lamp-lit room.
+//    The dark share goes by the rooms' clock (RoomClock: never jumping, so a room fades over 1.5 s); features/Windows
+//    asks for the same band (BandNow) so the window lights dim with the rooms behind them.
 #pragma once
 
 #include "../env/GlassModel.hpp"
@@ -63,10 +65,37 @@ namespace wxl_livingazeroth::glass
 
     /// The room for one glass batch: its building's style (a default house when `building` is null), the night
     /// (the client's window fade, 0..1), the hour (0..24), whether the client lights this material at night (SIDN).
-    struct RoomInputs { float night = 0.0f, hour = 12.0f; bool selfLit = false; uint32_t fallbackSeed = 0; };
-    /// Rewrites the room's part of `out` (c198.w, c199.rgb, c202..c205) and fills `seed` (c212).
+    struct RoomInputs
+    {
+        float night = 0.0f, hour = 12.0f;
+        bool selfLit = false;
+        uint32_t fallbackSeed = 0;
+        /// The rooms' clock (the dark band's fades); null: `hour` and `night`, at rest.
+        const RoomClock* clock = nullptr;
+        /// The instance's origin (world; the building's when it's a placement in GlassBuildings), null: unknown.
+        const float* origin = nullptr;
+    };
+    /// The settings the dark share depends on.
+    RoomToggles Toggles(const Settings& s);
+    /// A building's dark band (BandOf the clock; without one, the share at `hour` and `night`, at rest).
+    DarkBand RoomBand(const RoomStyle& style, uint32_t buildingFlags, const RoomInputs& in, const Settings& s);
+    /// Rewrites the room's part of `out` (c198.w, c199.rgb, c200.w, c202..c205) and fills `seed` (c212: the seed, the
+    /// block, the dark band's slope; c213: the origin the cells are about, the building's else the instance's, and
+    /// the band's base). The band: c203.w lo, c200.w hi.
     void RoomBatchConstants(const RoomStyle& style, const Building* building, const Light& light, const RoomInputs& in, const Settings& s,
-                            float out[4 * kConstantCount], float seed[4]);
+                            float out[4 * kConstantCount], float seed[4 * kSeedRegisters]);
+    /// The fallback seed of an instance the tables don't have: its WMO's PathHash when known (the same for every copy,
+    /// and features/Windows can know it), else the hook's.
+    uint32_t FallbackSeed(uint32_t path, uint32_t hookSeed);
+
+    // --- for the window lights (features/Windows) -------------------------------------------------------------------
+    /// Whether a dark room hides the client's lit window at night now: the glass on, its blocks in the shaders, the
+    /// rooms (FakeInteriors with OutsideReflection) and lamp-lit rooms on.
+    bool RoomsHideGlow();
+    /// This frame's dark band for a building (its style, its flags), as this frame's glass batches get it.
+    DarkBand BandNow(const RoomStyle& style, uint32_t buildingFlags);
+    /// The rooms' clock (for the panel and the tests).
+    const RoomClock& Clock();
     /// The built-in style (a human house) for buildings the tables don't have.
     const RoomStyle& DefaultStyle();
     /// The rooms' tables as loaded (for the tests and the panel).
@@ -90,7 +119,7 @@ namespace wxl_livingazeroth::glass
     unsigned PatchedVariants();
     /// Around a placed instance's group (Wmo.RenderGroup), before its batch loops: where the instance stands (its
     /// origin, world; null when unknown), its WMO's path (PathHash, 0 unknown), the group's index, and a seed for a
-    /// building the tables don't have (the instance's address: steady while it's loaded).
+    /// building the tables don't have (the instance's address: steady while it's loaded; FallbackSeed prefers the path).
     void BeginInstance(const float pos[3], uint32_t path, uint32_t group, uint32_t fallbackSeed);
     void EndInstance();
     /// Around a group's batch loop: its MOGP flags, and whether its root has glass materials.

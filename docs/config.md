@@ -141,8 +141,15 @@ says which). The storm panel auditions every recording.
 The lit windows of towns and cities (`WindowLights.cdbc`, [cdbc-tables.md](cdbc-tables.md)) cast a
 warm light on the ground and the walls in front of them, and their glass glows. Both follow the
 client's own lit windows: full from 21:30 to 06:00, fading over the hour before and after, off by
-day. The lights panel's **Windows** section changes all of this at runtime and shows the night
-factor, the client's Full Screen Glow and what's drawn.
+day. And they follow the rooms behind the glass (`[LivingAzeroth.Glass]`): as those go dark through
+the night, a window whose rooms are dark stops lighting the street, and a light over a row of windows
+dims as its rooms go out one by one (`WindowRooms.cdbc`: which rooms each light's glass shows, worked
+out with the shader's own cells, hash and clock, so the light goes out with the room you see). A room
+going dark or lit again fades over 1.5 s, the light and the glow with it; after a jump of the climate
+panel's time every room it crossed fades together, and while its slider is being dragged they wait
+for it to stop. Glass with no room (stained, frosted) keeps its light all night. The lights panel's
+**Windows** section changes all of this at runtime and shows the night factor, the client's Full
+Screen Glow, what's drawn, and how many lights near are lit, dimmed or dark now.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -155,6 +162,7 @@ factor, the client's Full Screen Glow and what's drawn.
 | GlowStrength | 1 | Your multiplier on the window glow. |
 | GlowRange | 220 | Windows farther than this (yards) don't glow; the glow fades out over the last third. |
 | WithClientGlow | 1 | While the client's own Full Screen Glow (`ffxGlow`) is on: 0 = the window glow at full strength, 1 = half, 2 = off. |
+| LightsFollowRooms | 1 | The window lights and their glow follow the rooms behind the glass: a window whose rooms are dark lights nothing, a row dims as its rooms go out (needs `WindowRooms.cdbc`; with the glass, its rooms or `LitRoomsAtNight` off, or `RoomVariety` or `LightsOut` off, every room is lit and so is every light). 0 = every lit window at full all night. |
 
 ## `[LivingAzeroth.Shafts]`: sun shafts
 
@@ -208,7 +216,10 @@ text, the UI, characters).
   lit window it replaces, the lamp's light falling off across the room and the curtains glowing with it behind them. More
   of them go dark as the night goes on: 8% in the evening, half at midnight, three quarters by 03:00, a few early risers
   before dawn; inns stay lit late, shops close early. Ruined, abandoned and haunted places (and ships and dungeons: the
-  window lights' dark places) stay dark. The window lights and their glow (`[LivingAzeroth.Windows]`) stay as they are.
+  window lights' dark places) stay dark. A room going dark or lit again fades over 1.5 s (after a jump of the climate
+  panel's time, every room it crossed together), and the window lights and their glow in front of it go with it
+  (`[LivingAzeroth.Windows]` LightsFollowRooms). A room's cell is its face's own: smoothed glass no longer bends the
+  rooms into a mosaic.
 - **Indoors, with the sun on the windows**: the panes' light on the room's floor and walls (where the ray toward the sun
   leaves through a pane, in the glass's colour; up to 12 panes, kept inside each pane's room) and **coloured shafts** in
   the room's air (a short march along the view against up to 16 panes whose room you're in, at a quarter of the
@@ -232,9 +243,9 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | ShaftStrength | 1 | Your multiplier on the coloured shafts. |
 | FloorStrength | 1 | Your multiplier on the light on the floor. |
 | Range | 70 | Yards from the camera: panes farther away give no floor light or shafts. |
-| RoomVariety | 1 | The rooms differ by building: tint, brightness, a few dark, by the building's kind and place. 0 = one warm room everywhere. |
+| RoomVariety | 1 | The rooms differ by building: tint, brightness, a few dark, by the building's kind and place. 0 = one warm room everywhere, lit all night (no lights out). |
 | LitRoomsAtNight | 1 | At night a lamp-lit room behind the windows the client lights. 0 = dark rooms at night. |
-| LightsOut | 1 | More of those rooms go dark as the night goes on (inns late, shops early). 0 = all lit all night. |
+| LightsOut | 1 | More of those rooms go dark as the night goes on (inns late, shops early; with RoomVariety), each fading over 1.5 s, the window lights in front with them. 0 = all lit all night. |
 | RoomLayouts | 1 | Shelves, curtains half drawn, a dividing wall with a doorway, or plain, per window. 0 = all plain. |
 | RoomVarietyStrength | 1 | Your multiplier on how far the buildings' tints and brightness differ and on the rooms dark by day. |
 | LitRoomStrength | 1 | Your multiplier on the lamp-lit rooms' brightness (1 = about the client's own lit window). |

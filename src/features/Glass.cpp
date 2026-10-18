@@ -18,6 +18,7 @@
 #include <d3d9.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -147,9 +148,11 @@ namespace wxl_livingazeroth::glass
         BuildingIndex g_buildings;
         const Building* g_building = nullptr;    // the current instance's (null: not in the tables)
         uint32_t g_fallbackSeed = 0;
-        bool g_inInstance = false;
+        float g_origin[3] = {};                  // the current instance's origin (world)
+        bool g_inInstance = false, g_hasOrigin = false;
         unsigned g_instances = 0, g_matched = 0, g_byWmo = 0, g_defaulted = 0;   // instance groups with glass: placed, by WMO, neither
         float g_hour = 12.0f, g_night = 0.0f;    // this frame's
+        RoomClock g_clock;                       // the rooms' lights out: the hour and night as they show them
         std::string g_roomLine;
 
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : (v == v ? v : 0.0f)); }
@@ -202,14 +205,24 @@ namespace wxl_livingazeroth::glass
             return it == g_styleById.end() ? nullptr : &g_styles[it->second];
         }
 
+        // This frame's inputs for a room: the night, the hour, and the band's ends from the rooms' clock.
+        RoomInputs FrameInputs()
+        {
+            RoomInputs in;
+            in.night = g_night; in.hour = g_hour;
+            in.clock = &g_clock;
+            return in;
+        }
+
         // One glass batch's constants: its material's look, inside or outside, and the room of the building drawn.
-        void GlassConstants(const Material& m, bool selfLit, float out[4 * kConstantCount], float seed[4])
+        void GlassConstants(const Material& m, bool selfLit, float out[4 * kConstantCount], float seed[4 * kSeedRegisters])
         {
             BatchConstants(m, InsideWeight(m.flags, g_groupFlags, g_indoors), g_light, g_sun, g_sunColour, g_sky, g_settings, out);
             const Building* b = g_inInstance ? g_building : nullptr;
             const RoomStyle* style = StyleOf(b);
-            RoomInputs in;
-            in.night = g_night; in.hour = g_hour; in.selfLit = selfLit; in.fallbackSeed = g_fallbackSeed;
+            RoomInputs in = FrameInputs();
+            in.selfLit = selfLit; in.fallbackSeed = g_fallbackSeed;
+            in.origin = g_inInstance && g_hasOrigin ? g_origin : nullptr;
             RoomBatchConstants(style ? *style : DefaultStyle(), style ? b : nullptr, g_light, in, g_settings, out, seed);
         }
     }
@@ -236,8 +249,26 @@ namespace wxl_livingazeroth::glass
         return c.valid ? c.dayFraction * 24.0f : 12.0f;
     }
 
+    RoomToggles Toggles(const Settings& s)
+    {
+        RoomToggles t;
+        t.variety = s.roomVariety != 0; t.lightsOut = s.lightsOut != 0;
+        t.varietyStrength = s.varietyStrength; t.lightsOutStrength = s.lightsOutStrength;
+        return t;
+    }
+
+    DarkBand RoomBand(const RoomStyle& style, uint32_t flags, const RoomInputs& in, const Settings& s)
+    {
+        const RoomToggles t = Toggles(s);
+        if (in.clock) return BandOf(*in.clock, style, flags, t);
+        const float now = DarkShare(style, flags, t, in.night, in.hour);
+        return Band(now, now);
+    }
+
+    uint32_t FallbackSeed(uint32_t path, uint32_t hookSeed) { return path ? path : hookSeed; }
+
     void RoomBatchConstants(const RoomStyle& style, const Building* b, const Light& light, const RoomInputs& in, const Settings& s,
-                            float out[4 * kConstantCount], float seed[4])
+                            float out[4 * kConstantCount], float seed[4 * kSeedRegisters])
     {
         float* c = out;
         const bool variety = s.roomVariety != 0;
@@ -256,12 +287,12 @@ namespace wxl_livingazeroth::glass
             c[40 + k] = variety ? tint[k] + (style.tint2[k] - tint[k]) * std::min(1.0f, v) : tint[k];
         }
         c[43] = variety ? Clamp01(style.spread * v) : 0.0f;
-        // c203.w the share of rooms dark: by day the style's few, at night by the hour (inns late, shops early);
-        // every room in an empty building, and at night in a dark place.
-        const float dayDark = empty ? 1.0f : (variety ? Clamp01(style.darkShare * v) : 0.0f);
-        float nightDark = s.lightsOut ? Clamp01(LightsOutShare(in.hour, style.lateHours, style.nightCap) * std::max(0.0f, s.lightsOutStrength)) : 0.0f;
-        if (darkPlace || empty) nightDark = 1.0f;
-        c[47] = dayDark + (nightDark - dayDark) * night;
+        // The dark band (c203.w lo, c200.w hi; c212.w its slope, c213.w its base): the share of rooms dark (DarkShare:
+        // by day the style's few, at night by the hour, inns late, shops early; every room in an empty building, and at
+        // night in a dark place) by the rooms' clock, so a room the threshold crosses, or a jump of the time, fades.
+        const DarkBand band = RoomBand(style, flags, in, s);
+        c[47] = band.lo;
+        c[35] = band.hi;
         // c203.rgb the lamp at night, behind the windows the client lights (SIDN): its colour at luminance 1 over the
         // room's mean light, so a lit room is about as bright as the client's window (the shader x its luminance).
         const bool lamp = s.litRooms && in.selfLit && !darkPlace && !empty;
@@ -279,12 +310,17 @@ namespace wxl_livingazeroth::glass
         c[51] = s.roomLayouts ? std::max(0.0f, s.layoutStrength) : 0.0f;
         for (int k = 0; k < 3; ++k) c[52 + k] = style.curtain[k];
         c[55] = s.litRooms && in.selfLit ? kGlowHidden * night : 0.0f;
-        // c212 the seed (two numbers 0..1023) and the block (a city's buildings).
+        // c212 the seed (two numbers 0..1023), the block (a city's buildings), the band's slope; c213 the origin the
+        // cells are about: a placement's from the table (features/Windows' cells are about the same numbers), else the
+        // instance's (a WMO's default row has none), else the world's; the band's base.
         const uint32_t sd = b ? b->seed : in.fallbackSeed;
         seed[0] = static_cast<float>(sd & 1023u);
         seed[1] = static_cast<float>((sd >> 10) & 1023u);
         seed[2] = b && variety && (flags & kBuildingCity) ? 1.0f / room::kBlock : 0.0f;
-        seed[3] = 0.0f;
+        seed[3] = band.slope;
+        const float* origin = b && b->uniqueId ? b->pos : in.origin;
+        for (int k = 0; k < 3; ++k) seed[4 + k] = origin ? origin[k] : 0.0f;
+        seed[7] = band.base;
     }
 
     void BatchConstants(const Material& m, float inside, const Light& light, const float sun[3], const float sunColour[3], const float sky[3],
@@ -500,6 +536,7 @@ namespace wxl_livingazeroth::glass
                 b.seed = cdbc->Value(t, row, "Seed", 0);
                 b.flags = cdbc->Value(t, row, "Flags", 0);
                 b.area = cdbc->Value(t, row, "AreaID", 0);
+                b.id = cdbc->Value(t, row, "ID", 0);
                 b.path = PathHash(cdbc->GetString(t, row, "Wmo"));
                 buildings.push_back(b);
             }
@@ -535,6 +572,16 @@ namespace wxl_livingazeroth::glass
         g_panesUp = false;
         const world::Snapshot& snap = world::Current();
         g_inWorld = snap.inWorld && snap.mapId >= 0;
+        // The rooms' clock: the hour and the night as the rooms (and the window lights with them) show them, steady
+        // seconds (a loading screen's gap snaps it).
+        g_hour = HourNow();
+        g_night = Clamp01(windows::Night());
+        if (g_inWorld)
+        {
+            const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            g_clock.Advance(now, g_hour, g_night);
+        }
+        else g_clock.Reset();
         if (!g_settings.enabled || !g_inWorld) { g_near.clear(); g_floorPanes = 0; return; }
 
         // The light of the moment.
@@ -560,8 +607,6 @@ namespace wxl_livingazeroth::glass
         g_light = Evaluate(in);
         for (int k = 0; k < 3; ++k) { g_sun[k] = in.sun[k]; g_sunColour[k] = in.sunColour[k]; g_sky[k] = in.sky[k]; }
         g_indoors = Clamp01(ReadFloat(kInteriorBlend));
-        g_night = Clamp01(in.night);
-        g_hour = HourNow();
 
         // The panes near the camera that the sun shines through: the floor light's and the shafts' (GlassShafts picks
         // those whose room holds the camera). Their rows about the camera are made at the frame's first batch
@@ -645,7 +690,9 @@ namespace wxl_livingazeroth::glass
     void BeginInstance(const float pos[3], uint32_t path, uint32_t group, uint32_t fallbackSeed)
     {
         g_inInstance = true;
-        g_fallbackSeed = fallbackSeed;
+        g_fallbackSeed = FallbackSeed(path, fallbackSeed);
+        g_hasOrigin = pos && std::isfinite(pos[0]) && std::isfinite(pos[1]) && std::isfinite(pos[2]);
+        for (int k = 0; k < 3; ++k) g_origin[k] = g_hasOrigin ? pos[k] : 0.0f;
         const world::Snapshot& snap = world::Current();
         g_building = g_buildings.Size() ? g_buildings.Find(static_cast<uint32_t>(snap.mapId), pos, path, group) : nullptr;
         ++g_instances;
@@ -657,8 +704,22 @@ namespace wxl_livingazeroth::glass
     void EndInstance()
     {
         g_inInstance = false;
+        g_hasOrigin = false;
         g_building = nullptr;
     }
+
+    bool RoomsHideGlow()
+    {
+        const Settings& s = g_settings;
+        return s.enabled && g_patched > 0 && s.fakeInteriors && s.outsideReflection && s.litRooms;
+    }
+
+    DarkBand BandNow(const RoomStyle& style, uint32_t buildingFlags)
+    {
+        return RoomBand(style, buildingFlags, FrameInputs(), g_settings);
+    }
+
+    const RoomClock& Clock() { return g_clock; }
 
     void Batch(uint32_t glassMaterial, bool rimsOn, bool selfLit)
     {
@@ -668,11 +729,11 @@ namespace wxl_livingazeroth::glass
         if (m || g_loopFloor) RenderView();
         if (m)
         {
-            float c[4 * kConstantCount], seed[4];
+            float c[4 * kConstantCount], seed[4 * kSeedRegisters];
             GlassConstants(*m, selfLit, c, seed);
             UploadFrame(dev);
             dev->SetPixelShaderConstantF(kFirstConstant, c, kConstantCount);
-            dev->SetPixelShaderConstantF(kSeedConstant, seed, 1);
+            dev->SetPixelShaderConstantF(kSeedConstant, seed, kSeedRegisters);
             g_floorConstsUp = false;   // c192..c201 are this batch's now
             if (!g_glassOn) { SetBool(kSwitch, true); g_glassOn = true; }
             ++g_glassBatches;
@@ -771,12 +832,15 @@ namespace wxl_livingazeroth::glass
 
     const char* RoomLine()
     {
-        char line[320];
+        char line[400];
         const int hh = static_cast<int>(g_hour) % 24, mm = static_cast<int>((g_hour - std::floor(g_hour)) * 60.0f);
+        const float ch = g_clock.Hour();
+        const int chh = static_cast<int>(ch) % 24, cmm = static_cast<int>((ch - std::floor(ch)) * 60.0f);
         std::snprintf(line, sizeof(line), "rooms: %u styles, %zu placements (%zu rows); instances drawn with glass %u: placed %u, by WMO %u, default %u; "
-                      "%02d:%02d night %.2f, dark at night: house %.0f%%, inn %.0f%%",
+                      "%02d:%02d night %.2f, dark at night: house %.0f%%, inn %.0f%%; the rooms' clock %02d:%02d night %.2f%s",
                       static_cast<unsigned>(g_styles.size()), g_buildings.Placements(), g_buildings.Size(), g_instances, g_matched, g_byWmo,
-                      g_defaulted, hh, mm, g_night, 100.0f * LightsOutShare(g_hour, 0.0f, 1.0f), 100.0f * LightsOutShare(g_hour, 2.5f, 0.55f));
+                      g_defaulted, hh, mm, g_night, 100.0f * LightsOutShare(g_hour, 0.0f, 1.0f), 100.0f * LightsOutShare(g_hour, 2.5f, 0.55f),
+                      chh, cmm, g_clock.Night(), g_clock.Fading() ? " (the time jumped: the rooms cross-fade to it)" : "");
         g_roomLine = line;
         return g_roomLine.c_str();
     }

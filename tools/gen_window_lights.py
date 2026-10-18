@@ -39,13 +39,22 @@ Inputs (the map scan in waterfall-scan, see its README; nothing here opens an MP
   <scan>/wmo-windows/        the placed WMOs' roots and the groups of those with window materials, made with
                              waterscan --extract-list <Data> <list> <scan>/wmo-windows (the lists:
                              <scan>/wmo-windows-roots.txt, then this tool's --group-list output)
+The rooms behind each light's glass (WindowRooms.cdbc; the user, 2026-10-17: "a window whose room has gone dark stops
+lighting the street"): features/Glass's fake rooms go dark as the night goes on, one per cell of the glass. For each
+light, which cells (about its building's origin, in the pane's frame, as the shader finds them: room_cells) its clear
+and leaded glass covers, of which building (GlassBuildings: a city's group's row, else the placement's), and what share
+of the light's glass each is. The runtime hashes each cell with the building's seed as the shader does and dims the
+light and its glow by the share whose room is lit. The glass tables are gen_glass.py's (read, not rebuilt).
+
 Usage:
   python gen_window_lights.py <scan> --group-list <out.txt>   the group files to extract (after the roots)
-  python gen_window_lights.py <scan> [data dir] [--survey]    write WindowLights.cdbc and the window rows of
-        DoodadLightProperties.cdbc (properties 200..219, this tool's; add_settlement_lights.py owns 101..199).
-        --survey also prints every area with windows, lit or not, to review TOWNS and DARK_AREAS.
-In the client (with a Living Azeroth build that reads WindowLights.cdbc): copy both files into DBFilesClient, then
-press "Reload light tables from disk" (lights panel). Run on the 2026-10-17 scan: 2,808 lit windows in 78 places,
+  python gen_window_lights.py <scan> [data dir] [--survey] [--glass <dir>]   write WindowLights.cdbc, WindowRooms.cdbc
+        and the window rows of DoodadLightProperties.cdbc (properties 200..219, this tool's; add_settlement_lights.py
+        owns 101..199). The rooms need GlassMaterials.cdbc and GlassBuildings.cdbc: from --glass, else the data dir if
+        it has them, else the repository's data. --survey also prints every area with windows, lit or not, to review
+        TOWNS and DARK_AREAS.
+In the client (with a Living Azeroth build that reads WindowLights.cdbc): copy the files into DBFilesClient, then
+press "Reload light tables from disk" (lights panel; WindowRooms.cdbc needs a build that reads it). Run on the 2026-10-17 scan: 2,808 lit windows in 78 places,
 1,858 casting light, at most 5 window lights reaching any 16-yd cell.
 """
 import collections
@@ -246,10 +255,12 @@ def unit(a):
 
 class Pane:
     """A piece of window glass: its middle, the way it faces (out of the building, once oriented), its glass area,
-    its corners (to measure a facade cluster's extent), and whether its group is an exterior one."""
-    def __init__(self, center, normal, area, points, texture, exterior=True):
+    its corners (to measure a facade cluster's extent; three per triangle, in order: the rooms' cells), its group's
+    index, and whether its group is an exterior one."""
+    def __init__(self, center, normal, area, points, texture, exterior=True, group=0):
         self.center, self.normal, self.area, self.points, self.texture = center, normal, area, points, texture
         self.exterior = exterior
+        self.group = group
 
 
 def triangles(group):
@@ -259,10 +270,11 @@ def triangles(group):
             if max(idx[k], idx[k + 1], idx[k + 2]) < len(v)]
 
 
-def panes(group, materials):
-    """The window panes of one group (WMO space, z up): connected, coplanar window triangles, facing the way their
-    winding (and MONR) says. In an exterior group that is out of the building; an interior group's panes are
-    oriented by orient() (Orgrimmar's buildings are all interior groups; Stormwind's rooms see the inner side)."""
+def panes(group, materials, index=0):
+    """The window panes of one group (WMO space, z up; `index`: the group's in its WMO): connected, coplanar window
+    triangles, facing the way their winding (and MONR) says. In an exterior group that is out of the building; an
+    interior group's panes are oriented by orient() (Orgrimmar's buildings are all interior groups; Stormwind's rooms
+    see the inner side)."""
     exterior = bool(group["flags"] & 0x8)
     tris = []
     for start, count, _mn, _mx, _fl, material in group["batches"]:
@@ -318,13 +330,13 @@ def panes(group, materials):
         n = unit(facing)
         if abs(n[2]) > 0.7071:   # skylights and floor glass
             return None
-        return Pane(mul(center, 1.0 / area), n, area, points, tris[ks[0]][1], exterior)
+        return Pane(mul(center, 1.0 / area), n, area, points, tris[ks[0]][1], exterior, index)
 
     for ks in pieces.values():
         p = pane_of(ks)
         if p is None:
             # Not one flat window; a band of glass round a tower may still hold some: try it in tiles.
-            p = Pane((0.0, 0.0, 0.0), unit(vsum(normals[k] for k in ks)), 0.0, [], "", exterior)
+            p = Pane((0.0, 0.0, 0.0), unit(vsum(normals[k] for k in ks)), 0.0, [], "", exterior, index)
             if length(p.normal) < 0.5:
                 continue
         u, w = facade_axes(p.normal)
@@ -514,6 +526,183 @@ def light_of(c):
     return add(middle, mul(c.normal, OUT)), c.normal, 0.5 * (u1 - u0), 0.5 * (w1 - w0), radius, strength
 
 
+# --- the rooms behind the glass (WindowRooms.cdbc) -------------------------------------------------------------------
+# The fake rooms (features/Glass, GlassShader) go dark as the night goes on, a room per cell of the glass: the cell is
+# the pixel's point about the building's origin, in the face's own frame (its geometric normal n facing out: along
+# (-n.y, n.x, 0), x for a skylight; up n x along), over CELL_W x CELL_H. A light's glass is the glass of its panes; for
+# each it says which cells its room glass covers (clear and leaded: GlassMaterials kinds with a room) and how much of
+# the light's glass each is, so the runtime dims the light as those rooms go dark. Stained and frosted glass, and glass
+# not in GlassMaterials, has no room: the share it leaves stays lit.
+CELL_W, CELL_H = 3.5, 3.2                          # features/Glass kCellWidth, kCellHeight
+INV_W = struct.unpack("<f", struct.pack("<f", 1.0 / CELL_W))[0]   # the shader's c198.xy (floats)
+INV_H = struct.unpack("<f", struct.pack("<f", 1.0 / CELL_H))[0]
+ROOM_KINDS = (1, 4)                                # GlassMaterials.Kind clear, leaded (stained 2, frosted 3: no room)
+MIN_SHARE = 0.004                                  # a cell with less of the light's glass is folded into the others
+WHOLE = 0xFFFFFFFF                                 # GlassBuildings.Group of a whole placement
+# Farther than ANCHOR / 2 from the origin on an axis (a city's one big WMO), the cells are about the nearest
+# ANCHOR-yd step from it, its index k (whole numbers) adding k . ANCHOR_KEY_X / _Y to the cell (env/GlassModel room::).
+ANCHOR = 64.0
+ANCHOR_KEY_X, ANCHOR_KEY_Y = (211, 97, 53), (59, 173, 31)
+
+
+def path_hash(wmo):
+    """PathHash (env/GlassModel; gen_glass.hash_path): FNV-1a of the lower-case backslashed path. The shader's seed
+    for an instance GlassBuildings doesn't have."""
+    h = 2166136261
+    for ch in wmo.lower().replace("/", BS).encode("latin1"):
+        h = ((h ^ ch) * 16777619) & 0xFFFFFFFF
+    return h if wmo else 0
+
+
+def norm_path(p):
+    return p.lower().replace("/", BS)
+
+
+def read_glass(folder):
+    """The glass tables the rooms come from (gen_glass.py's, as installed): {"kinds": {texture: kind},
+    "buildings": {(map, unique ID, group): (GlassBuildings ID, origin)}} (origins as the table's floats)."""
+    _, raw, string_at = io.read((folder / "GlassMaterials.cdbc").read_bytes())
+    kinds = {norm_path(string_at(r[1])): r[2] for r in raw}
+    _, raw, _s = io.read((folder / "GlassBuildings.cdbc").read_bytes())
+    buildings = {}
+    for r in raw:
+        if r[2]:   # a WMO's default (unique ID 0) names no placement
+            buildings[(r[1], r[2], r[6])] = (r[0], tuple(io.as_float(v) for v in r[3:6]))
+    return {"kinds": kinds, "buildings": buildings}
+
+
+def cell_frame(n):
+    """The shader's frame for a face whose normal (facing the eye: out) is n: along, up (both unit, in its plane)."""
+    a = (-n[1], n[0], 0.0)
+    if a[0] * a[0] + a[1] * a[1] < 0.0001:
+        a = (1.0, 0.0, 0.0)
+    a = unit(a)
+    return a, cross(n, a)
+
+
+def _clip(poly, axis, bound, keep_above):
+    """Sutherland-Hodgman: the part of a 2D polygon with coordinate `axis` >= bound (or <=)."""
+    out = []
+    for i, p in enumerate(poly):
+        q = poly[(i + 1) % len(poly)]
+        pin = p[axis] >= bound if keep_above else p[axis] <= bound
+        qin = q[axis] >= bound if keep_above else q[axis] <= bound
+        if pin:
+            out.append(p)
+        if pin != qin:
+            t = (bound - p[axis]) / (q[axis] - p[axis])
+            out.append((p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t))
+    return out
+
+
+def _area2(poly):
+    return abs(sum(p[0] * q[1] - q[0] * p[1] for p, q in zip(poly, poly[1:] + poly[:1]))) * 0.5
+
+
+def _clip3(poly, axis, bound, keep_above):
+    """_clip for a polygon in 3D, on one world axis."""
+    out = []
+    for i, p in enumerate(poly):
+        q = poly[(i + 1) % len(poly)]
+        pin = p[axis] >= bound if keep_above else p[axis] <= bound
+        qin = q[axis] >= bound if keep_above else q[axis] <= bound
+        if pin:
+            out.append(p)
+        if pin != qin:
+            t = (bound - p[axis]) / (q[axis] - p[axis])
+            out.append(tuple(p[k] + (q[k] - p[k]) * t for k in range(3)))
+    return out
+
+
+def anchor_index(r):
+    """The anchor a point (about the origin) is about: the nearest ANCHOR step on each axis."""
+    return tuple(math.floor(v / ANCHOR + 0.5) for v in r)
+
+
+def room_cells(tris, out, origin):
+    """{(cell x, cell y): yd^2} of glass triangles (world corners) in the shader's room cells about `origin` (and its
+    anchors, cut where they meet): each triangle in its own frame (its normal turned to `out`, the side the room is
+    seen from), cut exactly by the cells; a cell's index with its anchor's offset."""
+    acc = collections.defaultdict(float)
+    for corners in tris:
+        p = [sub(c, origin) for c in corners]
+        n = cross(sub(p[1], p[0]), sub(p[2], p[0]))
+        area = 0.5 * length(n)
+        if not area > 1e-9:
+            continue
+        n = unit(n)
+        if dot(n, out) < 0.0:
+            n = mul(n, -1.0)
+        a, u = cell_frame(n)
+        whole = _area2([(dot(q, a) * INV_W, dot(q, u) * INV_H) for q in p])
+        if not whole > 0.0:
+            continue
+        lo, hi = anchor_index([min(q[k] for q in p) for k in range(3)]), anchor_index([max(q[k] for q in p) for k in range(3)])
+        for kx in range(lo[0], hi[0] + 1):
+            for ky in range(lo[1], hi[1] + 1):
+                for kz in range(lo[2], hi[2] + 1):
+                    k = (kx, ky, kz)
+                    part = p
+                    for axis in range(3):
+                        part = _clip3(_clip3(part, axis, (k[axis] - 0.5) * ANCHOR, True), axis, (k[axis] + 0.5) * ANCHOR, False)
+                        if len(part) < 3:
+                            break
+                    if len(part) < 3:
+                        continue
+                    ox = sum(i * j for i, j in zip(k, ANCHOR_KEY_X))
+                    oy = sum(i * j for i, j in zip(k, ANCHOR_KEY_Y))
+                    st = [(dot(sub(q, mul(k, ANCHOR)), a) * INV_W, dot(sub(q, mul(k, ANCHOR)), u) * INV_H) for q in part]
+                    for x in range(math.floor(min(s for s, _ in st)), math.floor(max(s for s, _ in st)) + 1):
+                        col = _clip(_clip(st, 0, x, True), 0, x + 1, False)
+                        if len(col) < 3:
+                            continue
+                        for y in range(math.floor(min(t for _, t in col)), math.floor(max(t for _, t in col)) + 1):
+                            piece = _clip(_clip(col, 1, y, True), 1, y + 1, False)
+                            if len(piece) >= 3:
+                                a2 = _area2(piece)
+                                if a2 > 0.0:
+                                    acc[(x + ox, y + oy)] += area * a2 / whole
+    return acc
+
+
+def light_rooms(c, point, direction, map_id, uid, wmo, glass):
+    """A light's room cells: [(GlassBuildings ID or 0, cell x, cell y, share of the light's glass, seed)]. Each pane's
+    building is its group's row (a city's group), else its placement's; with neither, 0 and the cells about the
+    placement's origin (the runtime then takes the shader's default: the built-in house, the WMO's path as the seed).
+    Cells under MIN_SHARE are folded into the building's others (the rooms keep their share of the glass)."""
+    total = 0.0
+    per = collections.defaultdict(lambda: collections.defaultdict(float))
+    seed = path_hash(wmo)
+    for p in c.panes:
+        room = glass["kinds"].get(norm_path(p.texture), 0) in ROOM_KINDS
+        b = glass["buildings"].get((map_id, uid, p.group)) or glass["buildings"].get((map_id, uid, WHOLE))
+        bid, origin = b if b else (0, point((0.0, 0.0, 0.0)))
+        out = unit(direction(p.normal))
+        tris = []
+        for t in range(0, len(p.points) - 2, 3):
+            corners = [point(q) for q in p.points[t:t + 3]]
+            total += 0.5 * length(cross(sub(corners[1], corners[0]), sub(corners[2], corners[0])))
+            if room:
+                tris.append(corners)
+        if tris:
+            for key, a in room_cells(tris, out, origin).items():
+                per[bid][key] += a
+    out_rows = []
+    if total <= 0.0:
+        return out_rows
+    for bid in sorted(per):
+        cells = per[bid]
+        whole = sum(cells.values())
+        kept = {k: a for k, a in cells.items() if a / total >= MIN_SHARE}
+        if not kept:
+            kept = {max(cells, key=cells.get): whole}
+        scale = whole / sum(kept.values())
+        for (x, y), a in sorted(kept.items()):
+            share = struct.unpack("<f", struct.pack("<f", a * scale / total))[0]
+            out_rows.append((bid, x, y, share, seed))
+    return out_rows
+
+
 # --- placement (noggit's convention; checked against all 1,559 tilted MODF extents, waterfall-scan tilt_check.py) ---
 def _rot(axis, d):
     c, s = math.cos(math.radians(d)), math.sin(math.radians(d))
@@ -604,6 +793,8 @@ WINDOW_LIGHTS = ["u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f"
 #  ID MapID AreaID PosX PosY PosZ FacingX FacingY FacingZ Back HalfWidth HalfHeight Radius LightID Strength Flags Comment
 GLOW_ONLY = 0x1      # Flags: the window glows (WindowGlow) but casts no light (thin() left it out of a full cell)
 R_X, R_Y, R_HW, R_HH, R_RADIUS, R_FLAGS = 3, 4, 10, 11, 12, 15
+WINDOW_ROOMS = ["u", "u", "u", "i", "i", "f", "u"]
+#  ID WindowID BuildingID CellX CellY Share Seed
 
 
 def cells_reached(x, y, radius, size=CELL):
@@ -648,11 +839,14 @@ def flat(scan, name):
     return scan / "wmo-windows" / name.replace(BS, "#")
 
 
-def build(scan, survey=False):
+def build(scan, survey=False, glass=None):
+    """(rows, report) for WindowLights.cdbc; with `glass` (read_glass: the glass tables), also each light's room
+    cells as WindowRooms.cdbc rows: (rows, report, room_rows)."""
     areas = read_areas(scan / "AreaTable.dbc")
     amap = AreaMap(scan)
     per_wmo = {}
     rows, report = [], collections.Counter()
+    rooms, room_rows = {}, []
     lit_by_area, dark_by_area = collections.Counter(), collections.Counter()
     for uid, (mapdir, wmo, pos, rot) in sorted(placements(scan).items(), key=lambda kv: int(kv[0])):
         if wmo not in per_wmo:
@@ -667,19 +861,19 @@ def build(scan, survey=False):
                         gp = flat(scan, "%s_%03d.wmo" % (wmo[:-4], g))
                         if gp.exists():
                             group = parse_group(gp.read_bytes())
-                            found += panes(group, mats)
+                            found += panes(group, mats, g)
                             tris += triangles(group)
                     if found and not any(p.exterior for p in found):
                         found = orient(found, Occluder(tris))
                     else:
                         found = orient(found, None)
-                    per_wmo[wmo] = [(light_of(c), c.texture()) for c in cluster(found)]
+                    per_wmo[wmo] = [(light_of(c), c.texture(), c) for c in cluster(found)]
         if not per_wmo[wmo]:
             continue
         point, direction = placement(pos, rot)
         town = WMO_TOWNS.get(wmo.split(BS)[-1])
         town_area = next((a for a, v in areas.items() if town and v[0] == town[0] and v[3] == town[1]), 0)
-        for (p, n, hw, hh, radius, strength), texture in per_wmo[wmo]:
+        for (p, n, hw, hh, radius, strength), texture, c in per_wmo[wmo]:
             wp, wn = point(p), unit(direction(n))
             area = town_area if town_area else amap.at(mapdir, wp[0], wp[1])
             lit, why = lived_in(areas, area, wmo)
@@ -688,12 +882,19 @@ def build(scan, survey=False):
             if not lit:
                 continue
             report[(mapdir, name)] += 1
-            rows.append([0, CONTINENTS[mapdir], area, wp[0], wp[1], wp[2], wn[0], wn[1], wn[2], OUT, hw, hh, radius,
-                         light_for_texture(texture), strength, 0, "%s: %s" % (name, wmo.split(BS)[-1][:-4])])
+            row = [0, CONTINENTS[mapdir], area, wp[0], wp[1], wp[2], wn[0], wn[1], wn[2], OUT, hw, hh, radius,
+                   light_for_texture(texture), strength, 0, "%s: %s" % (name, wmo.split(BS)[-1][:-4])]
+            rows.append(row)
+            if glass is not None:
+                rooms[id(row)] = light_rooms(c, point, direction, CONTINENTS[mapdir], int(uid), wmo, glass)
     thin(rows)
     rows.sort(key=lambda r: (r[1], math.floor(r[3] / 64), math.floor(r[4] / 64), r[3], r[4], r[5]))
     for i, r in enumerate(rows):
         r[0] = i + 1
+    if glass is not None:
+        for r in rows:
+            for building, cx, cy, share, seed in rooms.get(id(r), ()):
+                room_rows.append([len(room_rows) + 1, r[0], building, cx, cy, share, seed])
     if survey:
         print("lit:")
         for k, n in sorted(lit_by_area.items()):
@@ -701,6 +902,8 @@ def build(scan, survey=False):
         print("dark:")
         for k, n in sorted(dark_by_area.items()):
             print("  %4d  %s / %s (%s)" % (n, *k))
+    if glass is not None:
+        return rows, report, room_rows
     return rows, report
 
 
@@ -715,6 +918,13 @@ def busiest_cells(rows, size=CELL):
 
 
 def main():
+    glass_dir = None
+    if "--glass" in sys.argv:
+        at = sys.argv.index("--glass")
+        if at + 1 >= len(sys.argv):
+            sys.exit("--glass needs a folder")
+        glass_dir = Path(sys.argv[at + 1])
+        del sys.argv[at:at + 2]
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
         sys.exit(__doc__)
@@ -732,11 +942,24 @@ def main():
         print(f"{out}: {len(set(names))} group files")
         return
     folder = Path(args[1]) if len(args) > 1 else Path(__file__).resolve().parent.parent / "data"
-    rows, report = build(scan, survey="--survey" in sys.argv)
+    if glass_dir is None:
+        glass_dir = folder if (folder / "GlassBuildings.cdbc").exists() else Path(__file__).resolve().parent.parent / "data"
+    glass = read_glass(glass_dir)
+    rows, report, room_rows = build(scan, survey="--survey" in sys.argv, glass=glass)
     cells = busiest_cells(rows)
     casting = [r for r in rows if not r[R_FLAGS] & GLOW_ONLY]
     print(f"{len(rows)} lit windows in {len(report)} places: {len(casting)} cast light, {len(rows) - len(casting)} only glow; "
           f"busiest 16-yd cell: {max(cells.values()) if cells else 0} window lights")
+    with_rooms = collections.Counter(r[1] for r in room_rows)
+    per_light = sorted(with_rooms.values())
+    room_share = collections.defaultdict(float)
+    for r in room_rows:
+        room_share[r[1]] += r[5]
+    print(f"rooms behind the glass (glass tables from {glass_dir}): {len(room_rows)} room cells for {len(with_rooms)} of the "
+          f"{len(rows)} lights ({len(rows) - len(with_rooms)} have no room glass: stained, frosted, not glass); cells per light: "
+          f"median {per_light[len(per_light) // 2] if per_light else 0}, most {per_light[-1] if per_light else 0}; "
+          f"room glass {100.0 * sum(room_share.values()) / max(1, len(with_rooms)):.0f}% of those lights' glass on average; "
+          f"{sum(1 for r in room_rows if r[2] == 0)} cells with no GlassBuildings row (the default house)")
     by_place = collections.Counter()
     for r in rows:
         by_place[(r[16].split(":")[0], r[1], not r[R_FLAGS] & GLOW_ONLY)] += 1
@@ -750,7 +973,9 @@ def main():
     props = read_table(ppath, io.DOODAD_LIGHT_PROPERTIES)
     pdata = io.build(io.DOODAD_LIGHT_PROPERTIES,
                      [tuple(r) for r in merge(props, LIGHTS, PROPERTY_IDS, "DoodadLightProperties", key=lambda r: r[1])])
-    for path, new in ((wpath, data), (ppath, pdata)):
+    rpath = folder / "WindowRooms.cdbc"
+    rdata = io.build(WINDOW_ROOMS, [tuple(r) for r in room_rows])
+    for path, new in ((wpath, data), (ppath, pdata), (rpath, rdata)):
         old = path.read_bytes() if path.exists() else None
         if new == old:
             print(f"{path}: unchanged")

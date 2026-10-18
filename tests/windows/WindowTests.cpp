@@ -2,8 +2,12 @@
 // window index, the spot's direction, the glass's rectangle, the light budget in a grid cell, and -- given the
 // client executable -- the guards and the key table against its bytes, and -- given the data folder -- the shipped
 // WindowLights.cdbc (inside the budget, its lights night only). No game.
+// Following the rooms behind the glass (env/GlassModel, as features/Windows uses it): a merged light's lit share, a
+// room fading over 1.5 s going dark and lit again (the clock, the time override's jumps, the night factor), the
+// toggles, and the shipped WindowRooms.cdbc (against WindowLights, GlassBuildings, RoomStyles).
 //
 // Usage:  windows_tests [<Wow.exe>] [<repo data folder>]
+#include "env/GlassModel.hpp"
 #include "env/WindowModel.hpp"
 
 #include <windows.h>
@@ -20,6 +24,7 @@
 #include <vector>
 
 namespace wm = wxl_livingazeroth::windows;
+namespace gl = wxl_livingazeroth::glass;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__)); } while (false)
 
@@ -117,7 +122,9 @@ namespace
     {
         uint32_t fields = 0;
         std::vector<std::vector<uint32_t>> rows;
+        std::vector<char> strings;
         float F(size_t r, size_t c) const { float f; std::memcpy(&f, &rows[r][c], 4); return f; }
+        std::string S(size_t r, size_t c) const { const uint32_t o = rows[r][c]; return o < strings.size() ? std::string(&strings[o]) : std::string(); }
     };
     Table ReadTable(const std::string& path)
     {
@@ -134,7 +141,50 @@ namespace
             std::memcpy(row.data(), b.data() + 20 + static_cast<size_t>(r) * h[2], h[2]);
             t.rows.push_back(row);
         }
+        const size_t at = 20 + static_cast<size_t>(h[0]) * h[2];
+        t.strings.assign(b.begin() + static_cast<std::ptrdiff_t>(at), b.end());
+        t.strings.push_back('\0');
         return t;
+    }
+
+    // Following the rooms: a frame-by-frame run of the rooms' clock (60 fps) toward `target(t)` (hour, night), and
+    // each room's lit value (hash in `hashes`) under a style's dark share, as features/Windows works it out.
+    struct Run
+    {
+        std::vector<std::vector<float>> lit;   // per frame, per room
+        double dt = 1.0 / 60.0;
+    };
+    template <class Target> Run RunClock(const gl::RoomStyle& style, uint32_t flags, const gl::RoomToggles& t, const std::vector<float>& hashes,
+                                         double seconds, Target target)
+    {
+        Run run;
+        gl::RoomClock clock;
+        for (double s = 0.0; s <= seconds + 1e-9; s += run.dt)
+        {
+            float hour, night;
+            target(s, hour, night);
+            clock.Advance(1000.0 + s, hour, night);
+            const gl::DarkBand band = gl::BandOf(clock, style, flags, t);
+            std::vector<float> row;
+            for (float h : hashes) row.push_back(gl::RoomLit(h, band));
+            run.lit.push_back(row);
+        }
+        return run;
+    }
+    // Per room: the biggest step between two frames, and how long it took from leaving its first value to reaching
+    // its last (seconds; 0 if it never moved).
+    void Steps(const Run& run, size_t room, float& biggest, double& took)
+    {
+        biggest = 0.0f;
+        int first = -1, last = -1;
+        const float a = run.lit.front()[room], b = run.lit.back()[room];
+        for (size_t f = 1; f < run.lit.size(); ++f)
+        {
+            biggest = std::max(biggest, std::fabs(run.lit[f][room] - run.lit[f - 1][room]));
+            if (first < 0 && run.lit[f][room] != a) first = static_cast<int>(f);
+            if (run.lit[f][room] != b) last = static_cast<int>(f);
+        }
+        took = first < 0 ? 0.0 : (last + 1 - first + 1) * run.dt;
     }
 
     wm::Window At(uint32_t map, float x, float y, float z, uint32_t flags = 0)
@@ -246,6 +296,138 @@ int main(int argc, char** argv)
             static_assert(wm::kWindowRank > 0.0f && wm::kWindowRank < 1.0f, "a window ranks below a torch as bright");
         });
 
+        Test("following the rooms: a merged light's lit share is its glass's share with a lit room", []
+        {
+            // Four rooms' cells (0.3, 0.3, 0.2, 0.1 of the glass) and 0.1 of stained glass (no room: always lit).
+            const float hash[4] = { 0.2f, 0.45f, 0.7f, 0.95f }, share[4] = { 0.3f, 0.3f, 0.2f, 0.1f };
+            auto at = [&](float threshold) {
+                const gl::DarkBand b = gl::Band(threshold, threshold);
+                gl::LightCell c[4];
+                for (int i = 0; i < 4; ++i) { c[i].hash = hash[i]; c[i].share = share[i]; c[i].band = b; }
+                return gl::LitShare(c, 4);
+            };
+            CHECK(Close(at(0.0f), 1.0f, 1e-6f));                 // evening: every room lit
+            CHECK(Close(at(0.3f), 0.7f, 1e-6f));                 // the first room dark: 0.3 of the glass gone
+            CHECK(Close(at(0.5f), 0.4f, 1e-6f));                 // two dark
+            CHECK(Close(at(0.8f), 0.2f, 1e-6f));                 // three dark: the last room and the stained glass
+            CHECK(Close(at(1.0f), 0.1f, 1e-6f));                 // all dark: only the stained glass still lights the street
+            // ... and only room glass: dark is dark; no rooms at all (stained, frosted, no glass entry): always full.
+            gl::LightCell only[2];
+            only[0].hash = 0.3f; only[0].share = 0.6f; only[1].hash = 0.6f; only[1].share = 0.4f;
+            for (auto& c : only) c.band = gl::Band(1.0f, 1.0f);
+            CHECK(gl::LitShare(only, 2) == 0.0f && gl::LitShare(nullptr, 0) == 1.0f);
+            // Half way through a fade the fading room counts half.
+            gl::LightCell fading[4];
+            const gl::DarkBand fade = gl::Band(0.5f, 0.4f);   // the threshold went 0.4 -> 0.5 in the last 1.5 s
+            for (int i = 0; i < 4; ++i) { fading[i].hash = hash[i]; fading[i].share = share[i]; fading[i].band = fade; }
+            CHECK(Close(gl::LitShare(fading, 4), 0.1f + 0.3f * 0.5f + 0.2f + 0.1f, 1e-5f));
+            // A row of windows (24 rooms' cells) dims step by step as the threshold rises, never up.
+            std::vector<gl::LightCell> row(24);
+            float last = 2.0f;
+            int steps = 0;
+            for (float t = 0.0f; t <= 1.0f; t += 0.01f)
+            {
+                const gl::DarkBand b = gl::Band(t, t);
+                for (size_t i = 0; i < row.size(); ++i)
+                {
+                    row[i].hash = gl::LitHash(static_cast<float>(i % 6), static_cast<float>(i / 6), 311.0f, 17.0f);
+                    row[i].share = 1.0f / row.size(); row[i].band = b;
+                }
+                const float s = gl::LitShare(row.data(), row.size());
+                CHECK(s <= last + 1e-6f);
+                steps += s < last - 1e-6f ? 1 : 0;
+                last = s;
+            }
+            CHECK(steps >= 12 && last < 0.05f);
+            std::printf("  a row of 24 rooms dims in %d steps from lit to dark\n", steps);
+        });
+
+        Test("following the rooms: a room going dark at night fades over 1.5 s, and lights again at dawn the same way", []
+        {
+            const gl::RoomStyle house;
+            const gl::RoomToggles on;
+            // The clock running (1 game second a real second) from 23:00 and from 05:00 (early risers: the share falls).
+            const float h23 = gl::LightsOutShare(23.0f + 20.0f / 3600.0f, 0, 1), h05 = gl::LightsOutShare(5.0f + 20.0f / 3600.0f, 0, 1);
+            const Run night = RunClock(house, 0, on, { h23 }, 40.0, [](double s, float& hour, float& n) { hour = 23.0f + static_cast<float>(s / 3600.0); n = 1; });
+            const Run dawn = RunClock(house, 0, on, { h05 }, 40.0, [](double s, float& hour, float& n) { hour = 5.0f + static_cast<float>(s / 3600.0); n = 1; });
+            float bigN, bigD;
+            double tookN, tookD;
+            Steps(night, 0, bigN, tookN);
+            Steps(dawn, 0, bigD, tookD);
+            std::printf("  23:00: lit %.0f -> %.0f over %.2f s (biggest step a frame %.3f); 05:00: %.0f -> %.0f over %.2f s (%.3f)\n",
+                        night.lit.front()[0], night.lit.back()[0], tookN, bigN, dawn.lit.front()[0], dawn.lit.back()[0], tookD, bigD);
+            // (a frame's step is 1/90 on average; the float hour's own 7 ms steps make it uneven: at most 1/40)
+            CHECK(night.lit.front()[0] == 1.0f && night.lit.back()[0] == 0.0f && tookN > 1.4 && tookN < 1.6 && bigN < 0.025f);
+            CHECK(dawn.lit.front()[0] == 0.0f && dawn.lit.back()[0] == 1.0f && tookD > 1.4 && tookD < 1.6 && bigD < 0.025f);
+        });
+
+        Test("following the rooms: the time override's jumps cross-fade (a dragged slider waits for it to stop), each room over 1.5 s", []
+        {
+            const gl::RoomStyle house;
+            const gl::RoomToggles on;
+            std::vector<float> hashes;
+            for (int k = 0; k < 289; ++k) hashes.push_back((k + 0.5f) / 289.0f);
+            // The panel's time set at 1 s: 20:00 -> 02:00, back again, noon -> 23:00 (the night factor 0 -> 1 with it),
+            // 23:59 -> 00:01 (across midnight); its slider dragged from 20:00 to 02:00 over a second (from 1 s to 2 s).
+            struct Jump { const char* name; float from, to, nightFrom, nightTo; bool drag; };
+            const Jump jumps[] = { { "20:00 -> 02:00", 20.0f, 2.0f, 0.0f, 1.0f, false }, { "02:00 -> 20:00", 2.0f, 20.0f, 1.0f, 0.0f, false },
+                                   { "12:00 -> 23:00", 12.0f, 23.0f, 0.0f, 1.0f, false }, { "23:59 -> 00:01", 23.983f, 0.0167f, 1.0f, 1.0f, false },
+                                   { "dragged 20:00 -> 02:00", 20.0f, 26.0f, 0.0f, 1.0f, true } };
+            for (const Jump& j : jumps)
+            {
+                const Run run = RunClock(house, 0, on, hashes, 8.0, [&](double s, float& hour, float& n) {
+                    const double f = j.drag ? std::min(1.0, std::max(0.0, s - 1.0)) : (s < 1.0 ? 0.0 : 1.0);
+                    hour = static_cast<float>(std::fmod(j.from + (j.to - j.from) * f, 24.0));
+                    n = static_cast<float>(j.nightFrom + (j.nightTo - j.nightFrom) * f);
+                });
+                float worst = 0.0f;
+                double longest = 0.0, shortest = 1e9;
+                int moved = 0, wrong = 0;
+                const float want = gl::DarkShare(house, 0, on, j.nightTo, std::fmod(j.to, 24.0f));
+                for (size_t r = 0; r < hashes.size(); ++r)
+                {
+                    float big;
+                    double took;
+                    Steps(run, r, big, took);
+                    worst = std::max(worst, big);
+                    if (took > 0.0) { ++moved; longest = std::max(longest, took); shortest = std::min(shortest, took); }
+                    wrong += run.lit.back()[r] != (hashes[r] > want ? 1.0f : 0.0f) ? 1 : 0;
+                }
+                std::printf("  %s: %d of %zu rooms changed, each over %.2f .. %.2f s, the biggest step a frame %.3f; %d not as the new time has them\n",
+                            j.name, moved, hashes.size(), moved ? shortest : 0.0, longest, worst, wrong);
+                // each room that changes fades over 1.5 s (all together after a jump; a dragged slider holds them until it
+                // stops, at 2 s, then the same)
+                CHECK(wrong == 0 && moved > 0 && worst < 0.015f && shortest >= 1.45 && longest <= 1.6);
+            }
+        });
+
+        Test("following the rooms: RoomVariety or LightsOut off, the lights stay at full at night", []
+        {
+            gl::RoomStyle house;
+            gl::RoomToggles on, noVariety, noLightsOut, none;
+            noVariety.variety = false; noLightsOut.lightsOut = false; none.lightsOutStrength = 0.0f;
+            for (float hour : { 22.0f, 0.0f, 2.0f, 4.5f })
+            {
+                CHECK(gl::DarkShare(house, 0, on, 1.0f, hour) > 0.2f);
+                CHECK(gl::DarkShare(house, 0, noVariety, 1.0f, hour) == 0.0f);
+                CHECK(gl::DarkShare(house, 0, noLightsOut, 1.0f, hour) == 0.0f);
+                CHECK(gl::DarkShare(house, 0, none, 1.0f, hour) == 0.0f);
+                // every room lit: a light's share 1 whatever its cells' hashes
+                const gl::DarkBand b = gl::Band(gl::DarkShare(house, 0, noVariety, 1.0f, hour), gl::DarkShare(house, 0, noVariety, 1.0f, hour));
+                gl::LightCell c[3];
+                for (int i = 0; i < 3; ++i) { c[i].hash = (i * 100 + 0.5f) / 289.0f; c[i].share = 0.3f; c[i].band = b; }
+                CHECK(gl::LitShare(c, 3) == 1.0f);
+            }
+            // By day, the style's few (with variety); an inn late, a shop early; a dark place or an empty house all dark.
+            gl::RoomStyle inn = house; inn.lateHours = 2.5f; inn.nightCap = 0.55f;
+            gl::RoomStyle shop = house; shop.lateHours = -1.0f;
+            CHECK(Close(gl::DarkShare(house, 0, on, 0.0f, 13.0f), house.darkShare, 1e-6f) && gl::DarkShare(house, 0, noVariety, 0.0f, 13.0f) == 0.0f);
+            CHECK(gl::DarkShare(inn, 0, on, 1.0f, 0.0f) < gl::DarkShare(house, 0, on, 1.0f, 0.0f) &&
+                  gl::DarkShare(shop, 0, on, 1.0f, 22.0f) > gl::DarkShare(house, 0, on, 1.0f, 22.0f) && gl::DarkShare(inn, 0, on, 1.0f, 3.0f) <= 0.55f);
+            CHECK(gl::DarkShare(house, gl::kBuildingDarkPlace, on, 1.0f, 21.0f) == 1.0f && gl::DarkShare(house, gl::kBuildingEmpty, on, 0.0f, 12.0f) == 1.0f &&
+                  gl::DarkShare(house, gl::kBuildingEmpty, noVariety, 1.0f, 23.0f) == 0.0f);
+        });
+
         if (argc > 1 && argv[1][0])
         {
             const std::string name = std::string("guards and the night keys against ") + argv[1];
@@ -325,6 +507,98 @@ int main(int argc, char** argv)
                 for (const auto& c : cells) busiest = std::max(busiest, c.second);
                 CHECK(busiest <= 5 && casting > 0);
                 std::printf("  %zu windows, %u cast light, busiest 16-yd cell %d window lights\n", w.rows.size(), casting, busiest);
+            });
+
+            Test("the shipped WindowRooms.cdbc: each light's rooms in GlassBuildings, their shares, a night's lights out", [&]
+            {
+                const Table r = ReadTable(dir + "\\WindowRooms.cdbc");
+                const Table w = ReadTable(dir + "\\WindowLights.cdbc");
+                const Table b = ReadTable(dir + "\\GlassBuildings.cdbc");
+                const Table st = ReadTable(dir + "\\RoomStyles.cdbc");
+                CHECK(r.fields == 7 && r.rows.size() > 1000 && b.fields == 13 && st.fields == 25);
+                std::map<uint32_t, size_t> window, building, style;
+                for (size_t i = 0; i < w.rows.size(); ++i) window[w.rows[i][0]] = i;
+                for (size_t i = 0; i < b.rows.size(); ++i) building[b.rows[i][0]] = i;
+                for (size_t i = 0; i < st.rows.size(); ++i) style[st.rows[i][0]] = i;
+                std::map<uint32_t, std::vector<size_t>> cells;   // per window, its rows
+                uint32_t lastId = 0;
+                unsigned noBuilding = 0;
+                for (size_t i = 0; i < r.rows.size(); ++i)
+                {
+                    const auto& row = r.rows[i];
+                    CHECK(row[0] > lastId);
+                    lastId = row[0];
+                    CHECK(window.count(row[1]));
+                    const float share = r.F(i, 5);
+                    CHECK(share > 0.0f && share <= 1.0f);
+                    const int32_t cx = static_cast<int32_t>(row[3]), cy = static_cast<int32_t>(row[4]);
+                    CHECK(cx > -200000 && cx < 200000 && cy > -200000 && cy < 200000);   // a cell about its anchor, its offset in
+                    if (!row[2]) { ++noBuilding; continue; }
+                    CHECK(building.count(row[2]));
+                    const size_t bi = building[row[2]], wi = window[row[1]];
+                    // the same map, the building's origin near the light, the seed its WMO's path (the shader's fallback)
+                    CHECK(b.rows[bi][1] == w.rows[wi][1] && b.rows[bi][2] != 0);
+                    const float dx = b.F(bi, 3) - w.F(wi, 3), dy = b.F(bi, 4) - w.F(wi, 4);
+                    CHECK(dx * dx + dy * dy < 1200.0f * 1200.0f);
+                    CHECK(row[6] == gl::PathHash(b.S(bi, 11).c_str()));
+                    cells[row[1]].push_back(i);
+                }
+                size_t most = 0;
+                for (const auto& c : cells)
+                {
+                    double sum = 0;
+                    for (size_t i : c.second) sum += r.F(i, 5);
+                    CHECK(sum <= 1.0001);
+                    most = std::max(most, c.second.size());
+                }
+                CHECK(most <= 32);
+                // A night: the lights' mean lit share by the hour, each cell by its building's style and seed (at rest).
+                auto styleOf = [&](size_t bi) {
+                    gl::RoomStyle s;
+                    auto it = style.find(b.rows[bi][7]);
+                    if (it == style.end()) return s;
+                    s.darkShare = st.F(it->second, 17); s.lateHours = st.F(it->second, 22); s.nightCap = st.F(it->second, 23);
+                    return s;
+                };
+                const float hours[] = { 21.0f, 22.0f, 23.0f, 0.0f, 1.0f, 2.0f, 3.0f, 4.5f, 6.0f };
+                float mean[9] = {}, place[2][9] = {};
+                unsigned placeLights[2] = {};
+                const gl::RoomToggles on;
+                for (int k = 0; k < 9; ++k)
+                {
+                    double sum = 0, sumPlace[2] = {};
+                    for (const auto& c : cells)
+                    {
+                        std::vector<gl::LightCell> lc;
+                        for (size_t i : c.second)
+                        {
+                            const size_t bi = building[r.rows[i][2]];
+                            const uint32_t seed = b.rows[bi][8];
+                            gl::LightCell x;
+                            x.hash = gl::LitHash(static_cast<float>(static_cast<int32_t>(r.rows[i][3])), static_cast<float>(static_cast<int32_t>(r.rows[i][4])),
+                                                 static_cast<float>(seed & 1023u), static_cast<float>((seed >> 10) & 1023u));
+                            x.share = r.F(i, 5);
+                            const float dark = gl::DarkShare(styleOf(bi), b.rows[bi][9], on, 1.0f, hours[k]);
+                            x.band = gl::Band(dark, dark);
+                            lc.push_back(x);
+                        }
+                        const float share = gl::LitShare(lc.data(), lc.size());
+                        sum += share;
+                        const std::string comment = w.S(window[c.first], 16);
+                        for (int p = 0; p < 2; ++p)
+                            if (comment.rfind(p ? "Goldshire:" : "Stormwind City:", 0) == 0) { sumPlace[p] += share; if (k == 0) ++placeLights[p]; }
+                    }
+                    mean[k] = static_cast<float>(sum / cells.size());
+                    for (int p = 0; p < 2; ++p) place[p][k] = placeLights[p] ? static_cast<float>(sumPlace[p] / placeLights[p]) : 0.0f;
+                }
+                std::printf("  %zu room cells behind %zu lights (%u without a building), at most %zu a light\n", r.rows.size(), cells.size(), noBuilding, most);
+                std::printf("  the lights with rooms, lit on average:");
+                for (int k = 0; k < 9; ++k) std::printf(" %02d:%02d %.0f%%", static_cast<int>(hours[k]), static_cast<int>((hours[k] - std::floor(hours[k])) * 60), 100 * mean[k]);
+                std::printf("\n  Stormwind (%u lights) at 23:00 %.0f%%, 02:00 %.0f%%; Goldshire (%u) at 23:00 %.0f%%, 02:00 %.0f%%\n",
+                            placeLights[0], 100 * place[0][2], 100 * place[0][5], placeLights[1], 100 * place[1][2], 100 * place[1][5]);
+                // dimming through the night to the small hours, early risers lighting some again at dawn
+                CHECK(mean[0] > 0.8f && mean[0] > mean[2] && mean[2] > mean[3] && mean[3] > mean[5] && mean[7] < 0.45f && mean[8] > mean[7]);
+                CHECK(noBuilding == 0 && placeLights[0] > 50 && placeLights[1] > 10);
             });
         }
         else std::printf("SKIP the shipped table (no data folder given)\n");

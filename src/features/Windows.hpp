@@ -2,6 +2,10 @@
 // buildings come from WindowLights.cdbc (tools/gen_window_lights.py, docs/cdbc-tables.md): each row a light in
 // front of a facade's windows and the glass's rectangle. At night (the client's own window fade) env/Lights adds the
 // nearest as spot lights facing out, and features/WindowGlow blooms the glass.
+// The rooms behind the glass (features/Glass) go dark as the night goes on; WindowRooms.cdbc says which rooms' cells
+// each light's glass covers, of which building, and how much of its glass each is. LitShare works out, with the
+// shader's own hash, band and clock, how much of a light's glass has a lit room now; the light and the glow scale by
+// it, so a row of windows dims as its rooms go dark, each fading over the same 1.5 s as the room.
 #pragma once
 
 #include "../env/WindowModel.hpp"
@@ -27,8 +31,14 @@ namespace wxl_livingazeroth::windows
         float glowRange = 220.0f;       // yd from the camera
         int   withClientGlow = 1;       // while the client's Full Screen Glow (ffxGlow) is on: 0 full, 1 half, 2 off
         float nightTest = -1.0f;        // the panel's test: this night factor (0..1) instead of the client's; < 0 off
+        int   lightsFollowRooms = 1;    // the lights and the glow dim with the rooms behind the glass (WindowRooms.cdbc)
     };
     Settings& Config();
+
+    /// How much of the window's glass has a lit room now, 0..1 (features/Glass's rooms, WindowRooms.cdbc): 1 with
+    /// LightsFollowRooms off, while dark rooms don't hide the client's window (glass, its rooms or lamp-lit rooms
+    /// off), and for glass with no room (stained, frosted, not glass). Once per window per frame.
+    float LitShare(const Window& w);
 
     /// (Re)loads WindowLights.cdbc from DBFilesClient (the lights panel's reload button calls it too).
     void Load(const WXL_SeyrisCdbcApi* cdbc);
@@ -56,6 +66,9 @@ namespace wxl_livingazeroth::windows
         unsigned glowWindows = 0, glowDrawn = 0;             // glow: windows in range, drawn this frame
         double   glowMs = 0.0;
         const char* glowInactive = "not drawn yet";
+        // The rooms (LitShare, last frame): windows near with rooms, of them dimmed (part dark) and dark, the mean lit.
+        unsigned roomWindows = 0, roomDimmed = 0, roomDark = 0;
+        float    roomMeanLit = 1.0f;
     };
     Stats& GetStats();
 
