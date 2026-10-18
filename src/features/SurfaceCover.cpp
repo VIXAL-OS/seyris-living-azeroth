@@ -3,6 +3,7 @@
 
 #include "../debug/Pages.hpp"
 #include "../env/Fields.hpp"
+#include "../env/Storm.hpp"
 #include "GrassPerf.hpp"
 
 #include <cmath>
@@ -72,6 +73,10 @@ namespace wxl_livingazeroth::cover
     float FillBudgetMs() { return g_settings.fillBudgetMs; }
     void SetLiftBaseEffects(bool on) { g_settings.liftBase = on ? 1 : 0; }
     bool LiftBaseEffects() { return g_settings.liftBase != 0; }
+    void  SetTrenchSoftness(float cells) { g_settings.trenchSoftness = cells < 0.0f ? 0.0f : (cells > 4.0f ? 4.0f : cells); }
+    float TrenchSoftness() { return g_settings.trenchSoftness; }
+    void  SetRainFillsRuts(float share) { g_settings.rainFill = share < 0.0f ? 0.0f : (share > 1.0f ? 1.0f : share); }
+    float RainFillsRuts() { return g_settings.rainFill; }
 
     void LoadTable(const void* cdbcApi)
     {
@@ -540,7 +545,7 @@ namespace wxl_livingazeroth::cover
             g_hereLayers.surface[l].texture = g_hereLayersSwapped.surface[l].texture = nullptr;
         }
 
-        Simulate(dt);
+        Simulate(dt, storm::GetStatus().rain); // env/Storm ran this frame already
         g_simMs = grassperf::Now() - t0;
     }
 }

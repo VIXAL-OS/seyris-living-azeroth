@@ -7,6 +7,9 @@
 // texel: how much fog is pushed out (fading with the trail's age, a slight pile-up at the rim), the
 // height the push reaches (the unit's body, not the whole column), and a displacement that drags the
 // fog's patch pattern along the path and curls it to both sides (the swirl).
+//
+// Rain and wind mix the fog back (FogWakeWeather.hpp): the push and the fill-in time shrink with the rain's grade, the
+// storm and the wind at the ground; in heavy rain there is next to no wake. Calm, dry fog is as before.
 #pragma once
 
 #include "../env/WorldQuery.hpp"
@@ -29,6 +32,10 @@ namespace wxl_livingazeroth::fogwake
         float heightScale = 1.0f;     // the wake's height = the unit's height x this
         float rim = 0.25f;            // fog piled up at the wake's rim (share of the push)
         float swirl = 1.0f;           // how far the fog's pattern is dragged and curled (x ~2 yd)
+        // Weather (FogWakeWeather.hpp): rain and wind mix the fog back. 1 = heavy rain leaves almost no wake (a
+        // twentieth of the push, filling in five times as fast); 0 = the weather changes nothing.
+        float rainMixing = 1.0f;
+        float windMixing = 0.5f;      // a strong wind at the ground, half of that
     };
     Settings& Config();
 

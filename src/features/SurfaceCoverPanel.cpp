@@ -50,6 +50,8 @@ namespace wxl_livingazeroth::cover::detail
         g_api->UiSliderFloat("Rim (x table)", &g_settings.rimMul, 0.0f, 3.0f);
         g_api->UiSliderFloat("Relax time (x table)", &g_settings.relaxMul, 0.1f, 10.0f);
         g_api->UiCheckbox("Units carve trenches", &g_settings.stamp);
+        g_api->UiSliderFloat("Trench edge softness (cells of 0.25 yd; 0 = the original, jagged)", &g_settings.trenchSoftness, 0.0f, 4.0f);
+        g_api->UiSliderFloat("Rain fills mud ruts (0.75 = in a quarter of the time in heavy rain)", &g_settings.rainFill, 0.0f, 1.0f);
         g_api->UiCheckbox("Sand: a still ring around each footprint instead of trenches", &g_settings.ripples);
         g_api->UiCheckbox("Slither trails: snakes, naga and worms leave a weaving groove", &g_settings.slither);
         g_api->UiSliderFloat("Ring slope", &g_settings.rippleSlope, 0.0f, 1.5f);
@@ -185,6 +187,16 @@ namespace wxl_livingazeroth::cover::detail
                 else
                     std::snprintf(line, sizeof(line), "here (moisture): needs %.2f, ground moisture not known here yet", v.moistureMin);
                 add();
+            }
+            {
+                const world::Snapshot& snap = world::Current();
+                float sealed = 0.0f, mud = 1.0f;
+                if (snap.inWorld && SealedAt(snap.playerPos[0], snap.playerPos[1], sealed, mud))
+                {
+                    std::snprintf(line, sizeof(line), "here (mud): %.0f%% paved or cobbled -> mud may form %.0f%%; ruts fill in x%.2f of their time (rain %.2f)",
+                                  100.0f * sealed, 100.0f * mud, blend::RainRelaxShare(g_rainNow, 1.0f, g_settings.rainFill), g_rainNow);
+                    add();
+                }
             }
             if (g_hereMccvValid)
                 std::snprintf(line, sizeof(line), "here: vertex colour (MCCV) r %.2f g %.2f b %.2f (0.50 = neutral)", g_hereMccv[0], g_hereMccv[1], g_hereMccv[2]);

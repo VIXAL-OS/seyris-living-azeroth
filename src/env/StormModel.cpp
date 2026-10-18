@@ -60,6 +60,12 @@ namespace wxl_livingazeroth::storm
         return Clamp01((grade - kRainFrom) / (kFullStorm - kRainFrom));
     }
 
+    float RainLevel(int weatherType, float grade)
+    {
+        if (weatherType != 1 || !std::isfinite(grade)) return 0.0f;
+        return Clamp01((grade - kRainFrom) / (kHeavyFrom - kRainFrom));
+    }
+
     uint32_t Rng::Next()
     {
         // xorshift32
@@ -193,13 +199,84 @@ namespace wxl_livingazeroth::storm
         return (distanceYards > 0.0f ? distanceYards : 0.0f) * kYard / kSoundSpeed;
     }
 
-    const char* ThunderSound(float d, float maxDistance)
+    const KitInfo& Info(Kit kit)
     {
-        if (!(d <= maxDistance)) return nullptr;
-        if (d < 250.0f) return "StormPeaksLightning";          // 13021, volume 0.8: Silvermyst's bolt
-        if (d < 600.0f) return "NetherstormLightningStrikes";  // 9843, 0.5: Netherstorm's crack
-        if (d < 1000.0f) return "TK_Lightning_Slow";           // 10007, 0.4: the same recordings
-        return "UL_lightning";                                 // 12779, 0.1: the same, far off
+        const int i = static_cast<int>(kit);
+        return kKits[i >= 0 && i < static_cast<int>(Kit::Count) ? i : static_cast<int>(Kit::Rumble)];
+    }
+
+    const char* LuaRowFor(Kit kit, float volume)
+    {
+        if (!(volume > 0.0f)) return nullptr;
+        const LuaRow* best = nullptr;
+        float bestOff = 0.0f;
+        for (const LuaRow& r : kLuaRows)
+        {
+            if (r.kit != kit) continue;
+            const float off = std::fabs(std::log(r.volume / volume));
+            if (!best || off < bestOff) { best = &r; bestOff = off; }
+        }
+        if (!best) return nullptr;
+        // The nearest may still be far too loud (distant strikes): then none at all. Too quiet is fine.
+        float quietest = best->volume;
+        for (const LuaRow& r : kLuaRows) if (r.kit == kit && r.volume < quietest) quietest = r.volume;
+        if (quietest > kLuaTooLoud * volume) return nullptr;
+        return best->name;
+    }
+
+    float ThunderGain(float d, float maxDistance)
+    {
+        if (!(d <= maxDistance) || !(maxDistance > 0.0f)) return 0.0f;
+        const float g = d <= kThunderRef ? 1.0f : std::pow(kThunderRef / d, kThunderFalloff);
+        return g * (1.0f - Smooth((1.0f - kThunderFadeShare) * maxDistance, maxDistance, d));
+    }
+
+    ThunderPlan PlanThunder(float d, float maxDistance, float pick, bool rumble)
+    {
+        ThunderPlan p;
+        const float g = ThunderGain(d, maxDistance);
+        if (!(g > 0.0f)) return p;
+        if (d < kNearCrack)
+        {
+            const Kit crack = pick < 0.5f ? Kit::Machine : (pick < 0.75f ? Kit::ShamanThunder : Kit::CallLightning);
+            p.layer[p.count++] = { crack, g, 0.0f };
+            if (rumble) p.layer[p.count++] = { Kit::Rumble, 0.5f * g, kRumbleAfterNear };
+        }
+        else if (d < kRumbleOnly || !rumble)
+        {
+            p.layer[p.count++] = { Kit::Bolt, g, 0.0f };
+            if (rumble) p.layer[p.count++] = { Kit::Rumble, 0.7f * g, kRumbleAfterMid };
+        }
+        else p.layer[p.count++] = { Kit::Rumble, std::fmin(1.0f, 1.3f * g), 0.0f };
+        return p;
+    }
+
+    float PlacementDistance(Kit kit)
+    {
+        const KitInfo& k = Info(kit);
+        return k.positional ? std::fmin(6.0f, 0.25f * k.minDistance) : 0.0f;
+    }
+
+    float ClientRolloff(float minDistance, float maxDistance, float distance)
+    {
+        if (distance >= maxDistance) return 0.0f;
+        if (minDistance < distance)
+        {
+            const float rolloff = minDistance / ((distance - minDistance) * 4.0f + minDistance);
+            if (maxDistance * 0.9f < distance) return (1.0f - (distance - maxDistance * 0.9f) / (maxDistance - maxDistance * 0.9f)) * rolloff;
+            return rolloff;
+        }
+        return 1.0f;
+    }
+
+    SoundOutcome Outcome(int result)
+    {
+        switch (result)
+        {
+            case 0: return SoundOutcome::Played;
+            case 9: case 10: case 11: case 14: case 15: case 17: return SoundOutcome::Declined;
+            default: return SoundOutcome::Problem;
+        }
     }
 
     bool Identity(const Shade& s)

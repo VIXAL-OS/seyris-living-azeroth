@@ -31,6 +31,10 @@ namespace wxl_livingazeroth::storm
         int   thunder = 1;           // heavy rain: strikes
         int   sounds = 1;            // their cracks
         float soundDistance = 1600.0f; // yd: farther strikes are silent
+        float soundVolume = 1.0f;    // x the thunder's loudness (StormModel ThunderGain)
+        int   rumble = 1;            // the rolling rumble after near and mid cracks, and alone for very far strikes
+        int   nativeSound = 1;       // through the client's sound kits (volume per distance, from the strike's
+                                     // direction); 0 = Lua PlaySound only (fixed volumes, no direction)
         float strikeLight = 1.0f;    // x the point light at a strike (0 = none)
         float wind = 1.0f;           // x the storm's extra gusts (0 = none)
         float haze = 0.3f;           // extra haze in full storm (0..1, 0 = none)
@@ -55,13 +59,16 @@ namespace wxl_livingazeroth::storm
     /// A flash in the clouds now, or a strike at a distance (yd; < 0 = a random one).
     void TestFlash();
     void TestStrike(float distance);
-    /// Plays the crack heard at this distance now.
+    /// Plays the thunder heard at this distance now (its crack, the rumble after it), from a random direction.
     void TestSound(float distance);
+    /// Plays one of StormModel's kits (Kit) at the loudness of a strike at this distance, from a random direction.
+    void TestKit(int kit, float distance);
 
     struct Status
     {
         int   phase = 0;          // StormModel Phase
         float grade = 0.0f;       // the weather's grade the phase comes from
+        float rain = 0.0f;        // StormModel RainLevel: 0..1, with storms on or off
         bool  overridden = false; // the climate panel's weather override
         float storminess = 0.0f;  // smoothed, 0..1
         float darkness = 0.0f, skyFlash = 0.0f, sceneFlash = 0.0f; // this frame's shade
@@ -71,8 +78,13 @@ namespace wxl_livingazeroth::storm
         int   pendingSounds = 0, liveBolts = 0;
         float scorchLeft = 0.0f;  // seconds
         unsigned bandFrames = 0;  // frames the band hook shaded
+        // Thunder: sounds played through the client's sound kits, through Lua PlaySound, declined by the client
+        // (sound off, too many at once), and layers with no row quiet enough for Lua; the last kit result.
+        unsigned nativeSounds = 0, luaSounds = 0, declinedSounds = 0, droppedSounds = 0;
+        int      lastKitResult = -1;
     };
     const Status& GetStatus();
     const char* BandStatus();   // the band hook: on, or why not
     const char* BoltStatus();   // the bolt models: available, or why not
+    const char* SoundStatus();  // thunder: through the client's sound kits, or Lua PlaySound and why
 }

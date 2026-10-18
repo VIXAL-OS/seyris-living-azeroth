@@ -2,12 +2,16 @@
 // storminess, when flashes come, what a flash looks like over time, where strikes land, thunder's delay
 // and loudness by distance, the day-night colour shading (and that it never builds up), the bolt's
 // matrix, and -- given the client executable -- every guard against its bytes. No game.
+// Also what the rain does elsewhere: the fog wake's weather scaling (features/FogWakeWeather.hpp).
 //
-// Usage:  storm_tests [<Wow.exe>]
+// Usage:  storm_tests [<Wow.exe>] [<SoundEntries.dbc>]
+//   (the client's SoundEntries.dbc, extracted: checks every thunder kit and Lua row against its rows)
 #include "env/StormModel.hpp"
+#include "features/FogWakeWeather.hpp"
 
 #include <windows.h>
 
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -17,6 +21,7 @@
 #include <vector>
 
 namespace st = wxl_livingazeroth::storm;
+namespace fw = wxl_livingazeroth::fogwake;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__)); } while (false)
 
@@ -97,6 +102,41 @@ namespace
             at[g.size - 1] ^= 0x01;
             CHECK(st::FirstMismatch(guards, [&](uintptr_t va, uint32_t size) { return changed.At(va, size); }) == &g);
         }
+    }
+
+    // --- SoundEntries.dbc (3.3.5a: 30 columns: ID, SoundType, Name, File[10], Freq[10], DirectoryBase, Volume, Flags,
+    // MinDistance, DistanceCutoff, EAXDef, SoundEntriesAdvancedID) ---
+    struct SoundRow { int32_t id; std::string name; std::vector<std::string> files; float volume, minDistance, cutoff; uint32_t flags; };
+    std::vector<SoundRow> LoadSoundEntries(const char* path)
+    {
+        FILE* f = std::fopen(path, "rb");
+        if (!f) throw std::runtime_error(std::string("can't open ") + path);
+        std::vector<uint8_t> b;
+        for (int c; (c = std::fgetc(f)) != EOF;) b.push_back(static_cast<uint8_t>(c));
+        std::fclose(f);
+        CHECK(b.size() > 20 && std::memcmp(b.data(), "WDBC", 4) == 0);
+        uint32_t h[5];
+        std::memcpy(h, b.data(), 20);
+        const uint32_t rows = h[1], fields = h[2], size = h[3], strings = h[4];
+        CHECK(fields == 30 && size == 120 && 20ull + uint64_t(rows) * size + strings <= b.size());
+        const char* text = reinterpret_cast<const char*>(b.data() + 20 + size_t(rows) * size);
+        auto str = [&](uint32_t o) { CHECK(o < strings); return std::string(text + o); };
+        std::vector<SoundRow> out;
+        for (uint32_t i = 0; i < rows; ++i)
+        {
+            uint32_t r[30];
+            std::memcpy(r, b.data() + 20 + size_t(i) * size, sizeof(r));
+            SoundRow s;
+            s.id = static_cast<int32_t>(r[0]);
+            s.name = str(r[2]);
+            for (int k = 0; k < 10; ++k) if (r[3 + k]) s.files.push_back(str(r[3 + k]));
+            std::memcpy(&s.volume, &r[24], 4);
+            s.flags = r[25];
+            std::memcpy(&s.minDistance, &r[26], 4);
+            std::memcpy(&s.cutoff, &r[27], 4);
+            out.push_back(s);
+        }
+        return out;
     }
 
     // Counts the flashes a scheduler fires over `seconds` at 60 fps, and the shortest gap between two.
@@ -253,20 +293,168 @@ int main(int argc, char** argv)
             CHECK(farCount > n * 0.66 && farCount < n * 0.74);
         });
 
-        Test("thunder: about 3 s per km after the flash; quieter entries farther away, silence beyond the distance", []
+        Test("thunder: about 3 s per km after the flash", []
         {
             CHECK(st::ThunderDelay(0.0f) == 0.0f && st::ThunderDelay(-5.0f) == 0.0f);
             const float km = 1000.0f / st::kYard; // yards in a kilometre
             CHECK(Near(st::ThunderDelay(km), 2.915f, 0.01f));
             CHECK(Near(st::ThunderDelay(343.0f / st::kYard), 1.0f, 1e-4f));
             CHECK(Near(st::ThunderDelay(2500.0f), 6.66f, 0.02f));
-            CHECK(std::strcmp(st::ThunderSound(100.0f, 1600.0f), "StormPeaksLightning") == 0);
-            CHECK(std::strcmp(st::ThunderSound(400.0f, 1600.0f), "NetherstormLightningStrikes") == 0);
-            CHECK(std::strcmp(st::ThunderSound(800.0f, 1600.0f), "TK_Lightning_Slow") == 0);
-            CHECK(std::strcmp(st::ThunderSound(1500.0f, 1600.0f), "UL_lightning") == 0);
-            CHECK(st::ThunderSound(1700.0f, 1600.0f) == nullptr);
-            CHECK(st::ThunderSound(100.0f, 0.0f) == nullptr);
-            CHECK(st::ThunderSound(std::nanf(""), 1600.0f) == nullptr);
+        });
+
+        Test("thunder's loudness: full near, (60/d)^0.6 out, quieter all the way, fading out before the silent distance", []
+        {
+            CHECK(st::ThunderGain(0.0f, 1600.0f) == 1.0f && st::ThunderGain(60.0f, 1600.0f) == 1.0f);
+            CHECK(Near(st::ThunderGain(250.0f, 1600.0f), 0.425f, 0.005f));
+            CHECK(Near(st::ThunderGain(1000.0f, 1600.0f), 0.185f, 0.005f));
+            float last = 1.0f;
+            for (float d = 61.0f; d < 1600.0f; d += 7.0f)
+            {
+                const float g = st::ThunderGain(d, 1600.0f);
+                CHECK(g < last && g > 0.0f);
+                last = g;
+            }
+            // No fade far from the end; gone at it; nothing beyond, or with no distance, or for a nonsense one.
+            CHECK(Near(st::ThunderGain(1300.0f, 1600.0f), std::pow(60.0f / 1300.0f, 0.6f), 1e-6f));
+            CHECK(st::ThunderGain(1600.0f, 1600.0f) == 0.0f && st::ThunderGain(1601.0f, 1600.0f) == 0.0f);
+            CHECK(st::ThunderGain(100.0f, 0.0f) == 0.0f && st::ThunderGain(std::nanf(""), 1600.0f) == 0.0f);
+            std::printf("  gain at 60 / 250 / 700 / 1000 / 1500 yd: %.2f %.2f %.2f %.2f %.2f\n", st::ThunderGain(60.0f, 1600.0f),
+                        st::ThunderGain(250.0f, 1600.0f), st::ThunderGain(700.0f, 1600.0f), st::ThunderGain(1000.0f, 1600.0f), st::ThunderGain(1500.0f, 1600.0f));
+        });
+
+        Test("thunder's recordings: near the machine's crack (or Shaman thunder, Call Lightning), then the Blasted Lands bolt, far the rumble alone", []
+        {
+            // Near: the crack by the pick, the rumble after it at half.
+            st::ThunderPlan p = st::PlanThunder(100.0f, 1600.0f, 0.2f, true);
+            CHECK(p.count == 2 && p.layer[0].kit == st::Kit::Machine && p.layer[0].after == 0.0f && p.layer[1].kit == st::Kit::Rumble);
+            CHECK(Near(p.layer[1].gain, 0.5f * p.layer[0].gain, 1e-6f) && p.layer[1].after > 0.0f);
+            CHECK(st::PlanThunder(100.0f, 1600.0f, 0.6f, true).layer[0].kit == st::Kit::ShamanThunder);
+            CHECK(st::PlanThunder(100.0f, 1600.0f, 0.9f, true).layer[0].kit == st::Kit::CallLightning);
+            // Half the near strikes are the machine's.
+            unsigned machine = 0;
+            st::Rng rng;
+            for (int i = 0; i < 1000; ++i) machine += st::PlanThunder(120.0f, 1600.0f, rng.Uniform(), true).layer[0].kit == st::Kit::Machine ? 1 : 0;
+            CHECK(machine > 430 && machine < 570);
+            // Mid and distant: the Blasted Lands takes (Zul'Gurub's row), the rumble after them.
+            for (float d : { 250.0f, 400.0f, 800.0f, 1199.0f })
+            {
+                p = st::PlanThunder(d, 1600.0f, 0.1f, true);
+                CHECK(p.count == 2 && p.layer[0].kit == st::Kit::Bolt && p.layer[1].kit == st::Kit::Rumble && p.layer[1].after > 0.0f);
+                CHECK(Near(p.layer[0].gain, st::ThunderGain(d, 1600.0f), 1e-6f));
+            }
+            // Very far: the rumble alone, a little louder than as a tail.
+            p = st::PlanThunder(1400.0f, 1600.0f, 0.1f, true);
+            CHECK(p.count == 1 && p.layer[0].kit == st::Kit::Rumble && p.layer[0].after == 0.0f && p.layer[0].gain > st::ThunderGain(1400.0f, 1600.0f));
+            // The rumble off: cracks and bolts only, and very far strikes keep their bolt.
+            CHECK(st::PlanThunder(100.0f, 1600.0f, 0.1f, false).count == 1);
+            p = st::PlanThunder(1400.0f, 1600.0f, 0.1f, false);
+            CHECK(p.count == 1 && p.layer[0].kit == st::Kit::Bolt);
+            // Silent beyond the distance (the setting), and for no distance setting at all.
+            CHECK(st::PlanThunder(1700.0f, 1600.0f, 0.1f, true).count == 0 && st::PlanThunder(100.0f, 0.0f, 0.1f, true).count == 0);
+            CHECK(st::PlanThunder(std::nanf(""), 1600.0f, 0.1f, true).count == 0);
+            // Never Saurfang's bolt, never Netherstorm's crack (nor its quieter rows, TK_Lightning_Slow and UL_lightning).
+            for (const st::KitInfo& k : st::kKits)
+                CHECK(k.soundKitId != 17203 && k.soundKitId != 9843 && k.soundKitId != 10007 && k.soundKitId != 12779 &&
+                      std::strstr(k.name, "Saurfang") == nullptr && std::strstr(k.name, "Netherstorm") == nullptr);
+            for (const st::LuaRow& r : st::kLuaRows)
+                CHECK(r.soundEntryId != 17203 && r.soundEntryId != 9843 && r.soundEntryId != 10007 && r.soundEntryId != 12779);
+            // Every name fits the DBC's 31 characters (Lua PlaySound looks them up as stored).
+            for (const st::KitInfo& k : st::kKits) CHECK(std::strlen(k.name) <= 31);
+            for (const st::LuaRow& r : st::kLuaRows) CHECK(std::strlen(r.name) <= 31);
+        });
+
+        Test("thunder's Lua fallback: the row nearest the volume; none when every row is far too loud", []
+        {
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Machine, 0.8f), "Goblin_Weather_Machine_Lightnin") == 0);
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Machine, 0.5f), "Goblin_Weather_Machine_Lightnin") == 0); // 1.6x: still played
+            CHECK(st::LuaRowFor(st::Kit::Machine, 0.3f) == nullptr);                                          // 2.7x: left out
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Bolt, 1.0f), "LightningBolt - ZulGurub") == 0);
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Bolt, 0.6f), "ChainHeal") == 0);                          // the 0.8 row of the same takes
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Rumble, 0.9f), "EarthquakeCameraShake (High Vol") == 0);
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Rumble, 0.35f), "EarthquakeCameraShake") == 0);
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Rumble, 0.15f), "EarthquakeCameraShake low volum") == 0);
+            CHECK(std::strcmp(st::LuaRowFor(st::Kit::Rumble, 0.1f), "EarthquakeCameraShake low volum") == 0);
+            CHECK(st::LuaRowFor(st::Kit::Rumble, 0.05f) == nullptr && st::LuaRowFor(st::Kit::Rumble, 0.0f) == nullptr);
+            // Every kit has a row at its own volume.
+            for (int i = 0; i < static_cast<int>(st::Kit::Count); ++i)
+                CHECK(st::LuaRowFor(static_cast<st::Kit>(i), st::kKits[i].volume) != nullptr);
+            // A whole storm through Lua: a far strike with only loud bolt rows is heard as its rumble.
+            const st::ThunderPlan p = st::PlanThunder(1100.0f, 1600.0f, 0.1f, true);
+            CHECK(p.count == 2 && st::LuaRowFor(p.layer[0].kit, p.layer[0].gain) == nullptr && st::LuaRowFor(p.layer[1].kit, p.layer[1].gain) != nullptr);
+        });
+
+        Test("thunder's direction: each positional kit is placed inside its MinDistance, so the client's rolloff keeps our volume", []
+        {
+            // The client's rolloff (ComputeRolloff 0x8782B0): 1 inside min, then min / ((d - min) x 4 + min), 0 at max.
+            CHECK(st::ClientRolloff(18.0f, 45.0f, 10.0f) == 1.0f && st::ClientRolloff(18.0f, 45.0f, 18.0f) == 1.0f);
+            CHECK(Near(st::ClientRolloff(18.0f, 45.0f, 27.0f), 18.0f / 54.0f, 1e-6f) && st::ClientRolloff(18.0f, 45.0f, 45.0f) == 0.0f);
+            CHECK(st::ClientRolloff(50.0f, 100.0f, 95.0f) < st::ClientRolloff(50.0f, 100.0f, 89.0f));
+            for (int i = 0; i < static_cast<int>(st::Kit::Count); ++i)
+            {
+                const st::KitInfo& k = st::kKits[i];
+                const float place = st::PlacementDistance(static_cast<st::Kit>(i));
+                if (!k.positional) { CHECK(place == 0.0f); continue; }
+                CHECK(place > 1.0f && place <= 6.0f && place <= 0.25f * k.minDistance);
+                CHECK(st::ClientRolloff(k.minDistance, k.cutoff, place) == 1.0f);
+                // ... with room for the listener to move off: still full volume 3x as far.
+                CHECK(st::ClientRolloff(k.minDistance, k.cutoff, 3.0f * place) == 1.0f);
+            }
+            CHECK(st::PlacementDistance(st::Kit::Machine) == 4.5f && st::PlacementDistance(st::Kit::Bolt) == 6.0f);
+            CHECK(!st::kKits[static_cast<int>(st::Kit::Rumble)].positional); // a long, deep rumble: straight, at its volume
+        });
+
+        Test("thunder through the client's call: what its results mean for the Lua fallback", []
+        {
+            CHECK(st::Outcome(0) == st::SoundOutcome::Played);
+            for (int declined : { 9, 10, 11, 14, 15, 17 }) CHECK(st::Outcome(declined) == st::SoundOutcome::Declined);
+            for (int problem : { 5, 6, 8, 16, 20, -1, 99 }) CHECK(st::Outcome(problem) == st::SoundOutcome::Problem);
+            static_assert(st::kSoundPropsVolume == 4 && st::kSoundPropsVolumeScale == 8 && st::kSoundPropsSize == 0xE8, "SE2SoundKitProperties");
+        });
+
+        Test("rain level: 0 up to light rain, 1 from heavy rain, rain only", []
+        {
+            CHECK(st::RainLevel(1, 0.0f) == 0.0f && st::RainLevel(1, 0.27f) == 0.0f);
+            CHECK(Near(st::RainLevel(1, 0.485f), 0.5f, 1e-5f));
+            CHECK(st::RainLevel(1, 0.70f) == 1.0f && st::RainLevel(1, 1.0f) == 1.0f);
+            CHECK(st::RainLevel(2, 0.9f) == 0.0f && st::RainLevel(0, 0.9f) == 0.0f && st::RainLevel(1, std::nanf("")) == 0.0f);
+            float last = -1.0f;
+            for (float g = 0.28f; g < 0.70f; g += 0.01f) { const float r = st::RainLevel(1, g); CHECK(r > last); last = r; }
+        });
+
+        Test("fog wake in weather: dry calm fog as before; heavy rain leaves almost no wake and it fills in fast; wind helps", []
+        {
+            // Dry and calm (a foggy forest): nothing changes, exactly.
+            for (float wind : { 0.0f, 0.1f, 0.3f, 0.35f })
+            {
+                const float m = fw::WeatherMixing(0.0f, 0.0f, wind, 1.0f, 0.5f);
+                const fw::WakeScale k = fw::ScaleFor(m);
+                CHECK(m == 0.0f && k.push == 1.0f && k.fill == 1.0f);
+            }
+            // Heavy rain (or a full storm): a twentieth of the push, a fifth of the fill-in time.
+            const float wet[3][2] = { { 1.0f, 0.0f }, { 0.0f, 1.0f }, { 1.0f, 1.0f } };
+            for (const auto& w : wet)
+            {
+                const fw::WakeScale k = fw::ScaleFor(fw::WeatherMixing(w[0], w[1], 0.0f, 1.0f, 0.5f));
+                CHECK(Near(k.push, 0.05f, 1e-6f) && Near(k.fill, 0.2f, 1e-6f));
+                CHECK(0.9f * k.push < 0.05f && 3.0f * k.fill <= 0.6f + 1e-6f); // the defaults' 0.9 push and 3 s: "almost no wake"
+            }
+            // In between it grows with the rain: medium rain already halves the wake.
+            float last = 0.0f;
+            for (float g = 0.28f; g <= 0.71f; g += 0.01f)
+            {
+                const float m = fw::WeatherMixing(st::RainLevel(1, g), st::Storminess(1, g), 0.0f, 1.0f, 0.5f);
+                CHECK(m > last - 1e-6f && m <= 1.0f);
+                last = m;
+            }
+            CHECK(fw::ScaleFor(fw::WeatherMixing(st::RainLevel(1, 0.55f), st::Storminess(1, 0.55f), 0.0f, 1.0f, 0.5f)).push < 0.5f);
+            // Wind: from a fresh breeze up, a strong one at half by default; with rain they add like chances.
+            CHECK(fw::WeatherMixing(0.0f, 0.0f, 1.0f, 1.0f, 0.5f) == 0.5f && fw::WeatherMixing(0.0f, 0.0f, 2.0f, 1.0f, 0.5f) == 0.5f);
+            CHECK(fw::WeatherMixing(0.0f, 0.0f, 0.6f, 1.0f, 0.5f) > 0.0f && fw::WeatherMixing(0.0f, 0.0f, 0.6f, 1.0f, 0.5f) < 0.5f);
+            CHECK(Near(fw::WeatherMixing(0.5f, 0.0f, 1.0f, 1.0f, 0.5f), 0.75f, 1e-6f));
+            // The settings at 0: weather changes nothing; NaN in, sane out.
+            CHECK(fw::WeatherMixing(1.0f, 1.0f, 2.0f, 0.0f, 0.0f) == 0.0f);
+            CHECK(fw::WeatherMixing(std::nanf(""), std::nanf(""), std::nanf(""), 1.0f, 0.5f) == 0.0f);
+            CHECK(fw::ScaleFor(std::nanf("")).push == 1.0f && fw::ScaleFor(-1.0f).fill == 1.0f && Near(fw::ScaleFor(5.0f).push, fw::kPushInFullMix, 1e-6f));
         });
 
         Test("colours: no shade leaves them exactly; the storm darkens the sky most; a flash brightens; alpha kept", []
@@ -347,6 +535,18 @@ int main(int argc, char** argv)
                 CHECK(im.base == 0x00400000u && im.timestamp == 0x4C2452FEu);
                 CheckGuards(im, st::kBandGuards);
                 CheckGuards(im, st::kModelGuards);
+                CheckGuards(im, st::kSoundGuards);
+                // PlaySoundKit resets its own defaults with the same function (0x4C6ACD), and the listener getter we call
+                // is the one the sound interface's own (0x4C5B4B) calls.
+                auto callTarget = [&](uintptr_t at)
+                {
+                    const auto* c = static_cast<const uint8_t*>(im.At(at, 5));
+                    CHECK(c && c[0] == 0xE8);
+                    int32_t r = 0;
+                    std::memcpy(&r, c + 1, 4);
+                    return static_cast<uintptr_t>(at + 5 + r);
+                };
+                CHECK(callTarget(0x004C6ACD) == st::kResetSoundProps && callTarget(0x004C5B4B) == st::kListenerPosition);
                 // The bands' address in the guarded instruction is the one shaded, and the copy is what the guard names.
                 const auto* entry = static_cast<const uint8_t*>(im.At(st::kBandsToLight, 12));
                 uint32_t ambient = 0;
@@ -364,10 +564,50 @@ int main(int argc, char** argv)
                 CHECK(scene == st::kWorldScene);
                 std::memcpy(&rel, spawn + 7, 4);
                 CHECK(static_cast<uintptr_t>(0x007BEEC8 + 11 + rel) == st::kCreateModel);
-                std::printf("  %zu + %zu guards\n", sizeof(st::kBandGuards) / sizeof(st::kBandGuards[0]), sizeof(st::kModelGuards) / sizeof(st::kModelGuards[0]));
+                std::printf("  %zu + %zu + %zu guards\n", sizeof(st::kBandGuards) / sizeof(st::kBandGuards[0]), sizeof(st::kModelGuards) / sizeof(st::kModelGuards[0]),
+                            sizeof(st::kSoundGuards) / sizeof(st::kSoundGuards[0]));
             });
         }
         else std::printf("SKIP guards (no Wow.exe given)\n");
+
+        if (argc > 2)
+        {
+            const std::string name = std::string("thunder's kits and Lua rows against ") + argv[2];
+            Test(name.c_str(), [&]
+            {
+                const std::vector<SoundRow> rows = LoadSoundEntries(argv[2]);
+                auto byId = [&](int32_t id) -> const SoundRow&
+                {
+                    for (const SoundRow& r : rows) if (r.id == id) return r;
+                    throw std::runtime_error("no SoundEntries row " + std::to_string(id));
+                };
+                auto lower = [](std::string v) { for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return v; };
+                for (const st::KitInfo& k : st::kKits)
+                {
+                    const SoundRow& r = byId(k.soundKitId);
+                    if (!(r.name == k.name && r.volume == k.volume && r.minDistance == k.minDistance && r.cutoff == k.cutoff && !r.files.empty()))
+                        throw std::runtime_error(std::string("kit differs from its row: ") + k.name);
+                    for (const std::string& f : r.files)
+                        CHECK(lower(f).find("netherstorm") == std::string::npos && lower(f).find("saurfang") == std::string::npos);
+                    std::printf("  kit %5d %-34s volume %.2f, min %3.0f, cutoff %3.0f, flags 0x%X, %zu take(s)\n", r.id, ("\"" + r.name + "\"").c_str(),
+                                r.volume, r.minDistance, r.cutoff, r.flags, r.files.size());
+                }
+                for (const st::LuaRow& l : st::kLuaRows)
+                {
+                    // Lua PlaySound finds a row by its exact name: exactly one row has it, the one meant, at that volume,
+                    // and it plays the kit's recordings.
+                    unsigned named = 0;
+                    for (const SoundRow& r : rows) named += r.name == l.name ? 1 : 0;
+                    const SoundRow& r = byId(l.soundEntryId);
+                    const SoundRow& kit = byId(st::Info(l.kit).soundKitId);
+                    bool shared = false;
+                    for (const std::string& f : r.files) for (const std::string& g : kit.files) shared = shared || lower(f) == lower(g);
+                    if (!(named == 1 && r.name == l.name && r.volume == l.volume && shared))
+                        throw std::runtime_error(std::string("Lua row isn't what it says: ") + l.name + " (" + std::to_string(named) + " rows by that name)");
+                }
+            });
+        }
+        else std::printf("SKIP SoundEntries checks (no SoundEntries.dbc given)\n");
     }
     catch (const std::exception& e)
     {

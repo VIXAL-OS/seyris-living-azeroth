@@ -41,6 +41,8 @@ says why.
 | SurfaceCoverDepth | 1 | Your multiplier on the cover depth from `SurfaceCover.cdbc` (1 = as the table says). |
 | SurfaceCoverFillBudgetMs | 2 | Milliseconds per frame spent filling the cover around you (on login, teleports, moving). Lower = smoother, slower to appear. |
 | SurfaceCoverLiftEffects | 1 | Effects at units' feet (auras and other spell effects on the Base attachment) sit on top of the cover instead of under it (within 40 yards of you). |
+| SurfaceCoverTrenchSoftness | 1.5 | No trench wall or rim narrower than this many 0.25-yard cells, or walked trenches get jagged, stair-stepped edges (0 = the original widths, 0..4). |
+| SurfaceCoverRainFillsRuts | 0.75 | How much faster mud ruts fill in in heavy rain, 0..1 (0.75 = in a quarter of their time; 0 = rain changes nothing). |
 | TerrainWetness | 1 | The terrain itself looks darker where the ground is wet (rain, water nearby). The client's own terrain shaders are patched for it when they're created. |
 | TerrainWetnessStrength | 0.45 | How much darker soaked ground gets, 0..1: the terrain and the surface cover alike. |
 | WindShelter | 1 | Roofs and overhangs shelter the ground below from wind. |
@@ -92,6 +94,8 @@ Where fog forms, and each kind's density, thickness, colour and so on, come from
 | Height | 1 | How high the push reaches, as a multiple of the unit's height. |
 | Rim | 0.25 | Fog piled up at the wake's edge, as a share of the push. |
 | Swirl | 1 | How far the fog's pattern is dragged and curled along the path. |
+| RainMixing | 1 | Rain mixes the fog back into a wake, 0..1: at 1 heavy rain leaves almost no wake (a twentieth of the push, filling in five times as fast; light rain a little less of one), 0 = rain changes nothing. Calm, dry fog is unaffected. |
+| WindMixing | 0.5 | A fresh to strong wind at the ground mixes the fog back too, 0..1 (calm and light winds change nothing). |
 
 The grass distance itself is still the client's own setting (`groundEffectDist`, options or
 console); the cap only decides how high it may go.
@@ -103,6 +107,13 @@ The server leads: rain grades below 0.40 are light rain (the build-up), below 0.
 gusts and haze and the odd flash in the clouds, more the heavier the rain; heavy rain brings
 strikes.
 
+Thunder: a near strike (under 250 yards) cracks like the Goblin weather machine's lightning half the
+time (else Shaman thunder or Call Lightning's impact), a farther one is the Blasted Lands bolt, the
+farthest (from 1200 yards) only a deep rumble, which also rolls after the nearer ones. Through the
+client's sound kits each plays at a loudness by distance ((60 / yards)^0.6) from the strike's
+direction; if that call isn't available, Lua PlaySound plays the row nearest that loudness (the log
+says which). The storm panel auditions every recording.
+
 | Key | Default | Meaning |
 |---|---|---|
 | Enabled | 1 | Rain builds up into storms. |
@@ -113,6 +124,9 @@ strikes.
 | Thunder | 1 | Heavy rain: lightning strikes, lighting the sky and (near ones) the ground. |
 | ThunderSounds | 1 | A strike's crack, after the sound's travel time (about 3 s per km), quieter the farther. |
 | ThunderSoundDistance | 1600 | Strikes farther than this (yards) are silent. |
+| ThunderVolume | 1 | Your multiplier on the thunder's loudness (a near strike at 1 plays its recording at full volume). |
+| ThunderRumble | 1 | A deep rumble rolls after near and mid cracks, and is all you hear of very far strikes. |
+| ThunderNative | 1 | Play thunder through the client's sound kits: a loudness per distance, from the strike's direction. 0 = Lua PlaySound (fixed volumes, no direction). |
 | StrikeLight | 1 | Your multiplier on the point light at a strike within light range, 0 = none. |
 | Gusts | 1 | Your multiplier on the storm's extra gusts, 0 = none. |
 | Haze | 0.3 | Extra haze in full storm, 0..1 (on top of the rain's own), 0 = none. |

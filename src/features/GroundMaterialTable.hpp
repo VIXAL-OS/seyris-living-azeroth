@@ -29,9 +29,16 @@ namespace wxl_livingazeroth::materials
     /// GroundMaterial Flags bits.
     /// Clear ice (features/TerrainIce): the terrain shader draws it as clear, deep ice.
     constexpr uint32_t kFlagClearIce = 0x1;
+    /// Sealed ground: paved, cobbled, flagstones. Water runs off it, so no mud forms there (covers with a MoistureMin,
+    /// features/SurfaceCoverFill; the share painted with sealed ground holds the mud back, blend::MudAllowed). Children
+    /// of a sealed material are sealed too (Sealed()).
+    constexpr uint32_t kFlagSealed = 0x2;
 
     /// Whether any GroundMaterial row has all of these Flags bits (cheap; from the last load).
     bool AnyWithFlags(uint32_t flags);
+
+    /// Whether the material or one of its parents has kFlagSealed. False for 0 (no material).
+    bool Sealed(uint32_t materialId);
 
     /// (Re)loads both tables through wxl-seyris-tools' cdbc reader.
     void Load(const void* cdbcApi);

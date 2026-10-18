@@ -29,6 +29,12 @@ namespace wxl_livingazeroth::cover
     /// Effects at units' feet (Base attachment: auras) lifted onto the cover.
     void SetLiftBaseEffects(bool on);
     bool LiftBaseEffects();
+    /// The trench edge filter: no trench wall or rim narrower than this many 0.25 yd cells (0..4; 0 = the original).
+    void  SetTrenchSoftness(float cells);
+    float TrenchSoftness();
+    /// How much faster mud ruts fill in in heavy rain (0..1: 0.75 = in a quarter of their relax time).
+    void  SetRainFillsRuts(float share);
+    float RainFillsRuts();
 
     /// Loads SurfaceCover.cdbc (which ground gets cover, how deep) through the cdbc reader.
     void LoadTable(const void* cdbcApi);

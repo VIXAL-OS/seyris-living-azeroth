@@ -128,7 +128,7 @@ should be a different material gets a TexturePath row; a zone that's different g
 | Parent | material whose values a −1 field takes (0 = none). Feature tables follow the same chain |
 | RestMoisture | 0 = bone dry .. 1 = soaked: **what the texture already shows** (wet-painted sand ≈ 0.8). Moisture rests here; later, visuals react to the difference from it. Not used yet |
 | Stiffness | resistance to deformation: **0 = gives way completely .. 1 = rigid** (the same meaning as GroundEffectDoodadWind's Stiffness). For a cover: feet press away (1 − Stiffness) of its depth, so mud at 0.4 keeps a floor in every print |
-| Flags | reserved, 0 |
+| Flags | 0x1 **clear ice** (the terrain draws it as deep, clear ice). 0x2 **sealed**: paved, cobbled, flagstones; water runs off, so **no mud forms** on it: a cover with a MoistureMin is held back where sealed ground is painted, fully from 30% of the spot, none below 5%. Children of a sealed material are sealed too. Flags are the material's own (not inherited), except 0x2 |
 | Absorbency | 0..1, how much outside moisture reaches it: **rain** on open ground and **water nearby**. Rock and ice ≈ 0.1 (rain runs off), sand and soil ≈ 0.9. Appended: older files without it still load |
 | Temperature | °C of the material itself; **−1000 = none** (signed). A heat source: **liquid materials** (magma) and **terrain materials** (e.g. a painted lava-stream texture, where it's painted at least 50%) warm (or cool) the ground toward it, by 5% of the difference at the source, fading out by 12 yd and 4 yd above it. Liquid and ground heat don't add up; the stronger one counts. Hot ground dries out by itself (heat drying). Appended |
 
@@ -180,7 +180,7 @@ in over time. Grass and small doodads are buried under it.
 | Flags | 0x1 **prevent underwater**: the cover thins out over 0.3 yd below a terrain liquid's surface (rivers, lakes, sea; not WMO water). 0x2 **prevent on land**: cover only there (river and sea floors). 0x4 **use MCCV**: tinted by the terrain's vertex colours, like the terrain. 0x8 **ignore specular map**: no shine from the CoverTexture. Flags come from the row that decides Depth, except 0x8, which belongs to the CoverTexture named in the same row |
 | MeltKeptShare | **snow covers only**: the share of the painted depth mild weather melts it down to (at 15 °C; less above 0 °C, nothing at or below). 0.6 if no row sets it. Appended |
 | MeltGoneTemperature | **snow covers only**: °C at which painted snow melts away completely (from MeltKeptShare at 15 °C down to nothing here). 25 if no row sets it; set it low (e.g. 16) for "no snow in summer" in a zone or on a texture. Signed: **−1000 inherits**. Appended |
-| MoistureMin | the cover only forms where the ground's **moisture** (0 bone dry .. 1 soaked; the climate panel shows it) is at least this, growing to its full Depth over the next 0.1: mud on riverbanks and in swamps, more of it after rain, drying away again. Checked every few seconds, so it lingers briefly after the ground dried. **2 (no row sets it) = off**: the cover doesn't depend on moisture. Off by default on purpose: nothing becomes mud unless a row asks for it. Appended |
+| MoistureMin | the cover only forms where the ground's **moisture** (0 bone dry .. 1 soaked; the climate panel shows it) is at least this, growing to its full Depth over the next 0.1: mud on riverbanks and in swamps, more of it after rain, drying away again. Checked every few seconds, so it lingers briefly after the ground dried. **Never on sealed ground** (GroundMaterial Flags 0x2: cobbles, paving), even where the mud's own texture shows between the stones. Its ruts fill in faster in rain (`SurfaceCoverRainFillsRuts`). **2 (no row sets it) = off**: the cover doesn't depend on moisture. Off by default on purpose: nothing becomes mud unless a row asks for it. Appended |
 
 **Specular:** a CoverTexture's alpha is its specular mask, as on the terrain's layers. If a `_s.blp`
 next to it exists (later expansions keep the mask there), that one is used instead. The shine uses the
@@ -197,6 +197,13 @@ ZOffset 0, Wetness 0, no flags, MoistureMin off. No material, no row along its c
 longer side (a human's 0.33 yd print → 0.4 yd). Models with FootprintTextureID −1 (bats, birds and
 other fliers that "walk" in the air) leave no trench.
 
+**Trench shape:** pressed flat in the middle, a wall around 0.85 × the radius, a rim outside it. No wall
+or rim is drawn narrower than `SurfaceCoverTrenchSoftness` cells of the near grid (1.5 × 0.25 yd), or a
+walked trench's edge comes out as a staircase along the grid; trenches from ~1.25 yd up keep their own
+widths, critters' smaller than the filter become shallower dimples. A foot flattens the rims earlier
+steps pushed up, and pushes up none where the ground is already trodden, so a walked path is a trench
+between two rims (not one raised band).
+
 **The client's own footprints** (FootprintTextures, `showfootprints`) stay visible on top of every
 cover. The client draws them after the whole scene, as copies of the terrain triangles under the foot,
 depth-tested with only a tiny depth bias, so a cover even a few centimetres thick used to hide them
@@ -211,6 +218,14 @@ table for testing or taste; at 1 the table applies exactly.
 
 Shipped baseline: snow 0.35 yd everywhere it's painted (bare above ~40°), sand listed but off
 (Depth 0, with a sandy tint ready).
+
+**Paved ground and Elwynn's mud** (`tools/add_paved_ground.py`, applied to `data/`): GroundMaterial 80
+**Paved** (Flags 0x2, sealed; nothing else set, so it reads like no material otherwise) on the old world's
+cobbled and paved road textures (Elwynn, Duskwood, Stranglethorn, Tirisfall, Burning Steppes' bricks), so
+no mud forms on them. Elwynn's road is cobblestones over ElwynnDirtBase2, whose mud (row 12, MoistureMin
+0.6) grew on the road itself in rain. Row 12 is shallow now: Depth 0.02, ZOffset −0.025, Rim 1.75 (was
+0.04, −0.08, 7): it stays 0.005 yd under the grass until feet push a rim up, 0.03 yd proud (was 0.24),
+and only where the dirt is painted at about half or more.
 
 **Ash and sand** (`tools/add_ash_sand_cover_rows.py`, applied to `data/`): thin layers that take trails
 like snow. Two parent materials, **Ash** (50) and **Sand** (51), carry the shared cover row; each
