@@ -369,6 +369,55 @@ int main(int argc, char** argv)
                 CHECK(At(*s).depth > 0.0f && !(At(*s).flags & ct::kFlagRipplePrints));
             CHECK(sand.relaxSeconds < At(kSearingAsh).relaxSeconds && At(kSearingAsh).relaxSeconds < At(kDunMorogh).relaxSeconds);
         });
+        Test("Silithus's dunes (45.0, 37.2): sand as in Tanaris, rims at every spot; the faint trench is the rock highlight's share, as before weather-polish", []
+        {
+            // "sand footprints in silithus do not work, only really faint trenches" (the user, 2026-10-18). The rows aren't
+            // why: Silithus's sand is Tanaris's, unchanged since the sand came in (rim 0.5, relax 10 s, 0.015 yd under the
+            // terrain, flags 0x15: rings around prints, no trench). The client put no prints down there: its dunes'
+            // ground effects are TerrainType Dirt (features/CoverPrints.hpp), so no rims formed around them either.
+            const ct::Values hi = At(kSilithusHi), s01 = At(kSilithus01), det = At(kSilithusDet), rock = At(kSilithusRock);
+            for (const ct::Values& v : { hi, s01, det, At(kTanarisSand), At(kTanarisStone) })
+                CHECK(Near(v.rim, 0.5f) && Near(v.relaxSeconds, 10.0f) && Near(v.zOffset, -0.015f) && v.flags == 0x15u && Near(v.maxSlope, 30.0f));
+            // The rock highlight painted over the dunes: upstream's thin row (1 cm, its own trench), not a ring cover.
+            CHECK(rock.material == 10 && Near(rock.depth, 0.01f) && Near(rock.rim, 0.6f) && Near(rock.relaxSeconds, 24.0f) &&
+                  !(rock.flags & ct::kFlagRipplePrints));
+            // The layer weights about the screenshot's spot (Kalimdor_30_44, the 5 x 5 cells around it, Living Azeroth's
+            // weighing: each layer's alpha, layer 0 one minus the rest): SilithisSandHighlight 215..255,
+            // SilithisRockHighlight2 4..193, SilithisSand01 0..40. The mean, the rockiest cell and the sandiest.
+            struct Mix { const char* what; float sand01, highlight, rockHighlight; };
+            const float human = 0.4f, cell = 0.25f; // a human's trench radius, level 0's grid
+            const blend::TrenchShape shape = blend::TrenchShapeFor(human, cell, 1.5f);
+            for (const Mix& m : { Mix{ "mean", 4.0f, 249.0f, 104.0f }, Mix{ "rockiest", 0.0f, 215.0f, 193.0f }, Mix{ "sandiest", 40.0f, 255.0f, 4.0f } })
+            {
+                const float sandW = m.sand01 + m.highlight, all = sandW + m.rockHighlight;
+                const float ripple = sandW / all;                                  // the look's share from 0x10 rows
+                const float depth = (m.sand01 * s01.depth + m.highlight * hi.depth + m.rockHighlight * rock.depth) / all;
+                // At least half: the rims form (SurfaceCoverInternal's kRippleShareMin) and, now, the client's prints too.
+                CHECK(ripple >= 0.5f);
+                // Feet press the rest (keep = 1 - ripple). A walked path's floor, by the rules before weather-polish (the
+                // largest press so far, rims the largest ring) and after (TrenchProfile, StampedRim): the same depth.
+                const float keep = 1.0f - ripple;
+                float pressOld = 0.0f, pressNew = 0.0f, rimNew = 0.0f, rimOld = 0.0f;
+                for (float x = -2.0f; x <= 2.0f; x += 0.05f)
+                {
+                    const float d = std::fabs(x);
+                    const float tOld = (d < human ? (d < 0.7f * human ? 1.0f : (human - d) / (0.3f * human)) : 0.0f) * keep;
+                    pressOld = std::fmax(pressOld, tOld);
+                    rimOld = std::fmax(rimOld, (1.0f - std::fabs(d - 1.25f * human) / (0.35f * human)) * keep);
+                    const blend::TrenchStamp st = blend::TrenchProfile(d, shape);
+                    rimNew = blend::StampedRim(rimNew, st.press * keep, st.rim * keep, pressNew);
+                    pressNew = std::fmax(pressNew, st.press * keep);
+                }
+                CHECK(Near(pressOld, keep) && Near(pressNew, keep));
+                const float dentOld = depth - blend::DeformedDepth(depth, 0.0f, 0.0f, pressOld, 0.0f, 1.0f);
+                const float dentNew = depth - blend::DeformedDepth(depth, 0.0f, 0.0f, pressNew, 0.0f, 1.0f);
+                std::printf("  Silithus %-8s sand %.0f%% of the look, cover %.3f yd: a walked path %.1f cm deep before weather-polish, %.1f cm now\n",
+                            m.what, 100.0f * ripple, depth, 100.0f * dentOld, 100.0f * dentNew);
+                CHECK(Near(dentOld, dentNew) && dentNew < 0.025f); // "only really faint trenches", the same before and after
+            }
+            // Pure sand (Tanaris's stony sand, all of the look): no trench at all, before and after.
+            CHECK(blend::TrenchProfile(0.0f, shape).press * 0.0f == 0.0f && blend::StampedRim(0.0f, 0.0f, 0.0f, 0.0f) == 0.0f);
+        });
         Test("the Caverns of Time: sand on its floor's rock-base textures, each its own texture; the same textures bare in the rest of Tanaris", []
         {
             const ct::Values burn = At(kCavernsBurn), rock = At(kCavernsRock);

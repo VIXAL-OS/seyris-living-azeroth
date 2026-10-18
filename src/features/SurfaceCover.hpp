@@ -76,6 +76,15 @@ namespace wxl_livingazeroth::cover
     /// close they came, starting with "FAIL " when they don't agree or a rim reaches past where the shader looks.
     std::string RimShaderSelfTest(void* device);
 
+    /// Prints on sand the client counts as dirt (features/CoverPrints: Silithus, Feralas, Ashenvale, ...): the setting.
+    void SetSandPrints(bool on);
+    bool SandPrints();
+    /// Whether a print the client is putting down at world (x, y, z) should go down although its ground's TerrainType
+    /// gives none: the setting is on and level 0's cover there takes prints instead of trenches (kFlagRipplePrints:
+    /// sand, dry-shore mud; the same test as the rims around prints), with the foot at the cover's base, not on a
+    /// building's floor. Reads only level 0's fixed arrays (the footstep may run off the main thread).
+    bool SandPrintsAt(float x, float y, float z);
+
     /// How far the cover drawn in this scene rises above the terrain at world (x, y), where the terrain
     /// is at terrainZ (yd): its top there as the near level draws it (trenches included), 0 where none
     /// is drawn (no cover, thinner than drawn, outside the near level, or PrintsOnCover() is false).

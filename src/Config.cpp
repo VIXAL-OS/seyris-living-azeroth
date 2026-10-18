@@ -135,6 +135,7 @@ namespace wxl_livingazeroth::config
         cover::SetLiftBaseEffects(Bool(s, "SurfaceCoverLiftEffects", "Effects at units' feet (auras and other spell effects on the Base attachment) sit on top of the cover instead of under it (within 40 yards of you).", cover::LiftBaseEffects()));
         cover::SetTrenchSoftness(Float(s, "SurfaceCoverTrenchSoftness", "No trench wall or rim narrower than this many 0.25-yard cells, or walked trenches get jagged, stair-stepped edges (0 = the original widths, 0..4).", cover::TrenchSoftness()));
         cover::SetRainFillsRuts(Float(s, "SurfaceCoverRainFillsRuts", "How much faster mud ruts fill in in heavy rain, 0..1 (0.75 = in a quarter of their time; 0 = rain changes nothing).", cover::RainFillsRuts()));
+        cover::SetSandPrints(Bool(s, "SurfaceCoverSandPrints", "Footprints, and the sand rims around them, on sand the game counts as dirt (Silithus, Feralas, Ashenvale, much of Darkshore, dry muddy shores), as in Tanaris. Only the prints: footstep sounds stay as they are.", cover::SandPrints()));
 
         terrainwet::SetEnabled(Bool(s, "TerrainWetness", "The terrain itself looks darker where the ground is wet (rain, water nearby).", terrainwet::Enabled()));
         terrainwet::SetStrength(Float(s, "TerrainWetnessStrength", "How much darker soaked ground gets, 0..1: the terrain and the surface cover alike.", terrainwet::Strength()));

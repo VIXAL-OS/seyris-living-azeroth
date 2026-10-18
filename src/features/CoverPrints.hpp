@@ -41,7 +41,8 @@ struct WXL_Api;
 namespace wxl_livingazeroth::coverprints
 {
     /// Checks the client (12340, every guard below), then hooks its print draw. Off, with the reason in
-    /// Status(), when anything differs.
+    /// Status(), when anything differs. The footstep's print thunk (prints on sand the client counts as dirt,
+    /// kStepGuards) is checked and hooked on its own, its reason in StepStatus().
     void Install(const WXL_Api* api);
     const char* Status();
     /// The last print draw: live prints, and those lifted onto the cover.
@@ -79,6 +80,9 @@ namespace wxl_livingazeroth::coverprints
     // Raised this much above the cover's surface besides: the cover is drawn on a 0.25 yd grid, the
     // print on the terrain's triangles, and the client's depth bias is small up close.
     constexpr float kAboveSurface = 0.01f;
+
+    inline float ReadFloat(const uint8_t* p) { float f; std::memcpy(&f, p, 4); return f; }
+    inline uint32_t ReadU32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 
     struct Guard
     {
@@ -128,17 +132,114 @@ namespace wxl_livingazeroth::coverprints
          {0xE8, 0x6B, 0xE1, 0xFF, 0xFF}},
     };
 
-    /// The first guard whose bytes differ (read through `read(address, size)`, which returns a pointer to
-    /// that many bytes or null), or null when all match.
-    template <class Read> const Guard* FirstMismatch(Read read)
+    /// The first guard of `list` whose bytes differ (read through `read(address, size)`, which returns a pointer
+    /// to that many bytes or null), or null when all match.
+    template <size_t N, class Read> const Guard* FirstMismatchIn(const Guard (&list)[N], Read read)
     {
-        for (const Guard& g : kGuards)
+        for (const Guard& g : list)
         {
             const void* at = read(g.address, g.size);
             if (!at || std::memcmp(at, g.bytes, g.size) != 0) return &g;
         }
         return nullptr;
     }
+    template <class Read> const Guard* FirstMismatch(Read read) { return FirstMismatchIn(kGuards, read); }
+
+    // --- Prints on sand the client counts as dirt (ChromieCraft fork, 2026-10-18) ---------------------------------
+    // "sand footprints in silithus do not work, only really faint trenches" (the user, 2026-10-18; Tanaris's work).
+    // The client puts a print down only where the ground's TerrainType has flag 0x1 (static disassembly of 12340):
+    //  - a unit's footstep (0x723A50) with showfootprints on calls the print thunk (0x77F040, from 0x723B80) with the
+    //    print's texture, size, position, facing, foot, the unit's TerrainType (unit +0xA40: the dominant layer's ground
+    //    effect's, GroundEffectTexture +0x28) and whether it is the active player;
+    //  - print add (0x79FA70) looks that TerrainType up (its DB storage at 0xAD4C34) and returns at once unless the
+    //    row's Flags (+0x14) have 0x1. The TerrainType is used for nothing else there.
+    // TerrainType.dbc gives 0x1 to Snow (3) and Sand (7) only. Silithus paints its dunes (SilithisSand01, -Highlight,
+    // -Detail, RockHighlight2) with ground effects 7436..7442, all TerrainType 0 (Dirt): the client never prints there,
+    // so the sand's rims (CoverRipples.hpp), made around the client's prints, never formed either, and the cover kept
+    // only the trench share of the rock highlight painted over the sand. Tanaris's sand effects are Sand (7). The same
+    // holds for Feralas's and Ashenvale's sand, most of Darkshore's sand 3, and the dry-shore muds (Dirt or Soggy).
+    //
+    // The fix: the print thunk is hooked. Where the client's TerrainType gives no print but the surface cover there is
+    // one that takes prints instead of trenches (kFlagRipplePrints: sand, dry-shore mud; cover::SandPrintsAt), the
+    // print goes down with a TerrainType that has the flag (Sand). Only the print: footstep sounds and everything else
+    // keep the unit's own TerrainType.
+    constexpr uintptr_t kStepPrint = 0x0077F040;          // __cdecl, the seven arguments below
+    constexpr uintptr_t kTerrainTypeMaxId = 0x00AD4C40;   // TerrainType's DB storage (0xAD4C34): +0x0C the largest ID,
+    constexpr uintptr_t kTerrainTypeMinId = 0x00AD4C44;   //   +0x10 the smallest,
+    constexpr uintptr_t kTerrainTypeRows = 0x00AD4C54;    //   +0x20 the rows by ID - smallest (null: none)
+    constexpr uint32_t  kTerrainTypeFlags = 0x14;
+    constexpr uint32_t  kTerrainTypeFootprints = 0x1;
+    constexpr int32_t   kSandTerrainType = 7;
+
+    const Guard kStepGuards[] = {
+        {"footstep: the print call takes the unit's TerrainType (+0xA40)", 0x00723B61, 24,
+         {0x8B, 0x86, 0x40, 0x0A, 0x00, 0x00, 0x0F, 0x94, 0xC1, 0x50, 0x8B, 0x42, 0x34, 0x51, 0x8B, 0xCE, 0xFF, 0xD0,
+          0x8B, 0x55, 0xE0, 0x51, 0xD9, 0x1C}},
+        {"footstep: the print thunk called with seven arguments", 0x00723B7A, 14,
+         {0x57, 0x8D, 0x4D, 0xEC, 0x51, 0x52, 0xE8, 0xBB, 0xB4, 0x05, 0x00, 0x83, 0xC4, 0x1C}},
+        {"print thunk: its arguments passed on in order", 0x0077F040, 24,
+         {0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x20, 0xD9, 0x45, 0x14, 0x8B, 0x4D, 0x1C, 0x8B, 0x55, 0x18, 0x50, 0x8B, 0x45,
+          0x10, 0x51, 0x52, 0x8B, 0x55, 0x08}},
+        {"print thunk: the call to print add", 0x0077F058, 18,
+         {0x51, 0x8B, 0x4D, 0x0C, 0xD9, 0x1C, 0x24, 0x50, 0x51, 0x52, 0xE8, 0x09, 0x0A, 0x02, 0x00, 0x83, 0xC4, 0x1C}},
+        {"print add: the TerrainType's row from its storage", 0x0079FA88, 24,
+         {0x8B, 0x45, 0x1C, 0x8B, 0x0D, 0x44, 0x4C, 0xAD, 0x00, 0x3B, 0xC1, 0x0F, 0x8C, 0x21, 0x02, 0x00, 0x00, 0x3B,
+          0x05, 0x40, 0x4C, 0xAD, 0x00, 0x0F}},
+        {"print add: no print unless the row's flags have 0x1", 0x0079FAA5, 24,
+         {0x2B, 0xC1, 0x8B, 0x0D, 0x54, 0x4C, 0xAD, 0x00, 0x8B, 0x04, 0x81, 0x85, 0xC0, 0x0F, 0x84, 0x02, 0x02, 0x00,
+          0x00, 0xF6, 0x40, 0x14, 0x01, 0x0F}},
+    };
+
+    /// Whether the client puts prints down on TerrainType `id` (its row's Flags have kTerrainTypeFootprints; stock:
+    /// Snow and Sand), reading the client's storage through `read(address, size)` as FirstMismatch does. False for an ID
+    /// without a row (-1: ground without a ground effect) or a table not loaded.
+    template <class Read> bool TerrainTypePrints(int32_t id, Read read)
+    {
+        const void* lo = read(kTerrainTypeMinId, 4);
+        const void* hi = read(kTerrainTypeMaxId, 4);
+        const void* rows = read(kTerrainTypeRows, 4);
+        if (!lo || !hi || !rows) return false;
+        int32_t minId, maxId;
+        std::memcpy(&minId, lo, 4);
+        std::memcpy(&maxId, hi, 4);
+        const uint32_t table = ReadU32(static_cast<const uint8_t*>(rows));
+        if (!table || id < minId || id > maxId) return false;
+        const void* slot = read(table + 4u * static_cast<uint32_t>(id - minId), 4);
+        if (!slot) return false;
+        const uint32_t row = ReadU32(static_cast<const uint8_t*>(slot));
+        if (!row) return false;
+        const void* flags = read(row + kTerrainTypeFlags, 4);
+        return flags && (ReadU32(static_cast<const uint8_t*>(flags)) & kTerrainTypeFootprints) != 0;
+    }
+
+    /// The TerrainType prints go down with on sand the client doesn't print on: Sand when it prints, else the first ID
+    /// that does (Snow); -1 when none does.
+    template <class Read> int32_t PrintingTerrainType(Read read)
+    {
+        if (TerrainTypePrints(kSandTerrainType, read)) return kSandTerrainType;
+        const void* lo = read(kTerrainTypeMinId, 4);
+        const void* hi = read(kTerrainTypeMaxId, 4);
+        if (!lo || !hi) return -1;
+        int32_t minId, maxId;
+        std::memcpy(&minId, lo, 4);
+        std::memcpy(&maxId, hi, 4);
+        if (maxId - minId > 4096) return -1; // not a table this small
+        for (int32_t id = minId; id <= maxId; ++id)
+            if (TerrainTypePrints(id, read)) return id;
+        return -1;
+    }
+
+    /// The TerrainType a step's print goes down with: the unit's own where the client prints on it already, or where
+    /// the cover there takes no prints (`sandHere` false); else `printingType` (when there is one).
+    inline int32_t StepTerrainType(int32_t unitType, bool unitTypePrints, bool sandHere, int32_t printingType)
+    {
+        return unitTypePrints || !sandHere || printingType < 0 ? unitType : printingType;
+    }
+
+    /// The step hook's state for the panel: its status line, the steps seen and those given the printing TerrainType.
+    const char* StepStatus();
+    unsigned    StepsSeen();
+    unsigned    StepsOnSand();
 
     /// What a lift changed, to put back exactly.
     struct Lifted
@@ -154,9 +255,6 @@ namespace wxl_livingazeroth::coverprints
         std::vector<float>  z;     // the original heights
         unsigned live = 0, onCover = 0;
     };
-
-    inline float ReadFloat(const uint8_t* p) { float f; std::memcpy(&f, p, 4); return f; }
-    inline uint32_t ReadU32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 
     /// Raises every live print lying on the terrain by liftAt(x, y, terrainZ) at its centre (yd, 0 = not
     /// covered there) plus kAboveSurface. terrainAt(x, y, z) is the terrain's height (false: none there).

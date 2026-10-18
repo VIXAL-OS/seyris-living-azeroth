@@ -1,6 +1,8 @@
 // Offline tests for features/CoverPrints (the client's footprints on top of the surface cover): every
 // guard against the client executable itself, lifting and putting back prints in a pool laid out like
 // the client's, and that the trench depth the prints follow is the one the cover uploads. No game.
+// Also (2026-10-18) the footstep's print on sand the client counts as dirt: its guards, and the TerrainType it
+// goes down with, over a TerrainType storage laid out like the client's.
 //
 // Usage:  cover_prints_tests <Wow.exe> [<another copy of the 12340 client, e.g. the launcher's exe>]
 #include "features/CoverBlend.hpp"
@@ -159,6 +161,31 @@ int main(int argc, char** argv)
                 }
                 std::printf("  %zu guards, %zu bytes\n", sizeof(cp::kGuards) / sizeof(cp::kGuards[0]),
                             [] { size_t n = 0; for (const cp::Guard& g : cp::kGuards) n += g.size; return n; }());
+            });
+            const std::string stepName = std::string("footstep print guards against ") + argv[a];
+            Test(stepName.c_str(), [&]
+            {
+                const Image im = LoadImage(argv[a]);
+                const cp::Guard* bad = cp::FirstMismatchIn(cp::kStepGuards, [&](uintptr_t va, uint32_t size) { return im.At(va, size); });
+                if (bad) throw std::runtime_error(std::string("differs: ") + bad->what);
+                for (const cp::Guard& g : cp::kStepGuards)
+                {
+                    Image changed = im;
+                    auto* at = static_cast<uint8_t*>(const_cast<void*>(changed.At(g.address, g.size)));
+                    CHECK(at);
+                    at[g.size - 1] ^= 0x01;
+                    CHECK(cp::FirstMismatchIn(cp::kStepGuards, [&](uintptr_t va, uint32_t size) { return changed.At(va, size); }) == &g);
+                    CHECK(cp::FirstMismatch([&](uintptr_t va, uint32_t size) { return changed.At(va, size); }) == nullptr); // the lift's own guards don't care
+                }
+                // The hooked thunk is the footstep's print call; its first instructions (push ebp; mov ebp, esp;
+                // mov eax, [ebp+20h]) are whole for the hook's jump.
+                const auto* thunk = static_cast<const uint8_t*>(im.At(cp::kStepPrint, 6));
+                CHECK(thunk && thunk[0] == 0x55 && thunk[1] == 0x8B && thunk[2] == 0xEC && thunk[3] == 0x8B && thunk[4] == 0x45 && thunk[5] == 0x20);
+                // The footstep's call at 0x723B80 lands on it, and the thunk's call on print add.
+                auto target = [&](uintptr_t call) { int32_t rel; std::memcpy(&rel, im.At(call + 1, 4), 4); return static_cast<uintptr_t>(call + 5 + rel); };
+                CHECK(target(0x00723B80) == cp::kStepPrint && target(0x0077F062) == 0x0079FA70);
+                std::printf("  %zu guards, %zu bytes\n", sizeof(cp::kStepGuards) / sizeof(cp::kStepGuards[0]),
+                            [] { size_t n = 0; for (const cp::Guard& g : cp::kStepGuards) n += g.size; return n; }());
             });
         }
 
@@ -475,6 +502,65 @@ int main(int argc, char** argv)
             CHECK(std::fabs(regs[0] - (s.cx - 990.0f)) < 1e-4f && std::fabs(regs[1] - (s.cy - 2010.0f)) < 1e-4f && std::fabs(regs[2] * s.r0 - 1.0f) < 1e-5f);
             CHECK(std::floor(regs[3]) / 1024.0f >= s.reach && std::floor(regs[3]) / 1024.0f < s.reach + 0.001f);
             CHECK(std::fabs((regs[3] - std::floor(regs[3])) / 0.99f - 0.37f) < 1e-3f);
+        });
+
+        Test("sand the client counts as dirt: the print goes down as on sand there, and only there", []
+        {
+            // TerrainType's storage as the client keeps it, with TerrainType.dbc's rows (3.3.5a: Flags 0x1 on Snow and Sand
+            // only), at addresses of its own: the row table at 0x10000, the rows at 0x20000 + 0x20 x ID.
+            struct Memory
+            {
+                std::vector<std::pair<uintptr_t, std::vector<uint8_t>>> blocks;
+                void Put(uintptr_t at, uint32_t v) { std::vector<uint8_t> b(4); std::memcpy(b.data(), &v, 4); blocks.push_back({ at, b }); }
+                const void* Read(uintptr_t at, uint32_t size) const
+                {
+                    for (const auto& b : blocks)
+                        if (at >= b.first && at + size <= b.first + b.second.size()) return b.second.data() + (at - b.first);
+                    return nullptr;
+                }
+            };
+            const uint32_t flags[12] = { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0 }; // Dirt Metallic Stone Snow Wood Grass Leaves Sand Soggy DustyGrass None Water
+            auto build = [&](const uint32_t* f, int count, bool loaded)
+            {
+                Memory m;
+                m.Put(cp::kTerrainTypeMinId, 0);
+                m.Put(cp::kTerrainTypeMaxId, static_cast<uint32_t>(count - 1));
+                m.Put(cp::kTerrainTypeRows, loaded ? 0x10000u : 0u);
+                for (int id = 0; id < count; ++id)
+                {
+                    m.Put(0x10000u + 4u * id, id == 10 ? 0u : 0x20000u + 0x20u * id); // "None" has no row here
+                    m.Put(0x20000u + 0x20u * id + cp::kTerrainTypeFlags, f[id]);
+                }
+                return m;
+            };
+            const Memory client = build(flags, 12, true);
+            auto read = [&](uintptr_t at, uint32_t size) { return client.Read(at, size); };
+            for (int32_t id = -2; id <= 13; ++id)
+                CHECK(cp::TerrainTypePrints(id, read) == (id == 3 || id == 7));
+            CHECK(cp::PrintingTerrainType(read) == cp::kSandTerrainType);
+            // Silithus: its dunes' ground effects (7436, 7439, 7441, 7442) are all Dirt (0). On its sand cover the print
+            // goes down as on Sand; footsteps there off the cover, and Tanaris's Sand steps, keep their own.
+            const int32_t sand = cp::PrintingTerrainType(read);
+            CHECK(cp::StepTerrainType(0, cp::TerrainTypePrints(0, read), true, sand) == 7);
+            CHECK(cp::StepTerrainType(0, cp::TerrainTypePrints(0, read), false, sand) == 0);
+            CHECK(cp::StepTerrainType(7, cp::TerrainTypePrints(7, read), true, sand) == 7);
+            CHECK(cp::StepTerrainType(3, cp::TerrainTypePrints(3, read), true, sand) == 3);   // snow as it was
+            CHECK(cp::StepTerrainType(8, cp::TerrainTypePrints(8, read), true, sand) == 7);   // dry-shore mud the client calls Soggy
+            CHECK(cp::StepTerrainType(-1, cp::TerrainTypePrints(-1, read), true, sand) == 7); // a layer without a ground effect
+            CHECK(cp::StepTerrainType(0, false, true, -1) == 0);                              // nothing prints: left alone
+            // A client whose Sand doesn't print: the first that does (Snow); none: -1; a table not loaded: nothing prints.
+            uint32_t noSand[12];
+            std::memcpy(noSand, flags, sizeof(flags));
+            noSand[7] = 0;
+            const Memory snowOnly = build(noSand, 12, true);
+            CHECK(cp::PrintingTerrainType([&](uintptr_t at, uint32_t size) { return snowOnly.Read(at, size); }) == 3);
+            noSand[3] = 0;
+            const Memory none = build(noSand, 12, true);
+            CHECK(cp::PrintingTerrainType([&](uintptr_t at, uint32_t size) { return none.Read(at, size); }) == -1);
+            const Memory unloaded = build(flags, 12, false);
+            CHECK(!cp::TerrainTypePrints(7, [&](uintptr_t at, uint32_t size) { return unloaded.Read(at, size); }));
+            CHECK(cp::PrintingTerrainType([&](uintptr_t at, uint32_t size) { return unloaded.Read(at, size); }) == -1);
+            CHECK(!cp::TerrainTypePrints(7, [](uintptr_t, uint32_t) -> const void* { return nullptr; }));
         });
 
         std::printf("%u test groups passed\n", g_passed);

@@ -213,6 +213,14 @@ The client still draws it with its own texture, fade and blending. The panel's "
 on top of the cover" switches it off; its status line says whether the client checks passed
 (features/CoverPrints).
 
+**Prints on sand the client counts as dirt.** The client puts a print down only where the ground's TerrainType
+(the dominant layer's ground effect's) has the footprint flag: Snow and Sand. Silithus paints its dunes with
+ground effects of TerrainType Dirt, and so do Feralas's and Ashenvale's sand, most of Darkshore's sand 3 and
+the dry muddy shores (Dirt or Soggy): no prints, so no rims around them either, only the trench share of
+anything else painted there (Silithus's rock highlight). Where the cover is a print-ringing one
+(Flags 0x10, at least half of it), the footstep's print now goes down as on sand; sounds keep the ground's own
+TerrainType (`SurfaceCoverSandPrints`, the panel's "Sand: footprints where the client counts it as dirt").
+
 Rim and RelaxSeconds apply per spot, like every other value (blended between materials). The panel's multipliers (Depth, Drift noise, Edge breakup, Rim, Relax time) scale the
 table for testing or taste; at 1 the table applies exactly.
 

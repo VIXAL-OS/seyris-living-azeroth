@@ -77,6 +77,8 @@ namespace wxl_livingazeroth::cover
     float TrenchSoftness() { return g_settings.trenchSoftness; }
     void  SetRainFillsRuts(float share) { g_settings.rainFill = share < 0.0f ? 0.0f : (share > 1.0f ? 1.0f : share); }
     float RainFillsRuts() { return g_settings.rainFill; }
+    void  SetSandPrints(bool on) { g_settings.sandPrints = on ? 1 : 0; }
+    bool  SandPrints() { return g_settings.sandPrints != 0; }
 
     void LoadTable(const void* cdbcApi)
     {
@@ -325,6 +327,19 @@ namespace wxl_livingazeroth::cover
     bool PrintsOnCover()
     {
         return g_settings.enabled && g_settings.printsOnCover && g_settings.drawPoint == 0 && g_printLift.valid;
+    }
+
+    bool SandPrintsAt(float x, float y, float z)
+    {
+        if (!g_settings.enabled || !g_settings.sandPrints || g_inactive) return false;
+        const Level& L = g_levels[0];
+        if (!L.haveGrid || !(std::isfinite(x) && std::isfinite(y) && std::isfinite(z))) return false;
+        const int i = static_cast<int>(std::lround(x / L.cell)), j = static_cast<int>(std::lround(y / L.cell));
+        if (i < L.gridI || i >= L.gridI + kGridVerts || j < L.gridJ || j >= L.gridJ + kGridVerts) return false;
+        const int s = SlotOf(i, j);
+        if (!RippleCell(s)) return false;
+        const float base = L.base[s];
+        return base > kHole * 0.5f && std::fabs(z - base) <= kSandPrintReach;
     }
 
     float DrawnCoverAbove(float x, float y, float terrainZ)

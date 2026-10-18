@@ -174,7 +174,7 @@ namespace wxl_livingazeroth::cover::detail
         const int i = static_cast<int>(std::lround(p.x / L.cell)), j = static_cast<int>(std::lround(p.y / L.cell));
         if (i < L.gridI || i >= L.gridI + kGridVerts || j < L.gridJ || j >= L.gridJ + kGridVerts) return;
         const int s = SlotOf(i, j);
-        if (g_rippleCell[s] < 0.5f || g_static0[s] < kMinDrawnDepth) return;
+        if (!RippleCell(s)) return;
         const bool shaped = shape();
         if (!(r.shape.r0 > 0.0f)) return;
         r.life = ripples::LifeFor(g_relaxCell[s] * g_settings.relaxMul);

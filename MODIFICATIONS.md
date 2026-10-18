@@ -21,6 +21,10 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   - On sand, mud, building floors and the snowy caves, a still rim of displaced ground forms around each footprint,
     following that print's own outline (the client's six footprint shapes, traced by
     `tools/gen_footprint_outlines.py`).
+  - Footprints on sand the client counts as dirt (18 October 2026): Silithus's dunes, Feralas's and Ashenvale's
+    sand and the dry muddy shores have ground effects of TerrainType Dirt or Soggy, where the client puts no print
+    down, so their rims never formed. Where the cover there is sand, the footstep's print goes down as on sand
+    (`SurfaceCoverSandPrints`).
 - **Clear ice** on icy ground, ice models and WMO ice, with styles for frozen waterfalls, shoreline floes, glaciers and
   sea ice.
 - **Fields:** the shore pass runs on a background worker thread.

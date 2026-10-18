@@ -103,6 +103,9 @@ namespace wxl_livingazeroth::cover::detail
         float rippleSlope = 0.9f;
         float rippleBright = 0.18f;
         int   slither = 1;              // bodies without legs (snakes, naga, worms) leave a weaving groove, not prints
+        // The client's prints on sand it counts as dirt (features/CoverPrints: Silithus's dunes are TerrainType Dirt,
+        // where the client puts no print down, so the sand's rims never formed there).
+        int   sandPrints = 1;
         // The trench edge filter (blend::TrenchProfile): no trench wall or rim narrower than this many level-0 cells
         // (0.25 yd), or the grid draws a walked trench's edge as a staircase. 0 = the original widths.
         float trenchSoftness = 1.5f;
@@ -356,6 +359,14 @@ namespace wxl_livingazeroth::cover::detail
     // around prints (features/CoverRipples), and the last draw's counts for the panel.
     extern std::vector<uint8_t> g_isActive;
     extern std::vector<float>   g_rippleCell;
+    // A print in sand at level 0's slot `s` gets a rim (AddRipple), and one the client wouldn't put down there goes down
+    // anyway (cover::SandPrintsAt): at least half the cover's look there is from kFlagRipplePrints rows and the cover is
+    // drawn. Silithus's dunes, with its rock highlight painted over the sand, come to 0.5..1.
+    constexpr float kRippleShareMin = 0.5f;
+    inline bool RippleCell(int s) { return g_rippleCell[s] >= kRippleShareMin && g_static0[s] >= kMinDrawnDepth; }
+    // How far from the cover's base a foot may be for SandPrintsAt (yd): the cover's few centimetres and the foot's
+    // height at the step; a building's floor (the Caverns of Time) lies further from the terrain.
+    constexpr float kSandPrintReach = 0.6f;
     extern ripples::Set         g_ripples, g_wmoRipples;
     extern unsigned             g_ripplesMade, g_ripplesShaped, g_wmoRipplesMade;
     extern float                g_rippleClock;

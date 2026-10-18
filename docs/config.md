@@ -43,6 +43,7 @@ says why.
 | SurfaceCoverLiftEffects | 1 | Effects at units' feet (auras and other spell effects on the Base attachment) sit on top of the cover instead of under it (within 40 yards of you). |
 | SurfaceCoverTrenchSoftness | 1.5 | No trench wall or rim narrower than this many 0.25-yard cells, or walked trenches get jagged, stair-stepped edges (0 = the original widths, 0..4). |
 | SurfaceCoverRainFillsRuts | 0.75 | How much faster mud ruts fill in in heavy rain, 0..1 (0.75 = in a quarter of their time; 0 = rain changes nothing). |
+| SurfaceCoverSandPrints | 1 | Footprints, and the sand rims around them, on sand the game counts as dirt (Silithus, Feralas, Ashenvale, much of Darkshore, dry muddy shores), as in Tanaris. Only the prints: footstep sounds stay as they are. |
 | TerrainWetness | 1 | The terrain itself looks darker where the ground is wet (rain, water nearby). The client's own terrain shaders are patched for it when they're created. |
 | TerrainWetnessStrength | 0.45 | How much darker soaked ground gets, 0..1: the terrain and the surface cover alike. |
 | WindShelter | 1 | Roofs and overhangs shelter the ground below from wind. |

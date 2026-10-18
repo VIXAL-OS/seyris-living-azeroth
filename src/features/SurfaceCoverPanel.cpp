@@ -64,6 +64,10 @@ namespace wxl_livingazeroth::cover::detail
         std::snprintf(line, sizeof(line), "  footprints: %s; last draw %u, %u of them on the cover", coverprints::Status(),
                       coverprints::LastLive(), coverprints::LastOnCover());
         g_api->UiText(line);
+        g_api->UiCheckbox("Sand: footprints where the client counts it as dirt (Silithus, Feralas, Ashenvale, ...)", &g_settings.sandPrints);
+        std::snprintf(line, sizeof(line), "  sand prints: %s; steps %u, %u of them printed on such sand", coverprints::StepStatus(),
+                      coverprints::StepsSeen(), coverprints::StepsOnSand());
+        g_api->UiText(line);
         g_api->UiSliderFloat("Trench width (x unit size)", &g_settings.stampScale, 0.3f, 3.0f);
         g_api->UiSliderFloat("Far lift (yd, 80 -> 400 yd away)", &g_settings.farLift, 0.0f, 3.0f);
         g_api->UiCheckbox("Light and fog like the terrain", &g_settings.sceneLight);
