@@ -11,6 +11,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -42,6 +43,53 @@ namespace
     int G(uint32_t c) { return (c >> 8) & 0xFF; }
     int B(uint32_t c) { return c & 0xFF; }
     int Sum(uint32_t c) { return R(c) + G(c) + B(c); }
+    float Lum(uint32_t c) { return 0.299f * R(c) + 0.587f * G(c) + 0.114f * B(c); }
+
+    // The band shading as it was before the fog got its own storm (weights: darkening, flash in the sky, flash on the
+    // ground), for the bands that still shade that way: the sky (2..7) and the clouds (11..13).
+    uint32_t ShadeBefore(uint32_t argb, int band, const st::Shade& s)
+    {
+        struct W { float dark, sky, scene; };
+        W w{};
+        switch (band)
+        {
+            case 2: w = { 1.00f, 0.75f, 0.30f }; break;
+            case 3: w = { 1.00f, 0.90f, 0.30f }; break;
+            case 4: case 5: w = { 1.00f, 1.00f, 0.30f }; break;
+            case 6: w = { 0.90f, 1.00f, 0.30f }; break;
+            case 7: w = { 0.80f, 0.80f, 0.30f }; break;
+            case 8: w = { 0.70f, 0.70f, 0.40f }; break; // the fog, as it was
+            case 11: case 12: case 13: w = { 0.80f, 1.00f, 0.30f }; break;
+            default: throw std::runtime_error("ShadeBefore: not a sky, cloud or fog band");
+        }
+        auto unit = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+        const float c[3] = { float(R(argb)), float(G(argb)), float(B(argb)) };
+        const float keep = 1.0f - unit(s.dark * w.dark), grey = unit(s.desat * w.dark);
+        const float luma = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2];
+        const float add = 255.0f * st::kFlashGain * ((s.sky > 0.0f ? s.sky : 0.0f) * w.sky + (s.scene > 0.0f ? s.scene : 0.0f) * w.scene);
+        uint32_t out = argb & 0xFF000000u;
+        for (int k = 0; k < 3; ++k)
+        {
+            float v = (c[k] + (luma - c[k]) * grey) * keep + add * s.tint[k];
+            v = v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v);
+            out |= static_cast<uint32_t>(v + 0.5f) << (16 - 8 * k);
+        }
+        return out;
+    }
+
+    // Heavy rain in full storm with the settings' defaults (Storm.cpp: darkness 0.35, StormFogBrightness 1.3,
+    // StormFogCool 0.6), at a time of day (0 night .. 1 day).
+    st::Shade HeavyRain(float day)
+    {
+        st::Shade s;
+        s.dark = 0.35f;
+        s.desat = 0.6f * s.dark;
+        s.fog = 1.0f;
+        s.fogBright = 1.3f;
+        s.fogCool = 0.6f;
+        s.day = day;
+        return s;
+    }
 
     // --- the client's file: virtual addresses to bytes through its section table ---
     struct Image
@@ -485,6 +533,116 @@ int main(int argc, char** argv)
             const uint32_t white = Argb(0xFF, 250, 250, 250);
             const uint32_t clamped = st::ShadeBand(white, 4, flash);
             CHECK(R(clamped) == 255 && G(clamped) == 255 && B(clamped) == 255);
+        });
+
+        // Elwynn's light is Light.dbc 1 (the Eastern Kingdoms default). In rain the client swaps in its storm set
+        // (LightParams 10), whose fog is one colour for every hour: #525452. Its clear set's fog: #000E21 at night,
+        // #4D788F at noon, #5B3D4B at 21:00.
+        Test("colours: heavy rain's fog (band 8) stays at least 0.9 of its brightness at night, 1.2 by day, and turns cool", []
+        {
+            const st::Shade night = HeavyRain(0.0f), day = HeavyRain(1.0f);
+            const uint32_t elwynnStorm = Argb(0xFF, 0x52, 0x54, 0x52);
+            // Before: darkened by 0.70 x 0.35 and greyed, #3E3F3E by day and by night alike.
+            CHECK(ShadeBefore(elwynnStorm, 8, night) == Argb(0xFF, 0x3E, 0x3F, 0x3E));
+            const uint32_t fogNight = st::ShadeBand(elwynnStorm, st::kFogBand, night), fogDay = st::ShadeBand(elwynnStorm, st::kFogBand, day);
+            std::printf("     Elwynn's storm fog #525452 (L %.0f): before #3E3F3E (L %.0f); night #%06X (L %.0f), day #%06X (L %.0f)\n",
+                        Lum(elwynnStorm), Lum(ShadeBefore(elwynnStorm, 8, night)), fogNight & 0xFFFFFF, Lum(fogNight), fogDay & 0xFFFFFF, Lum(fogDay));
+            CHECK(Lum(fogNight) >= 0.9f * Lum(elwynnStorm) && Lum(fogNight) <= Lum(elwynnStorm));    // dim at night, not darker than the client's
+            CHECK(Lum(fogDay) >= 1.2f * Lum(elwynnStorm));                                          // clearly bright by day
+            CHECK(Lum(fogNight) > 1.2f * Lum(ShadeBefore(elwynnStorm, 8, night)));                  // brighter than the dirty grey
+            CHECK(B(fogNight) > G(fogNight) && G(fogNight) > R(fogNight) && B(fogNight) >= R(fogNight) + 10); // a blue-grey
+            CHECK(B(fogDay) > G(fogDay) && G(fogDay) > R(fogDay) && B(fogDay) >= R(fogDay) + 10);
+            CHECK((fogNight >> 24) == 0xFF);
+
+            // Whatever the client hands over (its clear colours, if the storm set isn't all in yet; a warm fog): at least
+            // 0.9 of its brightness at night and 1.2 by day, never warmer, and the warm ones turn cool.
+            const uint32_t inputs[] = { elwynnStorm, Argb(0xFF, 0x00, 0x0E, 0x21), Argb(0xFF, 0x4D, 0x78, 0x8F),
+                                        Argb(0xFF, 0x5B, 0x3D, 0x4B), Argb(0xFF, 110, 95, 70), Argb(0xFF, 90, 90, 60) };
+            for (uint32_t in : inputs)
+            {
+                const uint32_t n = st::ShadeBand(in, st::kFogBand, night), d = st::ShadeBand(in, st::kFogBand, day);
+                CHECK(Lum(n) >= 0.9f * Lum(in) - 0.5f);
+                CHECK(Lum(d) >= 1.2f * Lum(in) - 0.5f);
+                CHECK(Lum(d) > Lum(n) || Lum(in) < 2.0f);
+                CHECK(B(n) >= R(n) && B(d) >= R(d));                                                  // b >= r: not brown
+                CHECK(R(n) - B(n) <= std::max(0, R(in) - B(in)) && G(n) - B(n) <= std::max(0, G(in) - B(in)) + 1);
+                if (R(in) > B(in)) CHECK(R(n) - B(n) < R(in) - B(in) && R(d) - B(d) < R(in) - B(in)); // warm turns cool
+            }
+        });
+
+        Test("colours: in heavy rain the fog is lighter than the sky; the sky and clouds darken exactly as before; flashes too", []
+        {
+            for (float day : { 0.0f, 0.5f, 1.0f })
+            {
+                st::Shade s = HeavyRain(day);
+                // Elwynn's storm set: the sky (bands 3..7, #6F6F6F at the top to #525352 at the horizon) and its fog.
+                const uint32_t fog = st::ShadeBand(Argb(0xFF, 0x52, 0x54, 0x52), st::kFogBand, s);
+                CHECK(Lum(fog) > Lum(st::ShadeBand(Argb(0xFF, 0x6F, 0x6F, 0x6F), 3, s)));
+                CHECK(Lum(fog) > Lum(st::ShadeBand(Argb(0xFF, 0x52, 0x53, 0x52), 7, s)));
+                for (int pass = 0; pass < 2; ++pass)
+                {
+                    if (pass) { s.sky = 0.6f; s.scene = 0.3f; } // and with a flash going
+                    for (int band : { 2, 3, 4, 5, 6, 7, 11, 12, 13 })
+                        for (uint32_t c : { Argb(0x80, 100, 150, 220), Argb(0xFF, 0x6F, 0x6F, 0x6F), Argb(0xFF, 10, 15, 30) })
+                            CHECK(st::ShadeBand(c, band, s) == ShadeBefore(c, band, s));
+                }
+            }
+            // The fog's settings touch only the fog: every other band as with them off.
+            st::Shade on = HeavyRain(1.0f), off = on;
+            off.fog = 0.0f; off.fogBright = 1.0f; off.fogCool = 0.0f;
+            for (int band = 0; band < st::kBandCount; ++band)
+                if (band != st::kFogBand) CHECK(st::ShadeBand(Argb(0xFF, 120, 110, 90), band, on) == st::ShadeBand(Argb(0xFF, 120, 110, 90), band, off));
+            // A flash lights the fog as before: on its own exactly so, and on top of the storm's fog by as much.
+            st::Shade flash;
+            flash.sky = 1.0f;
+            flash.scene = 0.5f;
+            const uint32_t nightFog = Argb(0xFF, 0x00, 0x0E, 0x21);
+            CHECK(st::ShadeBand(nightFog, st::kFogBand, flash) == ShadeBefore(nightFog, 8, flash));
+            st::Shade stormFlash = HeavyRain(0.0f);
+            stormFlash.sky = 1.0f;
+            const uint32_t lit = st::ShadeBand(Argb(0xFF, 0x52, 0x54, 0x52), st::kFogBand, stormFlash);
+            const uint32_t unlit = st::ShadeBand(Argb(0xFF, 0x52, 0x54, 0x52), st::kFogBand, HeavyRain(0.0f));
+            CHECK(Near(float(B(lit) - B(unlit)), 255.0f * st::kFlashGain * 0.7f * 1.0f, 1.01f));
+        });
+
+        Test("colours: the fog's floor, its ceiling, its settings off, no storm, nonsense", []
+        {
+            const uint32_t grey = Argb(0xFF, 0x52, 0x54, 0x52);
+            // No storm for the fog: the fog as the client made it, whatever else shades.
+            st::Shade calm;
+            calm.dark = 0.35f;
+            calm.desat = 0.21f;
+            CHECK(st::ShadeBand(grey, st::kFogBand, calm) == grey);
+            st::Shade only;
+            only.fog = 1.0f;
+            CHECK(!st::Identity(only));
+            // Settings off (brightness 0, no cool): only the storm's darkening, a third of the sky's (0.30 x 0.35), no tint.
+            st::Shade bare = HeavyRain(1.0f);
+            bare.fogBright = 0.0f;
+            bare.fogCool = 0.0f;
+            const uint32_t plain = st::ShadeBand(Argb(0xFF, 100, 100, 100), st::kFogBand, bare);
+            CHECK(R(plain) == G(plain) && G(plain) == B(plain) && Near(float(R(plain)), 100.0f * (1.0f - 0.35f * 0.30f), 0.51f));
+            // The floor holds against any darkness.
+            st::Shade black = HeavyRain(0.0f);
+            black.dark = 1.0f;
+            CHECK(Lum(st::ShadeBand(grey, st::kFogBand, black)) >= 0.9f * Lum(grey));
+            // Its lift stops at the ceiling; a fog already brighter keeps its brightness.
+            const uint32_t mid = st::ShadeBand(Argb(0xFF, 150, 150, 150), st::kFogBand, HeavyRain(1.0f));
+            CHECK(Near(Lum(mid), 255.0f * st::kFogCeiling, 1.0f));
+            const uint32_t bright = st::ShadeBand(Argb(0xFF, 200, 200, 200), st::kFogBand, HeavyRain(1.0f));
+            CHECK(Lum(bright) >= 0.9f * 200.0f && Lum(bright) <= 201.0f);
+            // Half a storm: half way.
+            st::Shade half = HeavyRain(1.0f);
+            half.fog = 0.5f;
+            half.dark = 0.175f;
+            const float l = Lum(st::ShadeBand(grey, st::kFogBand, half));
+            CHECK(l > Lum(grey) && l < Lum(st::ShadeBand(grey, st::kFogBand, HeavyRain(1.0f))));
+            // Nonsense in, sense out.
+            st::Shade bad = HeavyRain(std::nanf(""));
+            bad.fogBright = std::nanf("");
+            bad.fogCool = std::nanf("");
+            const uint32_t out = st::ShadeBand(grey, st::kFogBand, bad);
+            CHECK((out >> 24) == 0xFF && Sum(out) > 0 && Sum(out) <= Sum(grey));
         });
 
         Test("colours: shading the same bands twice (the client didn't recompute them) doesn't darken them further", []

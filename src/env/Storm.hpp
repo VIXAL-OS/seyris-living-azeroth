@@ -38,6 +38,10 @@ namespace wxl_livingazeroth::storm
         float strikeLight = 1.0f;    // x the point light at a strike (0 = none)
         float wind = 1.0f;           // x the storm's extra gusts (0 = none)
         float haze = 0.3f;           // extra haze in full storm (0..1, 0 = none)
+        float fogBrightness = 1.3f;  // the fog (the client's distance fog; our ground fog and haze take its colour) in full
+                                     // storm by day, x the client's own fog colour's brightness; at night 3/4 of that
+                                     // (StormModel Shade::fogBright)
+        float fogCool = 0.6f;        // 0..1: how much of the storm fog's hue gives way to a pale blue-grey
         int   bolts = 0;             // a bolt model at strikes (experimental: our own models in the client's scene)
         float boltSize = 6.0f;       // its scale (1 = Call Lightning's impact, about 11.5 yd tall)
         float boltRange = 900.0f;    // yd: strikes farther away get no bolt
@@ -72,6 +76,8 @@ namespace wxl_livingazeroth::storm
         bool  overridden = false; // the climate panel's weather override
         float storminess = 0.0f;  // smoothed, 0..1
         float darkness = 0.0f, skyFlash = 0.0f, sceneFlash = 0.0f; // this frame's shade
+        float day = 1.0f;         // the sky's day, 0..1, as the fog's storm treatment takes it
+        uint32_t fogIn = 0, fogOut = 0; // the fog band (0xAARRGGBB) as the client made it and as we left it (0: not shaded)
         float nextFlash = -1.0f;  // seconds, < 0 = none coming
         unsigned flashes = 0, strikes = 0, sounds = 0, bolts = 0, lights = 0; // this session
         float lastStrikeDistance = -1.0f;

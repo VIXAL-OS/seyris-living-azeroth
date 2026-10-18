@@ -151,6 +151,8 @@ namespace wxl_livingazeroth::storm
                     if (g_api) g_api->Log(WXL_LOG_WARN, kTag, "storm: a fault while shading the client's day-night colours; no darker sky or flashes from now on.");
                 }
                 else if (active) ++g_status.bandFrames;
+                g_status.fogIn = g_bandMemory.valid ? g_bandMemory.in[kFogBand] : 0;
+                g_status.fogOut = g_bandMemory.valid ? g_bandMemory.out[kFogBand] : 0;
             }
             g_origBands();
         }
@@ -516,6 +518,13 @@ namespace wxl_livingazeroth::storm
         }
         g_shade.dark = active ? Clamp01(s.darkness) * g_storm : 0.0f;
         g_shade.desat = 0.6f * g_shade.dark;
+        // The fog's own storm: lighter and cooler than the sky, brighter by day (the sky's day, as the ground fog's).
+        const climate::Clock& clock = climate::Now();
+        const float day = clock.valid ? 1.0f - fog::SkyNight(clock.dayFraction) : climate::SunNow().daylight;
+        g_shade.fog = active ? Clamp01(g_storm) : 0.0f;
+        g_shade.fogBright = s.fogBrightness;
+        g_shade.fogCool = s.fogCool;
+        g_shade.day = std::isfinite(day) ? Clamp01(day) : 1.0f;
         g_shade.sky = sky * s.flashStrength;
         g_shade.scene = scene * s.flashStrength * g_outdoors;
 
@@ -547,6 +556,7 @@ namespace wxl_livingazeroth::storm
         g_status.darkness = g_shade.dark;
         g_status.skyFlash = g_shade.sky;
         g_status.sceneFlash = g_shade.scene;
+        g_status.day = g_shade.day;
         g_status.nextFlash = next;
         g_status.pendingSounds = static_cast<int>(g_sounds.size());
         g_status.liveBolts = static_cast<int>(g_bolts.size());

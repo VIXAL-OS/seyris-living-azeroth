@@ -44,7 +44,8 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   heavy rain); no mud on paved or cobbled ground (GroundMaterial Flags 0x2, `tools/add_paved_ground.py`) and shallow
   mud ruts on Elwynn's dirt that fill in faster in rain; trench walls and rims no narrower than the near grid can draw,
   and feet flattening the rims of earlier steps; thunder through the client's own sound kits (a loudness by distance,
-  from the strike's direction; Lua PlaySound as the fallback) with new recordings (`env/StormModel`).
+  from the strike's direction; Lua PlaySound as the fallback) with new recordings (`env/StormModel`). In a storm the
+  fog stays lighter than the darkened sky and turns a pale blue-grey (18 October 2026).
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

@@ -1438,6 +1438,7 @@ namespace wxl_livingazeroth::fog
     Stats GetStats() { return g_stats; }
     void  SetStormHaze(float extra) { g_stormHaze = std::isfinite(extra) ? Clamp01(extra) : 0.0f; }
     float StormHaze() { return g_stormHaze; }
+    float SkyNight(float dayFraction) { return std::isfinite(dayFraction) ? FogNight(dayFraction) : 0.0f; }
 
     void Reset()
     {
