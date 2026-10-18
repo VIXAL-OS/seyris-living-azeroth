@@ -4,7 +4,9 @@
 //
 // A post pass at the weather render's entry, right after the sun shafts (which are off indoors): a short march along
 // each view ray at a quarter of the resolution against up to kMaxPanes panes, then added over the frame. Off where
-// there's no glass (no pane's room holds the camera), at night, in the rain and in storms (the sun through glass).
+// there's no glass (no pane's room holds the camera), at night, in the rain and in storms (the sun through glass); in
+// Ulduar and the Halls of Stone and of Lightning the titan glass's light from behind each pane, at any hour (each pane
+// along its own light: glass::LightOfPane).
 #pragma once
 
 #include "wxl/PluginApi.h"

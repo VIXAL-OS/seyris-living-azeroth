@@ -22,6 +22,10 @@
 //    HearthClockNow, HearthAmplitudeNow). A dungeon's frosted glass keeps the client's look.
 //  - Underground (GlassBuildings' kBuildingUnderground: Ironforge's interior groups) the glass has the street's look
 //    with no sky, sun or glint in it, and its panes (GlassPanes' kPaneNoSky) light no floor and make no shafts.
+//  - Titan glass with no sky behind it (GlassBuildings' kBuildingBacklit, GlassMaterials' Backlit: Ulduar, the Halls of
+//    Stone and of Lightning) is lit from behind: its batches take the inside look with a steady light behind them (its
+//    texture's strength, General Vezax's with a slow pulse: BacklitConstants; no sky, sun or glint), the same at any hour,
+//    and its panes (GlassPanes' kPaneBacklit) light the floor and the air from a light behind each (LightOfPane).
 #pragma once
 
 #include "../env/GlassModel.hpp"
@@ -76,6 +80,10 @@ namespace wxl_livingazeroth::glass
         float flickerSpeed = 1.0f;      // x the hearth's pace (~0.6 .. 1.8 Hz; the lamps' too)
         float lampFlicker = 0.0f;       // the same for the lamp-lit rooms behind clear and leaded glass (0 = steady lamps)
         int   ironforgeAlwaysLit = 0;   // Ironforge's windows lit all night (they still flicker)
+        // Titan glass with no sky behind it (Ulduar, the Halls of Stone and of Lightning).
+        int   titanBacklit = 1;         // lit from behind: it glows at any hour, its colours on the floor and in the air (0: the sun's, as other glass)
+        float backlitStrength = 1.0f;   // x its glow and the light it casts
+        float vezaxPulse = 1.0f;        // x the slow pulse of General Vezax's glass (0: steady)
     };
     Settings& Config();
 
@@ -152,6 +160,31 @@ namespace wxl_livingazeroth::glass
     /// and features/Windows can know it), else the hook's.
     uint32_t FallbackSeed(uint32_t path, uint32_t hookSeed);
 
+    // --- titan glass lit from behind --------------------------------------------------------------------------------
+    /// A batch lit from behind: TitanBacklit on, its material backlit glass (GlassMaterials' Backlit) and its building's
+    /// with no sky behind its glass (kBuildingBacklit).
+    bool BacklitBatch(const Material& m, uint32_t buildingFlags, const Settings& s);
+    /// The pulse's scale for a material: VezaxPulse for General Vezax's glass (kBacklitPulse), else 1 (the others' shimmer).
+    float PulseScale(const Material& m, const Settings& s);
+    /// Rewrites a backlit batch's look over what BatchConstants and RoomBatchConstants made: c193.x 1 (the inside look,
+    /// whatever the camera's indoors blend), c193.z 0 (no room); c194.rgb its glow at `seconds` on the pulse's clock
+    /// (BacklitGlow), c194.w 0 (no sun through it); c196.w, c197.xy 0 (no sky in it, no darkening, no glint); c199.w 1;
+    /// c201.w 0; and its day look's c85.x, c86.x 0. No input depends on the hour: the same at noon and at midnight.
+    void BacklitConstants(const Material& m, double seconds, const Settings& s, float out[4 * kConstantCount], float day[4 * kDayRegisters]);
+    /// A pane's light this frame, for the floor light and the coloured shafts: toward its light (world, unit) and its
+    /// colour (the floor block x kFloorGain). A backlit pane (kPaneBacklit, TitanBacklit on, its material backlit glass):
+    /// the light behind it (BacklitDirection; BacklitGlow x backlit::kFloorShare x its kind's through x its light), at any
+    /// hour. Else the sun through it (the sun's direction; its light x the sun's colour x the kind's through x the sun's
+    /// gain): false with the sun down (gain 0.01 or less), behind the pane (out . sun 0.05 or less), or the pane underground
+    /// (kPaneNoSky).
+    struct PaneLight { const Pane* pane = nullptr; float dir[3] = { 0, 0, 1 }; float colour[3] = {}; bool backlit = false; };
+    bool LightOfPane(const Pane& p, const Material* m, const Light& light, const float sun[3], const float sunColour[3], double seconds,
+                     const Settings& s, PaneLight& out);
+    /// The direction the floor light's facing (c195 in its batches) and the shafts' forward scattering use for a set of
+    /// panes: with a backlit pane among them, their lights' directions weighted by their colours' luminance (MeanDirection;
+    /// from overhead if they cancel); sunlit panes alone (or none), the sun's, exactly as before.
+    void LightFacing(const PaneLight* lights, size_t n, const float sun[3], float out[3]);
+
     // --- for the window lights (features/Windows) -------------------------------------------------------------------
     /// Whether a dark room hides the client's lit window at night now: the glass on, its blocks in the shaders, the
     /// rooms (FakeInteriors with OutsideReflection) and lamp-lit rooms on.
@@ -181,6 +214,8 @@ namespace wxl_livingazeroth::glass
     /// The glass table's row for a texture path (any case or slashes): its index + 1, 0 when it isn't glass.
     uint32_t MaterialOf(const char* texturePath);
     const Material* MaterialAt(uint32_t indexPlusOne);
+    /// The material with this GlassMaterials ID (a pane's Material), null: none.
+    const Material* MaterialById(uint32_t id);
     /// What the floor light and the shafts use (for the tests and GlassShafts).
     const PaneIndex& Panes();
 
@@ -209,10 +244,9 @@ namespace wxl_livingazeroth::glass
     /// The ice (WmoIce) just wrote c180..c190 with its own view: ours go up again before the next floor-light batch.
     void ViewTaken();
 
-    /// The coloured shafts' panes this frame: sunlit, whose room holds the camera (up to `max`), and the sun's
-    /// light through them (colour x strength, per pane); false when there are none.
-    struct ShaftPane { const Pane* pane; float colour[3]; };
-    bool ShaftPanes(std::vector<ShaftPane>& out, size_t max);
+    /// The coloured shafts' panes this frame: sunlit or backlit, whose room holds the camera (up to `max`), each with
+    /// its light (toward it, its colour: LightOfPane); false when there are none.
+    bool ShaftPanes(std::vector<PaneLight>& out, size_t max);
     /// The sun this frame (toward it, world) and its colour x gain through glass.
     void SunNow(float dir[3], float colour[3]);
 
@@ -227,4 +261,7 @@ namespace wxl_livingazeroth::glass
     /// Frosted glass's line: lights out, the flicker now, the lit frosted and underground batches drawn last frame, and
     /// Ironforge's parts' dark shares at this hour.
     const char* FrostLine();
+    /// Titan glass's line: TitanBacklit, the backlit panes loaded and near the camera; last frame the backlit panes
+    /// lighting the floor and the backlit batches drawn; Vezax's pulse now.
+    const char* BacklitLine();
 }

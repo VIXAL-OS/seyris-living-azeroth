@@ -165,6 +165,66 @@ namespace wxl_livingazeroth::glass
         return FloorWeight(rows, point, p.roomMin, p.roomMax, soft, farSoft);
     }
 
+    // --- titan glass lit from behind ----------------------------------------------------------------------------------
+    void BacklitDirection(const Pane& p, float out[3])
+    {
+        // out + tan(tilt) z: the way back along a ray that falls `tilt` below the inward normal (a skylight's: up).
+        const float lift = std::tan(backlit::kTiltDegrees * 3.14159265f / 180.0f);
+        float d[3] = { p.out[0], p.out[1], p.out[2] + lift };
+        const float n = std::sqrt(Dot(d, d));
+        bool ok = std::isfinite(n) && n > 1e-6f;
+        if (ok)
+        {
+            for (float& v : d) v /= n;
+            ok = Dot(d, p.out) >= backlit::kMinOut;
+        }
+        for (int k = 0; k < 3; ++k) out[k] = ok ? d[k] : p.out[k];
+    }
+
+    float BacklitWave(double seconds, float period)
+    {
+        if (!std::isfinite(seconds) || !std::isfinite(period) || !(period > 0.0f)) return 0.0f;
+        const double x = seconds / static_cast<double>(period);
+        const double f = x - std::floor(x);
+        return static_cast<float>(0.5 - 0.5 * std::cos(6.283185307179586 * f));
+    }
+
+    void BacklitGlow(const Material& m, double seconds, float strength, float pulseScale, float out[3])
+    {
+        const bool ok = m.backlit > 0.0f && std::isfinite(m.backlit) && std::isfinite(strength) && std::isfinite(pulseScale) &&
+                        std::isfinite(m.pulse);
+        const float base = ok ? m.backlit * std::max(0.0f, strength) : 0.0f;
+        const float wave = ok ? BacklitWave(seconds, m.pulseSeconds) * std::max(0.0f, m.pulse) * std::max(0.0f, pulseScale) : 0.0f;
+        for (int k = 0; k < 3; ++k)
+        {
+            const float tint = std::isfinite(m.pulseColour[k]) ? std::max(0.0f, m.pulseColour[k]) : 1.0f;
+            const float v = base * (1.0f + wave * tint);
+            out[k] = std::isfinite(v) ? std::max(0.0f, v) : 0.0f;
+        }
+    }
+
+    void MeanDirection(const float* dirs, const float* weights, size_t n, const float fallback[3], float out[3])
+    {
+        double sum[3] = { 0, 0, 0 }, total = 0;
+        for (size_t i = 0; i < n; ++i)
+        {
+            const float w = std::isfinite(weights[i]) ? std::max(0.0f, weights[i]) : 0.0f;
+            if (!(w > 0.0f)) continue;
+            bool finite = true;
+            for (int k = 0; k < 3; ++k) finite = finite && std::isfinite(dirs[3 * i + k]);
+            if (!finite) continue;
+            for (int k = 0; k < 3; ++k) sum[k] += static_cast<double>(w) * dirs[3 * i + k];
+            total += w;
+        }
+        const double len = std::sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]);
+        if (!(total > 0.0) || !(len > 0.2 * total))
+        {
+            for (int k = 0; k < 3; ++k) out[k] = fallback[k];
+            return;
+        }
+        for (int k = 0; k < 3; ++k) out[k] = static_cast<float>(sum[k] / len);
+    }
+
     // --- who lives behind the glass ---------------------------------------------------------------------------------
     const char* ClassName(uint32_t cls)
     {

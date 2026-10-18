@@ -441,12 +441,16 @@ row also says which texels are glass.
 | ID | row id |
 | Texture | the texture's path as the WMO names it (case and `/` vs `\` don't matter) |
 | Kind | 1 clear, 2 stained, 3 frosted (translucent: icy panes, hide, parchment), 4 leaded (clear in a lead grid) |
-| Flags | 0x1 the texture is a window's **inside** face (`_int_`): the inside look wherever it is; 0x2 its **outside** face (`_ext_`); 0x4 **matte** (hide, parchment: no gloss or reflection); 0x8 painted into a wall (only the masked texels are glass) |
+| Flags | 0x1 the texture is a window's **inside** face (`_int_`): the inside look wherever it is; 0x2 its **outside** face (`_ext_`); 0x4 **matte** (hide, parchment: no gloss or reflection); 0x8 painted into a wall (only the masked texels are glass); 0x10 its backlit pulse is **General Vezax's** heartbeat (`VezaxPulse` scales it; the others' is a shimmer) |
 | ColorR/G/B | the glass texels' average colour (0..1) |
 | LightR/G/B | the colour of the light it lets in, full value 1: stained glass its own colour, clear and leaded glass nearly white (a quarter of its tint), frosted half |
 | MaskR/G/B, MaskBias | which texels are glass: saturate(dot(texel.rgb, Mask) + MaskBias), 1 = glass. Mask 0 0 0 and bias 1: the whole texture |
 | Share | the share of the texture's texels that are glass (for review; not read) |
 | Comment | the texture's name, kind and a few WMOs it's in; never read |
+| Backlit | titan glass (gen_glass.py BACKLIT): its glow from behind, x the texel, where its building has no sky behind its glass (GlassBuildings 0x40: Ulduar, the Halls of Stone and of Lightning). 0 = not titan glass. Appended 2026-10-18 |
+| Pulse | the glow's pulse: its amplitude, a share of the glow (Vezax's evil glass 0.05: a few percent; the others 0.012, a very slow shimmer). 0 = steady. Appended |
+| PulseSeconds | the pulse's period (s): 6.5 for the evil glass, 37 .. 59 for the others (each its own). Appended |
+| PulseR/G/B | the colour the pulse adds, at luminance 1 (the evil glass's deep purple; white: a plain brightening). Appended |
 
 ### GlassPanes.cdbc — `GlassPanes.xml`
 
@@ -466,13 +470,15 @@ Panes with no room behind them (a facade's painted windows) are left out.
 | LightR/G/B | the colour of the light it lets in (its texture's) |
 | Kind | its texture's kind (as GlassMaterials): how much sun gets through (clear 1, leaded 0.85, stained 0.8, frosted 0.55) |
 | RoomMinX/Y/Z, RoomMaxX/Y/Z | the room it lights: the interior group behind it, as a world box. Its light lands only inside (widened by 0.5 yd) |
-| Flags | 0x1 **no sky** behind it: an underground WMO's interior pane (Ironforge's, the tram's): it puts no sunlight on the floor and makes no shafts |
+| Flags | 0x1 **no sky** behind it: an underground WMO's interior pane (Ironforge's, the tram's): it puts no sunlight on the floor and makes no shafts; 0x2 **backlit**: titan glass with no real sky behind it (Ulduar, the Halls of Stone and of Lightning; an interior group's pane, or an exterior group's whose out side doesn't open to the sky): a light behind it, along its inward normal tilted 30° down, puts its colours on the floor and in the air at any hour (its texture's Backlit and pulse), not the sun's (`TitanBacklit`) |
 | Comment | the WMO and the texture; never read |
+| Material | its texture's GlassMaterials ID (the backlit glow's strength and pulse). Appended 2026-10-18 |
 
 At run time the sunlit panes nearest the camera (within `Range`) light the floor: the panes whose
 room holds the camera first, then the nearest, up to 12. The light lands where the ray from a surface
 toward the sun leaves through a pane, only behind the pane, within 30 yd of it, and inside its room's
-box. **Leaks:** the room's box is a box, so in an L-shaped or many-storey group the light can reach a
+box. A backlit titan pane (Flags 0x2) is the same with the light behind it in place of the sun, at any hour: the
+floor and walls its tilted rays reach within 30 yd, in its room's box, lit in its colours. **Leaks:** the room's box is a box, so in an L-shaped or many-storey group the light can reach a
 floor that a real wall or ceiling would shade (a storey below a high window, the far side of an
 arch); a building's other groups get none of a pane's light (the cathedral's side aisles when the
 window is in the nave). The coloured shafts use the panes whose room holds the camera (up to 16).
@@ -605,7 +611,7 @@ WMO is the same, then its group's row if it has one, else the WMO's default, els
 | Group | the WMO group's index for a city's group, else 4294967295 (the whole placement) |
 | Style | its RoomStyles row |
 | Seed | its hash seed (a CRC of the map, the unique ID and the group): two numbers 0..1023 (bits 0..9, 10..19) hashed with each window's ordinal and group (GlassWindows) |
-| Flags | 0x1 a city (the shader's 14-yd blocks are its buildings: each its own tint and brightness); 0x2 a dark place (gen_window_lights' DARK_AREAS or DARK_PATHS: ruined, abandoned, haunted, dungeons, ships): no lit rooms at night; 0x4 empty: every room dark (a share of each class's buildings whose windows the client doesn't light: SIDN windows, or unlit frosted glass); 0x8 its WMO has windows the client lights at night (for the editor); 0x10 **underground**: no sky behind its glass (Ironforge's interior groups, the tram): the street's look whatever the camera's indoors, no sky, darkening or glint in it; 0x20 a **dungeon's** WMO (its path): its frosted windows keep the client's look (no lights out, no flicker) |
+| Flags | 0x1 a city (the shader's 14-yd blocks are its buildings: each its own tint and brightness); 0x2 a dark place (gen_window_lights' DARK_AREAS or DARK_PATHS: ruined, abandoned, haunted, dungeons, ships): no lit rooms at night; 0x4 empty: every room dark (a share of each class's buildings whose windows the client doesn't light: SIDN windows, or unlit frosted glass); 0x8 its WMO has windows the client lights at night (for the editor); 0x10 **underground**: no sky behind its glass (Ironforge's interior groups, the tram): the street's look whatever the camera's indoors, no sky, darkening or glint in it; 0x20 a **dungeon's** WMO (its path): its frosted windows keep the client's look (no lights out, no flicker); 0x40 **backlit**: its titan glass has no real sky behind it (Ulduar, the Halls of Stone and of Lightning; the placement's flag what most of its titan glass is, by area, a group row for each group the other way): that glass glows from behind in its own colours at any hour, the inside look with no sky, sun or glint (`TitanBacklit`) |
 | AreaID | AreaTable ID at its origin (a city group's: at its middle), for the editor |
 | Wmo | the WMO's path (case and slashes don't matter): the instance must be of this WMO |
 | Comment | the WMO, its class and palette, the area; never read |

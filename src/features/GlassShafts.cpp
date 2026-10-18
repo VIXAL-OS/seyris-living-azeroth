@@ -125,7 +125,7 @@ namespace wxl_livingazeroth::glassshafts
             dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(Vtx));
         }
 
-        std::vector<glass::ShaftPane> g_shaftPanes;
+        std::vector<glass::PaneLight> g_shaftPanes;
 
         const char* WhyNot()
         {
@@ -135,7 +135,7 @@ namespace wxl_livingazeroth::glassshafts
             if (!snap.inWorld || snap.mapId < 0) return "not in the world";
             if (s.shaftStrength <= 0.0f) return "strength 0";
             if (*reinterpret_cast<const uint32_t*>(kCameraInLiquid)) return "camera under water";
-            if (!glass::ShaftPanes(g_shaftPanes, kMaxPanes)) return "no sunlit glass in the room you're in";
+            if (!glass::ShaftPanes(g_shaftPanes, kMaxPanes)) return "no sunlit (or backlit titan) glass in the room you're in";
             if (!depth::Texture()) return "no readable scene depth (see the scene depth panel)";
             if (g_shaderFailed) return "their shaders failed to compile (see the log)";
             if (g_texFailed) return "couldn't create their target (see the log)";
@@ -166,19 +166,24 @@ namespace wxl_livingazeroth::glassshafts
             dev->GetViewport(&vp);
             if (!vp.Width || !vp.Height || vp.MaxZ <= vp.MinZ) { screen->Release(); g_inactive = "unexpected viewport"; return; }
 
-            // The panes as projection rows about the camera, their light x the air's density.
-            float sun[3], sunColour[3];
+            // The panes as projection rows about the camera along each one's light (the sun's, or the light behind a titan
+            // pane), their light x the air's density; the forward scattering toward their lights' direction (LightFacing:
+            // the sun's for sunlit panes alone).
+            float sun[3], sunColour[3], phase[3];
             glass::SunNow(sun, sunColour);
             const float strength = glass::Config().shaftStrength;
             // Six arrays of kMaxPanes registers (GlassShaftShaders.hpp): rows a, b, t, light, room min, room max.
             float panes[4 * kPaneArrays * kMaxPanes] = {};
             auto reg = [&panes](int array, int pane) { return panes + 4 * (array * kMaxPanes + pane); };
             int count = 0;
-            for (const glass::ShaftPane& sp : g_shaftPanes)
+            static std::vector<glass::PaneLight> used;
+            used.clear();
+            for (const glass::PaneLight& sp : g_shaftPanes)
             {
                 if (count >= kMaxPanes) break;
                 float rows[12];
-                if (!glass::ProjectionRows(*sp.pane, sun, cam, kReach, rows)) continue;
+                if (!glass::ProjectionRows(*sp.pane, sp.dir, cam, kReach, rows)) continue;
+                used.push_back(sp);
                 for (int r = 0; r < 3; ++r) std::memcpy(reg(r, count), rows + 4 * r, sizeof(float) * 4);
                 for (int k = 0; k < 3; ++k)
                 {
@@ -192,11 +197,12 @@ namespace wxl_livingazeroth::glassshafts
                 ++count;
             }
             g_panes = static_cast<unsigned>(count);
+            glass::LightFacing(used.data(), used.size(), sun, phase);
             // The rooms' box together (the march stays inside it).
             float roomLo[4] = { 1e9f, 1e9f, 1e9f, 0 }, roomHi[4] = { -1e9f, -1e9f, -1e9f, 0 };
             for (int i = 0; i < count; ++i)
                 for (int k = 0; k < 3; ++k) { roomLo[k] = std::min(roomLo[k], reg(4, i)[k]); roomHi[k] = std::max(roomHi[k], reg(5, i)[k]); }
-            if (!count) { screen->Release(); g_inactive = "no pane lets the sun in"; g_ms = grassperf::Now() - t0; return; }
+            if (!count) { screen->Release(); g_inactive = "no pane lets the sun (or a titan pane's light) in"; g_ms = grassperf::Now() - t0; return; }
 
             const UINT tw = (vp.Width + 3) / 4, th = (vp.Height + 3) / 4;
             if (!EnsureTexture(dev, tw, th)) { screen->Release(); g_inactive = "couldn't create their target (see the log)"; return; }
@@ -250,7 +256,7 @@ namespace wxl_livingazeroth::glassshafts
                     inv[0][0], inv[0][1], inv[0][2], 0.0f,
                     inv[1][0], inv[1][1], inv[1][2], 0.0f,
                     inv[2][0], inv[2][1], inv[2][2], 0.0f,
-                    sun[0], sun[1], sun[2], kForward,
+                    phase[0], phase[1], phase[2], kForward,
                     roomLo[0], roomLo[1], roomLo[2], 0.0f,
                     roomHi[0], roomHi[1], roomHi[2], 0.0f,
                 };

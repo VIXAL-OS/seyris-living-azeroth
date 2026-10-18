@@ -83,8 +83,24 @@ brightness from the building's identity ... Room types that follow the building 
   cavern, darker), and its interior groups flagged underground (no sky behind their glass: the street's look, and
   their panes light no floor). IRONFORGE_AREAS below is the mapping.
 
+Titan glass lit from behind ("Their stained glass should glow on its own and cast coloured light from behind, not depend
+on the sun", the user, 2026-10-18): on Ulduar, the Halls of Stone and the Halls of Lightning (TITAN_MAPS) the titan
+textures (BACKLIT) with no real sky behind them are lit from behind.
+- A pane faces the sky when its group is an exterior one (MOGP 0x8, not 0x2000: the client draws no sky in an interior
+  group and lights it by its own colours, so the void behind a dungeon's windows doesn't count) and its out side opens
+  to the sky: at least SKY_OPEN of SKY_RAYS (up at 15 .. 75 degrees, turned up to 40 either way) get SKY_REACH yd away
+  from the glass without hitting the WMO or going under the terrain (terrain-scan's heights). Every other titan pane on
+  those maps is backlit (GlassPanes Flags PANE_BACKLIT, its Material the texture's row: the floor light and the shafts
+  from a light behind it, at any hour).
+- The look is per batch, so per WMO group: a group whose titan glass (all of it, a room behind it or not) is mostly
+  backlit by area is backlit (GlassBuildings B_BACKLIT: the placement's flag the majority's, a group row for each group
+  the other way, its style and seed the placement's). Wyrmrest's wr_window (map 571) and every other map keep the
+  daylight look.
+- GlassMaterials' Backlit columns: each texture's glow (x the texel), and its pulse: General Vezax's evil glass a slow
+  faint purple heartbeat (BACKLIT_PULSE: VezaxPulse scales it), the others a very slow shimmer of about 1%.
+
 Inputs (the map scan in waterfall-scan, see its README; nothing here opens an MPQ):
-  <scan>/adt_wmos.tsv, <scan>/maps.tsv, <scan>/AreaTable.dbc, <scan>/terrain-scan/ (areas)
+  <scan>/adt_wmos.tsv, <scan>/maps.tsv, <scan>/AreaTable.dbc, <scan>/terrain-scan/ (areas; the titan maps' heights)
   <scan>/WMOAreaTable.dbc   (the client's DBFilesClient/WMOAreaTable.dbc, from patch-enUS-3.MPQ: Ironforge's sub-zones;
                             without it Ironforge's groups are classed by their names, as a city's)
   <scan>/wmo-windows/     WMO roots and groups (waterscan --extract-list <Data> <list> <scan>/wmo-windows)
@@ -262,6 +278,37 @@ SKIP = {
     "silvermyst_inn_window01": "a ruined inn", "azr_window01": "ruins", "cer_window01": "ruins",
 }
 BROKEN_WORDS = ("abndn", "abandn", "abandon", "burn", "broken", "destroyed", "ruin")
+
+# Titan glass lit from behind (see the docstring): the maps, and per texture (the glow's strength x the texel, its pulse's
+# amplitude, its period in seconds, the colour the pulse adds or None for white). Strengths by eye from the textures'
+# brightness (GlassMaterials' Color: each glass's mean glows at about 0.6 .. 0.95 of full; the evil glass is dark and
+# stays dark). General Vezax's evil glass (the Descent into Madness) pulses a few percent over several seconds, deep
+# purple; the others shimmer by about 1% over 37 .. 59 s, each its own period.
+TITAN_MAPS = {599: "Halls of Stone", 602: "Halls of Lightning", 603: "Ulduar"}
+VEZAX = "ce_evilglass"
+VEZAX_PURPLE = (0.55, 0.2, 1.0)
+BACKLIT = {
+    VEZAX: (1.7, 0.05, 6.5, VEZAX_PURPLE),
+    "ce_uldr_stainedglass01": (1.45, 0.012, 37.0, None),
+    "ce_uldr_stainedglass03": (1.5, 0.012, 41.0, None),
+    "ce_uldr_warroomstainedglass": (1.8, 0.012, 43.0, None),
+    "eb_stainedglass": (1.5, 0.012, 47.0, None),
+    "eb_uldr_redwindow": (1.6, 0.012, 53.0, None),
+    "wr_window": (1.15, 0.012, 59.0, None),
+}
+BACKLIT_PULSE = 0x10   # GlassMaterials.Flags: its pulse is General Vezax's heartbeat (VezaxPulse scales it)
+
+
+def backlit_values(texture):
+    """GlassMaterials' Backlit columns for a texture: (Backlit, Pulse, PulseSeconds, PulseR, PulseG, PulseB), the
+    pulse's colour at luminance 1; zeros and white for glass that isn't titan glass."""
+    b = BACKLIT.get(base_name(texture))
+    if b is None:
+        return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+    strength, pulse, seconds, colour = b
+    colour = colour or (1.0, 1.0, 1.0)
+    lum = sum(c * w for c, w in zip(colour, LUMA))
+    return (strength, pulse, seconds) + tuple(c / lum for c in colour)
 
 
 def base_name(path):
@@ -614,6 +661,150 @@ def wmo_panes(scan, wmo):
     for p in kept:
         p.room = groups[p.room][1] if groups[p.room] else None
     return [p for p in kept if p.room is not None], ("%d groups missing" % missing if missing else "")
+
+
+# --- titan glass: which panes face the sky (the rest are lit from behind) ----------------------------------------------
+SKY_RAYS = [(e, a) for e in (15.0, 35.0, 55.0, 75.0) for a in (-40.0, 0.0, 40.0)]
+SKY_START = 0.3      # yd off the glass
+SKY_REACH = 400.0    # yd
+SKY_STEP = 4.0       # yd: the terrain's samples along a ray
+SKY_OPEN = 4         # of the 12: a pane whose out side lets this many get away faces the sky
+
+
+def sky_rays(occluder, center, out, below=None):
+    """How many SKY_RAYS leave a pane's out side for the open sky: from SKY_START yd off the glass, up at 15 .. 75
+    degrees and turned up to 40 degrees either way about the way out (a skylight's fan round x), SKY_REACH yd without
+    hitting the WMO (`occluder`, WMO space) or, with `below` (a WMO-space point -> whether it's under the ground), going
+    under the terrain. A ray along or behind the pane's plane counts as blocked."""
+    if abs(out[2]) < 0.95:
+        u = wl.unit(wl.cross((0.0, 0.0, 1.0), out))
+        flat_out = wl.unit((out[0], out[1], 0.0))
+    else:
+        u, flat_out = (1.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+    start = wl.add(center, wl.mul(out, SKY_START))
+    n = 0
+    for elevation, turn in SKY_RAYS:
+        e, a = math.radians(elevation), math.radians(turn)
+        h = wl.add(wl.mul(flat_out, math.cos(a)), wl.mul(u, math.sin(a)))
+        d = wl.unit(wl.add(wl.mul(h, math.cos(e)), (0.0, 0.0, math.sin(e))))
+        if wl.dot(d, out) <= 0.02:
+            continue
+        if occluder is not None and occluder.blocked(start, d, SKY_REACH):
+            continue
+        if below is not None and any(below(wl.add(start, wl.mul(d, k * SKY_STEP)))
+                                     for k in range(1, int(SKY_REACH / SKY_STEP) + 1)):
+            continue
+        n += 1
+    return n
+
+
+class Terrain:
+    """The ground's height under a world point (x, y): terrain-scan's ter_h at its cells' corners, bilinear; None where
+    the scan has no tile there or the ground has a hole."""
+    _maps = {}
+
+    def __init__(self, scan, mapdir):
+        root = scan / "terrain-scan"
+        dirs = {d.lower(): d for d in os.listdir(root)} if root.exists() else {}
+        self.dir = root / dirs[mapdir.lower()] if mapdir.lower() in dirs else None
+        self.tiles = {}
+
+    @classmethod
+    def of(cls, scan, mapdir):
+        key = (str(scan), mapdir.lower())
+        if key not in cls._maps:
+            cls._maps[key] = cls(scan, mapdir)
+        return cls._maps[key]
+
+    def height(self, x, y):
+        if self.dir is None:
+            return None
+        import numpy as np
+        row, col = int(math.floor(32 - x / wl.TILE)), int(math.floor(32 - y / wl.TILE))
+        if (col, row) not in self.tiles:
+            p = self.dir / ("%d_%d.npz" % (col, row))
+            if p.exists():
+                z = np.load(p)
+                self.tiles[(col, row)] = (z["ter_h"], z["holes"])
+            else:
+                self.tiles[(col, row)] = None
+        t = self.tiles[(col, row)]
+        if t is None:
+            return None
+        h, holes = t
+        cell = wl.CHUNK / 8.0
+        fr, fc = ((32 - row) * wl.TILE - x) / cell, ((32 - col) * wl.TILE - y) / cell
+        r, c = min(127, max(0, int(fr))), min(127, max(0, int(fc)))
+        if holes[r, c]:
+            return None
+        ar, ac = min(1.0, max(0.0, fr - r)), min(1.0, max(0.0, fc - c))
+        v = (h[r, c] * (1 - ar) * (1 - ac) + h[r + 1, c] * ar * (1 - ac) + h[r, c + 1] * (1 - ar) * ac + h[r + 1, c + 1] * ar * ac)
+        return None if v != v else float(v)
+
+    def below(self, p):
+        g = self.height(p[0], p[1])
+        return g is not None and p[2] < g
+
+
+class TitanGlass:
+    """A placement's titan glass on a titan map: each glass group's titan panes (all of them, a room behind them or not)
+    by area, backlit or facing the sky; faces_sky() for a pane the panes table keeps (the same WMO's)."""
+
+    def __init__(self, scan, wmo, info, point=None, terrain=None):
+        mats = {i: t for i, t in glass_materials(info, panes=True).items() if base_name(t) in BACKLIT}
+        groups, (panes,), tris, _missing = read_groups(scan, wmo, info, [mats])
+        self.flags = {gi: gb[0] for gi, gb in enumerate(groups) if gb}
+        self._tris = tris
+        self._occluder = None
+        self.below = (lambda q: terrain.below(point(q))) if terrain is not None and point is not None else None
+        self.groups = {}   # group -> [backlit area, sky area, backlit panes, sky panes]
+        for p in panes:
+            g = self.groups.setdefault(p.group, [0.0, 0.0, 0, 0])
+            sky = self.faces_sky(p)
+            g[1 if sky else 0] += p.area
+            g[3 if sky else 2] += 1
+
+    def faces_sky(self, p):
+        """An exterior group's pane whose out side opens to the sky (sky_rays: at least SKY_OPEN); never an interior
+        group's."""
+        fl = self.flags.get(p.group, 0)
+        if not (fl & EXTERIOR) or (fl & INDOOR):
+            return False
+        if self._occluder is None:
+            self._occluder = wl.Occluder(self._tris)
+        out = p.out if p.out is not None else p.normal
+        return sky_rays(self._occluder, p.center, out, self.below) >= SKY_OPEN
+
+    def backlit_group(self, group):
+        """Whether a group's batches take the backlit look: most of its titan glass (by area) is backlit."""
+        a = self.groups.get(group)
+        return a is not None and a[0] >= a[1]
+
+    def backlit_placement(self):
+        """Whether the placement as a whole is backlit (its row's flag): most of its titan glass (by area)."""
+        b = sum(a[0] if self.backlit_group(g) else 0.0 for g, a in self.groups.items())
+        k = sum(a[0] + a[1] for g, a in self.groups.items() if not self.backlit_group(g))
+        return bool(self.groups) and b >= k
+
+
+_titan = {}
+
+
+def titan_glass(scan, map_id, mapdir, wmo, uid, pos, rot):
+    """A placement's TitanGlass (cached): on a titan map with titan glass, else None."""
+    if map_id not in TITAN_MAPS:
+        return None
+    key = (str(scan), wmo.lower(), uid)
+    if key not in _titan:
+        rp = flat(scan, wmo)
+        tg = None
+        if rp.exists():
+            info = parse_root_all(rp.read_bytes())
+            if any(base_name(t) in BACKLIT for t in glass_materials(info, panes=True).values()):
+                point, _direction = wl.placement(pos, rot)
+                tg = TitanGlass(scan, wmo, info, point, Terrain.of(scan, mapdir))
+        _titan[key] = tg
+    return _titan[key]
 
 
 # --- windows: one room behind each (GlassWindows.cdbc) ---------------------------------------------------------------
@@ -1306,10 +1497,11 @@ def empty_building(seed, cls, lived_in, dark):
 
 
 # Flags (GlassBuildings.Flags)
-B_CITY, B_DARK_PLACE, B_EMPTY, B_SELF_LIT, B_UNDERGROUND, B_DUNGEON = 0x1, 0x2, 0x4, 0x8, 0x10, 0x20
+B_CITY, B_DARK_PLACE, B_EMPTY, B_SELF_LIT, B_UNDERGROUND, B_DUNGEON, B_BACKLIT = 0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40
 WHOLE = 0xFFFFFFFF
 # Flags (GlassPanes.Flags)
 PANE_NO_SKY = 0x1   # no sky behind it (an underground WMO's interior group): no floor light, no shafts
+PANE_BACKLIT = 0x2  # titan glass with no sky behind it: its light from behind at any hour, not the sun's
 
 
 def group_infos(b):
@@ -1413,8 +1605,23 @@ def buildings_table(scan, areas=None, amap=None):
         flags = (B_CITY if cls == CITY else 0) | (B_DARK_PLACE if dark else 0) | (B_SELF_LIT if lit else 0) | where
         if empty_building(seed, cls, lit, dark):
             flags |= B_EMPTY
+        # titan glass with no sky behind it: the placement backlit as most of it is, a group row for each group the
+        # other way (its style and seed the placement's)
+        tg = titan_glass(scan, map_id, mapdir, wmo, uid, pos, rot)
+        if tg is not None and tg.backlit_placement():
+            flags |= B_BACKLIT
         rows.append([0, map_id, uid, *o, WHOLE, style_id(cls, pal), seed, flags, area, wmo,
                      "%s (%s, %s): %s" % (base[:-4], CLASS_NAMES[cls], PALETTES[pal].name.split(":")[0], names[0] if names else "?")])
+        if tg is not None:
+            report["titan placement" + (" backlit" if flags & B_BACKLIT else "")] += 1
+            for gi in sorted(tg.groups):
+                if tg.backlit_group(gi) == bool(flags & B_BACKLIT) or gi in glass_groups:
+                    continue
+                gname = groups[gi][3] if gi < len(groups) else ""
+                rows.append([0, map_id, uid, *o, gi, style_id(cls, pal), seed, flags ^ B_BACKLIT, area, wmo,
+                             "%s group %d %s: titan glass %s" % (base[:-4], gi, gname or "-",
+                                                                 "lit from behind" if tg.backlit_group(gi) else "facing the sky")])
+                report["titan group row"] += 1
         report[("placement", cls)] += 1
         report[("palette", pal)] += 1
         if flags & B_EMPTY:
@@ -1447,7 +1654,7 @@ def buildings_table(scan, areas=None, amap=None):
             defaults.add((map_id, wmo))
             dpal = palette_of(wmo, map_id)
             rows.append([0, map_id, 0, 0.0, 0.0, 0.0, WHOLE, style_id(cls, dpal), seed_of(map_id, 0, abs(hash_path(wmo)) % 100000),
-                         (B_CITY if cls == CITY else 0) | (B_SELF_LIT if lit else 0) | where, 0, wmo,
+                         (B_CITY if cls == CITY else 0) | (B_SELF_LIT if lit else 0) | where | (flags & B_BACKLIT), 0, wmo,
                          "%s: the default (%s)" % (base[:-4], CLASS_NAMES[cls])])
     rows.sort(key=lambda r: (r[2] == 0, r[1], r[2], r[6] if r[6] != WHOLE else -1, r[11]))
     for i, r in enumerate(rows):
@@ -1471,12 +1678,14 @@ def hash_path(wmo):
 
 
 # --- the tables ----------------------------------------------------------------------------------------------------
-GLASS_MATERIALS = ["u", "s", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "s"]
+GLASS_MATERIALS = ["u", "s", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "s", "f", "f", "f", "f", "f", "f"]
 #  ID Texture Kind Flags ColorR ColorG ColorB LightR LightG LightB MaskR MaskG MaskB MaskBias Share Comment
+#  Backlit Pulse PulseSeconds PulseR PulseG PulseB (2026-10-18: titan glass lit from behind)
 GLASS_PANES = ["u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f",
-               "f", "f", "f", "u", "f", "f", "f", "f", "f", "f", "u", "s"]
+               "f", "f", "f", "u", "f", "f", "f", "f", "f", "f", "u", "s", "u"]
 #  ID MapID WmoID PosX PosY PosZ OutX OutY OutZ AlongX AlongY AlongZ HalfWidth HalfHeight
 #  LightR LightG LightB Kind RoomMinX RoomMinY RoomMinZ RoomMaxX RoomMaxY RoomMaxZ Flags Comment
+#  Material (2026-10-18: its texture's GlassMaterials ID)
 ROOM_STYLES = ["u", "u", "u"] + ["f"] * 21 + ["s"]
 #  ID Class Palette TintR TintG TintB Tint2R Tint2G Tint2B LampR LampG LampB CurtainR CurtainG CurtainB
 #  Brightness Spread DarkShare Shelves Curtains Divider Plain LateHours NightCap Comment
@@ -1543,8 +1752,8 @@ def materials_table(scan, textures, sheets=None):
         plane, bias, share = mask_plane(px, mode, hint)
         avg, light = glass_colours(px, plane, bias, kind)
         report[kind] += 1
-        rows.append([0, t, kind, flags, *avg, *light, *plane, bias, share,
-                     "%s (%s): %s" % (base_name(t), KIND_NAMES[kind], ", ".join(sorted(cands[t])[:3]))])
+        rows.append([0, t, kind, flags | (BACKLIT_PULSE if base_name(t) == VEZAX else 0), *avg, *light, *plane, bias, share,
+                     "%s (%s): %s" % (base_name(t), KIND_NAMES[kind], ", ".join(sorted(cands[t])[:3])), *backlit_values(t)])
         previews.append((path, plane, bias, base_name(t)))
     for i, r in enumerate(rows):
         r[0] = i + 1
@@ -1576,7 +1785,7 @@ def contact_sheets(previews, out):
 
 
 def panes_table(scan, light_of):
-    """(rows, report) of GlassPanes over every placement."""
+    """(rows, report) of GlassPanes over every placement. light_of: texture -> (kind, light, GlassMaterials ID)."""
     per_wmo, why_none = {}, collections.Counter()
     rows = []
     by_map = collections.Counter()
@@ -1592,6 +1801,7 @@ def panes_table(scan, light_of):
         point, direction = wl.placement(pos, rot)
         uid = int(mapdir_uid[1])
         wmos_with.add(wmo)
+        tg = titan_glass(scan, map_id, mapdir, wmo, uid, pos, rot)
         for p in panes:
             c = point(p.center)
             out = wl.unit(direction(p.out))
@@ -1601,11 +1811,13 @@ def panes_table(scan, light_of):
             corners = [point((x, y, z)) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
             rlo = [min(q[i] for q in corners) for i in range(3)]
             rhi = [max(q[i] for q in corners) for i in range(3)]
-            kind, light = light_of[p.texture]
+            kind, light, material = light_of[p.texture]
             # an underground WMO's interior pane: no sky behind it (no floor light, no shafts)
             no_sky = PANE_NO_SKY if wmo.split(BS)[-1] in UNDERGROUND_WMOS and not p.exterior else 0
-            rows.append([0, map_id, uid, *c, *out, *along, p.hw, p.hh, *light, kind, *rlo, *rhi, no_sky,
-                         "%s: %s" % (wmo.split(BS)[-1][:-4], base_name(p.texture))])
+            # titan glass with no sky behind it: lit from behind
+            backlit = PANE_BACKLIT if tg is not None and base_name(p.texture) in BACKLIT and not tg.faces_sky(p) else 0
+            rows.append([0, map_id, uid, *c, *out, *along, p.hw, p.hh, *light, kind, *rlo, *rhi, no_sky | backlit,
+                         "%s: %s" % (wmo.split(BS)[-1][:-4], base_name(p.texture)), material])
             by_map[map_id] += 1
     rows.sort(key=lambda r: (r[1], math.floor(r[3] / 64), math.floor(r[4] / 64), r[3], r[4], r[5]))
     for i, r in enumerate(rows):
@@ -1683,6 +1895,29 @@ def texture_list(scan):
     return sorted(out)
 
 
+def titan_report(prows):
+    """The titan maps' panes: backlit, titan glass facing the sky, other glass."""
+    for m, name in sorted(TITAN_MAPS.items()):
+        rs = [r for r in prows if r[1] == m]
+        titan = [r for r in rs if r[25].split(": ")[-1] in BACKLIT]
+        back = sum(1 for r in titan if r[24] & PANE_BACKLIT)
+        print("  %s (map %d): %d panes, %d titan: %d backlit, %d facing the sky; other glass %d (%s)" % (
+            name, m, len(rs), len(titan), back, len(titan) - back, len(rs) - len(titan),
+            ", ".join(sorted({r[25].split(": ")[-1] for r in rs if r not in titan})) or "-"))
+
+
+def titan_groups_report():
+    """The titan maps' WMO groups whose titan glass (all of it, a room behind it or not: the look) faces the sky."""
+    for (_scan, wmo, uid), tg in sorted(_titan.items(), key=lambda kv: kv[0][1:]):
+        if tg is None:
+            continue
+        for gi, (ab, asky, nb, ns) in sorted(tg.groups.items()):
+            if ns:
+                print("    %s (%d) group %d: %d of %d titan panes face the sky (%.0f of %.0f yd2): %s" % (
+                    wmo.split(BS)[-1], uid, gi, ns, nb + ns, asky, ab + asky,
+                    "the group lit from behind" if tg.backlit_group(gi) else "the group keeps the daylight look"))
+
+
 def write(path, data):
     old = path.read_bytes() if path.exists() else None
     if data == old:
@@ -1715,6 +1950,10 @@ def write_rooms(scan, folder):
     if ironforge:
         print("  Ironforge's glass groups (class, sub-zone): " + ", ".join("%s %s %d" % (c, z, n) for (c, z), n in sorted(ironforge.items())))
     print("  underground rows %d, dungeon rows %d" % (sum(1 for r in brows if r[9] & B_UNDERGROUND), sum(1 for r in brows if r[9] & B_DUNGEON)))
+    print("  titan glass: %d placements on the titan maps, %d backlit; %d group rows the other way; backlit rows %d" % (
+        report["titan placement"] + report["titan placement backlit"], report["titan placement backlit"], report["titan group row"],
+        sum(1 for r in brows if r[9] & B_BACKLIT)))
+    titan_groups_report()
     for c in sorted(CLASSES):
         k = CLASSES[c]
         total = sum(k.weights)
@@ -1765,8 +2004,9 @@ def main():
         if r in ("unreviewed", "texture not extracted"):
             print(f"  {r}: {n}")
     # A pane's light: its texture's, x how much of the texture is glass (lead and frames let none through).
-    light_of = {r[1]: (r[2], tuple(x * max(0.35, min(1.0, r[14])) for x in (r[7], r[8], r[9]))) for r in mrows}
+    light_of = {r[1]: (r[2], tuple(x * max(0.35, min(1.0, r[14])) for x in (r[7], r[8], r[9])), r[0]) for r in mrows}
     prows, by_map, wmos, why_none = panes_table(scan, light_of)
+    titan_report(prows)
     print(f"{len(prows)} glass panes with a room behind them, in {wmos} WMOs:")
     for m, n in sorted(by_map.items(), key=lambda kv: -kv[1]):
         if m in CONTINENTS or n >= 50:
