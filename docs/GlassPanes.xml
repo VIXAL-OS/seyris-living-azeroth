@@ -25,4 +25,5 @@
     <Field Name="RoomMaxZ" Type="float" />
     <Field Name="Flags" Type="int" />
     <Field Name="Comment" Type="string" />
+    <Field Name="Material" Type="int" />
   </Table>

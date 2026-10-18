@@ -44,17 +44,20 @@
 //  the window (farther darker: c86.y; lower lighter: c86.z; a patch of sun on the floor by it: c86.x); at night the lamp
 //  at a hashed spot (c216, c217), the hearths and candles aglow (c96). Far away (c218) the room fades to its plain
 //  shading: no texture, furniture or corners to shimmer.
-// Floor light (b10: on for the batches of a building's interior groups while sunlit panes are near): up to
+// Floor light (b10: on for the batches of a building's interior groups while sunlit or backlit panes are near): up to
 //  kFloorPanes panes, each as three rows taking the point (camera-relative, world axes) to where the ray toward the
 //  sun crosses the pane (|a|, |b| < 1) and how far (0 < t < 1), with soft edges, kept inside its room's box; x the
-//  surface's own texel x its facing to the sun.
+//  surface's own texel x its facing to the sun. Titan glass lit from behind (Ulduar, the Halls of Stone and of
+//  Lightning) the same with no new code: each backlit pane's rows along the light behind it instead of the sun's, at
+//  any hour, its colour the glow's, and the facing (c195 in a floor batch) toward its lights (features/Glass's
+//  LightOfPane, LightFacing). Its glass's look is the inside look with a steady light behind it in c194 (BacklitConstants).
 //
 // Registers (WMO pixel shaders; the stock ones use r0..r11, c0..c14, s0..s7 and no b/i registers):
 //  b9 glass, b10 floor light; r12..r31 (shared with the ice and the rims, see ModelIce.hpp); i1 (defined: the window
 //  loop's bound); s8..s13 (the room: floor, walls, ceiling, wood, the furniture atlas, the window table);
 //  c180..c183 the camera and the view's rows (terrainice::FillModelConstants, as the ice); c175, c176 (the ice's defs);
 //  c192 mask plane; c193 (inside weight, strength, the room's share, thickness yd); c194 (the sky through the glass
-//  rgb, the sun's gain); c195 (toward the sun, world xyz; saturation inside); c196 (the reflected sky rgb, Fresnel
+//  rgb, the sun's gain); c195 (toward the sun, world xyz, in a floor batch toward its panes' lights; saturation inside); c196 (the reflected sky rgb, Fresnel
 //  strength); c197 (darkening outside, glint, F0, diffusion); c198 (the room's daylight: its colour, its strength); c199 (its tint rgb; the
 //  inside's brightness); c200 (the sun's colour; the dark band's hi); c201 (the floor light's gain, the hearth clock,
 //  the flicker's amplitude, lit frosted glass 1); c202 (the room's other tint rgb, the buildings' spread in brightness);

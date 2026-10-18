@@ -25,6 +25,9 @@
 //    the same way: the same windows, hash, schedule and fades, the glass's own glow hidden when dark; and a lit one has a
 //    hearth's gentle flicker (HearthDip), its window light in time with it. Ironforge's parts each keep their own hours
 //    (the forge never sleeps), and underground no sky comes through its glass.
+//  - Titan glass with no sky behind it (Ulduar, the Halls of Stone and of Lightning: tools/gen_glass.py TITAN_MAPS) is
+//    lit from behind: it glows in its own colours at any hour, General Vezax's with a slow faint pulse, and a light
+//    behind each pane puts its colours on the floor and in the room's air (BacklitDirection, BacklitGlow).
 #pragma once
 
 #include <cstddef>
@@ -36,7 +39,11 @@ namespace wxl_livingazeroth::glass
 {
     // --- the tables (tools/gen_glass.py, docs/cdbc-tables.md) ----------------------------------------------------
     enum Kind : uint32_t { kNone = 0, kClear = 1, kStained = 2, kFrosted = 3, kLeaded = 4 };
-    enum MaterialFlag : uint32_t { kInsideFace = 0x1, kOutsideFace = 0x2, kMatte = 0x4, kPainted = 0x8 };
+    enum MaterialFlag : uint32_t
+    {
+        kInsideFace = 0x1, kOutsideFace = 0x2, kMatte = 0x4, kPainted = 0x8,
+        kBacklitPulse = 0x10,   // its backlit pulse is a heartbeat (General Vezax's glass): VezaxPulse scales it (the others' is a shimmer)
+    };
 
     struct Material
     {
@@ -44,15 +51,25 @@ namespace wxl_livingazeroth::glass
         float colour[3] = { 1, 1, 1 };   // the glass texels' average colour
         float light[3] = { 1, 1, 1 };    // the light it lets in (full value 1)
         float mask[4] = { 0, 0, 0, 1 };  // glass = saturate(dot(texel.rgb, mask.xyz) + mask.w)
+        // Titan glass (GlassMaterials' Backlit columns, tools/gen_glass.py BACKLIT): where its building has no sky behind its
+        // glass (kBuildingBacklit) lit from behind: the glow's strength (x the texel; 0: not backlit glass), its pulse's
+        // amplitude (a share of the glow), period (s) and the colour the pulse adds (luminance 1; white: a brightening).
+        float backlit = 0.0f, pulse = 0.0f, pulseSeconds = 0.0f;
+        float pulseColour[3] = { 1, 1, 1 };
     };
     const char* KindName(uint32_t kind);
 
-    enum PaneFlag : uint32_t { kPaneNoSky = 0x1 };   // GlassPanes.Flags: no sky behind it (underground): no floor light, no shafts
+    enum PaneFlag : uint32_t
+    {
+        kPaneNoSky = 0x1,     // GlassPanes.Flags: no sky behind it (underground): no floor light, no shafts
+        kPaneBacklit = 0x2,   // titan glass with no sky behind it: its light from behind at any hour (BacklitDirection), not the sun's
+    };
 
     struct Pane
     {
         uint32_t id = 0, map = 0, wmo = 0;     // wmo: the placement's unique ID
         uint32_t flags = 0;                    // PaneFlag
+        uint32_t material = 0;                 // its texture's GlassMaterials ID (0: unknown)
         float    pos[3] = {};                  // the glass's middle
         float    out[3] = {};                  // out of the building (unit)
         float    along[3] = {};                // along the pane (unit; horizontal for an upright window)
@@ -136,6 +153,33 @@ namespace wxl_livingazeroth::glass
     /// The same from scratch, for the tests: the pane, the sun and a world point.
     float FloorWeightWorld(const Pane& p, const float sun[3], const float point[3], float reach, float soft, float farSoft);
 
+    // --- titan glass lit from behind (Ulduar, the Halls of Stone and of Lightning) ------------------------------------
+    // "Their stained glass should glow on its own and cast coloured light from behind, not depend on the sun" (the user,
+    // 2026-10-18). A backlit pane's light is a virtual one behind it, its rays along the pane's inward normal tilted
+    // kTiltDegrees down: the floor light's projection (ProjectionRows) and the shafts' with that direction instead of the
+    // sun's, at any hour.
+    namespace backlit
+    {
+        constexpr float kTiltDegrees = 30.0f;   // the light from behind falls this far below the pane's inward normal
+        constexpr float kFloorShare = 0.45f;    // its light on the floor and in the air: x the glow x the pane's light (the sun's: 1 x)
+        constexpr float kMinOut = 0.25f;        // toward the light at least this along the pane's way out (else straight out)
+    }
+    /// Toward the virtual light behind a backlit pane (world, unit): its way out tilted kTiltDegrees up (the light falls that
+    /// far below the inward normal), normalize(out + tan(tilt) z); a skylight's straight up. Straight out when that would
+    /// lie within kMinOut of the pane's plane (a pane facing steeply down).
+    void BacklitDirection(const Pane& p, float out[3]);
+    /// The pulse's wave at `seconds` (any steady clock): 0.5 - 0.5 cos(2 pi frac(seconds / period)), 0..1, 0 at whole
+    /// periods; 0 without a period (0, negative, not finite) or when the time isn't finite. Worked in doubles: the same
+    /// value for the same time, periodic.
+    float BacklitWave(double seconds, float period);
+    /// A backlit material's glow now (the light behind it, rgb, x the texel): `strength` (BacklitStrength) x its Backlit x
+    /// (1 + its pulse x `pulseScale` x the wave x its pulse colour). Never below 0; 0 where it isn't backlit glass or a
+    /// number isn't finite.
+    void BacklitGlow(const Material& m, double seconds, float strength, float pulseScale, float out[3]);
+    /// The mean of `n` unit directions (three floats each) weighted by `weights` (negative ones count 0), normalised;
+    /// `fallback` when the weights are all 0 or the directions cancel (the mean shorter than 0.2).
+    void MeanDirection(const float* dirs, const float* weights, size_t n, const float fallback[3], float out[3]);
+
     // --- the fake room behind clear glass (one room per window: env/GlassRooms) ---------------------------------------
     enum RoomFace : int { kBackWall = 0, kSideWall = 1, kFloor = 2, kCeiling = 3 };
 
@@ -180,6 +224,7 @@ namespace wxl_livingazeroth::glass
         kBuildingSelfLit = 0x8,    // its WMO has windows the client lights at night (for the editor; not read)
         kBuildingUnderground = 0x10, // no sky through its glass (Ironforge's interior groups): the street's look, no sky or sun in it
         kBuildingDungeon = 0x20,   // a dungeon's WMO (its path): its frosted windows keep the client's look (no lights out, no flicker)
+        kBuildingBacklit = 0x40,   // its titan glass has no sky behind it (Ulduar, the Halls of Stone and of Lightning): lit from behind
     };
     constexpr uint32_t kWholePlacement = 0xFFFFFFFFu;
 

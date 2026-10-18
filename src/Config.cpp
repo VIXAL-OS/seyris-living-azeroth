@@ -305,6 +305,9 @@ namespace wxl_livingazeroth::config
             g.flickerSpeed = In(s, f, "FlickerSpeed", "Your multiplier on the hearths' pace (about 0.6 to 1.8 dips a second; the torches' flicker, at half their pace).", g.flickerSpeed);
             g.lampFlicker = In(s, f, "LampFlicker", "The same flicker for the lamp-lit rooms behind clear and leaded glass and their window lights (0.03 is a candle's breath). 0 = steady lamps.", g.lampFlicker);
             g.ironforgeAlwaysLit = In(s, f, "IronforgeAlwaysLit", "Ironforge's windows lit all night (its parts' hours off; they still flicker).", g.ironforgeAlwaysLit);
+            g.titanBacklit = In(s, f, "TitanBacklit", "Titan stained glass with no sky behind it (Ulduar, the Halls of Stone and the Halls of Lightning) is lit from behind: it glows in its own colours at any hour, never below the client's own colour, with no sky or sun glint in it, and a light behind each pane casts its colours on the floor and in the room's air (General Vezax's glass with a slow, faint purple pulse). Panes that face real sky keep the daylight look. 0 = the sun's light, as other glass.", g.titanBacklit);
+            g.backlitStrength = In(s, f, "BacklitStrength", "Your multiplier on the titan glass's glow and on the light it casts on the floor and in the air (each texture has its own strength).", g.backlitStrength);
+            g.vezaxPulse = In(s, f, "VezaxPulse", "Your multiplier on the slow pulse of General Vezax's glass in the Descent into Madness (1 = a few percent over about six and a half seconds, deep purple-tinged). 0 = steady.", g.vezaxPulse);
         }
 
         api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass);

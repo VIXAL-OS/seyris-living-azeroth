@@ -15,4 +15,10 @@
     <Field Name="MaskBias" Type="float" />
     <Field Name="Share" Type="float" />
     <Field Name="Comment" Type="string" />
+    <Field Name="Backlit" Type="float" />
+    <Field Name="Pulse" Type="float" />
+    <Field Name="PulseSeconds" Type="float" />
+    <Field Name="PulseR" Type="float" />
+    <Field Name="PulseG" Type="float" />
+    <Field Name="PulseB" Type="float" />
   </Table>

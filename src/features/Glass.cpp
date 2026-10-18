@@ -46,8 +46,11 @@ namespace wxl_livingazeroth::glass
             {"LightB", 9, WXL_CDBC_FIELD_VALUE}, {"MaskR", 10, WXL_CDBC_FIELD_VALUE},   {"MaskG", 11, WXL_CDBC_FIELD_VALUE},
             {"MaskB", 12, WXL_CDBC_FIELD_VALUE}, {"MaskBias", 13, WXL_CDBC_FIELD_VALUE}, {"Share", 14, WXL_CDBC_FIELD_VALUE},
             {"Comment", 15, WXL_CDBC_FIELD_STRING},
+            // titan glass lit from behind (2026-10-18)
+            {"Backlit", 16, WXL_CDBC_FIELD_VALUE}, {"Pulse", 17, WXL_CDBC_FIELD_VALUE},   {"PulseSeconds", 18, WXL_CDBC_FIELD_VALUE},
+            {"PulseR", 19, WXL_CDBC_FIELD_VALUE},  {"PulseG", 20, WXL_CDBC_FIELD_VALUE},  {"PulseB", 21, WXL_CDBC_FIELD_VALUE},
         };
-        constexpr WXL_SeyrisCdbcDefinition kMaterialDef = { "GlassMaterials", kMaterialsFile, kMaterialFields, 16 };
+        constexpr WXL_SeyrisCdbcDefinition kMaterialDef = { "GlassMaterials", kMaterialsFile, kMaterialFields, 22 };
         constexpr WXL_SeyrisCdbcField kPaneFields[] = {
             {"ID", 0, WXL_CDBC_FIELD_VALUE},         {"MapID", 1, WXL_CDBC_FIELD_VALUE},     {"WmoID", 2, WXL_CDBC_FIELD_VALUE},
             {"PosX", 3, WXL_CDBC_FIELD_VALUE},       {"PosY", 4, WXL_CDBC_FIELD_VALUE},      {"PosZ", 5, WXL_CDBC_FIELD_VALUE},
@@ -58,9 +61,9 @@ namespace wxl_livingazeroth::glass
             {"Kind", 17, WXL_CDBC_FIELD_VALUE},
             {"RoomMinX", 18, WXL_CDBC_FIELD_VALUE},  {"RoomMinY", 19, WXL_CDBC_FIELD_VALUE}, {"RoomMinZ", 20, WXL_CDBC_FIELD_VALUE},
             {"RoomMaxX", 21, WXL_CDBC_FIELD_VALUE},  {"RoomMaxY", 22, WXL_CDBC_FIELD_VALUE}, {"RoomMaxZ", 23, WXL_CDBC_FIELD_VALUE},
-            {"Flags", 24, WXL_CDBC_FIELD_VALUE},     {"Comment", 25, WXL_CDBC_FIELD_STRING},
+            {"Flags", 24, WXL_CDBC_FIELD_VALUE},     {"Comment", 25, WXL_CDBC_FIELD_STRING},  {"Material", 26, WXL_CDBC_FIELD_VALUE},
         };
-        constexpr WXL_SeyrisCdbcDefinition kPaneDef = { "GlassPanes", kPanesFile, kPaneFields, 26 };
+        constexpr WXL_SeyrisCdbcDefinition kPaneDef = { "GlassPanes", kPanesFile, kPaneFields, 27 };
         // The rooms behind the glass (tools/gen_glass.py ROOM_STYLES, GLASS_BUILDINGS).
         constexpr const char* kStylesFile = "DBFilesClient\\RoomStyles.cdbc";
         constexpr const char* kBuildingsFile = "DBFilesClient\\GlassBuildings.cdbc";
@@ -134,6 +137,7 @@ namespace wxl_livingazeroth::glass
         Settings g_settings;
         std::vector<Material> g_materials;
         std::unordered_map<std::string, uint32_t> g_byTexture;
+        std::unordered_map<uint32_t, uint32_t> g_materialById;   // GlassMaterials ID -> index + 1
         PaneIndex g_panes;
         std::string g_status = "not loaded yet", g_line;
         uint32_t g_generation = 1;
@@ -144,8 +148,10 @@ namespace wxl_livingazeroth::glass
         float g_indoors = 0.0f;
         float g_view[16] = {};                   // c180..c183
         bool  g_inWorld = false;
-        std::vector<const Pane*> g_near;         // the panes in range, nearest first
-        std::vector<const Pane*> g_floorList;    // the floor light's, this frame
+        std::vector<PaneLight> g_near;           // the panes in range that light the room (sunlit or backlit), nearest first
+        std::vector<PaneLight> g_floorList;      // the floor light's, this frame
+        float g_floorFacing[3] = { 0, 0, 1 };    // its batches' c195: their lights' direction (LightFacing)
+        double g_pulseSeconds = 0.0;             // the backlit glass's pulse clock (steady seconds)
         uint32_t g_viewFrame = 0;                // the frame g_view and the panes' rows were made for
         float g_paneConstants[4 * kPaneRegisters * kFloorPanes] = {};
         unsigned g_floorPanes = 0;
@@ -174,6 +180,8 @@ namespace wxl_livingazeroth::glass
         // Lit frosted glass drawn: batches this frame and last (of them Ironforge's, underground ones).
         unsigned g_frostBatches = 0, g_frostIronforge = 0, g_underground = 0;
         unsigned g_lastFrost = 0, g_lastIronforge = 0, g_lastUnderground = 0;
+        // Titan glass lit from behind: panes loaded, near this frame; on the floor and batches drawn this frame and last.
+        unsigned g_backlitPanes = 0, g_backlitNear = 0, g_backlitFloor = 0, g_lastBacklitFloor = 0, g_backlitBatches = 0, g_lastBacklitBatches = 0;
 
         // One room per window: the table (GlassWindows.cdbc), the current instance's frame and group, the device's
         // textures (the table, the furniture atlas, a white texel for RoomTextures off, each palette's set: loaded the
@@ -278,6 +286,8 @@ namespace wxl_livingazeroth::glass
             in.origin = g_inInstance && g_hasOrigin ? g_origin : nullptr;
             in.kind = m.kind; in.unlit = unlit; in.hearthClock = g_hearth.Now();
             RoomBatchConstants(style ? *style : DefaultStyle(), style ? b : nullptr, g_light, in, g_settings, out, seed);
+            // Titan glass with no sky behind it: lit from behind, the same at any hour.
+            if (BacklitBatch(m, b ? b->flags : 0, g_settings)) { BacklitConstants(m, g_pulseSeconds, g_settings, out, day); ++g_backlitBatches; }
             if (out[39] > 0.0f) { ++g_frostBatches; g_frostIronforge += IsIronforge(b) ? 1 : 0; }
             g_underground += b && (b->flags & kBuildingUnderground) ? 1 : 0;
             // The room's: the group's grid and the instance's frame (none without either: no room, lit), the class, the
@@ -499,6 +509,72 @@ namespace wxl_livingazeroth::glass
     float FlickerAmplitude(float amount, float night)
     {
         return std::isfinite(amount) ? Clamp01(amount) * Clamp01(night) : 0.0f;
+    }
+
+    bool BacklitBatch(const Material& m, uint32_t buildingFlags, const Settings& s)
+    {
+        return s.titanBacklit && m.backlit > 0.0f && (buildingFlags & kBuildingBacklit);
+    }
+
+    float PulseScale(const Material& m, const Settings& s)
+    {
+        if (!(m.flags & kBacklitPulse)) return 1.0f;
+        return std::isfinite(s.vezaxPulse) ? std::max(0.0f, s.vezaxPulse) : 0.0f;
+    }
+
+    void BacklitConstants(const Material& m, double seconds, const Settings& s, float out[4 * kConstantCount], float day[4 * kDayRegisters])
+    {
+        // The inside look (the texel, more saturated, x the light behind it; never below the client's own colour), with a
+        // steady light behind the glass in place of the sky and the sun: nothing in it depends on the hour or the weather.
+        float glow[3];
+        BacklitGlow(m, seconds, s.backlitStrength, PulseScale(m, s), glow);
+        out[4] = 1.0f;                                  // c193.x: seen from inside, whatever the camera's indoors blend
+        out[6] = 0.0f;                                  // c193.z: no room behind it
+        for (int k = 0; k < 3; ++k) out[8 + k] = glow[k];   // c194.rgb: the light behind it
+        out[11] = 0.0f;                                 // c194.w: no sun through it
+        out[19] = 0.0f;                                 // c196.w: no sky in it
+        out[20] = 0.0f; out[21] = 0.0f;                 // c197.xy: no darkening by day, no glint
+        out[31] = 1.0f;                                 // c199.w: the glow is c194's
+        out[39] = 0.0f;                                 // c201.w: not lit frosted glass
+        day[0] = 0.0f;                                  // c85.x: not cooler by day
+        day[4] = 0.0f;                                  // c86.x: no sun's patch
+    }
+
+    bool LightOfPane(const Pane& p, const Material* m, const Light& light, const float sun[3], const float sunColour[3], double seconds,
+                     const Settings& s, PaneLight& out)
+    {
+        out = PaneLight{};
+        out.pane = &p;
+        const float through = LookOf(p.kind).through;
+        if ((p.flags & kPaneBacklit) && m && BacklitBatch(*m, kBuildingBacklit, s))
+        {
+            float glow[3];
+            BacklitGlow(*m, seconds, s.backlitStrength, PulseScale(*m, s), glow);
+            BacklitDirection(p, out.dir);
+            for (int k = 0; k < 3; ++k) out.colour[k] = p.light[k] * glow[k] * backlit::kFloorShare * through;
+            out.backlit = true;
+            return Lum(out.colour) > 0.0f;
+        }
+        if (light.sunGain <= 0.01f || (p.flags & kPaneNoSky) || p.out[0] * sun[0] + p.out[1] * sun[1] + p.out[2] * sun[2] <= 0.05f) return false;
+        for (int k = 0; k < 3; ++k) { out.dir[k] = sun[k]; out.colour[k] = p.light[k] * sunColour[k] * through * light.sunGain; }
+        return true;
+    }
+
+    void LightFacing(const PaneLight* lights, size_t n, const float sun[3], float out[3])
+    {
+        bool any = false;
+        for (size_t i = 0; i < n; ++i) any = any || lights[i].backlit;
+        if (!any) { for (int k = 0; k < 3; ++k) out[k] = sun[k]; return; }   // sunlit panes alone: the sun's, as before
+        static thread_local std::vector<float> dirs, weights;
+        dirs.assign(3 * n, 0.0f);
+        weights.assign(n, 0.0f);
+        for (size_t i = 0; i < n; ++i)
+        {
+            for (int k = 0; k < 3; ++k) dirs[3 * i + k] = lights[i].dir[k];
+            weights[i] = Lum(lights[i].colour);
+        }
+        const float up[3] = { 0, 0, 1 };   // (lights that cancel: from overhead)
+        MeanDirection(dirs.data(), weights.data(), n, up, out);
     }
 
     void RoomBatchConstants(const RoomStyle& style, const Building* b, const Light& light, const RoomInputs& in, const Settings& s,
@@ -732,7 +808,8 @@ namespace wxl_livingazeroth::glass
         void FloorFrameConstants(float out[4 * kConstantCount])
         {
             std::memset(out, 0, sizeof(float) * 4 * kConstantCount);
-            for (int k = 0; k < 3; ++k) { out[12 + k] = g_sun[k]; out[32 + k] = g_sunColour[k]; }
+            // c195: the surfaces' facing to the panes' light (the sun's; with backlit panes their lights': LightFacing)
+            for (int k = 0; k < 3; ++k) { out[12 + k] = g_floorFacing[k]; out[32 + k] = g_sunColour[k]; }
             out[36] = kFloorGain * g_settings.floorStrength;
         }
 
@@ -763,6 +840,7 @@ namespace wxl_livingazeroth::glass
         ++g_generation;
         g_materials.clear();
         g_byTexture.clear();
+        g_materialById.clear();
         g_styles.clear();
         g_styleById.clear();
         g_building = nullptr;
@@ -789,12 +867,22 @@ namespace wxl_livingazeroth::glass
                     m.mask[k] = F(row, names[2][k], 0.0f);
                 }
                 m.mask[3] = F(row, "MaskBias", 1.0f);
+                // titan glass lit from behind (none in an older file)
+                m.backlit = std::max(0.0f, F(row, "Backlit", 0.0f));
+                m.pulse = std::max(0.0f, F(row, "Pulse", 0.0f));
+                m.pulseSeconds = F(row, "PulseSeconds", 0.0f);
+                const char* pulse[3] = { "PulseR", "PulseG", "PulseB" };
+                for (int k = 0; k < 3; ++k) m.pulseColour[k] = std::max(0.0f, F(row, pulse[k], 1.0f));
                 g_materials.push_back(m);
                 g_byTexture[Key(texture)] = static_cast<uint32_t>(g_materials.size());
+                g_materialById[cdbc->Value(t, row, "ID", 0)] = static_cast<uint32_t>(g_materials.size());
             }
             cdbc->Release(t);
-            char line[96];
-            std::snprintf(line, sizeof(line), "GlassMaterials.cdbc: %u glass textures", static_cast<unsigned>(g_materials.size()));
+            char line[128];
+            unsigned backlitTextures = 0;
+            for (const Material& mm : g_materials) backlitTextures += mm.backlit > 0.0f ? 1 : 0;
+            std::snprintf(line, sizeof(line), "GlassMaterials.cdbc: %u glass textures (%u titan glass that can be lit from behind)",
+                          static_cast<unsigned>(g_materials.size()), backlitTextures);
             status = line;
         }
         else status = std::string("GlassMaterials.cdbc: ") + (err[0] ? err : "not found") + " (no glass)";
@@ -827,6 +915,7 @@ namespace wxl_livingazeroth::glass
                 p.halfHeight = F(row, "HalfHeight", 1.0f);
                 p.kind = cdbc->Value(t, row, "Kind", 0);
                 p.flags = cdbcload::Has(cdbc, t, "Flags") ? cdbc->Value(t, row, "Flags", 0) : 0;
+                p.material = cdbcload::Has(cdbc, t, "Material") ? cdbc->Value(t, row, "Material", 0) : 0;
                 const float lo = std::sqrt(p.out[0] * p.out[0] + p.out[1] * p.out[1] + p.out[2] * p.out[2]);
                 const float la = std::sqrt(p.along[0] * p.along[0] + p.along[1] * p.along[1] + p.along[2] * p.along[2]);
                 if (!(lo > 0.5f) || !(la > 0.5f)) continue;
@@ -837,8 +926,10 @@ namespace wxl_livingazeroth::glass
                 panes.push_back(p);
             }
             cdbc->Release(t);
-            char line[96];
-            std::snprintf(line, sizeof(line), "; GlassPanes.cdbc: %u panes", static_cast<unsigned>(panes.size()));
+            g_backlitPanes = 0;
+            for (const Pane& pp : panes) g_backlitPanes += (pp.flags & kPaneBacklit) ? 1 : 0;
+            char line[128];
+            std::snprintf(line, sizeof(line), "; GlassPanes.cdbc: %u panes (%u titan panes lit from behind)", static_cast<unsigned>(panes.size()), g_backlitPanes);
             status += line;
         }
         else status += std::string("; GlassPanes.cdbc: ") + (err[0] ? err : "not found") + " (no floor light, no coloured shafts)";
@@ -967,6 +1058,12 @@ namespace wxl_livingazeroth::glass
         return indexPlusOne && indexPlusOne <= g_materials.size() ? &g_materials[indexPlusOne - 1] : nullptr;
     }
 
+    const Material* MaterialById(uint32_t id)
+    {
+        auto it = g_materialById.find(id);
+        return it == g_materialById.end() ? nullptr : MaterialAt(it->second);
+    }
+
     void Update()
     {
         ++g_frame;
@@ -979,6 +1076,8 @@ namespace wxl_livingazeroth::glass
         g_night = Clamp01(windows::Night());
         g_lastFrost = g_frostBatches; g_lastIronforge = g_frostIronforge; g_lastUnderground = g_underground;
         g_frostBatches = g_frostIronforge = g_underground = 0;
+        g_lastBacklitBatches = g_backlitBatches; g_backlitBatches = 0;
+        g_lastBacklitFloor = g_backlitFloor; g_backlitFloor = 0;
         g_lastRoomBatches = g_roomBatches; g_lastNoFrame = g_noFrame; g_lastNoGrid = g_noGrid;
         g_roomBatches = g_noFrame = g_noGrid = 0;
         if (g_settings.enabled && g_patched > 0) RoomTexturesUpdate();
@@ -987,8 +1086,10 @@ namespace wxl_livingazeroth::glass
             const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
             g_clock.Advance(now, g_hour, g_night);
             g_hearth.Advance(now, g_settings.flickerSpeed);
+            g_pulseSeconds = now;
         }
         else { g_clock.Reset(); g_hearth.Reset(); }
+        g_backlitNear = 0;
         if (!g_settings.enabled || !g_inWorld) { g_near.clear(); g_floorPanes = 0; return; }
 
         // The light of the moment.
@@ -1015,30 +1116,38 @@ namespace wxl_livingazeroth::glass
         for (int k = 0; k < 3; ++k) { g_sun[k] = in.sun[k]; g_sunColour[k] = in.sunColour[k]; g_sky[k] = in.sky[k]; }
         g_indoors = Clamp01(ReadFloat(kInteriorBlend));
 
-        // The panes near the camera that the sun shines through: the floor light's and the shafts' (GlassShafts picks
-        // those whose room holds the camera). Their rows about the camera are made at the frame's first batch
-        // (RenderView), with the camera the shaders get.
+        // The panes near the camera that light the room behind them: the sun's through them, or a titan pane's light
+        // behind it at any hour (LightOfPane). The floor light's and the shafts' (GlassShafts picks those whose room holds
+        // the camera). Their rows about the camera are made at the frame's first batch (RenderView), with the camera the
+        // shaders get.
         g_near.clear();
         g_floorList.clear();
         g_floorPanes = 0;
         g_viewFrame = 0;
-        if (g_light.sunGain <= 0.01f || g_panes.Size() == 0) return;
+        const bool backlitNear = g_settings.titanBacklit && g_backlitPanes > 0;
+        if ((g_light.sunGain <= 0.01f && !backlitNear) || g_panes.Size() == 0) return;
         float cam[3];
         wxl::game::camera::GetPosition(cam);
         static std::vector<const Pane*> candidates;
         g_panes.Near(static_cast<uint32_t>(snap.mapId), cam, g_settings.range, 256, candidates);
-        // (not an underground pane: no sky behind it, Ironforge's)
+        // (the sun's: not an underground pane, Ironforge's; not one the sun is behind)
         for (const Pane* p : candidates)
-            if (!(p->flags & kPaneNoSky) && p->out[0] * g_sun[0] + p->out[1] * g_sun[1] + p->out[2] * g_sun[2] > 0.05f) g_near.push_back(p);
+        {
+            PaneLight pl;
+            if (!LightOfPane(*p, MaterialById(p->material), g_light, g_sun, g_sunColour, g_pulseSeconds, g_settings, pl)) continue;
+            g_backlitNear += pl.backlit ? 1 : 0;
+            g_near.push_back(pl);
+        }
         // The floor light: the panes whose room holds the camera first (the room you stand in), then the nearest.
         if (!g_settings.floorLight) return;
         for (int pass = 0; pass < 2; ++pass)
-            for (const Pane* p : g_near)
+            for (const PaneLight& pl : g_near)
             {
                 if (g_floorList.size() >= static_cast<size_t>(kFloorPanes)) break;
+                const Pane* p = pl.pane;
                 bool inRoom = true;
                 for (int k = 0; k < 3; ++k) inRoom = inRoom && cam[k] >= p->roomMin[k] && cam[k] <= p->roomMax[k];
-                if (inRoom == (pass == 0)) g_floorList.push_back(p);
+                if (inRoom == (pass == 0)) g_floorList.push_back(pl);
             }
         g_floorPanes = static_cast<unsigned>(g_floorList.size());
     }
@@ -1060,19 +1169,25 @@ namespace wxl_livingazeroth::glass
                 for (int k = 0; k < 3; ++k) g_view[4 + r * 4 + k] = have ? view[r * 4 + k] : (r == k ? 1.0f : 0.0f);
             std::memset(g_paneConstants, 0, sizeof(g_paneConstants));
             unsigned n = 0;
-            for (const Pane* p : g_floorList)
+            static std::vector<PaneLight> drawn;
+            drawn.clear();
+            for (const PaneLight& pl : g_floorList)
             {
+                const Pane* p = pl.pane;
                 float* c = g_paneConstants + 4 * kPaneRegisters * n;
-                if (!ProjectionRows(*p, g_sun, cam, kReach, c)) continue;
-                const float t = LookOf(p->kind).through * g_light.sunGain;
-                for (int k = 0; k < 3; ++k) c[12 + k] = p->light[k] * g_sunColour[k] * t;
+                // the rows along its light (the sun's, or the light behind a titan pane), its colour
+                if (!ProjectionRows(*p, pl.dir, cam, kReach, c)) continue;
+                for (int k = 0; k < 3; ++k) c[12 + k] = pl.colour[k];
                 c[15] = 1.0f;
                 for (int k = 0; k < 3; ++k) { c[16 + k] = p->roomMin[k] - cam[k]; c[20 + k] = p->roomMax[k] - cam[k]; }
                 c[19] = kSoft;
                 c[23] = kFarSoft;
+                drawn.push_back(pl);
+                g_backlitFloor += pl.backlit ? 1 : 0;
                 ++n;
             }
             g_floorPanes = n;
+            LightFacing(drawn.data(), drawn.size(), g_sun, g_floorFacing);
             g_panesUp = false;
         }
     }
@@ -1215,23 +1330,21 @@ namespace wxl_livingazeroth::glass
     void PaneRangeTaken() { g_panesUp = false; g_floorConstsUp = false; }
     void ViewTaken() { g_floorConstsUp = false; }
 
-    bool ShaftPanes(std::vector<ShaftPane>& out, size_t max)
+    bool ShaftPanes(std::vector<PaneLight>& out, size_t max)
     {
         out.clear();
         if (!g_settings.enabled || !g_settings.colouredShafts || g_near.empty()) return false;
         float cam[3];
         wxl::game::camera::GetPosition(cam);
-        for (const Pane* p : g_near)
+        for (const PaneLight& pl : g_near)
         {
             if (out.size() >= max) break;
             // the room you stand in (a little slack: a doorway)
+            const Pane* p = pl.pane;
             bool inRoom = true;
             for (int k = 0; k < 3; ++k) inRoom = inRoom && cam[k] >= p->roomMin[k] - 2.0f && cam[k] <= p->roomMax[k] + 2.0f;
             if (!inRoom) continue;
-            ShaftPane s{ p, {} };
-            const float t = LookOf(p->kind).through * g_light.sunGain;
-            for (int k = 0; k < 3; ++k) s.colour[k] = p->light[k] * g_sunColour[k] * t;
-            out.push_back(s);
+            out.push_back(pl);
         }
         return !out.empty();
     }
@@ -1268,6 +1381,9 @@ namespace wxl_livingazeroth::glass
         api->UiSliderFloat("hearth flicker speed (x)##glfrs", &s.flickerSpeed, 0.0f, 3.0f);
         api->UiSliderFloat("rooms: lamp flicker behind clear and leaded glass (0 = steady lamps)##gllpf", &s.lampFlicker, 0.0f, 0.3f);
         api->UiCheckbox("Ironforge: every window lit all night (they still flicker)##glifl", &s.ironforgeAlwaysLit);
+        api->UiCheckbox("titan glass (Ulduar, Halls of Stone and Lightning): lit from behind, at any hour##glttn", &s.titanBacklit);
+        api->UiSliderFloat("titan glass: its glow and the light it casts (x)##glttns", &s.backlitStrength, 0.0f, 3.0f);
+        api->UiSliderFloat("titan glass: General Vezax's slow pulse (x; 0 = steady)##glvzx", &s.vezaxPulse, 0.0f, 3.0f);
         api->UiCheckbox("rooms: furniture (tables, beds, shelves, hearths...) at its depth##gldet", &s.roomDetail);
         api->UiCheckbox("rooms: floors, walls and ceilings in the client's interior textures##gltex", &s.roomTextures);
         api->UiCheckbox("rooms: curtains half drawn in some##gllay", &s.roomLayouts);
@@ -1287,6 +1403,29 @@ namespace wxl_livingazeroth::glass
         api->UiText(RoomLine());
         api->UiText(WindowLine());
         api->UiText(FrostLine());
+        api->UiText(BacklitLine());
+    }
+
+    const char* BacklitLine()
+    {
+        static std::string line;
+        // Vezax's pulse now (the first backlit material whose pulse VezaxPulse scales), as a share of its glow
+        float pulse = -1.0f;
+        for (const Material& m : g_materials)
+            if ((m.flags & kBacklitPulse) && m.backlit > 0.0f)
+            {
+                float glow[3];
+                BacklitGlow(m, g_pulseSeconds, 1.0f, PulseScale(m, g_settings), glow);
+                pulse = 100.0f * (Lum(glow) / m.backlit - 1.0f);
+                break;
+            }
+        char buf[400];
+        std::snprintf(buf, sizeof(buf), "titan glass lit from behind: %s; %u backlit panes loaded, %u near the camera; last frame %u lighting the floor, "
+                      "%u backlit glass batches drawn; Vezax's pulse now %.1f%% over its glow (-1: no such glass loaded)",
+                      g_settings.titanBacklit ? "on" : "off (the sun's, as other glass)", g_backlitPanes, g_backlitNear, g_lastBacklitFloor,
+                      g_lastBacklitBatches, pulse);
+        line = buf;
+        return line.c_str();
     }
 
     const char* FrostLine()

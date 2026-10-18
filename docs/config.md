@@ -287,13 +287,27 @@ text, the UI, characters).
   Tinker Town has no glass. Its streets are interior groups with no sky: its glass has the street's look whatever the
   camera, with no daylight, sky or glint in it, and its panes put no sunlight on its floors (`IronforgeAlwaysLit` keeps
   every window lit).
-- **Indoors, with the sun on the windows**: the panes' light on the room's floor and walls (where the ray toward the sun
+- **Titan glass lit from behind** (`TitanBacklit`): in Ulduar, the Halls of Stone and the Halls of Lightning the titans'
+  stained glass has no real sky behind it, so it no longer waits for the sun: it glows on its own in its own colours at
+  any hour (the same at noon and at midnight, never below the client's own colour, no sky reflection or sun glint), each
+  texture at its own strength (`BacklitStrength` on top), and a light behind each pane, along its inward normal tilted
+  30° down, puts the pane's colours on the floor and walls and in the room's air (the floor light and the coloured
+  shafts, the same leak guards: the pane's room, 30 yd). General Vezax's glass in the Descent into Madness pulses slowly
+  and faintly, a few percent over six and a half seconds, deep purple (`VezaxPulse`); the others shimmer by about 1% over
+  half a minute or more. A pane counts as facing the sky only in an exterior group with its out side open to the sky
+  (long rays against the WMO and the terrain); the look goes by WMO group, as most of its titan glass is. The groups that
+  keep the daylight look are outdoors: Ulduar's siege-yard facades (`ul_detail_01`, the tram's outer architecture) and
+  the Colossal Forge's wall windows; Wyrmrest's `wr_window` elsewhere keeps it too. Every pane with a room behind it is
+  backlit: 929 (Ulduar 874, the Halls of Stone 44, the Halls of Lightning 11). The Yogg-Saron vision of Stormwind Keep
+  keeps the cathedral glass's daylight look (it isn't titan glass).
+- **Indoors, with the sun on the windows** (or a titan pane's light behind it, at any hour): the panes' light on the room's floor and walls (where the ray toward the sun
   leaves through a pane, in the glass's colour; up to 12 panes, kept inside each pane's room) and **coloured shafts** in
   the room's air (a short march along the view against up to 16 panes whose room you're in, at a quarter of the
   resolution, added right after the sun shafts). Both use `GlassPanes.cdbc`.
 
 The lights panel's **Glass** section changes all of this at runtime and shows the light through the glass, how many
-shader variants carry the blocks, the panes in use and the shafts' cost; the frame profiler has a row for the shafts' GPU
+shader variants carry the blocks, the panes in use and the shafts' cost, and the titan glass (backlit panes near the camera and
+lighting the floor, backlit batches drawn, Vezax's pulse now); the frame profiler has a row for the shafts' GPU
 time ("ours: glass shafts"). The look itself is part of the buildings' own draws.
 
 | Key | Default | Meaning |
@@ -330,3 +344,6 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | FlickerSpeed | 1 | Your multiplier on the hearths' pace (about 0.6 to 1.8 dips a second). |
 | LampFlicker | 0 | The same flicker for the lamp-lit rooms behind clear and leaded glass and their window lights (0.03 is a candle's breath). 0 = steady lamps: their window lights keep their own faint flicker. |
 | IronforgeAlwaysLit | 0 | Ironforge's windows lit all night (they still flicker). |
+| TitanBacklit | 1 | Titan stained glass with no sky behind it (Ulduar, the Halls of Stone and of Lightning) is lit from behind: it glows in its own colours at any hour, never below the client's own colour, no sky or glint in it, and a light behind each pane casts its colours on the floor and in the air. Panes facing real sky keep the daylight look. 0 = the sun's light, as other glass. |
+| BacklitStrength | 1 | Your multiplier on the titan glass's glow and the light it casts (each texture has its own strength, GlassMaterials' Backlit). |
+| VezaxPulse | 1 | Your multiplier on the slow pulse of General Vezax's glass (1 = a few percent over 6.5 s, deep purple). 0 = steady. |

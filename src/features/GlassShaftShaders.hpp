@@ -3,7 +3,8 @@
 //
 //  1. March (kGlassShaftMarchHlsl), at a quarter of the resolution: along each pixel's view ray, from the camera to
 //     the surface (or kMarch yd), within the panes' rooms' box, a few steps (jittered per pixel); at each step, for each pane whose room holds the
-//     camera, whether the ray from that point toward the sun leaves through the pane (the floor light's projection
+//     camera, whether the ray from that point toward its light (the sun, or a titan pane's light behind it: each pane's
+//     rows along its own) leaves through the pane (the floor light's projection
 //     rows: |a|, |b| < 1, 0 < t < 1, soft edges) and the point is in the pane's room; the light of the panes it
 //     leaves through, x the step, x the air's density, x a forward-scattering phase (brighter looking toward the
 //     sun). A sum of coloured light: the shafts are each window's own colour.
@@ -28,7 +29,7 @@ float4 cPix   : register(c4);  // xy = viewport uv per target pixel, z = the air
 float4 cInv0  : register(c5);  // view to world (rows)
 float4 cInv1  : register(c6);
 float4 cInv2  : register(c7);
-float4 cSun   : register(c8);  // xyz = toward the sun (world, unit), w = the forward-scattering share
+float4 cSun   : register(c8);  // xyz = toward the panes' light (the sun; glass::LightFacing with titan glass), w = the forward-scattering share
 float4 cRoomLo : register(c9); // the panes' rooms together: their box (camera-relative), so the steps stay in the room
 float4 cRoomHi : register(c10);
 // Per pane (six arrays of 16, so the loop's counter indexes each): the rows a, b, t (camera-relative, world axes;

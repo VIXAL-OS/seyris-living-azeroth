@@ -42,9 +42,17 @@
 //     groups by sub-zone and their hours at 23:00 and 03:00, the underground and dungeon flags, the panes with no sky,
 //     WindowRooms' frosted windows); and on WARP 48 frosted windows pixel by pixel against the CPU's lit value, dip and
 //     glow hidden, and each light's share with its flicker against the pixels'.
+//  9. Titan glass lit from behind (Ulduar, the Halls of Stone and of Lightning): the light behind a pane (out tilted 30
+//     degrees up), the floor projection along it against the crossing over a floor grid and its leak guards, the pulse
+//     (a pure function of the time, periodic, bounded, a gentle step; no period: none), Vezax's glow (a few percent,
+//     purple, VezaxPulse; NaN in, finite out), which batches and their constants (the registers the inside look reads the
+//     same at noon and at midnight), a pane's light (backlit at any hour, sunlit by day, TitanBacklit off: the sun's), the
+//     facing; the shipped tables (the 7 textures, Vezax's pulse, the backlit panes per map, the buildings, none
+//     elsewhere); and on WARP the glass and its light on the floor at noon and at midnight: the same pixels, the rules'.
 // Run: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]
 // GLASS_TEXTURES=<folder>: the client's interior BLPs (waterscan --extract-list's names) for the rooms on WARP, else
-// synthetic ones. GLASS_ONLY=<parts>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, lit, frosted).
+// synthetic ones. GLASS_ONLY=<parts>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, lit, frosted,
+// titan).
 #include "env/Flame.hpp"
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
@@ -69,6 +77,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <regex>
 #include <set>
@@ -1725,7 +1734,7 @@ namespace
         Table m, p;
         if (!ReadTable(data / "GlassMaterials.cdbc", m) || !ReadTable(data / "GlassPanes.cdbc", p)) { Check(false, "the shipped glass tables read"); return; }
         std::map<uint32_t, int> kinds;
-        bool sane = m.fields == 16;
+        bool sane = m.fields == 22;
         std::map<std::string, uint32_t> byName;
         for (const auto& r : m.rows)
         {
@@ -1750,7 +1759,7 @@ namespace
               byName.count("stormwindlampglass.blp") == 0,
               "the stained glass the user named is stained; the vrykul's icy panes frosted, Elwynn's leaded; no Stormwind walls, abandoned glass or lamps");
         std::map<uint32_t, int> maps;
-        bool unit = p.fields == 26;
+        bool unit = p.fields == 27;
         for (const auto& r : p.rows)
         {
             maps[r[1]]++;
@@ -3264,6 +3273,478 @@ namespace
     }
 }
 
+namespace
+{
+    // --- 9. titan glass lit from behind (Ulduar, the Halls of Stone and of Lightning) -----------------------------------
+    // "Their stained glass should glow on its own and cast coloured light from behind, not depend on the sun" (the user,
+    // 2026-10-18).
+    const char* const kTitanTextures[] = { "ce_evilglass", "ce_uldr_stainedglass01", "ce_uldr_stainedglass03", "ce_uldr_warroomstainedglass",
+                                           "eb_stainedglass", "eb_uldr_redwindow", "wr_window" };
+
+    // General Vezax's evil glass as gen_glass makes its row: stained, all glass here, its glow and its purple pulse.
+    gl::Material EvilGlass()
+    {
+        gl::Material m;
+        m.kind = gl::kStained;
+        m.flags = gl::kBacklitPulse;
+        m.mask[0] = m.mask[1] = m.mask[2] = 0; m.mask[3] = 1;
+        m.light[0] = 1.0f; m.light[1] = 0.73f; m.light[2] = 0.9f;
+        m.backlit = 1.7f; m.pulse = 0.05f; m.pulseSeconds = 6.5f;
+        const float purple[3] = { 0.55f, 0.2f, 1.0f };
+        const float lum = 0.2126f * purple[0] + 0.7152f * purple[1] + 0.0722f * purple[2];
+        for (int k = 0; k < 3; ++k) m.pulseColour[k] = purple[k] / lum;
+        return m;
+    }
+
+    // Noon (the sun high, clear) or midnight (the client's windows lit, the sun down).
+    gl::Inputs HourInputs(bool night)
+    {
+        gl::Inputs in;
+        in.sun[0] = 0.3f; in.sun[1] = -0.2f; in.sun[2] = night ? -0.6f : 0.93f; Norm(in.sun);
+        in.daylight = night ? 0.0f : 1.0f; in.night = night ? 1.0f : 0.0f;
+        return in;
+    }
+
+    // A batch's constants as the runtime makes them (BatchConstants, DayConstants, RoomBatchConstants, then BacklitConstants
+    // for a backlit one) in a building flagged `flags`, seen from inside by `inside`, at `seconds` on the pulse's clock.
+    void TitanBatch(const gl::Material& m, const gl::Settings& s, uint32_t flags, bool night, float inside, double seconds,
+                    float c[4 * gl::kConstantCount], float sd[4 * gl::kSeedRegisters], float day[4 * gl::kDayRegisters])
+    {
+        const gl::Inputs in = HourInputs(night);
+        const gl::Light lt = gl::Evaluate(in);
+        gl::BatchConstants(m, inside, lt, in.sun, in.sunColour, in.sky, s, c);
+        gl::DayConstants(m, lt, s, flags, day);
+        gl::Building b;
+        b.seed = 5; b.uniqueId = 2712187; b.flags = flags;
+        gl::RoomInputs ri;
+        ri.night = night ? 1.0f : 0.0f; ri.hour = night ? 0.0f : 12.0f; ri.kind = m.kind; ri.hearthClock = 10.0f;
+        gl::RoomBatchConstants(gl::DefaultStyle(), &b, lt, ri, s, c, sd);
+        if (gl::BacklitBatch(m, flags, s)) gl::BacklitConstants(m, seconds, s, c, day);
+    }
+
+    void BacklitRulesTests()
+    {
+        namespace bl = gl::backlit;
+        char line[700];
+        const double kPi = 3.14159265358979;
+        const float tilt = static_cast<float>(bl::kTiltDegrees * kPi / 180.0);
+
+        // Toward the light behind a pane: its way out tilted 30 degrees up (the light falls 30 degrees below the inward
+        // normal); a skylight's straight up; a pane facing a little down still lit along its way out; unit, outside.
+        gl::Pane wall = WallWindow();
+        float d[3];
+        gl::BacklitDirection(wall, d);
+        const bool wallOk = Near(d[0], std::cos(tilt), 1e-5f) && Near(d[1], 0, 1e-6f) && Near(d[2], std::sin(tilt), 1e-5f);
+        gl::Pane sky = wall;
+        sky.out[0] = 0; sky.out[2] = 1;
+        float ds[3];
+        gl::BacklitDirection(sky, ds);
+        gl::Pane down = wall;
+        down.out[0] = 0.97f; down.out[2] = -0.2425f; Norm(down.out);
+        float dd[3];
+        gl::BacklitDirection(down, dd);
+        const float ddOut = dd[0] * down.out[0] + dd[1] * down.out[1] + dd[2] * down.out[2];
+        std::snprintf(line, sizeof(line), "backlit: toward the light behind a wall pane (%.4f, %.4f, %.4f) (out tilted %.0f degrees up), a skylight's "
+                      "(%.2f, %.2f, %.2f), a pane facing a little down (%.3f along its way out, unit %.5f)", d[0], d[1], d[2], bl::kTiltDegrees, ds[0], ds[1],
+                      ds[2], ddOut, std::sqrt(dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2]));
+        Check(wallOk && Near(ds[2], 1, 1e-6f) && ddOut >= bl::kMinOut && Near(dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2], 1, 1e-5f), line);
+
+        // The floor projection along it: the wall window (x = 0, y -1 .. 1, z 1.5 .. 4.5, its room behind at x < 0). A
+        // floor point (x, y, 0) is lit where its ray toward the light crosses the glass: at y, z = -x tan(tilt), so the
+        // patch is x -4.5 / tan .. -1.5 / tan, y -1 .. 1, against the rows' weight over a grid of floor points (away from
+        // the soft edges); the leak guards: in front of the glass, outside the room's box, beyond the reach.
+        const float tn = std::tan(tilt);
+        int agree = 0, total = 0, lit = 0;
+        for (int i = 0; i < 60; ++i)
+            for (int j = 0; j < 30; ++j)
+            {
+                const float x = -9.8f + i * (9.6f / 59.0f), y = -1.45f + j * (2.9f / 29.0f);
+                const float q[3] = { x, y, 0.0f };
+                const float zc = -x * tn;
+                const bool inside = std::fabs(y) < 0.8f && zc > 1.5f + 0.3f && zc < 4.5f - 0.3f;
+                const bool outside = std::fabs(y) > 1.0f || zc < 1.5f || zc > 4.5f;
+                if (!inside && !outside) continue;
+                const float wgt = gl::FloorWeightWorld(wall, d, q, 30, 6, 4);
+                ++total;
+                lit += wgt > 0.0f ? 1 : 0;
+                agree += (inside && wgt > 0.95f) || (outside && wgt == 0.0f) ? 1 : 0;
+            }
+        gl::Pane high = wall;
+        high.pos[2] = 40; high.roomMax[2] = 60;   // 38.5 yd above the floor: its patch 66 yd off, its ray 77 yd: beyond the reach
+        const float qHigh[3] = { -40.0f / tn, 0, 0 }, qFront[3] = { 3, 0, 0 }, qOut[3] = { -5.2f, 0, -1.0f };
+        const float mid[3] = { -3.0f / tn, 0, 0 };
+        std::snprintf(line, sizeof(line), "backlit floor light: the projection along the light behind the pane agrees with the crossing at %d of %d floor points "
+                      "(%d lit; the patch's middle %.3f); in front of the glass %.2f, under the room's floor %.2f, beyond the reach %.2f",
+                      agree, total, lit, gl::FloorWeightWorld(wall, d, mid, 30, 6, 4), gl::FloorWeightWorld(wall, d, qFront, 30, 6, 4),
+                      gl::FloorWeightWorld(wall, d, qOut, 30, 6, 4), gl::FloorWeightWorld(high, d, qHigh, 30, 6, 4));
+        Check(total > 1000 && agree == total && lit > 150 && Near(gl::FloorWeightWorld(wall, d, mid, 30, 6, 4), 1, 1e-4f) &&
+              gl::FloorWeightWorld(wall, d, qFront, 30, 6, 4) == 0 && gl::FloorWeightWorld(wall, d, qOut, 30, 6, 4) == 0 &&
+              gl::FloorWeightWorld(high, d, qHigh, 30, 6, 4) == 0, line);
+
+        // The pulse: a pure function of the time (the same bits again), 0 at a whole period and 1 half-way, periodic (a
+        // period later, or a million seconds later on a whole number of periods, the same within 1e-6), within 0..1, its
+        // mean a half, a frame's step small; no period or no finite time: 0.
+        const float T = 6.5f;
+        float lo = 1, hi = 0, step = 0, period = 0, later = 0;
+        double sum = 0;
+        long n = 0;
+        bool same = true;
+        float last = gl::BacklitWave(0.0, T);
+        for (int f = 1; f <= 60 * 130; ++f)
+        {
+            const double t = f / 60.0;
+            const float w = gl::BacklitWave(t, T);
+            lo = std::min(lo, w); hi = std::max(hi, w); sum += w; ++n;
+            step = std::max(step, std::fabs(w - last));
+            last = w;
+            same = same && Bits(w) == Bits(gl::BacklitWave(t, T));
+            period = std::max(period, std::fabs(w - gl::BacklitWave(t + T, T)));
+            later = std::max(later, std::fabs(w - gl::BacklitWave(t + 153846.0 * T, T)));
+        }
+        const float inf = std::numeric_limits<float>::infinity(), nan = std::numeric_limits<float>::quiet_NaN();
+        const bool degenerate = gl::BacklitWave(1.0, 0.0f) == 0 && gl::BacklitWave(1.0, -2.0f) == 0 && gl::BacklitWave(1.0, nan) == 0 &&
+                                gl::BacklitWave(1.0, inf) == 0 && gl::BacklitWave(std::nan(""), T) == 0 && gl::BacklitWave(HUGE_VAL, T) == 0;
+        std::snprintf(line, sizeof(line), "backlit pulse: %.4f .. %.4f, 0 at a whole period (%.6f) and 1 half-way (%.6f), mean %.4f, a frame's step at most %.4f, "
+                      "the same bits again, a period later off by %.1e, a million seconds later by %.1e; no period or time: 0",
+                      lo, hi, gl::BacklitWave(13.0, T), gl::BacklitWave(3.25, T), sum / n, step, period, later);
+        Check(lo >= 0 && hi <= 1 && hi > 0.999f && lo < 0.001f && gl::BacklitWave(13.0, T) < 1e-6f && gl::BacklitWave(3.25, T) > 1 - 1e-6f &&
+              std::fabs(sum / n - 0.5) < 0.01 && step < 0.009f && same && period < 1e-6f && later < 1e-5f && degenerate, line);
+
+        // Vezax's glow: at least its steady glow, at most a few percent more, the pulse deep purple (blue and red more than
+        // green); VezaxPulse scales it (0: steady to the bit, 2: twice); another texture's shimmer ignores VezaxPulse; NaN
+        // anywhere gives finite colours.
+        const gl::Material evil = EvilGlass();
+        gl::Material plain = evil;
+        plain.flags = 0; plain.pulse = 0.012f; plain.pulseSeconds = 37.0f;
+        for (float& c : plain.pulseColour) c = 1.0f;
+        gl::Settings s;
+        float minLum = 1e9f, maxLum = 0, peak[3] = {};
+        bool steady = true, shimmer = true;
+        for (int f = 0; f <= 60 * 7; ++f)
+        {
+            const double t = f / 60.0;
+            float g[3], g0[3], gp[3], gq[3];
+            gl::BacklitGlow(evil, t, 1.0f, gl::PulseScale(evil, s), g);
+            const float l = 0.2126f * g[0] + 0.7152f * g[1] + 0.0722f * g[2];
+            if (l > maxLum) { maxLum = l; for (int k = 0; k < 3; ++k) peak[k] = g[k]; }
+            minLum = std::min(minLum, l);
+            gl::Settings off = s; off.vezaxPulse = 0;
+            gl::BacklitGlow(evil, t, 1.0f, gl::PulseScale(evil, off), g0);
+            for (int k = 0; k < 3; ++k) steady = steady && Bits(g0[k]) == Bits(evil.backlit);
+            gl::BacklitGlow(plain, t, 1.0f, gl::PulseScale(plain, off), gp);
+            gl::BacklitGlow(plain, t, 1.0f, gl::PulseScale(plain, s), gq);
+            for (int k = 0; k < 3; ++k) shimmer = shimmer && Bits(gp[k]) == Bits(gq[k]) && gp[k] <= plain.backlit * 1.0121f && gp[k] >= plain.backlit;
+        }
+        gl::Settings twice = s; twice.vezaxPulse = 2;
+        float g2[3];
+        gl::BacklitGlow(evil, 3.25, 1.0f, gl::PulseScale(evil, twice), g2);
+        const float l2 = 0.2126f * g2[0] + 0.7152f * g2[1] + 0.0722f * g2[2];
+        gl::Material bad = evil;
+        bad.pulseSeconds = nan; bad.pulseColour[1] = nan;
+        float gn[3], gs[3], gz[3];
+        gl::BacklitGlow(bad, 1.0, 1.0f, 1.0f, gn);
+        gl::BacklitGlow(evil, 1.0, nan, 1.0f, gs);
+        gl::Material notBacklit = evil; notBacklit.backlit = 0;
+        gl::BacklitGlow(notBacklit, 1.0, 1.0f, 1.0f, gz);
+        bool finite = true;
+        for (int k = 0; k < 3; ++k) finite = finite && std::isfinite(gn[k]) && std::isfinite(gs[k]) && gs[k] == 0 && gz[k] == 0 && Bits(gn[k]) == Bits(evil.backlit);
+        const float b = evil.backlit;
+        std::snprintf(line, sizeof(line), "Vezax's glow: luminance %.4f .. %.4f of %.2f (+%.1f%% at the peak: blue +%.1f%%, red +%.1f%%, green +%.1f%%); VezaxPulse 0 "
+                      "steady to the bit, 2 +%.1f%%; another glass's shimmer within 1.2%%, deaf to VezaxPulse; NaN in: finite out, no glow without Backlit",
+                      minLum, maxLum, b, 100 * (maxLum / b - 1), 100 * (peak[2] / b - 1), 100 * (peak[0] / b - 1), 100 * (peak[1] / b - 1), 100 * (l2 / b - 1));
+        Check(Near(minLum, b, 1e-5f) && maxLum / b > 1.04f && maxLum / b < 1.06f && peak[2] > peak[0] && peak[0] > peak[1] && steady && shimmer &&
+              Near(l2 / b, 1.10f, 2e-3f) && finite, line);
+
+        // Which batches, and their constants: titan glass in a backlit building with TitanBacklit on; the inside look with
+        // the glow behind it (no sun, sky, darkening or glint), and every register the inside look reads the same at noon
+        // and at midnight, the camera outdoors or indoors.
+        gl::Settings off = s;
+        off.titanBacklit = 0;
+        Check(gl::BacklitBatch(evil, gl::kBuildingBacklit, s) && !gl::BacklitBatch(evil, 0, s) && !gl::BacklitBatch(evil, gl::kBuildingBacklit, off) &&
+              !gl::BacklitBatch(notBacklit, gl::kBuildingBacklit, s), "backlit batches: titan glass, its building backlit, TitanBacklit on (else the daylight look)");
+        float ref[4 * gl::kConstantCount], sd[4 * gl::kSeedRegisters], day[4 * gl::kDayRegisters];
+        TitanBatch(evil, s, gl::kBuildingBacklit | gl::kBuildingDungeon, false, 0.0f, 1.25, ref, sd, day);
+        bool look = ref[4] == 1 && ref[6] == 0 && ref[11] == 0 && ref[19] == 0 && ref[20] == 0 && ref[21] == 0 && ref[31] == 1 && ref[39] == 0 &&
+                    day[0] == 0 && day[4] == 0;
+        float glow[3];
+        gl::BacklitGlow(evil, 1.25, 1.0f, 1.0f, glow);
+        for (int k = 0; k < 3; ++k) look = look && Bits(ref[8 + k]) == Bits(glow[k]);
+        const int reads[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 19, 21, 31, 39 };   // c192, c193, c194, c195.w, c196.w, c197.y, c199.w, c201.w
+        int differ = 0;
+        for (int night = 0; night < 2; ++night)
+            for (int in = 0; in < 2; ++in)
+            {
+                float c[4 * gl::kConstantCount];
+                TitanBatch(evil, s, gl::kBuildingBacklit | gl::kBuildingDungeon, night != 0, static_cast<float>(in), 1.25, c, sd, day);
+                for (int r : reads) differ += Bits(c[r]) != Bits(ref[r]) ? 1 : 0;
+            }
+        float daylight[4 * gl::kConstantCount], nightlight[4 * gl::kConstantCount];
+        TitanBatch(evil, off, gl::kBuildingBacklit, false, 0.0f, 1.25, daylight, sd, day);
+        TitanBatch(evil, off, gl::kBuildingBacklit, true, 0.0f, 1.25, nightlight, sd, day);
+        std::snprintf(line, sizeof(line), "a backlit batch: the inside look, its glow behind it (%.3f %.3f %.3f), no sun, sky, darkening or glint; the registers the "
+                      "inside look reads differ between noon and midnight, outdoors and indoors at %d of %zu; with TitanBacklit off the daylight look (its sky "
+                      "through %.3f at noon, %.3f at midnight)", ref[8], ref[9], ref[10], differ, 4 * std::size(reads), daylight[8], nightlight[8]);
+        Check(look && differ == 0 && daylight[8] > 0.1f && nightlight[8] == 0, line);
+
+        // A pane's light: a backlit pane's from behind it at any hour (its direction BacklitDirection, its colour the glow x
+        // kFloorShare x stained's 0.8 x its light), the same at noon and at midnight; a sunlit pane's the sun's by day and
+        // none at night; TitanBacklit off: the backlit pane the sun's; an underground pane none; a backlit pane whose
+        // texture isn't backlit glass the sun's.
+        gl::Pane pane = WallWindow();
+        pane.flags = gl::kPaneBacklit;
+        gl::Pane sunlit = WallWindow();
+        gl::Pane under = WallWindow();
+        under.flags = gl::kPaneNoSky;
+        gl::PaneLight a, n2, sd1, sn, offDay, offNight, ug, plainLit;
+        const gl::Inputs noonIn = HourInputs(false), nightIn = HourInputs(true);
+        const gl::Light noonL = gl::Evaluate(noonIn), nightL = gl::Evaluate(nightIn);
+        float noonSun[3] = { 0.8f, 0.1f, 0.59f }; Norm(noonSun);   // beyond the pane (+x)
+        const bool la = gl::LightOfPane(pane, &evil, noonL, noonSun, noonIn.sunColour, 2.0, s, a);
+        const bool ln = gl::LightOfPane(pane, &evil, nightL, nightIn.sun, nightIn.sunColour, 2.0, s, n2);
+        const bool ls = gl::LightOfPane(sunlit, &evil, noonL, noonSun, noonIn.sunColour, 2.0, s, sd1);
+        const bool lsn = gl::LightOfPane(sunlit, &evil, nightL, nightIn.sun, nightIn.sunColour, 2.0, s, sn);
+        const bool lod = gl::LightOfPane(pane, &evil, noonL, noonSun, noonIn.sunColour, 2.0, off, offDay);
+        const bool lon = gl::LightOfPane(pane, &evil, nightL, nightIn.sun, nightIn.sunColour, 2.0, off, offNight);
+        const bool lu = gl::LightOfPane(under, &evil, noonL, noonSun, noonIn.sunColour, 2.0, s, ug);
+        const bool lp = gl::LightOfPane(pane, &notBacklit, noonL, noonSun, noonIn.sunColour, 2.0, s, plainLit);
+        float g[3];
+        gl::BacklitGlow(evil, 2.0, 1.0f, 1.0f, g);
+        bool same2 = la && ln && a.backlit && n2.backlit;
+        for (int k = 0; k < 3; ++k)
+            same2 = same2 && Bits(a.dir[k]) == Bits(n2.dir[k]) && Bits(a.colour[k]) == Bits(n2.colour[k]) && Near(a.dir[k], d[k], 1e-6f) &&
+                    Near(a.colour[k], pane.light[k] * g[k] * bl::kFloorShare * 0.8f, 1e-6f);
+        std::snprintf(line, sizeof(line), "a pane's light: backlit at noon and midnight the same (%.3f %.3f %.3f toward %.2f %.2f %.2f); sunlit by day %s, at night %s; "
+                      "TitanBacklit off: the sun's by day %s, at night %s; underground %s; a backlit pane of plain glass the sun's %s",
+                      a.colour[0], a.colour[1], a.colour[2], a.dir[0], a.dir[1], a.dir[2], ls ? "yes" : "no", lsn ? "yes" : "no", lod && !offDay.backlit ? "yes" : "no",
+                      lon ? "lit" : "none", lu ? "lit" : "none", lp && !plainLit.backlit ? "yes" : "no");
+        Check(same2 && ls && !sd1.backlit && !lsn && lod && !offDay.backlit && Near(offDay.dir[0], noonSun[0], 1e-6f) && !lon && !lu && lp && !plainLit.backlit, line);
+
+        // The facing (c195 in a floor batch) and the shafts' forward scattering: the sun's to the bit for sunlit panes alone;
+        // a backlit pane's light alone, its direction; two opposite lights cancel: from overhead; NaN directions and
+        // weights ignored.
+        float facing[3];
+        gl::LightFacing(&sd1, 1, noonSun, facing);
+        const bool sunBits = Bits(facing[0]) == Bits(noonSun[0]) && Bits(facing[1]) == Bits(noonSun[1]) && Bits(facing[2]) == Bits(noonSun[2]);
+        gl::LightFacing(&a, 1, noonSun, facing);
+        const bool own = Near(facing[0], d[0], 1e-6f) && Near(facing[2], d[2], 1e-6f);
+        gl::PaneLight pair[2] = { a, a };
+        pair[1].dir[0] = -pair[1].dir[0]; pair[1].dir[2] = -pair[1].dir[2];
+        gl::LightFacing(pair, 2, noonSun, facing);
+        const bool cancel = facing[2] == 1 && facing[0] == 0;
+        const float dirs[9] = { 1, 0, 0, nan, 0, 0, 0, 1, 0 }, weights[3] = { 1, 5, nan };
+        const float up[3] = { 0, 0, 1 };
+        gl::MeanDirection(dirs, weights, 3, up, facing);
+        const bool nanSafe = Near(facing[0], 1, 1e-6f) && std::isfinite(facing[1]) && std::isfinite(facing[2]);
+        gl::MeanDirection(dirs, weights, 0, up, facing);
+        Check(sunBits && own && cancel && nanSafe && facing[2] == 1,
+              "the floor light's facing and the shafts' scattering: the sun's to the bit for sunlit panes alone, a backlit pane's own, opposite lights from "
+              "overhead, NaN ignored, none: the fallback");
+    }
+
+    // On WARP: a backlit pane at noon and at midnight, the camera outdoors and indoors, the same pixels to the bit, the
+    // rules' inside colour, never below the stock colour; its light on the floor at both hours against the rules.
+    void BacklitWarpTests()
+    {
+        Warp w;
+        std::string why;
+        if (!InitWarp(w, why)) { std::printf("skip  backlit WARP checks: %s\n", why.c_str()); return; }
+        std::vector<uint8_t> code;
+        if (!wxl_livingazeroth::shaderpatch::Assemble(BlockShader(), "glass blocks", code, why)) { Check(false, "the blocks assemble (backlit): " + why.substr(0, 300)); return; }
+        IDirect3DPixelShader9* ps = nullptr;
+        if (FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps))) { Check(false, "the blocks' shader on WARP (backlit)"); return; }
+        const float e = static_cast<float>(kSide) - 0.5f;
+        auto quad = [&](const float p[4][3], const float n[3], const float base[3], V out[4])
+        {
+            const float xy[4][2] = { { -0.5f, -0.5f }, { e, -0.5f }, { -0.5f, e }, { e, e } };
+            for (int c = 0; c < 4; ++c) out[c] = { xy[c][0], xy[c][1], 0, 1, { p[c][0], p[c][1], p[c][2] }, { n[0], n[1], n[2] }, { 0.5f, 0.5f }, { base[0], base[1], base[2] } };
+        };
+        const float texel[3] = { 0.8f, 77.0f / 255.0f, 0.2f };
+        float view[16] = { 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+        w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
+        UploadLook(w.dev, gl::Light{});
+        const float noRooms[4 * gl::kRoomRegisters] = {};
+        w.dev->SetPixelShaderConstantF(gl::kRoomConstant, noRooms, gl::kRoomRegisters);
+        const gl::Material evil = EvilGlass();
+        const gl::Settings s;
+        char line[600];
+
+        // The pane 5 yd ahead, at a slant, the client's own colour dim (an Ulduar hall's vertex light) and bright.
+        {
+            float n[3] = { -1, 0.4f, 0.1f }; Norm(n);
+            const float p[4][3] = { { 5, 0, 0 }, { 5, 0, 0 }, { 5, 0, 0 }, { 5, 0, 0 } };
+            const size_t mid = (static_cast<size_t>(kSide / 2) * kSide + kSide / 2) * 3;
+            float first[3] = {}, worst = 0, below = 0;
+            int bad = 0, differ = 0, draws = 0;
+            bool drewAll = true;
+            for (int bright = 0; bright < 2; ++bright)
+            {
+                const float base[3] = { bright ? 0.95f : 0.12f, bright ? 0.95f : 0.1f, bright ? 0.95f : 0.14f };
+                for (int night = 0; night < 2; ++night)
+                    for (int in = 0; in < 2; ++in)
+                    {
+                        float c[4 * gl::kConstantCount], sd[4 * gl::kSeedRegisters], day[4 * gl::kDayRegisters];
+                        TitanBatch(evil, s, gl::kBuildingBacklit | gl::kBuildingDungeon, night != 0, static_cast<float>(in), 1.25, c, sd, day);
+                        w.dev->SetPixelShaderConstantF(gl::kSeedConstant, sd, gl::kSeedRegisters);
+                        w.dev->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+                        V v[4];
+                        quad(p, n, base, v);
+                        std::vector<float> rgb;
+                        const bool ok = Draw(w, ps, v, c, gl::kFirstConstant, gl::kConstantCount, true, false, rgb);
+                        drewAll = drewAll && ok;
+                        if (!ok) continue;
+                        for (float x : rgb) bad += std::isfinite(x) ? 0 : 1;
+                        if (night == 0 && in == 0) for (int k = 0; k < 3; ++k) first[k] = rgb[mid + k];
+                        else for (int k = 0; k < 3; ++k) differ += Bits(first[k]) != Bits(rgb[mid + k]) ? 1 : 0;
+                        float glow[3], want[3];
+                        for (int k = 0; k < 3; ++k) glow[k] = c[8 + k] * c[31];
+                        gl::InsideColour(texel, base, c[15], glow, want);
+                        for (int k = 0; k < 3; ++k) { worst = std::max(worst, std::fabs(rgb[mid + k] - want[k])); below = std::max(below, base[k] - rgb[mid + k]); }
+                        ++draws;
+                    }
+            }
+            w.dev->SetPixelShaderConstantF(gl::kSeedConstant, kZeroSeed, gl::kSeedRegisters);
+            std::snprintf(line, sizeof(line), "WARP, backlit glass at noon and at midnight, the camera outdoors and indoors (%d draws): the same pixels (%d channels "
+                          "differ), the rules' inside colour with the glow behind it within %.4f, never below the client's colour (by at most %.1e), NaN/Inf %d",
+                          draws, differ, worst, below, bad);
+            Check(drewAll && draws == 8 && differ == 0 && worst < 0.01f && below <= 1e-6f && bad == 0, line);
+        }
+
+        // Its light on the floor (z = 0, x -10 .. 0, y -2 .. 2) under the wall window, at noon and at midnight: the same,
+        // against the rules (the rows along the light behind the pane, the glow's colour, the facing toward it).
+        {
+            gl::Pane pane = WallWindow();
+            pane.flags = gl::kPaneBacklit;
+            const gl::Material& m = evil;
+            std::vector<float> both[2];
+            float worst = 0, peak = 0;
+            int lit = 0;
+            bool drew = true;
+            for (int night = 0; night < 2; ++night)
+            {
+                const gl::Inputs in = HourInputs(night != 0);
+                const gl::Light lt = gl::Evaluate(in);
+                gl::PaneLight pl;
+                if (!gl::LightOfPane(pane, &m, lt, in.sun, in.sunColour, 2.0, s, pl)) { drew = false; break; }
+                const float origin[3] = { 0, 0, 0 };
+                float panes[4 * gl::kPaneRegisters * gl::kFloorPanes] = {};
+                gl::ProjectionRows(pane, pl.dir, origin, 30, panes);
+                for (int k = 0; k < 3; ++k) { panes[12 + k] = pl.colour[k]; panes[16 + k] = pane.roomMin[k]; panes[20 + k] = pane.roomMax[k]; }
+                panes[15] = 1; panes[19] = 6; panes[23] = 4;
+                float facing[3];
+                gl::LightFacing(&pl, 1, in.sun, facing);
+                float c[4 * gl::kConstantCount] = {};
+                c[12] = facing[0]; c[13] = facing[1]; c[14] = facing[2];
+                c[36] = 1;
+                w.dev->SetPixelShaderConstantF(gl::kPaneConstant, panes, gl::kPaneRegisters * gl::kFloorPanes);
+                const float p[4][3] = { { -10, -2, 0 }, { 0, -2, 0 }, { -10, 2, 0 }, { 0, 2, 0 } };
+                const float n[3] = { 0, 0, 1 }, base[3] = { 0, 0, 0 };
+                V v[4];
+                quad(p, n, base, v);
+                drew = drew && Draw(w, ps, v, c, gl::kFirstConstant, gl::kConstantCount, false, true, both[night]);
+                if (!drew) break;
+                for (int row = 0; row < kSide; ++row)
+                    for (int col = 0; col < kSide; ++col)
+                    {
+                        const float x = -10 + (col + 0.5f) / kSide * 10, y = -2 + (row + 0.5f) / kSide * 4;
+                        const float q[3] = { x, y, 0 };
+                        const float weight = gl::FloorWeightWorld(pane, pl.dir, q, 30, 6, 4);
+                        const float want = texel[0] * pl.colour[0] * weight * std::max(0.0f, facing[2]);
+                        const float got = both[night][(static_cast<size_t>(row) * kSide + col) * 3];
+                        worst = std::max(worst, std::fabs(got - want));
+                        peak = std::max(peak, got);
+                        lit += got > 0.02f && night == 0 ? 1 : 0;
+                    }
+            }
+            int differ = 0;
+            if (drew) for (size_t i = 0; i < both[0].size(); ++i) differ += Bits(both[0][i]) != Bits(both[1][i]) ? 1 : 0;
+            std::snprintf(line, sizeof(line), "WARP, the backlit pane's light on the floor at noon and at midnight: the same pixels (%d channels differ), off from the "
+                          "rules by up to %.4f (peak %.3f, %d of %d floor points lit)", differ, worst, peak, lit, kSide * kSide);
+            Check(drew && differ == 0 && worst < 0.01f && peak > 0.1f && lit > 60 && lit < kSide * kSide / 2, line);
+        }
+        ps->Release();
+    }
+
+    // The shipped tables: the titan textures backlit (Vezax's pulsing), the titan maps' panes backlit (by map; those facing
+    // the sky and other glass not), no backlit pane or building elsewhere (Wyrmrest's wr_window keeps the daylight).
+    void BacklitTableTests(const std::filesystem::path& data)
+    {
+        Table m, p, bu;
+        if (!ReadTable(data / "GlassMaterials.cdbc", m) || !ReadTable(data / "GlassPanes.cdbc", p) || !ReadTable(data / "GlassBuildings.cdbc", bu))
+        { Check(false, "the shipped tables read (backlit)"); return; }
+        auto text = [](const Table& t, uint32_t at) { return at < t.strings.size() ? std::string(&t.strings[at]) : std::string(); };
+        auto isTitan = [](const std::string& name) { for (const char* t : kTitanTextures) if (name == t) return true; return false; };
+        std::map<uint32_t, bool> backlitId;
+        std::set<std::string> backlitNames;
+        int pulsing = 0, lumOff = 0;
+        bool vezax = false, shimmers = true;
+        for (const auto& r : m.rows)
+        {
+            if (m.fields < 22) break;
+            std::string t = text(m, r[1]);
+            t = t.substr(t.find_last_of('\\') + 1);
+            t = t.substr(0, t.size() - 4);
+            const bool b = F(r[16]) > 0;
+            backlitId[r[0]] = b;
+            if (b) backlitNames.insert(t);
+            const float lum = 0.2126f * F(r[19]) + 0.7152f * F(r[20]) + 0.0722f * F(r[21]);
+            lumOff += std::fabs(lum - 1) > 1e-3f ? 1 : 0;
+            if (r[3] & gl::kBacklitPulse)
+            {
+                ++pulsing;
+                vezax = t == "ce_evilglass" && F(r[17]) >= 0.02f && F(r[17]) <= 0.08f && F(r[18]) >= 3 && F(r[18]) <= 12 && F(r[21]) > F(r[19]) && F(r[19]) > F(r[20]);
+            }
+            else if (b) shimmers = shimmers && F(r[17]) <= 0.02f && F(r[18]) >= 20;
+        }
+        bool named = backlitNames.size() == std::size(kTitanTextures);
+        for (const char* t : kTitanTextures) named = named && backlitNames.count(t);
+        char line[900];
+        std::snprintf(line, sizeof(line), "GlassMaterials.cdbc: %u columns; %zu titan textures backlit (the 7 named), Vezax's evil glass alone pulsing (%d; a few "
+                      "percent over several seconds, purple), the others a slow shimmer; pulse colours at luminance 1 (%d off)",
+                      m.fields, backlitNames.size(), pulsing, lumOff);
+        Check(m.fields == 22 && named && pulsing == 1 && vezax && shimmers && lumOff == 0, line);
+
+        std::map<uint32_t, int> backlit, titan, other;
+        int elsewhere = 0, wrongMaterial = 0, noMaterial = 0;
+        for (const auto& r : p.rows)
+        {
+            if (p.fields < 27) break;
+            const std::string c = text(p, r[25]);
+            const std::string tex = c.substr(c.find(": ") == std::string::npos ? 0 : c.find(": ") + 2);
+            const bool titanMap = r[1] == 599 || r[1] == 602 || r[1] == 603;
+            noMaterial += r[26] == 0 ? 1 : 0;
+            if (r[24] & gl::kPaneBacklit)
+            {
+                backlit[r[1]]++;
+                elsewhere += titanMap ? 0 : 1;
+                wrongMaterial += backlitId.count(r[26]) && backlitId[r[26]] ? 0 : 1;
+            }
+            if (titanMap) (isTitan(tex) ? titan : other)[r[1]]++;
+        }
+        const int sky = titan[599] + titan[602] + titan[603] - backlit[599] - backlit[602] - backlit[603];
+        std::snprintf(line, sizeof(line), "GlassPanes.cdbc: %u columns; backlit panes: Halls of Stone %d of %d titan, Halls of Lightning %d of %d, Ulduar %d of %d "
+                      "(titan panes facing the sky: %d; other glass there not backlit: %d); backlit elsewhere %d, of glass that isn't backlit %d; panes with no "
+                      "material %d", p.fields, backlit[599], titan[599], backlit[602], titan[602], backlit[603], titan[603], sky, other[603] + other[599] + other[602],
+                      elsewhere, wrongMaterial, noMaterial);
+        Check(p.fields == 27 && backlit[599] == 44 && backlit[602] == 11 && backlit[603] > 800 && backlit[603] <= titan[603] && sky >= 0 && elsewhere == 0 &&
+              wrongMaterial == 0 && noMaterial == 0 && other[603] > 0, line);
+
+        int rows = 0, outside = 0, wyrmrest = 0, ulduar = 0, halls = 0;
+        for (const auto& r : bu.rows)
+        {
+            const std::string wmo = text(bu, r[11]);
+            if (wmo.find("wyrmrest") != std::string::npos && (r[9] & gl::kBuildingBacklit)) ++wyrmrest;
+            if (!(r[9] & gl::kBuildingBacklit)) continue;
+            ++rows;
+            outside += r[1] == 599 || r[1] == 602 || r[1] == 603 ? 0 : 1;
+            ulduar += wmo.find("ulduar_raid.wmo") != std::string::npos && r[2] != 0 && r[6] == gl::kWholePlacement ? 1 : 0;
+            halls += (wmo.find("ulduar_dwarf77.wmo") != std::string::npos || wmo.find("ulduar_irongiant80.wmo") != std::string::npos) && r[2] != 0 ? 1 : 0;
+        }
+        std::snprintf(line, sizeof(line), "GlassBuildings.cdbc: %d backlit rows (Ulduar's raid placement %d, the Halls' %d), none off the titan maps (%d), Wyrmrest's none (%d)",
+                      rows, ulduar, halls, outside, wyrmrest);
+        Check(rows > 0 && ulduar == 1 && halls == 2 && outside == 0 && wyrmrest == 0, line);
+    }
+}
+
 int main(int argc, char** argv)
 {
     bool warp = true;
@@ -3274,7 +3755,7 @@ int main(int argc, char** argv)
         else args.push_back(argv[i]);
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
-    // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, lit, frosted)
+    // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, lit, frosted, titan)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -3293,6 +3774,8 @@ int main(int argc, char** argv)
     if (warp && run("lit")) LitAgreementTests();
     if (run("frosted")) { FrostedRulesTests(); FrostedTableTests(args[1]); }
     if (warp && run("frosted")) FrostedAgreementTests();
+    if (run("titan")) { BacklitRulesTests(); BacklitTableTests(args[1]); }
+    if (warp && run("titan")) BacklitWarpTests();
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

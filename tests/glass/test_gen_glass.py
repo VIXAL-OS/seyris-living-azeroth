@@ -2,7 +2,8 @@
 candidates and how they are classified (Stormwind's walls are not windows; broken, burnt and abandoned glass is left
 out), the glass mask on texels, the panes of a WMO, which way is out (an exterior face, its interior twin, an
 interior-only window), the room each pane lights, the placement into world space, and the windows (GlassWindows: which
-panes make one window, its rectangle, tiles, ordinals).
+panes make one window, its rectangle, tiles, ordinals), and titan glass lit from behind (which panes face the sky,
+the terrain, a titan hall on Ulduar's map and elsewhere).
 
 Run:  python -m unittest discover -s tests/glass -p "test_*.py"     (from the repository)
 """
@@ -621,6 +622,135 @@ class Rooms(unittest.TestCase):
         self.assertEqual(cls[placed[1][7]], g.HOUSE)
         self.assertEqual(placed[1][7], 1)
         self.assertTrue(all(sid > max(s for s, c in cls.items() if c < g.FORGE) for sid, c in cls.items() if c >= g.FORGE))
+
+
+TITAN_TEX = "dungeons\\textures\\ulduar\\ce_uldr_stainedglass01.blp"
+EVIL_TEX = "dungeons\\textures\\ulduar\\ce_evilglass.blp"
+HALL = "world\\wmo\\dungeon\\ulduar\\testhall.wmo"
+
+
+def niche(y0, y1):
+    """A closed stone box in front of a pane in the wall x = 0 (y0 .. y1, z 1 .. 3): a lattice that keeps the sky out."""
+    lo, hi = (0.0, y0 - 0.5, 0.5), (2.0, y1 + 0.5, 3.5)
+    x0, x1, ya, yb, za, zb = lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]
+    return [[(x0, ya, zb), (x1, ya, zb), (x1, yb, zb), (x0, yb, zb)], [(x0, ya, za), (x0, yb, za), (x1, yb, za), (x1, ya, za)],
+            [(x0, ya, za), (x1, ya, za), (x1, ya, zb), (x0, ya, zb)], [(x0, yb, za), (x0, yb, zb), (x1, yb, zb), (x1, yb, za)],
+            wall_x(x1, ya, yb, za, zb, out=False)]
+
+
+class Titan(unittest.TestCase):
+    """Titan glass lit from behind: the textures' columns, which panes face the sky, the terrain's heights, the panes and
+    buildings of a titan hall on Ulduar's map and the same hall elsewhere."""
+
+    def test_backlit_values(self):
+        b = g.backlit_values(EVIL_TEX)
+        self.assertEqual(b[:3], (1.7, 0.05, 6.5))
+        self.assertAlmostEqual(sum(c * w for c, w in zip(b[3:], g.LUMA)), 1.0, places=6)   # the pulse's colour at luminance 1
+        self.assertGreater(b[5], b[3])
+        self.assertGreater(b[3], b[4])                                   # deep purple: blue, then red, then green
+        self.assertEqual(g.backlit_values(TITAN_TEX)[3:], (1.0, 1.0, 1.0))   # a shimmer: white
+        self.assertLessEqual(g.backlit_values(TITAN_TEX)[1], 0.02)
+        self.assertEqual(g.backlit_values(WINDOW), (0.0, 0.0, 0.0, 1.0, 1.0, 1.0))
+        self.assertEqual(set(g.BACKLIT), {"ce_evilglass", "ce_uldr_stainedglass01", "ce_uldr_stainedglass03", "ce_uldr_warroomstainedglass",
+                                          "eb_stainedglass", "eb_uldr_redwindow", "wr_window"})
+        self.assertTrue(all(g.classify("x\\%s.blp" % t)[0] == g.STAINED for t in g.BACKLIT))
+        self.assertEqual(sorted(g.TITAN_MAPS), [599, 602, 603])
+
+    def test_sky_rays(self):
+        stone = [q for quad in niche(-1, 1) for q in ((quad[0], quad[1], quad[2]), (quad[0], quad[2], quad[3]))]
+        open_air = g.wl.Occluder([])
+        self.assertEqual(g.sky_rays(open_air, (0.0, 0.0, 2.0), (1.0, 0.0, 0.0)), len(g.SKY_RAYS))      # a wall in the open
+        self.assertEqual(g.sky_rays(open_air, (0.0, 0.0, 2.0), (0.0, 0.0, 1.0)), len(g.SKY_RAYS))      # a skylight
+        self.assertEqual(g.sky_rays(open_air, (0.0, 0.0, 2.0), (0.0, 0.0, -1.0)), 0)                   # facing the ground
+        self.assertEqual(g.sky_rays(g.wl.Occluder(stone), (0.0, 0.0, 2.0), (1.0, 0.0, 0.0)), 0)        # in a closed niche
+        self.assertEqual(g.sky_rays(open_air, (0.0, 0.0, 2.0), (1.0, 0.0, 0.0), below=lambda q: True), 0)   # under the ground
+        # an awning 3 yd over the window's outside, 8 yd deep: the steep rays meet it, the lowest (15 degrees) get away
+        roof = [((0.0, -50.0, 5.0), (8.0, -50.0, 5.0), (8.0, 50.0, 5.0)), ((0.0, -50.0, 5.0), (8.0, 50.0, 5.0), (0.0, 50.0, 5.0))]
+        n = g.sky_rays(g.wl.Occluder(roof), (0.0, 0.0, 2.0), (1.0, 0.0, 0.0))
+        self.assertEqual(n, 3)
+        self.assertLess(n, g.SKY_OPEN)                       # ... too few: not facing the sky
+
+    def test_terrain(self):
+        import numpy as np
+        d = Path(tempfile.mkdtemp())
+        (d / "terrain-scan" / "UlduarRaid").mkdir(parents=True)
+        h = np.full((129, 129), 50.0, np.float32)
+        h[:, 64:] = 70.0
+        holes = np.zeros((128, 128), bool)
+        holes[10, 10] = True
+        np.savez(d / "terrain-scan" / "UlduarRaid" / "31_31.npz", ter_h=h, holes=holes)
+        t = g.Terrain(d, "ulduarraid")
+        tile, cell = g.wl.TILE, g.wl.CHUNK / 8.0
+        x, y = tile - 20.5 * cell, tile - 20.5 * cell      # cell (20, 20): ground at 50
+        self.assertAlmostEqual(t.height(x, y), 50.0, places=4)
+        self.assertTrue(t.below((x, y, 40.0)))
+        self.assertFalse(t.below((x, y, 60.0)))
+        self.assertAlmostEqual(t.height(x, tile - 63.5 * cell), 60.0, places=3)   # half-way up the step, bilinear
+        self.assertIsNone(t.height(tile - 10.5 * cell, tile - 10.5 * cell))       # a hole
+        self.assertIsNone(t.height(-5000.0, -5000.0))                              # no tile there
+        self.assertIsNone(g.Terrain(d, "azeroth").height(x, y))                    # no such map
+
+    def hall(self, map_id, mapdir, uid):
+        """A titan hall: an exterior group (0) with a big titan pane in the wall x = 0 facing the open sky (y -3 .. 3) and a
+        small one in a closed niche (y 10 .. 12); an interior group (1, the hall behind) with Vezax's glass on a wall of its
+        own, the void behind it; a plain leaded window in the open (not titan glass)."""
+        d = Path(tempfile.mkdtemp())
+        (d / "wmo-windows").mkdir()
+        ext_quads = [(1, wall_x(0.0, -3, 3, 1, 3)), (1, wall_x(0.0, 10, 12, 1, 3)), (3, wall_x(0.0, -9, -7, 1, 3))]
+        ext_quads += [(0, q) for q in niche(10, 12)]
+        files = {
+            HALL: root_with_groups([STONE, TITAN_TEX, EVIL_TEX, WINDOW], ["outside", "HallOfWar"], group_flags=[0x8, 0x2000]),
+            HALL[:-4] + "_000.wmo": group(0x8, ((-6, -20, 0), (2.5, 20, 10)), ext_quads),
+            HALL[:-4] + "_001.wmo": group(0x2000, ((-6, -20, 0), (0.2, 20, 10)), [(2, wall_x(-3.0, -16, -14, 1, 3))]),
+        }
+        for name, data in files.items():
+            (d / "wmo-windows" / name.replace(BS, "#")).write_bytes(data)
+        (d / "maps.tsv").write_text("%d\t%s\n" % (map_id, mapdir), newline="")
+        rows = ["source\twmo\tuniqueId\tpx\tpy\tpz\trx\try\trz",
+                "world\\maps\\%s\\%s_32_32.adt\t%s\t%d\t16000.0\t60.0\t16000.0\t0\t0\t0" % (mapdir.lower(), mapdir.lower(), HALL, uid)]
+        (d / "adt_wmos.tsv").write_text("\n".join(rows) + "\n", newline="")
+        return d
+
+    def test_titan_hall_on_ulduar(self):
+        d = self.hall(603, "UlduarRaid", 2712187)
+        light_of = {TITAN_TEX: (g.STAINED, (0.7, 1.0, 0.6), 11), EVIL_TEX: (g.STAINED, (1.0, 0.7, 0.9), 10), WINDOW: (g.LEADED, (1.0, 1.0, 1.0), 40)}
+        rows, by_map, wmos, _why = g.panes_table(d, light_of)
+        by_tex = {}
+        for r in rows:
+            by_tex.setdefault(r[25].split(": ")[1], []).append(r)
+        self.assertEqual(by_map[603], 4)
+        open_pane, niche_pane = sorted(by_tex["ce_uldr_stainedglass01"], key=lambda r: -r[12])   # the big one first
+        self.assertFalse(open_pane[24] & g.PANE_BACKLIT)          # it faces the open sky: daylight
+        self.assertTrue(niche_pane[24] & g.PANE_BACKLIT)          # a closed niche in front: lit from behind
+        evil, = by_tex["ce_evilglass"]
+        self.assertTrue(evil[24] & g.PANE_BACKLIT)                # an interior group's: the void behind it is no sky
+        leaded, = by_tex["mm_elwynn_wnd_ext__01"]
+        self.assertFalse(leaded[24] & g.PANE_BACKLIT)             # not titan glass
+        self.assertEqual((open_pane[26], evil[26], leaded[26]), (11, 10, 40))   # each its texture's GlassMaterials ID
+        # the look per group: the outside group's titan glass mostly faces the sky (12 of 16 yd2): daylight; the hall's is
+        # backlit; the placement goes with the most glass (daylight), the hall a group row the other way
+        styles, buildings, report = g.buildings_table(d)
+        placed = [r for r in buildings if r[2] == 2712187 and r[6] == g.WHOLE]
+        groups = {r[6]: r for r in buildings if r[2] == 2712187 and r[6] != g.WHOLE}
+        default = [r for r in buildings if r[2] == 0]
+        self.assertEqual(len(placed), 1)
+        self.assertFalse(placed[0][9] & g.B_BACKLIT)
+        self.assertEqual(sorted(groups), [1])
+        self.assertTrue(groups[1][9] & g.B_BACKLIT)
+        self.assertEqual((groups[1][7], groups[1][8]), (placed[0][7], placed[0][8]))   # the placement's style and seed
+        self.assertEqual(groups[1][9] & ~g.B_BACKLIT, placed[0][9])
+        self.assertFalse(default[0][9] & g.B_BACKLIT)
+        self.assertTrue(placed[0][9] & g.B_DUNGEON)
+
+    def test_the_same_hall_elsewhere_keeps_the_daylight(self):
+        d = self.hall(571, "Northrend", 77)
+        light_of = {TITAN_TEX: (g.STAINED, (0.7, 1.0, 0.6), 11), EVIL_TEX: (g.STAINED, (1.0, 0.7, 0.9), 10), WINDOW: (g.LEADED, (1.0, 1.0, 1.0), 40)}
+        rows, by_map, _wmos, _why = g.panes_table(d, light_of)
+        self.assertEqual(by_map[571], 4)
+        self.assertFalse(any(r[24] & g.PANE_BACKLIT for r in rows))
+        _styles, buildings, _report = g.buildings_table(d)
+        self.assertFalse(any(r[9] & g.B_BACKLIT for r in buildings))
+        self.assertFalse(any(r[6] != g.WHOLE for r in buildings if r[2] != 0))
 
 
 if __name__ == "__main__":
