@@ -5,6 +5,7 @@
 #include "env/Fog.hpp"
 #include "env/Shelter.hpp"
 #include "env/Storm.hpp"
+#include "env/ThunderDsp.hpp"
 #include "features/DoodadFade.hpp"
 #include "features/FogWake.hpp"
 #include "features/GroundFog.hpp"
@@ -235,6 +236,10 @@ namespace wxl_livingazeroth::config
             t.boltRange = In(s, f, "BoltRange", "Strikes farther than this (yards) get no bolt model.", t.boltRange);
             t.scorch = In(s, f, "Scorch", "Experimental: a scorch mark on the terrain where a near strike lands.", t.scorch);
             t.scorchSeconds = In(s, f, "ScorchSeconds", "Seconds the scorch mark takes to fade.", t.scorchSeconds);
+            thunderdsp::Settings& d = thunderdsp::Config();
+            d.filters = In(s, f, "ThunderFilters", "Experimental: thunder through distance filters in the client's own sound engine: farther strikes muffled (a low-pass from 20 kHz near down to about 900 Hz at 2000 yards), a little lower (pitch 0.88 at 2000 yards) and rolling (an echo for mid and far strikes, a longer one on the rumble). Near cracks stay crisp. Needs ThunderNative; anything unexpected and thunder plays unfiltered (the log says why).", d.filters);
+            d.strength = In(s, f, "FilterStrength", "Your multiplier on how far the low-pass and the pitch-down go with distance, 0..2 (0 = none, 2 = twice as far).", d.strength);
+            d.echoAmount = In(s, f, "EchoAmount", "Your multiplier on the thunder's echo (its repeats' loudness), 0..2 (0 = none).", d.echoAmount);
         }
 
         // Lit windows at night: their light and their glow.

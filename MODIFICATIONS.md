@@ -44,6 +44,11 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   the whole window, so lit leaded windows no longer sparkle at night. By day (18 October 2026) the glass seen from
   outside keeps the client's painted glass (a little darker, the sky in it) and the room behind it is only a soft hint:
   as bright as the glass, its walls a gradient, no hard edges, rooms meeting without a step.
+- **Thunder through distance filters** (18 October 2026, experimental): farther thunder muffled, a little lower and
+  rolling, through the client's own FMOD Ex: its sound kits' DSP chain callback (as for Death Knight voices) joins each
+  layer to one of a few filter chains of our own (`env/ThunderDspModel`, `env/ThunderDsp`, `[LivingAzeroth.Storm]`
+  `ThunderFilters`). Built on the SE2/FMOD findings in Morfium-G's
+  [wxl-seyris-dehardcoding](https://github.com/Morfium-G/wxl-seyris-dehardcoding) (`LiveDsp.cpp`, `DspParamTable.hpp`).
 - **Rain and storms** (17 October 2026): rain and wind mix the ground fog back into the units' wakes (none to speak of in
   heavy rain); no mud on paved or cobbled ground (GroundMaterial Flags 0x2, `tools/add_paved_ground.py`) and shallow
   mud ruts on Elwynn's dirt that fill in faster in rain; trench walls and rims no narrower than the near grid can draw,

@@ -38,6 +38,7 @@
 #include "env/Lights.hpp"
 #include "env/Regional.hpp"
 #include "env/Storm.hpp"
+#include "env/ThunderDsp.hpp"
 #include "env/Wind.hpp"
 #include "env/WorldQuery.hpp"
 #include "features/DoodadFade.hpp"
@@ -165,6 +166,7 @@ namespace
             prof::Scope scope(prof::kOursEnv);
             wxl_livingazeroth::climate::Update(snap);
             wxl_livingazeroth::storm::Update(dt, snap); // before the wind, the fog and the lights it feeds
+            wxl_livingazeroth::thunderdsp::Update(dt);  // the thunder filters' chains: sounds counted, quiet ones off
             wxl_livingazeroth::regional::Update(dt, snap);
             wxl_livingazeroth::wind::Update(dt, snap);
             if (snap.inWorld)
@@ -268,6 +270,8 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::m2effects::Install(api);
     // Storms: the day-night colours, shaded right before the client's sky, light and fog take them.
     wxl_livingazeroth::storm::Install(api);
+    // Thunder's distance filters (experimental): detours on the client's DSP chain callback and its chains' shutdown.
+    wxl_livingazeroth::thunderdsp::Install(api);
 
     // Surface cover spike: draws at the end of the world scene (before anti-aliasing's pass).
     wxl_livingazeroth::cover::Install(api);

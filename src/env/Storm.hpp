@@ -66,8 +66,9 @@ namespace wxl_livingazeroth::storm
     void TestStrike(float distance);
     /// Plays the thunder heard at this distance now (its crack, the rumble after it), from a random direction.
     void TestSound(float distance);
-    /// Plays one of StormModel's kits (Kit) at the loudness of a strike at this distance, from a random direction.
-    void TestKit(int kit, float distance);
+    /// Plays one of StormModel's kits (Kit) at the loudness of a strike at this distance, from a random direction, and
+    /// through its distance filters (env/ThunderDsp) as `filters` says: -1 as the setting, 0 none, 1 yes.
+    void TestKit(int kit, float distance, int filters = -1);
 
     struct Status
     {
