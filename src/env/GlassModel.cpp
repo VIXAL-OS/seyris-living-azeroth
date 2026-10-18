@@ -347,7 +347,9 @@ namespace wxl_livingazeroth::glass
         const float pos[2] = { Dot(P, a) * k.c198[0], Dot(P, u) * k.c198[1] };
         const float f[2] = { Frac(pos[0]), Frac(pos[1]) };
         const float cell[2] = { pos[0] - f[0], pos[1] - f[1] };
-        const float tx = (Ge(d[0]) - f[0]) * (1.0f / d[0]), ty = (Ge(d[1]) - f[1]) * (1.0f / d[1]), tz = 1.0f / d[2];
+        // (the way to the wall over the step, both as sizes: a step of 0 or -0 never divides)
+        const float tx = std::fabs(Ge(d[0]) - f[0]) * (1.0f / std::max(std::fabs(d[0]), 0.0001f));
+        const float ty = std::fabs(Ge(d[1]) - f[1]) * (1.0f / std::max(std::fabs(d[1]), 0.0001f)), tz = 1.0f / d[2];
         const float t = std::min(std::min(tx, ty), tz);
         // The face it meets; farther is darker.
         float face = d[1] >= 0.0f ? kFace[2] : kFace[1];
@@ -406,9 +408,10 @@ namespace wxl_livingazeroth::glass
         // The lamp.
         const float ld[3] = { hit[0] - (h[2] * kLamp[1] + kLamp[0]), hit[1] - kLamp[2], hit[2] - kLamp[3] };
         const float falloff = (1.0f / ((ld[0] * ld[0] + ld[1] * ld[1] + ld[2] * ld[2]) + 1.0f / kLampK)) * (kLampGain / kLampK) + kLampBase;
-        // The detail fades with distance.
+        // The detail fades with distance and with the pixel's footprint.
         const float e[3] = { P[0] - k.cam[0], P[1] - k.cam[1], P[2] - k.cam[2] };
-        const float fade = Clamp01((e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * kFadeB + kFadeA) * k.c204[3];
+        const float fade = Clamp01((e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * kFadeB + kFadeA) * k.c204[3] *
+                           Clamp01(k.footprint2 * kFootprintB + kFootprintA);
         shelf = shelf * fade + 1.0f;
         const float clothFar = curtains * kClothFar;
         cloth = (cloth - clothFar) * fade + clothFar;
@@ -425,12 +428,13 @@ namespace wxl_livingazeroth::glass
             cloth3[i] = (k.c203[i] * lamp + day * kCurtainDay) * k.c205[i] * fold * kCurtainGain;
             room[i] = Lerp(cloth, cloth3[i], room[i]);
         }
-        // Dark rooms behind the client's lit windows at night hide most of its glow.
+        // Dark rooms behind the client's lit windows at night hide most of its glow (from the whole window: the
+        // shader takes it from the rest of the window too).
         const float hide = (1.0f - lit) * k.c205[3];
-        const float share = Lerp(hide, 1.0f, k.share);
-        for (int i = 0; i < 3; ++i) out[i] = Lerp(share, room[i], outside[i]);
+        for (int i = 0; i < 3; ++i) out[i] = Lerp(k.share, room[i], outside[i] * -hide + outside[i]);
         if (sample)
         {
+            sample->hide = hide;
             sample->layout = shelves > 0 ? kLayoutShelves : curtains > 0 ? kLayoutCurtains : divider > 0 ? kLayoutDivider : kLayoutPlain;
             sample->lit = lit > 0; sample->door = door > 0; sample->wall = wall > 0;
             sample->cloth = cloth; sample->fold = fold; sample->shelf = shelf; sample->falloff = falloff; sample->fade = fade;

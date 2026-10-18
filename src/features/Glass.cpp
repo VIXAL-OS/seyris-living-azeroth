@@ -108,7 +108,7 @@ namespace wxl_livingazeroth::glass
         // changes the tint and the light: RoomBatchConstants).
         constexpr float kCellWidth = 3.5f, kCellHeight = 3.2f, kRoomDepth = 4.0f, kRoomLight = 0.32f;
         constexpr float kRoomTint[3] = { 0.85f, 0.72f, 0.55f };
-        constexpr float kGlowHidden = 0.75f;   // at night a dark room hides this much of the client's lit window behind it
+        constexpr float kGlowHidden = 0.75f;   // at night a dark room hides this much of the client's lit window in front of it (all of the window)
         // The floor light: the reach along the sun's ray behind a pane, the soft edges (1 / the share of the half
         // sizes), the far end's softness, and the gain.
         constexpr float kReach = 30.0f, kSoft = 6.0f, kFarSoft = 4.0f, kFloorGain = 1.2f;

@@ -215,6 +215,9 @@ namespace wxl_livingazeroth::glass
         constexpr float kLamp[4] = { 0.25f, 0.5f, 0.42f, 0.72f }; // across 0.25 .. 0.75 (hashed), up, deep
         constexpr float kLampK = 6.0f, kLampGain = 1.2f, kLampBase = 0.4f;  // base + gain / (1 + k d^2)
         constexpr float kFadeA = 1.225f, kFadeB = -1.0f / 4000.0f;  // detail: 1 within 30 yd .. 0 from 70 yd (d^2)
+        /// ... and by the pixel's footprint on the glass (yd, squared): 1 up to 0.05 yd .. 0 from 0.15 yd, where the
+        /// planks (0.1 yd), the things and the folds (0.4 yd) would shimmer
+        constexpr float kFootprintA = 1.125f, kFootprintB = -50.0f;
         constexpr float kClothFar = 0.6f;                         // the curtains' cover far away
         constexpr float kDarkDay = 0.12f;                         // a dark room by day keeps this much light
         constexpr float kCurtainDay = 1.5f, kCurtainGain = 0.8f;  // cloth: 1.2 x the day in front, 0.8 x the lamp behind
@@ -253,6 +256,7 @@ namespace wxl_livingazeroth::glass
         float c205[4] = { 0.55f, 0.2f, 0.16f, 0 };
         float c212[4] = { 0, 0, 0, 0 };
         float cam[3] = { 0, 0, 0 };
+        float footprint2 = 0.0f;                      // the pixel's footprint on the glass, squared (yd^2; the shader's)
     };
 
     /// What RoomOutside found (for the tests).
@@ -262,11 +266,14 @@ namespace wxl_livingazeroth::glass
         bool lit = true, door = false, wall = false;  // through the doorway; the dividing wall
         float cloth = 0, fold = 0, shelf = 1, falloff = 0, fade = 1, shade = 0, building[2] = {};
         float hit[3] = {};                            // where the ray meets the room (cell units)
+        float hide = 0;                               // the share of the client's glow a dark room hides (c205.w or 0)
     };
 
     /// The room seen through clear glass from outside as the shader works it (GlassShader's room part, op for op):
     /// the point P (world), toward the eye V, the normal N facing the eye (world, unit), the client's colour r12 and
-    /// the outside colour so far (r23): the outside colour after the room. `sample` may be null.
+    /// the outside colour so far (r23): the outside colour after the room. `sample` may be null. A dark room behind
+    /// the client's lit window hides `sample->hide` of its glow from the whole window: the glass here, and the shader
+    /// takes it from the rest of the window too (the lead, the frame: (1 - hide) x r12; seen from outside).
     void RoomOutside(const float P[3], const float V[3], const float N[3], const RoomConstants& k, const float r12[3],
                      const float outside[3], float out[3], RoomSample* sample);
 }

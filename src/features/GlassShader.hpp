@@ -19,7 +19,8 @@
 //  curtains half drawn, a dividing wall with a doorway, else plain), whether it's dark (below c203.w), its light, the
 //  lamp's place, the curtains' gap, the things on its shelves. At night the lit rooms behind the client's lit windows
 //  have a lamp (c203.rgb, as bright as the client's window: x its luminance); dark ones there hide most of its glow
-//  (c205.w). The detail fades from 30 to 70 yd (x c204.w). Curtains c205.rgb.
+//  (c205.w) from the whole window, lead and frame too (the client lights all of it). The detail fades from 30 to 70 yd
+//  (x c204.w) and where a pixel's footprint on the glass passes 0.05 .. 0.15 yd. Curtains c205.rgb.
 // Floor light (b10: on for the batches of a building's interior groups while sunlit panes are near): up to
 //  kFloorPanes panes, each as three rows taking the point (camera-relative, world axes) to where the ray toward the
 //  sun crosses the pane (|a|, |b| < 1) and how far (0 < t < 1), with soft edges, kept inside its room's box; x the
@@ -35,7 +36,7 @@
 //  c202 (the room's other tint rgb, the buildings' spread in brightness); c203 (the lamp rgb, the share of rooms
 //  dark); c204 (the layouts' thresholds, the detail's strength); c205 (the curtains rgb, the glow dark rooms hide);
 //  c212 (the building's seed xy, 1 / its block (0: one building), 0); c206..c211 and c87..c100 (the room's numbers,
-//  env/GlassModel's glass::room) defined; the floor light's panes c101..c172 (six registers each; the rims' range: a
+//  env/GlassModel's glass::room; c208 the footprint's fade) defined; the floor light's panes c101..c172 (six registers each; the rims' range: a
 //  batch has one or the other, features/Glass re-uploads when the rims took it). ps_3_0 has c0..c223, and an
 //  instruction reads at most one constant register.
 #pragma once
@@ -67,6 +68,7 @@ namespace wxl_livingazeroth::glass
         };
         return "    def c206, 0.0001, 0.05, 0, 300\n" +
                def(207, -1.0f, 1.0f, kFar, 0.0f) +
+               def(208, kFootprintB, kFootprintA, 1e-12f, 0.0f) +
                def(209, kFace[0], kFace[1], kFace[2], kFace[3]) +
                def(210, kCellLight[0], kCellLight[1], 0.0f, 0.0f) +
                "    def c211, 0.7, 0.85, 1.25, 0\n" +
@@ -95,11 +97,11 @@ namespace wxl_livingazeroth::glass
             "\n      dp3 r14.w, r13, c192"
             "\n      add_sat r14.w, r14.w, c192.w"
             "\n      mul r14.w, r14.w, c193.y"
-            // P (world), V (world, toward the eye), N (world, facing the eye), cos = N.V
+            // P (world; camera-relative until the screen gradients are taken), V (world, toward the eye), N (world,
+            // facing the eye), cos = N.V
             "\n      dp3 r15.x, " + vP + ", c181"
             "\n      dp3 r15.y, " + vP + ", c182"
             "\n      dp3 r15.z, " + vP + ", c183"
-            "\n      add r15.xyz, r15, c180"
             "\n      mov r16.xyz, -" + vP +
             "\n      nrm r17.xyz, r16"
             "\n      dp3 r16.x, r17, c181"
@@ -112,9 +114,16 @@ namespace wxl_livingazeroth::glass
             "\n      dp3 r17.w, r18, r16"
             "\n      cmp r18.xyz, r17.w, r18, -r18"
             "\n      dp3_sat r17.w, r18, r16"
-            // the glass's thickness: grad u, grad v (x det) from the screen gradients; the texel h yd deeper
+            // the screen gradients of P about the camera (a city's world coordinates, -8800 in Stormwind, would leave
+            // them a few bits); the pixel's footprint on the glass, squared (r14.x: the room's detail fades by it)
             "\n      dsx r19.xyz, r15"
             "\n      dsy r20.xyz, r15"
+            "\n      add r15.xyz, r15, c180"
+            "\n      dp3 r14.x, r19, r19"
+            "\n      dp3 r14.z, r20, r20"
+            "\n      max r14.x, r14.x, r14.z"
+            // the glass's thickness: grad u, grad v (x det) from the screen gradients; the texel h yd deeper (none
+            // where the glass is nearly edge-on: det cos below 5% of the footprint's square)
             "\n      dsx r21.xy, " + vT +
             "\n      dsy r21.zw, " + vT + ".xyxy"
             "\n      crs r22.xyz, r20, r18"
@@ -127,7 +136,8 @@ namespace wxl_livingazeroth::glass
             "\n      dp3 r26.x, r24, r16"
             "\n      dp3 r26.y, r25, r16"
             "\n      mul r26.z, r24.w, r17.w"
-            "\n      add r26.w, r26_abs.z, -c206.x"
+            "\n      mad r26.w, r14.x, -c206.y, r26_abs.z"
+            "\n      add r26.w, r26.w, -c208.z"
             "\n      rcp r27.x, r26.z"
             "\n      cmp r27.x, r26.w, r27.x, c175.y"
             "\n      mul r26.xy, r26, r27.x"
@@ -163,7 +173,9 @@ namespace wxl_livingazeroth::glass
             "\n      lrp r23.w, r22.y, c175.x, r22.z"
             "\n      mul r23.w, r23.w, c196.w"
             "\n      mad r23.xyz, r12, -c197.x, r12"
-            // behind clear glass, a room: interior mapping in the pane's frame (along, up, deep), in cells
+            // behind clear glass, a room: interior mapping in the pane's frame (along, up, deep), in cells (r14.y: the
+            // share of the client's glow a dark room hides, none without the room)
+            "\n      mov r14.y, c175.y"
             "\n      mov r19.x, c193.z"
             "\n      if_gt r19.x, c175.y"
             "\n        mul r24.xy, r18.yxxx, c207"
@@ -184,10 +196,12 @@ namespace wxl_livingazeroth::glass
             "\n        add r29.xy, r28, -r28.zwww"
             "\n        cmp r29.zw, r27.xxxy, c175.x, c175.y"
             "\n        add r29.zw, r29, -r28"
-            "\n        rcp r30.x, r27.x"
-            "\n        rcp r30.y, r27.y"
+            // (the way to the wall over the ray's step, both as sizes: a step of 0 or -0 never divides)
+            "\n        max r30.xy, r27_abs, c206.x"
+            "\n        rcp r30.x, r30.x"
+            "\n        rcp r30.y, r30.y"
             "\n        rcp r30.z, r27.z"
-            "\n        mul r30.xy, r29.zwww, r30"
+            "\n        mul r30.xy, r29_abs.zwww, r30"
             "\n        min r30.w, r30.x, r30.y"
             "\n        min r30.w, r30.w, r30.z"
             // the face it meets: the back wall, a side wall, the floor or the ceiling; farther is darker
@@ -317,11 +331,14 @@ namespace wxl_livingazeroth::glass
             "\n        add r22.x, r22.x, c95.x"
             "\n        rcp r22.x, r22.x"
             "\n        mad r20.x, r22.x, c95.y, c95.z"
-            // the detail fades with distance (x the layouts' strength): the curtains and folds to their average
+            // the detail fades with distance (x the layouts' strength) and where a pixel is too big for it (its
+            // footprint on the glass: none from 0.15 yd, no shimmer): the curtains and folds to their average
             "\n        add r28.xyz, r15, -c180"
             "\n        dp3 r28.x, r28, r28"
             "\n        mad_sat r28.x, r28.x, c100.x, c100.y"
             "\n        mul r28.x, r28.x, c204.w"
+            "\n        mad_sat r28.y, r14.x, c208.x, c208.y"
+            "\n        mul r28.x, r28.x, r28.y"
             "\n        mad r29.w, r29.w, r28.x, c175.x"
             "\n        mul r28.y, r19.y, c100.z"
             "\n        add r26.z, r26.z, -r28.y"
@@ -351,12 +368,16 @@ namespace wxl_livingazeroth::glass
             "\n        mul r29.xyz, r29, r26.x"
             "\n        mul r29.xyz, r29, c87.z"
             "\n        lrp r28.xyz, r26.z, r29, r30"
-            // dark rooms behind the client's lit windows at night hide most of its glow; then the room behind the glass
+            // a dark room behind the client's lit window at night hides most of its glow, from the whole window (the
+            // client lights all of it, the lead and the frame too: hidden through the glass mask alone, the lead's
+            // edges and the glass's darker texels kept it and sparkled); seen from inside, only the glass; then the
+            // room behind the glass
             "\n        add r22.w, c175.x, -r20.w"
             "\n        mul r22.w, r22.w, c205.w"
+            "\n        mad r23.xyz, r23, -r22.w, r23"
+            "\n        mad r14.y, r22.w, -c193.x, r22.w"
             "\n        mov r29.w, c193.z"
-            "\n        lrp r26.w, r22.w, c175.x, r29.w"
-            "\n        lrp r30.xyz, r26.w, r28, r23"
+            "\n        lrp r30.xyz, r29.w, r28, r23"
             "\n        mov r23.xyz, r30"
             "\n      endif"
             // the sky in it (deeper toward the zenith: the reflected ray's height, 2 cos N.z - V.z) and the sun's
@@ -377,8 +398,11 @@ namespace wxl_livingazeroth::glass
             "\n      mad r25.xyz, c200, r26.w, r25"
             "\n      mov r26.x, c193.x"
             "\n      lrp r27.xyz, r26.x, r21, r25"
+            // the glass by its mask; the rest of the window (1 - hidden) of the client's colour
             "\n      add r27.xyz, r27, -r12"
+            "\n      mad r27.xyz, r12, r14.y, r27"
             "\n      mad r31.xyz, r27, r14.w, r31"
+            "\n      mad r31.xyz, r12, -r14.y, r31"
             "\n    endif";
     }
 
