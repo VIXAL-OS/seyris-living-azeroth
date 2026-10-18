@@ -5,6 +5,7 @@
 #include "../env/Climate.hpp"
 #include "../env/Storm.hpp"
 #include "../env/StormModel.hpp"
+#include "../env/ThunderDsp.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -18,6 +19,17 @@ namespace wxl_livingazeroth::debug
         float g_grade = 0.8f;
         float g_distance = 400.0f;
         int   g_kit = 0;            // the recording to audition (storm::Kit)
+        int   g_kitFilters = 1;     // ... through its distance filters (whatever ThunderFilters says)
+
+        // A chain's settings in a few words.
+        void Describe(const thunderdsp::Params& p, char* out, size_t size)
+        {
+            if (thunderdsp::Plain(p)) { std::snprintf(out, size, "none (crisp)"); return; }
+            char lowpass[40] = "no low-pass", echo[64] = "no echo";
+            if (p.lowpass) std::snprintf(lowpass, sizeof(lowpass), "low-pass %.1f kHz", p.cutoff / 1000.0f);
+            if (p.echo) std::snprintf(echo, sizeof(echo), "echo %.0f ms x %.2f, wet %.2f (rings %.1f s)", p.delayMs, p.decay, p.wet, thunderdsp::TailSeconds(p));
+            std::snprintf(out, size, "%s, pitch %.3f, %s", lowpass, p.pitch, echo);
+        }
 
         void __cdecl Panel(void* /*user*/)
         {
@@ -76,6 +88,19 @@ namespace wxl_livingazeroth::debug
                 g_api->UiSliderFloat("bolts up to (yd)##storm", &s.boltRange, 100.0f, 2500.0f);
                 g_api->UiCheckbox("scorch marks where near strikes land (terrain only)##storm", &s.scorch);
                 g_api->UiSliderFloat("scorch fades over (s)##storm", &s.scorchSeconds, 5.0f, 120.0f);
+                thunderdsp::Settings& d = thunderdsp::Config();
+                g_api->UiCheckbox("thunder through distance filters: farther = muffled, lower, rolling (the client's own sound engine)##storm", &d.filters);
+                g_api->UiSliderFloat("filter strength (x how far the low-pass and the pitch-down go)##storm", &d.strength, 0.0f, 2.0f);
+                g_api->UiSliderFloat("echo amount (x its repeats)##storm", &d.echoAmount, 0.0f, 2.0f);
+                const thunderdsp::Status& ft = thunderdsp::GetStatus();
+                std::snprintf(line, sizeof(line), "  filters: %s", thunderdsp::StatusText());
+                g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "  %u layers filtered, %u near enough to stay crisp, %u unfiltered while unavailable; chains: %d made, %d busy now",
+                              ft.filtered, ft.plain, ft.unavailable, ft.chains, ft.busyChains);
+                g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "  %u sounds joined a chain (%u sharing one), %u layers found no chain free, %u came too late for theirs, %u refused by FMOD",
+                              ft.pool.joined, ft.pool.shared, ft.pool.busy, ft.pool.stale, ft.pool.failedJoins);
+                g_api->UiText(line);
             }
 
             g_api->UiSeparator();
@@ -124,7 +149,9 @@ namespace wxl_livingazeroth::debug
             for (int i = 0; i < static_cast<int>(storm::Kit::Count); ++i) kits[i] = storm::kKits[i].label;
             g_api->UiCombo("recording##stormkit", &g_kit, kits, static_cast<int>(storm::Kit::Count));
             g_api->UiSameLine();
-            if (g_api->UiButton("Play it at this distance##stormkit")) storm::TestKit(g_kit, g_distance);
+            if (g_api->UiButton("Play it at this distance##stormkit")) storm::TestKit(g_kit, g_distance, g_kitFilters ? 1 : 0);
+            g_api->UiSameLine();
+            g_api->UiCheckbox("as if that far: its distance filters##stormkit", &g_kitFilters);
             {
                 const storm::KitInfo& k = storm::kKits[g_kit >= 0 && g_kit < static_cast<int>(storm::Kit::Count) ? g_kit : 0];
                 const float volume = storm::LayerVolume(static_cast<storm::Kit>(g_kit), storm::ThunderGain(g_distance, 1.0e9f), s.soundVolume);
@@ -132,6 +159,11 @@ namespace wxl_livingazeroth::debug
                 std::snprintf(line, sizeof(line), "  kit %d \"%s\": volume %.2f here (its own %.2f, min distance %.0f yd%s); Lua fallback: %s",
                               k.soundKitId, k.name, volume, k.volume, k.minDistance, k.positional ? ", from the strike's direction" : ", not positional",
                               lua ? lua : "none quiet enough (left out)");
+                g_api->UiText(line);
+                char filters[160];
+                const storm::Kit kit = static_cast<storm::Kit>(g_kit >= 0 && g_kit < static_cast<int>(storm::Kit::Count) ? g_kit : 0);
+                Describe(thunderdsp::Preview(kit == storm::Kit::Rumble ? thunderdsp::Layer::Rumble : thunderdsp::Layer::Crack, g_distance), filters, sizeof(filters));
+                std::snprintf(line, sizeof(line), "  its distance filters here: %s%s", filters, g_kitFilters ? "" : " -- off for this audition");
                 g_api->UiText(line);
             }
             std::snprintf(line, sizeof(line), "thunder through %s; played %u through the kits, %u through Lua; declined by the client %u, left out %u; last kit result %d",

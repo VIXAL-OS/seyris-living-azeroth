@@ -230,11 +230,16 @@ namespace
     }
 }
 
+// Thunder's distance filters (env/ThunderDspModel), on the helpers above.
+#include "ThunderDspTests.hpp"
+
 int main(int argc, char** argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     try
     {
+        ThunderDspTests(argc, argv);
+
         Test("phase: the server's cut-offs (fine below 0.27, light, medium from 0.40, heavy from 0.70); rain only", []
         {
             CHECK(st::PhaseFor(1, 0.0f) == st::Phase::None);

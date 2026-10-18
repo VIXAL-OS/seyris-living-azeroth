@@ -132,6 +132,17 @@ yards, 0.65 at 600, 0.53 at 1000; x `ThunderVolume`, never above full) from the 
 direction; if that call isn't available, Lua PlaySound plays the row nearest that loudness (the log
 says which). The storm panel auditions every recording.
 
+Experimental, `ThunderFilters`: thunder through distance filters in the client's own sound engine (FMOD Ex), the way
+it gives Death Knight voices their filter. The farther a strike, the more muffled (a low-pass from 20 kHz down to
+about 900 Hz at 2000 yards), the lower (pitch 0.88 at 2000 yards, by the sound's own playback rate, so a far rumble
+also lasts a little longer) and the more it rolls (an echo from 200 yards out, 150 to 400 ms apart and decaying by 0.3
+to 0.5; the rumble's longer, 250 to 450 ms and 0.45 to 0.6, at every distance). Cracks within 150 yards stay crisp:
+no filter at all. `FilterStrength` scales how far the low-pass and the pitch-down go, `EchoAmount` the echo's
+repeats. Six filter chains are kept and shared, each switched off once its echo has died away. It follows the client's
+own `Sound_EnableDSPEffects`. Everything it relies on in the client is checked byte for byte first; if anything
+differs, FMOD refuses, every chain is busy or anything faults, thunder plays unfiltered as before and the log says
+why. The storm panel's audition plays a recording "as if at" the slider's distance, with or without its filters.
+
 | Key | Default | Meaning |
 |---|---|---|
 | Enabled | 1 | Rain builds up into storms. |
@@ -158,6 +169,9 @@ says which). The storm panel auditions every recording.
 | BoltRange | 900 | Strikes farther than this (yards) get no bolt model. |
 | Scorch | 0 | Experimental: a scorch mark on the terrain where a near strike lands. |
 | ScorchSeconds | 45 | Seconds the scorch mark takes to fade. |
+| ThunderFilters | 1 | Experimental: thunder through distance filters in the client's own sound engine: farther strikes muffled, a little lower and rolling; near cracks stay crisp. Needs `ThunderNative`. Anything unexpected and thunder plays unfiltered (the log says why). |
+| FilterStrength | 1 | Your multiplier on how far the low-pass and the pitch-down go with distance, 0..2 (0 = none, 2 = twice as far). |
+| EchoAmount | 1 | Your multiplier on the thunder's echo (its repeats' loudness), 0..2 (0 = none). |
 
 ## `[LivingAzeroth.Windows]`: lit windows at night
 

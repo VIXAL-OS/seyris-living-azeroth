@@ -5,6 +5,7 @@
 #include "Lights.hpp"
 #include "StormModel.hpp"
 #include "TerrainHeight.hpp"
+#include "ThunderDsp.hpp"
 #include "Wind.hpp"
 #include "../features/TerrainWetness.hpp"
 
@@ -47,9 +48,10 @@ namespace wxl_livingazeroth::storm
         float     g_outdoors = 1.0f;  // smoothed: indoors, a flash doesn't light the scene around you
         std::vector<Flash> g_flashes;
 
-        // A layer of thunder on its way: when it arrives, which kit, its gain (x the kit's volume) and where the strike
-        // is from the player (a unit vector in world x, y).
-        struct PendingSound { float due; Kit kit; float gain; float dir[2]; };
+        // A layer of thunder on its way: when it arrives, which kit, its gain (x the kit's volume), where the strike
+        // is from the player (a unit vector in world x, y), how far (yd: its distance filters, env/ThunderDsp) and
+        // whether it's filtered (-1 as the setting says, 0 no, 1 yes).
+        struct PendingSound { float due; Kit kit; float gain; float dir[2]; float distance; int filters; };
         std::vector<PendingSound> g_sounds;
 
         // --- thunder through the client's sound kits ---
@@ -299,18 +301,27 @@ namespace wxl_livingazeroth::storm
         }
 
         // The kit through the client's own call, as its object sounds do: properties at their defaults with the
-        // volume scale set, positional at `pos` (or not, null). Returns PlaySoundKit's result.
-        int PlayKitUnsafe(int32_t kitId, const float* pos, float scale)
+        // volume scale set, positional at `pos` (or not, null), and through a chain of env/ThunderDsp's when `chain`
+        // names one (the properties' DSP chain, as the client gives Death Knight voices theirs). Returns PlaySoundKit's
+        // result.
+        int PlayKitUnsafe(int32_t kitId, const float* pos, float scale, const char* chain)
         {
             alignas(16) uint8_t props[0x100] = {};
             static_assert(sizeof(props) >= kSoundPropsSize, "room for SE2SoundKitProperties");
+            static_assert(thunderdsp::kPropsChainName + thunderdsp::kChainNameSize <= kSoundPropsSize, "the chain name inside them");
             reinterpret_cast<ResetSoundPropsFn>(kResetSoundProps)(props, nullptr);
             std::memcpy(props + kSoundPropsVolumeScale, &scale, sizeof(scale));
+            if (chain && chain[0])
+            {
+                const int32_t on = 1;
+                std::memcpy(props + thunderdsp::kPropsUseChain, &on, sizeof(on));
+                std::strncpy(reinterpret_cast<char*>(props + thunderdsp::kPropsChainName), chain, thunderdsp::kChainNameSize - 1);
+            }
             return reinterpret_cast<PlaySoundKitFn>(kPlaySoundKit)(kitId, pos, nullptr, props, 0, nullptr, 1, 0);
         }
-        bool PlayKit(int32_t kitId, const float* pos, float scale, int& result)
+        bool PlayKit(int32_t kitId, const float* pos, float scale, const char* chain, int& result)
         {
-            __try { result = PlayKitUnsafe(kitId, pos, scale); return true; }
+            __try { result = PlayKitUnsafe(kitId, pos, scale, chain); return true; }
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
         bool ListenerUnsafe(float out[3]) { return reinterpret_cast<ListenerPositionFn>(kListenerPosition)(out); }
@@ -322,8 +333,9 @@ namespace wxl_livingazeroth::storm
 
         // One layer of thunder now: through the client's sound kits at its volume and from the strike's direction (a
         // point PlacementDistance from the listener, inside the kit's MinDistance, so the client's rolloff leaves the
-        // volume alone), or through Lua PlaySound with the row nearest that volume.
-        void PlayLayer(Kit kit, float gain, const float dir[2])
+        // volume alone) and through its distance filters (env/ThunderDsp; `filters` as PendingSound's), or through Lua
+        // PlaySound with the row nearest that volume.
+        void PlayLayer(Kit kit, float gain, const float dir[2], float distance, int filters)
         {
             const KitInfo& k = Info(kit);
             // The kit's volume x this scale is what it plays at: LayerVolume, at most 1.
@@ -343,7 +355,13 @@ namespace wxl_livingazeroth::storm
                     at[2] = listener[2] + 0.25f * place; // a little from above
                 }
                 int result = -1;
-                if (!PlayKit(k.soundKitId, positional ? at : nullptr, scale, result))
+                char chain[thunderdsp::kChainNameSize] = {};
+                const bool wantFilters = filters < 0 ? thunderdsp::Config().filters != 0 : filters != 0;
+                const thunderdsp::Use use = thunderdsp::Prepare(kit == Kit::Rumble ? thunderdsp::Layer::Rumble : thunderdsp::Layer::Crack,
+                                                                distance, wantFilters, chain, sizeof(chain));
+                const bool called = PlayKit(k.soundKitId, positional ? at : nullptr, scale, use.filtered ? chain : nullptr, result);
+                thunderdsp::Played(use, called && result == 0);
+                if (!called)
                 {
                     g_soundBroken = true;
                     std::snprintf(g_soundStatus, sizeof(g_soundStatus), "Lua PlaySound: a fault in the client's sound kit call; stopped using it");
@@ -407,7 +425,7 @@ namespace wxl_livingazeroth::storm
                 const ThunderPlan plan = PlanThunder(d, s.soundDistance, g_rng.Uniform(), s.rumble != 0);
                 for (int i = 0; i < plan.count; ++i)
                     g_sounds.push_back({ g_clock + delay + ThunderDelay(d) + plan.layer[i].after, plan.layer[i].kit, plan.layer[i].gain,
-                                         { std::cos(bearing), std::sin(bearing) } });
+                                         { std::cos(bearing), std::sin(bearing) }, d, -1 });
             }
             if (s.scorch && known && d <= kScorchRange)
             {
@@ -583,7 +601,7 @@ namespace wxl_livingazeroth::storm
             if (g_clock < g_sounds[i].due) continue;
             const PendingSound p = g_sounds[i];
             g_sounds.erase(g_sounds.begin() + static_cast<std::ptrdiff_t>(i));
-            if (g_clock - p.due < 1.5f && snap.inWorld && s.sounds) PlayLayer(p.kit, p.gain, p.dir);
+            if (g_clock - p.due < 1.5f && snap.inWorld && s.sounds) PlayLayer(p.kit, p.gain, p.dir, p.distance, p.filters);
             break;
         }
 
@@ -643,16 +661,16 @@ namespace wxl_livingazeroth::storm
         const float dir[2] = { std::cos(bearing), std::sin(bearing) };
         for (int i = 0; i < plan.count; ++i)
         {
-            if (plan.layer[i].after <= 0.0f) PlayLayer(plan.layer[i].kit, plan.layer[i].gain, dir); // the crack: now
-            else g_sounds.push_back({ g_clock + plan.layer[i].after, plan.layer[i].kit, plan.layer[i].gain, { dir[0], dir[1] } });
+            if (plan.layer[i].after <= 0.0f) PlayLayer(plan.layer[i].kit, plan.layer[i].gain, dir, distance, -1); // the crack: now
+            else g_sounds.push_back({ g_clock + plan.layer[i].after, plan.layer[i].kit, plan.layer[i].gain, { dir[0], dir[1] }, distance, -1 });
         }
     }
 
-    void TestKit(int kit, float distance)
+    void TestKit(int kit, float distance, int filters)
     {
         if (kit < 0 || kit >= static_cast<int>(Kit::Count)) return;
         const float bearing = g_rng.Range(0.0f, kTwoPi);
         const float dir[2] = { std::cos(bearing), std::sin(bearing) };
-        PlayLayer(static_cast<Kit>(kit), ThunderGain(distance, 1.0e9f), dir);
+        PlayLayer(static_cast<Kit>(kit), ThunderGain(distance, 1.0e9f), dir, distance, filters);
     }
 }
