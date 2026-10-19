@@ -49,6 +49,7 @@ says why.
 | CrystalLook | 1 | Crystals look like deep, semi-transparent gems, as the ice does: facets and sparkles inside them that shift as you move, their colour deeper toward the core, a bright rim, the sun's glint, and a soft inner glow in their colour, stronger at night. The draenei's (Azuremyst, Bloodmyst, the Exodar, Tempest Keep), the fel-green ones of Blade's Edge, Hellfire and Shadowmoon, Netherstorm's gems, Shattrath's, Terokkar's, Crystalsong's, Dalaran's and the caves', Maraudon's, Un'Goro's, Silithus's and Sholazar's, jewels (`CrystalMaterials.cdbc`; needs dynamic shadows on). Crystals already see-through or glowing stay as they are, and the ice keeps the ice. The depth is faked: they still draw opaque (see features/Crystal.hpp for why). |
 | CrystalStrength | 1 | How fully crystals take that look, 0..1. |
 | CrystalGlow | 1 | Your multiplier on the crystals' inner glow (0 = none, up to 3). |
+| CrystalCellScale | 1 | Your multiplier on the size of the facets inside crystals, 0.25..4. They already grow with the crystal: a hand-sized shard keeps small ones, a building-sized crystal (the Exodar's giant ones) gets them up to 8 times bigger, and deeper; they follow each crystal's own size, never the camera's distance. |
 | WindShelter | 1 | Roofs and overhangs shelter the ground below from wind. |
 | WindLee | 1 | Walls and cliffs cast a wind shadow on their downwind side. |
 | DebugWindArrows | 0 | Debug: draw the wind as arrows around the player. |

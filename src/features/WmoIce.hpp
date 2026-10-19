@@ -11,7 +11,8 @@
 // more, Wmo.RenderGroup (around a placed instance's visible group), tells glass::BeginInstance which building it is:
 // the instance's origin, its WMO's path and the group, for the rooms behind its glass.
 // The crystal textures (features/Crystal, CrystalMaterials.cdbc) drawn opaque or alpha-keyed switch the same block on with
-// the crystal's constants, per material as for the ice (the ice wins where a texture is both).
+// the crystal's constants, per material as for the ice (the ice wins where a texture is both), the facets as big as the
+// batch's crystals call for (features/Crystal's WmoBatchPieceRadius over the group's triangles, once per batch).
 #pragma once
 
 #include "ModelIce.hpp"

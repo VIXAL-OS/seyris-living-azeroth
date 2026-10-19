@@ -65,7 +65,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   Crystalsong's, Dalaran's, Maraudon's, Un'Goro's, Silithus's and Sholazar's crystals look like deep, semi-transparent
   gems, as the ice does: facets inside them at depth, their colour deeper toward the core, a rim, the sun's glint and an
   inner glow stronger at night; the crystals' own see-through shells and glows are left alone (`CrystalMaterials.cdbc`,
-  `tools/gen_crystals.py`, `features/Crystal`, the ice block in `features/ModelIce`, `CrystalLook`).
+  `tools/gen_crystals.py`, `features/Crystal`, the ice block in `features/ModelIce`, `CrystalLook`). The facets inside
+  grow with each crystal's size, and deepen with it: a shard's stay small, the Exodar's giant crystals' are up to 8 times
+  bigger (19 October 2026; `CrystalCellScale`).
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

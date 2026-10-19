@@ -29,6 +29,16 @@
 // them (the terrain, the WMOs; not the doodads behind them drawn later, which would come and go as the client re-sorts,
 // nor the water), their own far faces would show or not by triangle order, and with depth writes on they'd hide the
 // particles and see-through models behind them. The depth is faked, as the ice's.
+//
+// The facets grow with the crystal: "the big ones might need bigger voronoi cells tho" (the user, 2026-10-19, beside the
+// Exodar's giant crystals). A row's FacetSize is a hand-sized crystal's; a batch's crystals' size (PieceRadius: its
+// triangles' connected pieces, the median by vertex, worked out once per batch from the geometry the client holds) makes
+// them up to kMaxCellScale times bigger (CellScale), and the layers' depths and the detail's fade distances with them, x
+// CrystalCellScale. Per batch, never per view: the facets don't change as the camera moves. The Exodar's giant crystals
+// are its WMO's (ol_draenei_city's Chrystal01..04 groups and the hall beside them: jlo_draenei_crystal02, 100-200 yd);
+// its big M2 crystals (exodar_crystal_large, 21 yd) sit in the same WMO. An M2's own placement scale isn't followed: the
+// client draws a model's placed copies together in one draw, sharing these constants, so following each copy's scale
+// would change the facets as copies come into view.
 #pragma once
 
 #include "wxl/PluginApi.h"
@@ -50,8 +60,8 @@ namespace wxl_livingazeroth::crystal
     };
 
     /// A family's look: the tint the body deepens toward at the core, how far (at full depth); the rim's strength; the
-    /// glow's colour and strength by day and its extra at night; the facets' size (yd a repeat of the detail); the
-    /// colour the facets' edges and sparkles light toward.
+    /// glow's colour and strength by day and its extra at night; the facets' size (yd a repeat of the detail in a
+    /// hand-sized crystal; a bigger crystal's grow, CellScale); the colour the facets' edges and sparkles light toward.
     struct FamilyLook
     {
         const char* name;
@@ -83,8 +93,30 @@ namespace wxl_livingazeroth::crystal
         int   enabled = 1;      // CrystalLook
         float strength = 1.0f;  // CrystalStrength: x the look, 0..1
         float glow = 1.0f;      // CrystalGlow: x the inner glow, 0..3
+        float cellScale = 1.0f; // CrystalCellScale: x the facets' size inside every crystal, 0.25..4
     };
     Settings& Config();
+
+    /// How many times bigger than its row's FacetSize a crystal's facets are, for crystals of this size (yd: the radius of
+    /// the pieces its batch is made of, PieceRadius): 1 for a hand-sized shard, growing about as the size^kCellGrowth past
+    /// kCellSizeStart and levelling off smoothly at kMaxCellScale (the Exodar's and Tempest Keep's building-sized crystals).
+    /// 1 for 0, a negative or a non-finite size.
+    constexpr float kCellSizeStart = 2.5f, kCellGrowth = 0.65f, kMaxCellScale = 8.0f;
+    float CellScale(float sizeYards);
+    /// CrystalCellScale's range.
+    constexpr float kMinCellSetting = 0.25f, kMaxCellSetting = 4.0f;
+
+    /// The size of the crystals a batch draws: its triangles (corners: 3 floats each, 3 corners a triangle) joined into
+    /// connected pieces (corners at the same place, to 1/256 yd, are one: a crystal split at its hard edges stays one
+    /// piece), each piece's radius (half its box's diagonal), and the median of those by the pieces' vertices. 0 when
+    /// there are none.
+    float PieceRadius(const float* corners, size_t cornerCount);
+    /// The M2 batch about to draw (the batch-draw hooks' context): its pieces' radius in the model's own units, from its
+    /// skin section's triangles (the live skin profile and the model's vertices); 0 when unreadable.
+    float M2BatchPieceRadius(const void* ctx);
+    /// A WMO batch (its MOBA record) of a group object (Wmo.IntRender's / Wmo.ExtRender's group): its pieces' radius (yd),
+    /// from the group's MOVI and MOVT; 0 when unreadable.
+    float WmoBatchPieceRadius(const void* group, const void* record);
 
     /// (Re)loads CrystalMaterials.cdbc (the lights panel's reload button too).
     void Load(const WXL_SeyrisCdbcApi* cdbc);
@@ -120,9 +152,13 @@ namespace wxl_livingazeroth::crystal
     constexpr int kConstant = 78;    // c78..c81
     constexpr int kRegisters = 4;
     /// One crystal batch's constants: the shared look (terrainice::FillModelConstants, c180..c189) adjusted in place, c179,
-    /// c190 (as ModelIce's StyleConstants) and c78..c81, for its material, the settings and the night (0 day .. 1).
+    /// c190 (as ModelIce's StyleConstants) and c78..c81, for its material, the settings, the night (0 day .. 1) and the
+    /// size of its crystals (yd, PieceRadius; 0: a hand-sized crystal's facets). The facets' size, the layers' depths and
+    /// the detail's fade distances are the row's x CellScale(size) x the settings' cellScale.
     void Constants(const Material& m, const Settings& s, float night, bool unlit, float* look, float c179[4], float c190[4],
-                   float crystal[4 * kRegisters]);
+                   float crystal[4 * kRegisters], float sizeYards = 0.0f);
+    /// ... the factor those go by: CellScale(size) x the setting (clamped to its range; 1 when not finite).
+    float CellFactor(const Settings& s, float sizeYards);
 
     /// The detail texture's texels (A8R8G8B8, size x size, tiling): r = the facets' edges, g = sparkles, b = the facets'
     /// shading (flat per facet, a slight slope across each), a = 0.

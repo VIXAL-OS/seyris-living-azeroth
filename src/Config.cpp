@@ -153,6 +153,7 @@ namespace wxl_livingazeroth::config
             c.enabled = Bool(s, "CrystalLook", "Crystals look like deep, semi-transparent gems, as the ice does: facets and sparkles inside them that shift as you move, the colour deeper toward the core, a bright rim, the sun's glint, and a soft inner glow in their colour, stronger at night. The draenei's, the Exodar's and Tempest Keep's, Bloodmyst's, the fel-green ones of Blade's Edge, Hellfire and Shadowmoon, Netherstorm's gems, Shattrath's, Terokkar's, Crystalsong's, Dalaran's and the caves', Maraudon's, Un'Goro's, Silithus's and Sholazar's (CrystalMaterials.cdbc; needs dynamic shadows on). Crystals that are already see-through or glowing stay as they are.", c.enabled != 0) ? 1 : 0;
             c.strength = Float(s, "CrystalStrength", "How fully crystals take that look, 0..1.", c.strength);
             c.glow = Float(s, "CrystalGlow", "Your multiplier on the crystals' inner glow (0 = none, up to 3).", c.glow);
+            c.cellScale = Float(s, "CrystalCellScale", "Your multiplier on the size of the facets inside crystals, 0.25..4. They already grow with the crystal: a shard's stay small, the Exodar's giant crystals' are several times bigger.", c.cellScale);
         }
 
         fields::SetShoreWorker(Bool(s, "ShoreWorker",

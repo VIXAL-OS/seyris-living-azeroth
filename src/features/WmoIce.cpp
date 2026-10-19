@@ -91,7 +91,9 @@ namespace wxl_livingazeroth::wmoice
         bool g_on = false;                // the block is switched on for the current batch
         modelice::Style g_onStyle = modelice::Style::None;  // with this style's constants
         uint16_t g_onCrystal = 0;         // ... or this crystal class's (features/Crystal), 0 = the ice's
+        float g_onCrystalSize = 0.0f;     // ... for crystals this size
         bool g_crystalLoop = false;       // the crystal look is on for the current loop
+        const void* g_group = nullptr;    // the group whose batch loop this is
         unsigned g_iceBatches = 0, g_roots = 0, g_iceRoots = 0;
         std::string g_status;
 
@@ -219,6 +221,37 @@ namespace wxl_livingazeroth::wmoice
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
 
+        // A crystal batch's crystals' size (features/Crystal's PieceRadius over its triangles), worked out the first time
+        // it draws and kept by its MOBA record, checked against the record's range and material and its group (a group
+        // unloaded and another loaded at the same place gets its own).
+        constexpr size_t kMobaStartIndex = 0x0C, kMobaIndexCount = 0x10;
+        struct CrystalSize { const void* group = nullptr; uint32_t start = 0; uint16_t count = 0; uint8_t material = 0; float size = 0.0f; };
+        std::unordered_map<const void*, CrystalSize> g_crystalSizes;
+
+        bool ReadBatchRange(const void* record, uint32_t& start, uint16_t& count)
+        {
+            __try
+            {
+                start = *reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(record) + kMobaStartIndex);
+                count = *reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(record) + kMobaIndexCount);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        float CrystalSizeOf(const void* record, uint8_t material)
+        {
+            uint32_t start = 0;
+            uint16_t count = 0;
+            if (!g_group || !ReadBatchRange(record, start, count)) return 0.0f;
+            if (const auto it = g_crystalSizes.find(record); it != g_crystalSizes.end())
+                if (const CrystalSize& c = it->second; c.group == g_group && c.start == start && c.count == count && c.material == material) return c.size;
+            if (g_crystalSizes.size() > 16384) g_crystalSizes.clear();
+            const float size = crystal::WmoBatchPieceRadius(g_group, record);
+            g_crystalSizes[record] = { g_group, start, count, material, size };
+            return size;
+        }
+
         const uint8_t* RootOf(const void* group)
         {
             __try { return group ? *reinterpret_cast<const uint8_t* const*>(static_cast<const uint8_t*>(group) + kGroupRoot) : nullptr; }
@@ -301,8 +334,9 @@ namespace wxl_livingazeroth::wmoice
 
         void SwitchOff();
 
-        // The same block for a crystal material (features/Crystal): its constants and the crystal detail texture.
-        void SwitchOnCrystal(uint16_t cls)
+        // The same block for a crystal material (features/Crystal): its constants, for its crystals' size, and the crystal
+        // detail texture.
+        void SwitchOnCrystal(uint16_t cls, float size)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             const crystal::Material* m = crystal::MaterialAt(cls & ~crystal::kUnlitBit);
@@ -311,7 +345,7 @@ namespace wxl_livingazeroth::wmoice
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
             float weight[4], more[4], c[4 * crystal::kRegisters];
-            crystal::Constants(*m, crystal::Config(), crystal::Night(), (cls & crystal::kUnlitBit) != 0, look, weight, more, c);
+            crystal::Constants(*m, crystal::Config(), crystal::Night(), (cls & crystal::kUnlitBit) != 0, look, weight, more, c, size);
             dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);
@@ -323,6 +357,7 @@ namespace wxl_livingazeroth::wmoice
             g_on = true;
             g_onStyle = modelice::Style::None;
             g_onCrystal = cls;
+            g_onCrystalSize = size;
         }
 
         void SwitchOff()
@@ -393,9 +428,9 @@ namespace wxl_livingazeroth::wmoice
             uint16_t glassRow = 0, crystalClass = 0;
             bool selfLit = false, unlit = false;
             const RootIce* r = g_rootIce;
+            uint8_t index = 0;
             if (r)
             {
-                uint8_t index = 0;
                 if (ReadMaterialIndex(record, index) && index < r->ice.size())
                 {
                     if (g_iceLoop)
@@ -418,7 +453,9 @@ namespace wxl_livingazeroth::wmoice
             }
             else if (crystalClass)
             {
-                if (!g_on || g_onCrystal != crystalClass) SwitchOnCrystal(crystalClass);
+                // The facets grow with this batch's crystals (the Exodar's giant ones: 100-200 yd).
+                const float size = CrystalSizeOf(record, index);
+                if (!g_on || g_onCrystal != crystalClass || g_onCrystalSize != size) SwitchOnCrystal(crystalClass, size);
                 if (g_on) crystal::NoteBatch(true);
             }
             else SwitchOff();
@@ -459,8 +496,10 @@ namespace wxl_livingazeroth::wmoice
         void __fastcall hkLoop(void* root, void* edx, void* group, int flag)
         {
             const RootIce* saved = g_rootIce;
+            const void* savedGroup = g_group;
             const bool savedIce = g_iceLoop, savedCrystal = g_crystalLoop;
             g_rootIce = nullptr;
+            g_group = group;
             g_iceLoop = g_enabled && modelice::Enabled() && modelice::PatchedVariants() > 0;
             g_crystalLoop = crystal::Active() && modelice::PatchedVariants() > 0;
             const bool glassOn = glass::Config().enabled && glass::PatchedVariants() > 0;
@@ -478,6 +517,7 @@ namespace wxl_livingazeroth::wmoice
             if (g_rootIce && g_rootIce->anyGlass) glass::EndGroup();
             --g_depth;
             g_rootIce = saved;
+            g_group = savedGroup;
             g_iceLoop = savedIce;
             g_crystalLoop = savedCrystal;
         }

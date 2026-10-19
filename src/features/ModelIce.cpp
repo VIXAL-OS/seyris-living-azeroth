@@ -94,14 +94,17 @@ namespace wxl_livingazeroth::modelice
         }
 
         struct Kind { Style style = Style::None; bool hat = false; const HatFade* fade = nullptr; };
-        // Per shared model: its stem and kind, and its batches' crystal classes (features/Crystal: by batch record, for the
+        // A batch's crystal class (features/Crystal; 0: none) and its crystals' size (the model's units: the radius of the
+        // pieces its submesh is made of, which the facets grow with).
+        struct CrystalBatch { uint16_t cls = 0; float size = 0.0f; };
+        // Per shared model: its stem and kind, and its batches' crystal classes and sizes (by batch record, for the
         // crystal table's generation they were worked out under).
         struct Entry
         {
             std::string stem;
             Kind kind;
             uint32_t crystalGeneration = 0;
-            std::unordered_map<const void*, uint16_t> crystal;
+            std::unordered_map<const void*, CrystalBatch> crystal;
         };
         std::unordered_map<const void*, Entry> g_models;
 
@@ -125,15 +128,19 @@ namespace wxl_livingazeroth::modelice
             return &e;
         }
 
-        // The crystal class of the batch about to draw (0: none), worked out once per batch record.
-        uint16_t CrystalClass(const void* ctx, Entry& e)
+        // The crystal class of the batch about to draw (0: none) and its crystals' size, worked out once per batch record.
+        // The size is the model's own, not this instance's: placed copies of a model are drawn together, sharing the
+        // constants (see features/Crystal.hpp).
+        CrystalBatch CrystalOf(const void* ctx, Entry& e)
         {
             if (e.crystalGeneration != crystal::Generation()) { e.crystal.clear(); e.crystalGeneration = crystal::Generation(); }
             const void* key = crystal::M2BatchKey(ctx);
-            if (!key) return 0;
+            if (!key) return {};
             const auto it = e.crystal.find(key);
             if (it != e.crystal.end()) return it->second;
-            const uint16_t c = crystal::ClassifyM2Batch(ctx, e.stem.c_str());
+            CrystalBatch c;
+            c.cls = crystal::ClassifyM2Batch(ctx, e.stem.c_str());
+            if (c.cls) c.size = crystal::M2BatchPieceRadius(ctx);
             if (e.crystal.size() < 512) e.crystal.emplace(key, c);
             return c;
         }
@@ -197,9 +204,11 @@ namespace wxl_livingazeroth::modelice
             return true;
         }
 
-        // The block for a crystal batch (features/Crystal): its material's constants and the crystal detail texture.
-        bool BeginCrystal(uint16_t cls)
+        // The block for a crystal batch (features/Crystal): its material's constants, for its crystals' size, and the
+        // crystal detail texture.
+        bool BeginCrystal(const CrystalBatch& batch)
         {
+            const uint16_t cls = batch.cls;
             if (!cls || g_patched == 0 || !crystal::Active()) return false;
             const crystal::Material* m = crystal::MaterialAt(cls & ~crystal::kUnlitBit);
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
@@ -209,7 +218,7 @@ namespace wxl_livingazeroth::modelice
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
             float weight[4], more[4], c[4 * crystal::kRegisters];
-            crystal::Constants(*m, crystal::Config(), crystal::Night(), (cls & crystal::kUnlitBit) != 0, look, weight, more, c);
+            crystal::Constants(*m, crystal::Config(), crystal::Night(), (cls & crystal::kUnlitBit) != 0, look, weight, more, c, batch.size);
             dev->SetPixelShaderConstantF(kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(kStyleConstant, more, 1);
@@ -236,7 +245,7 @@ namespace wxl_livingazeroth::modelice
             if (!e) return false;
             if (e->kind.style != Style::None) return Begin(e->kind.style);
             if (!crystal::Active() || g_patched == 0) return false;
-            return BeginCrystal(CrystalClass(ctx, *e));
+            return BeginCrystal(CrystalOf(ctx, *e));
         }
 
         void __fastcall hkBatch(void* ctx, void* edx)

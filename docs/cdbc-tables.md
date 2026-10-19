@@ -643,7 +643,7 @@ panel (or "Reload light tables from disk" in the lights panel).
 | NightGlow | added to it at night |
 | Deepen | how far the body deepens toward the tint face on, 0..1 |
 | Rim | the rim of its own colour at a grazing angle, 0..1 |
-| FacetSize | yards a repeat of the facets inside it (a gem 1-2, a big crystal 3) |
+| FacetSize | yards a repeat of the facets inside a hand-sized crystal (a gem 1-2, a big crystal 3); a bigger crystal's grow with its size, up to 8 times (features/Crystal's CellScale, from the size of the pieces its batch is made of), x `CrystalCellScale` |
 | MaskR/G/B, MaskBias | which texels take the look on a texture they share with foliage, rock or a frame: saturate(dot(colour, Mask) / (luminance + 0.04) + MaskBias), on the lit colour (a test of hue); -1000: all of them |
 | Comment | the texture, its family and where it's used; never read |
 | Model | M2s only: the model's path must contain this (case and slashes don't matter); empty: any model and any WMO. For a texture shared with what isn't crystal (Terokkar's atlas: its trees too) |
