@@ -1473,9 +1473,13 @@ int main(int argc, char** argv)
                     both.volume = true; both.deckDensity = 0.004f;
                     PassSetup low = s;
                     low.smooth = false;
+                    PassSetup screenOld = screenOnly, bothOld = both; // TerrainBlocks 0: the old look (and its cost)
+                    screenOld.occlusion = bothOld.occlusion = false;
                     const double msScreen = measure(screenOnly, 20), msBoth = measure(both, 20), msLow = measure(low, 20);
+                    const double msScreenOld = measure(screenOld, 20), msBothOld = measure(bothOld, 20);
                     std::printf("     per frame: %.3f ms (screen-space shafts), %.3f ms (with the in-scatter under the deck), %.3f ms (low quality)\n",
                                 msScreen, msBoth, msLow);
+                    std::printf("     with TerrainBlocks 0: %.3f ms, %.3f ms\n", msScreenOld, msBothOld);
                     for (auto* q : { disjoint, freq, t0, t1 }) q->Release();
                     CHECK(msScreen < 0.5 && msBoth < 0.5);
                 });
