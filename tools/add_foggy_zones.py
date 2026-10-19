@@ -32,7 +32,7 @@ STRONG, FOREST, LIGHT, MISTY = 0.6, 0.4, 0.3, 0.15
 # (zone, AreaTable ID, fogginess, row ID for a new row)
 ZONES = [
     ("Eastern Plaguelands", 139, STRONG, 310),
-    ("Western Plaguelands", 28, STRONG, 311),
+    ("Western Plaguelands", 28, FOREST, 311),  # "western plaguelands possibly also too foggy" (the user, 2026-10-18): upstream 0.7
     ("Duskwood", 10, STRONG, 312),
     ("Dustwallow Marsh", 15, STRONG, 313),
     ("Swamp of Sorrows", 8, STRONG, 314),
@@ -70,7 +70,7 @@ ZONES = [
 # Zones whose value here wins even over a row of upstream's own: every misty forest (upstream has Elwynn 0.5, Redridge
 # 0.45, Stranglethorn 0.3), and Zangarmarsh, where upstream's row 109 has 1.0, the top of the scale ("very pretty but
 # possibly too foggy lol", the user, 2026-10-14, flying over Umbrafen).
-OVERRIDE = {3521} | {area for _, area, fog, _ in ZONES if fog == MISTY}
+OVERRIDE = {3521, 28} | {area for _, area, fog, _ in ZONES if fog == MISTY}
 FOGGINESS = 9  # column (ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment)
 
 
