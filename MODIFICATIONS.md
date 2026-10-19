@@ -61,6 +61,11 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   fog stays lighter than the darkened sky and turns a pale blue-grey (18 October 2026). In falling snow the client's
   grey weather fog, sky and clouds turn a bright pale blue-white by day, and its fog no longer starts behind the camera
   or ends nearer than 400 yards (18 October 2026).
-- **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass.
+- **Crystals** (18 October 2026): the draenei's, Bloodmyst's, the fel-green, Netherstorm's, Shattrath's, Terokkar's,
+  Crystalsong's, Dalaran's, Maraudon's, Un'Goro's, Silithus's and Sholazar's crystals look like deep, semi-transparent
+  gems, as the ice does: facets inside them at depth, their colour deeper toward the core, a rim, the sun's glint and an
+  inner glow stronger at night; the crystals' own see-through shells and glows are left alone (`CrystalMaterials.cdbc`,
+  `tools/gen_crystals.py`, `features/Crystal`, the ice block in `features/ModelIce`, `CrystalLook`).
+- **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

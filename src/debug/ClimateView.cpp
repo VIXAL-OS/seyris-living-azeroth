@@ -6,6 +6,7 @@
 #include "../env/Fields.hpp"
 #include "../env/Regional.hpp"
 #include "../env/TerrainHeight.hpp"
+#include "../features/Crystal.hpp"
 #include "../features/ModelIce.hpp"
 #include "../features/TerrainIce.hpp"
 #include "../features/TerrainWetness.hpp"
@@ -184,6 +185,8 @@ namespace wxl_livingazeroth::debug
             g_api->UiText(wmoice::StatusLine());
             int iceBuildings = wmoice::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice in buildings and dungeons", &iceBuildings)) wmoice::SetEnabled(iceBuildings != 0);
+            crystal::DrawPanelSection(g_api);
+            if (g_api->UiButton("Reload CrystalMaterials")) crystal::Load(g_cdbc);
             int iceDebug = terrainice::Debug() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice debug: tint what counts as ice magenta", &iceDebug)) terrainice::SetDebug(iceDebug != 0);
 

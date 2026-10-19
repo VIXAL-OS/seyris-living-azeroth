@@ -41,6 +41,7 @@
 #include "env/ThunderDsp.hpp"
 #include "env/Wind.hpp"
 #include "env/WorldQuery.hpp"
+#include "features/Crystal.hpp"
 #include "features/DoodadFade.hpp"
 #include "features/DoodadLightTable.hpp"
 #include "features/GrassDensity.hpp"
@@ -118,6 +119,7 @@ namespace
         wxl_livingazeroth::lighttable::Load(cdbc);
         wxl_livingazeroth::windows::Load(cdbc);
         wxl_livingazeroth::glass::Load(cdbc);
+        wxl_livingazeroth::crystal::Load(cdbc);
         wxl_livingazeroth::debug::SetLightsCdbc(cdbc);
         wxl_livingazeroth::debug::SetLightEditorCdbc(cdbc);
 
@@ -135,10 +137,10 @@ namespace
         next = now + std::chrono::seconds(30);
         const auto& s = wxl_livingazeroth::world::Current();
         if (!s.inWorld) return;
-        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s",
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s",
                    s.mapId, s.playerPos[0], s.playerPos[1], s.playerPos[2], s.playerTerrainType, s.outdoors ? "outdoors" : "indoors",
                    wxl_livingazeroth::terrainice::StatusLine(), wxl_livingazeroth::modelice::StatusLine(),
-                   wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine());
+                   wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine(), wxl_livingazeroth::crystal::StatusLine());
     }
 
     // Between frames: the safe moment to swap the depth surface the next world pass will bind.
@@ -182,6 +184,7 @@ namespace
             prof::Scope scope(prof::kOursLights);
             wxl_livingazeroth::windows::Update(); // the night factor the window lights and glow follow
             wxl_livingazeroth::glass::Update();   // the light through the glass, the panes near the camera
+            wxl_livingazeroth::crystal::Update(); // the night the crystals' inner glow goes by
             wxl_livingazeroth::lights::Update(dt, snap);
         }
         {

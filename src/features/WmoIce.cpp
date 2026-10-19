@@ -1,5 +1,6 @@
 #include "WmoIce.hpp"
 
+#include "Crystal.hpp"
 #include "Glass.hpp"
 #include "ModelIce.hpp"
 #include "SurfaceCover.hpp"
@@ -42,7 +43,7 @@ namespace wxl_livingazeroth::wmoice
         constexpr size_t kGroupFlags = 0x30;   // MOGP flags, copied into the group object (offsets/game/WMO.hpp)
         constexpr size_t kRootMotx = 0x124, kRootMotxSize = 0x164, kRootMaterials = 0x160, kRootMaterialCount = 0x19C;
         constexpr size_t kMomtStride = 0x40, kMomtTexture1 = 0x0C, kMobaMaterial = 0x17;
-        constexpr size_t kMomtFlags = 0x00, kMomtSidn = 0x10;
+        constexpr size_t kMomtFlags = 0x00, kMomtBlend = 0x08, kMomtSidn = 0x10;
         constexpr uint32_t kMomtFlagSidn = 0x10, kMomtFlagUnlit = 0x1;
         constexpr size_t kRootPath = 0x1C;
         constexpr size_t kInstanceArg = 0xB0, kInstanceOrigin = 0xA0, kInstanceMatrix = 0x70;
@@ -89,6 +90,8 @@ namespace wxl_livingazeroth::wmoice
         int  g_depth = 0;                 // inside a batch loop
         bool g_on = false;                // the block is switched on for the current batch
         modelice::Style g_onStyle = modelice::Style::None;  // with this style's constants
+        uint16_t g_onCrystal = 0;         // ... or this crystal class's (features/Crystal), 0 = the ice's
+        bool g_crystalLoop = false;       // the crystal look is on for the current loop
         unsigned g_iceBatches = 0, g_roots = 0, g_iceRoots = 0;
         std::string g_status;
 
@@ -103,6 +106,9 @@ namespace wxl_livingazeroth::wmoice
                                           // (MOMT 0x1: at full day and night), 0 neither
             bool any = false, anySand = false, anyGlass = false;
             uint32_t glassGeneration = 0; // the glass table these were looked up in
+            std::vector<uint16_t> crystal;// per material: its crystal class (features/Crystal: row + 1 | unlit), 0 = none
+            bool anyCrystal = false;
+            uint32_t crystalGeneration = 0; // the crystal table these were looked up in
             uint32_t path = 0;            // glass::PathHash of the root's WMO path (0 unread)
         };
         std::unordered_map<const void*, RootIce> g_cache;
@@ -152,6 +158,19 @@ namespace wxl_livingazeroth::wmoice
                 return (flags & kMomtFlagUnlit) ? 2 : 0;
             }
             __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+        }
+
+        // Material i's flags and blend mode (MOMT +0x00, +0x08: 0 opaque, 1 alpha-keyed, 2 alpha, 3.. additive and the rest).
+        bool ReadBlend(const RootView& v, uint32_t i, uint32_t& flags, uint32_t& blend)
+        {
+            __try
+            {
+                const uint8_t* m = v.materials + i * kMomtStride;
+                flags = *reinterpret_cast<const uint32_t*>(m + kMomtFlags);
+                blend = *reinterpret_cast<const uint32_t*>(m + kMomtBlend);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
 
         // The root's WMO path (inline at +0x1C), hashed as GlassBuildings.cdbc's paths are.
@@ -213,12 +232,15 @@ namespace wxl_livingazeroth::wmoice
             if (!root || !ReadRoot(root, v)) return nullptr;
             if (g_cache.size() > 4096 && g_depth == 0) g_cache.clear(); // not under a loop that holds an entry
             RootIce& r = g_cache[root];
-            if (r.motx != v.motx || r.materials != v.materials || r.ice.size() != v.count || r.glassGeneration != glass::Generation())
+            if (r.motx != v.motx || r.materials != v.materials || r.ice.size() != v.count || r.glassGeneration != glass::Generation() ||
+                r.crystalGeneration != crystal::Generation())
             {
                 r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.sand.assign(v.count, 0); r.glass.assign(v.count, 0);
                 r.selfLit.assign(v.count, 0);
-                r.any = r.anySand = r.anyGlass = false;
+                r.crystal.assign(v.count, 0);
+                r.any = r.anySand = r.anyGlass = r.anyCrystal = false;
                 r.glassGeneration = glass::Generation();
+                r.crystalGeneration = crystal::Generation();
                 r.path = ReadPathHash(root);
                 char name[kMaxName];
                 for (uint32_t i = 0; i < v.count; ++i)
@@ -226,6 +248,8 @@ namespace wxl_livingazeroth::wmoice
                     {
                         if (const modelice::Style style = StyleOfTexture(name); style != modelice::Style::None)
                         { r.ice[i] = static_cast<uint8_t>(style); r.any = true; }
+                        else if (uint32_t flags = 0, blend = 0; ReadBlend(v, i, flags, blend))
+                            if (const uint16_t c = crystal::Classify(blend, flags, name)) { r.crystal[i] = c; r.anyCrystal = true; }
                         if (IsSandTexture(name)) { r.sand[i] = 1; r.anySand = true; }
                         else if (IsSnowFloorTexture(name)) { r.sand[i] = 2; r.anySand = true; }
                         if (const uint32_t g = glass::MaterialOf(name))
@@ -241,6 +265,17 @@ namespace wxl_livingazeroth::wmoice
             return &r;
         }
 
+        void BindDetail(IDirect3DDevice9* dev, IDirect3DTexture9* detail)
+        {
+            dev->SetTexture(kSampler, detail);
+            dev->SetSamplerState(kSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(kSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(kSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+            dev->SetSamplerState(kSampler, D3DSAMP_SRGBTEXTURE, FALSE);
+        }
+
         void SwitchOn(modelice::Style style)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
@@ -253,18 +288,41 @@ namespace wxl_livingazeroth::wmoice
             dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);
+            const float noCrystal[4 * crystal::kRegisters] = {};
+            dev->SetPixelShaderConstantF(crystal::kConstant, noCrystal, crystal::kRegisters);
             glass::ViewTaken();        // c180..c183 are the floor light's too
-            dev->SetTexture(kSampler, detail);
-            dev->SetSamplerState(kSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-            dev->SetSamplerState(kSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-            dev->SetSamplerState(kSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-            dev->SetSamplerState(kSampler, D3DSAMP_SRGBTEXTURE, FALSE);
+            BindDetail(dev, detail);
             const BOOL on = TRUE;
             dev->SetPixelShaderConstantB(modelice::kSwitch, &on, 1);
             g_on = true;
             g_onStyle = style;
+            g_onCrystal = 0;
+        }
+
+        void SwitchOff();
+
+        // The same block for a crystal material (features/Crystal): its constants and the crystal detail texture.
+        void SwitchOnCrystal(uint16_t cls)
+        {
+            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+            const crystal::Material* m = crystal::MaterialAt(cls & ~crystal::kUnlitBit);
+            IDirect3DTexture9* detail = dev && m ? crystal::DetailTexture(dev) : nullptr;
+            if (!detail) { SwitchOff(); return; }
+            float look[4 * terrainice::kModelConstantCount];
+            terrainice::FillModelConstants(look);
+            float weight[4], more[4], c[4 * crystal::kRegisters];
+            crystal::Constants(*m, crystal::Config(), crystal::Night(), (cls & crystal::kUnlitBit) != 0, look, weight, more, c);
+            dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
+            dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
+            dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);
+            dev->SetPixelShaderConstantF(crystal::kConstant, c, crystal::kRegisters);
+            glass::ViewTaken();
+            BindDetail(dev, detail);
+            const BOOL on = TRUE;
+            dev->SetPixelShaderConstantB(modelice::kSwitch, &on, 1);
+            g_on = true;
+            g_onStyle = modelice::Style::None;
+            g_onCrystal = cls;
         }
 
         void SwitchOff()
@@ -332,7 +390,7 @@ namespace wxl_livingazeroth::wmoice
             if (!g_depth || culled) return culled;
             modelice::Style style = modelice::Style::None;
             uint8_t floor = 0;   // 1 sand, 2 snow
-            uint16_t glassRow = 0;
+            uint16_t glassRow = 0, crystalClass = 0;
             bool selfLit = false, unlit = false;
             const RootIce* r = g_rootIce;
             if (r)
@@ -345,6 +403,7 @@ namespace wxl_livingazeroth::wmoice
                         style = static_cast<modelice::Style>(r->ice[index]);
                         floor = r->sand[index];
                     }
+                    if (g_crystalLoop && style == modelice::Style::None) crystalClass = r->crystal[index];
                     glassRow = r->glass[index];
                     selfLit = r->selfLit[index] == 1;
                     unlit = r->selfLit[index] == 2;
@@ -354,8 +413,13 @@ namespace wxl_livingazeroth::wmoice
             else RingsOff();
             if (style != modelice::Style::None)
             {
-                if (!g_on || g_onStyle != style) SwitchOn(style);
+                if (!g_on || g_onStyle != style || g_onCrystal) SwitchOn(style);
                 g_iceBatches += g_on ? 1 : 0;
+            }
+            else if (crystalClass)
+            {
+                if (!g_on || g_onCrystal != crystalClass) SwitchOnCrystal(crystalClass);
+                if (g_on) crystal::NoteBatch(true);
             }
             else SwitchOff();
             // The window glass and the floor light (features/Glass): its material, and whether the rims hold c101..
@@ -395,12 +459,14 @@ namespace wxl_livingazeroth::wmoice
         void __fastcall hkLoop(void* root, void* edx, void* group, int flag)
         {
             const RootIce* saved = g_rootIce;
-            const bool savedIce = g_iceLoop;
+            const bool savedIce = g_iceLoop, savedCrystal = g_crystalLoop;
             g_rootIce = nullptr;
             g_iceLoop = g_enabled && modelice::Enabled() && modelice::PatchedVariants() > 0;
+            g_crystalLoop = crystal::Active() && modelice::PatchedVariants() > 0;
             const bool glassOn = glass::Config().enabled && glass::PatchedVariants() > 0;
-            if (g_iceLoop || glassOn)
-                if (const RootIce* r = IceOf(RootOf(group)); r && ((g_iceLoop && (r->any || r->anySand)) || (glassOn && r->anyGlass)))
+            if (g_iceLoop || g_crystalLoop || glassOn)
+                if (const RootIce* r = IceOf(RootOf(group));
+                    r && ((g_iceLoop && (r->any || r->anySand)) || (g_crystalLoop && r->anyCrystal) || (glassOn && r->anyGlass)))
                 {
                     g_rootIce = r;
                     if (glassOn && r->anyGlass) glass::BeginGroup(ReadGroupFlags(group), true);
@@ -413,6 +479,7 @@ namespace wxl_livingazeroth::wmoice
             --g_depth;
             g_rootIce = saved;
             g_iceLoop = savedIce;
+            g_crystalLoop = savedCrystal;
         }
     }
 

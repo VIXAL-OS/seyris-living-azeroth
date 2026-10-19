@@ -8,6 +8,7 @@
 #include "../features/SurfaceCover.hpp"
 #include "../features/TerrainLights.hpp"
 #include "../features/TerrainWetness.hpp"
+#include "../features/Crystal.hpp"
 #include "../features/Glass.hpp"
 #include "../features/Windows.hpp"
 #include "../render/M2Effects.hpp"
@@ -260,7 +261,7 @@ namespace wxl_livingazeroth::debug
             std::snprintf(head, sizeof(head), "DoodadLightProperties / DoodadLightAssignment: %s%s; in range: %u table light(s), %u model(s) with their own lights suppressed, %u attachment(s) not found (at the origin instead)",
                           lighttable::Status(), lighttable::Dirty() ? " (edited, not saved)" : "", ls.tableLights, ls.suppressedModels, ls.attachFallbacks);
             g_api->UiText(head);
-            if (g_api->UiButton("Reload light tables from disk")) { lighttable::Load(g_cdbc); windows::Load(g_cdbc); glass::Load(g_cdbc); }
+            if (g_api->UiButton("Reload light tables from disk")) { lighttable::Load(g_cdbc); windows::Load(g_cdbc); glass::Load(g_cdbc); crystal::Load(g_cdbc); }
             // Research for M2 receivers: the M2 shaders the client has loaded so far.
             std::snprintf(head, sizeof(head), "Dump M2 shaders (%u effect(s) loaded; Logs\\living-azeroth)",
                           static_cast<unsigned>(m2effects::Effects().size()));

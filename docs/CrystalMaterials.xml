@@ -1,0 +1,24 @@
+  <Table Name="CrystalMaterials" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="Texture" Type="string" />
+    <Field Name="Family" Type="int" />
+    <Field Name="Flags" Type="int" />
+    <Field Name="Weight" Type="float" />
+    <Field Name="TintR" Type="float" />
+    <Field Name="TintG" Type="float" />
+    <Field Name="TintB" Type="float" />
+    <Field Name="GlowR" Type="float" />
+    <Field Name="GlowG" Type="float" />
+    <Field Name="GlowB" Type="float" />
+    <Field Name="Glow" Type="float" />
+    <Field Name="NightGlow" Type="float" />
+    <Field Name="Deepen" Type="float" />
+    <Field Name="Rim" Type="float" />
+    <Field Name="FacetSize" Type="float" />
+    <Field Name="MaskR" Type="float" />
+    <Field Name="MaskG" Type="float" />
+    <Field Name="MaskB" Type="float" />
+    <Field Name="MaskBias" Type="float" />
+    <Field Name="Comment" Type="string" />
+    <Field Name="Model" Type="string" />
+  </Table>

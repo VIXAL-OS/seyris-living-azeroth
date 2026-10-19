@@ -6,6 +6,7 @@
 #include "env/Shelter.hpp"
 #include "env/Storm.hpp"
 #include "env/ThunderDsp.hpp"
+#include "features/Crystal.hpp"
 #include "features/DoodadFade.hpp"
 #include "features/FogWake.hpp"
 #include "features/GroundFog.hpp"
@@ -147,6 +148,12 @@ namespace wxl_livingazeroth::config
         modelice::SetFadeHats(Bool(s, "FadeWaterfallHats", "The waterfall hats (the streaky sheet over a river where it pours over a fall's edge) fade in from their upstream end instead of starting in a jagged edge on the water.", modelice::FadeHats()));
         modelice::SetHideHats(Bool(s, "HideWaterfallHats", "Don't draw the waterfall hats at all (a test switch: the modern water's own run to the edge is subtle).", modelice::HideHats()));
         terrainice::SetClarity(Float(s, "ClearIceClarity", "How much of the deep blue inside shows through the ice's own texture, 0..1.", terrainice::Clarity()));
+        {
+            crystal::Settings& c = crystal::Config();
+            c.enabled = Bool(s, "CrystalLook", "Crystals look like deep, semi-transparent gems, as the ice does: facets and sparkles inside them that shift as you move, the colour deeper toward the core, a bright rim, the sun's glint, and a soft inner glow in their colour, stronger at night. The draenei's, the Exodar's and Tempest Keep's, Bloodmyst's, the fel-green ones of Blade's Edge, Hellfire and Shadowmoon, Netherstorm's gems, Shattrath's, Terokkar's, Crystalsong's, Dalaran's and the caves', Maraudon's, Un'Goro's, Silithus's and Sholazar's (CrystalMaterials.cdbc; needs dynamic shadows on). Crystals that are already see-through or glowing stay as they are.", c.enabled != 0) ? 1 : 0;
+            c.strength = Float(s, "CrystalStrength", "How fully crystals take that look, 0..1.", c.strength);
+            c.glow = Float(s, "CrystalGlow", "Your multiplier on the crystals' inner glow (0 = none, up to 3).", c.glow);
+        }
 
         fields::SetShoreWorker(Bool(s, "ShoreWorker",
             "Work out the ground's distance to water and hot ground (the shore pass) on a background thread instead of the game thread. Same results, a frame later. 0 = the original pass on the game thread.",

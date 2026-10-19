@@ -46,6 +46,9 @@ says why.
 | SurfaceCoverSandPrints | 1 | Footprints, and the sand rims around them, on sand the game counts as dirt (Silithus, Feralas, Ashenvale, much of Darkshore, dry muddy shores), as in Tanaris. Only the prints: footstep sounds stay as they are. |
 | TerrainWetness | 1 | The terrain itself looks darker where the ground is wet (rain, water nearby). The client's own terrain shaders are patched for it when they're created. |
 | TerrainWetnessStrength | 0.45 | How much darker soaked ground gets, 0..1: the terrain and the surface cover alike. |
+| CrystalLook | 1 | Crystals look like deep, semi-transparent gems, as the ice does: facets and sparkles inside them that shift as you move, their colour deeper toward the core, a bright rim, the sun's glint, and a soft inner glow in their colour, stronger at night. The draenei's (Azuremyst, Bloodmyst, the Exodar, Tempest Keep), the fel-green ones of Blade's Edge, Hellfire and Shadowmoon, Netherstorm's gems, Shattrath's, Terokkar's, Crystalsong's, Dalaran's and the caves', Maraudon's, Un'Goro's, Silithus's and Sholazar's, jewels (`CrystalMaterials.cdbc`; needs dynamic shadows on). Crystals already see-through or glowing stay as they are, and the ice keeps the ice. The depth is faked: they still draw opaque (see features/Crystal.hpp for why). |
+| CrystalStrength | 1 | How fully crystals take that look, 0..1. |
+| CrystalGlow | 1 | Your multiplier on the crystals' inner glow (0 = none, up to 3). |
 | WindShelter | 1 | Roofs and overhangs shelter the ground below from wind. |
 | WindLee | 1 | Walls and cliffs cast a wind shadow on their downwind side. |
 | DebugWindArrows | 0 | Debug: draw the wind as arrows around the player. |

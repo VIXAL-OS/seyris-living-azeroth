@@ -10,6 +10,8 @@
 // group's MOGP flags go to glass::BeginGroup, and each batch to glass::Batch (the glass look, the floor light). One
 // more, Wmo.RenderGroup (around a placed instance's visible group), tells glass::BeginInstance which building it is:
 // the instance's origin, its WMO's path and the group, for the rooms behind its glass.
+// The crystal textures (features/Crystal, CrystalMaterials.cdbc) drawn opaque or alpha-keyed switch the same block on with
+// the crystal's constants, per material as for the ice (the ice wins where a texture is both).
 #pragma once
 
 #include "ModelIce.hpp"

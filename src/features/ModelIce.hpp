@@ -10,8 +10,11 @@
 // batch draws (M2.DrawBatch, M2.DrawBatchDoodad) switch b7 on for ice models only, so every other
 // model draw skips the block and comes out exactly as before.
 // Registers: r12..r31, b7, c174..c178 (defined), c179 (the batch's ice weight and style), c180..c189
-// (the look), c190 (more of the style), s14. Stock M2 pixel shaders use r0..r11, c0..c14, s0..s7 and no
-// b/i registers.
+// (the look), c190 (more of the style), c78..c81 (the crystals': features/Crystal; zeros for the ice), s14. Stock M2
+// pixel shaders use r0..r11, c0..c14, s0..s7 and no b/i registers.
+//
+// The same block draws the crystals (features/Crystal): the batch-draw hooks switch it on for a crystal batch of any other
+// model, with the crystal's constants and detail texture.
 //
 // Behind b8, after the ice: still rims around footprints on the sand and snow floors of buildings (features/WmoIce
 // switches it on for those batches; the rims come from features/SurfaceCover's prints). The Caverns of Time are a

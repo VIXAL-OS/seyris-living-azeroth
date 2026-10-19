@@ -1,4 +1,5 @@
 #include "ModelIce.hpp"
+#include "Crystal.hpp"
 #include "DoodadFade.hpp"
 #include "Glass.hpp"
 #include "GlassShader.hpp"
@@ -93,26 +94,48 @@ namespace wxl_livingazeroth::modelice
         }
 
         struct Kind { Style style = Style::None; bool hat = false; const HatFade* fade = nullptr; };
-        struct Entry { std::string stem; Kind kind; };
+        // Per shared model: its stem and kind, and its batches' crystal classes (features/Crystal: by batch record, for the
+        // crystal table's generation they were worked out under).
+        struct Entry
+        {
+            std::string stem;
+            Kind kind;
+            uint32_t crystalGeneration = 0;
+            std::unordered_map<const void*, uint16_t> crystal;
+        };
         std::unordered_map<const void*, Entry> g_models;
 
-        Kind KindFor(const void* ctx)
+        Entry* EntryFor(const void* ctx)
         {
-            if (!ctx) return {};
+            if (!ctx) return nullptr;
             const auto* instance = *reinterpret_cast<const uint8_t* const*>(static_cast<const uint8_t*>(ctx) + kCtxInstance);
-            if (!instance) return {};
+            if (!instance) return nullptr;
             const auto* shared = *reinterpret_cast<const uint8_t* const*>(instance + kInstShared);
-            if (!shared) return {};
+            if (!shared) return nullptr;
             const char* stem = reinterpret_cast<const char*>(shared + kSharedStem);
             const size_t length = strnlen(stem, kStemCapacity);
+            if (g_models.size() > 8192 && g_models.find(shared) == g_models.end()) g_models.clear();
             Entry& e = g_models[shared];
             if (e.stem.size() != length || std::memcmp(e.stem.data(), stem, length) != 0)
             {
                 e.stem.assign(stem, length);
                 e.kind = { StyleOf(e.stem.c_str()), IsWaterfallHat(e.stem.c_str()), HatFadeOf(e.stem.c_str()) };
+                e.crystal.clear();
             }
-            if (g_models.size() > 8192) { const Kind kind = e.kind; g_models.clear(); return kind; }
-            return e.kind;
+            return &e;
+        }
+
+        // The crystal class of the batch about to draw (0: none), worked out once per batch record.
+        uint16_t CrystalClass(const void* ctx, Entry& e)
+        {
+            if (e.crystalGeneration != crystal::Generation()) { e.crystal.clear(); e.crystalGeneration = crystal::Generation(); }
+            const void* key = crystal::M2BatchKey(ctx);
+            if (!key) return 0;
+            const auto it = e.crystal.find(key);
+            if (it != e.crystal.end()) return it->second;
+            const uint16_t c = crystal::ClassifyM2Batch(ctx, e.stem.c_str());
+            if (e.crystal.size() < 512) e.crystal.emplace(key, c);
+            return c;
         }
 
         // A hat's fade on for its batch: false when it isn't a hat, the fade is off, or no vertex shader took it.
@@ -138,6 +161,17 @@ namespace wxl_livingazeroth::modelice
             }
         }
 
+        void BindDetail(IDirect3DDevice9* dev, IDirect3DTexture9* detail)
+        {
+            dev->SetTexture(kSampler, detail);
+            dev->SetSamplerState(kSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(kSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(kSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+            dev->SetSamplerState(kSampler, D3DSAMP_SRGBTEXTURE, FALSE);
+        }
+
         // Switches the block on for one batch (main thread, inside the M2 pass).
         bool Begin(Style style)
         {
@@ -154,16 +188,36 @@ namespace wxl_livingazeroth::modelice
             dev->SetPixelShaderConstantF(kWeightConstant, weight, 1);
             dev->SetPixelShaderConstantF(kLookConstant, look, terrainice::kModelConstantCount);
             dev->SetPixelShaderConstantF(kStyleConstant, more, 1);
-            dev->SetTexture(kSampler, detail);
-            dev->SetSamplerState(kSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-            dev->SetSamplerState(kSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-            dev->SetSamplerState(kSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-            dev->SetSamplerState(kSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-            dev->SetSamplerState(kSampler, D3DSAMP_SRGBTEXTURE, FALSE);
+            const float noCrystal[4 * crystal::kRegisters] = {};
+            dev->SetPixelShaderConstantF(crystal::kConstant, noCrystal, crystal::kRegisters);
+            BindDetail(dev, detail);
             const BOOL on = TRUE;
             dev->SetPixelShaderConstantB(kSwitch, &on, 1);
             ++g_iceDraws;
+            return true;
+        }
+
+        // The block for a crystal batch (features/Crystal): its material's constants and the crystal detail texture.
+        bool BeginCrystal(uint16_t cls)
+        {
+            if (!cls || g_patched == 0 || !crystal::Active()) return false;
+            const crystal::Material* m = crystal::MaterialAt(cls & ~crystal::kUnlitBit);
+            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+            if (!m || !dev) return false;
+            IDirect3DTexture9* detail = crystal::DetailTexture(dev);
+            if (!detail) return false;
+            float look[4 * terrainice::kModelConstantCount];
+            terrainice::FillModelConstants(look);
+            float weight[4], more[4], c[4 * crystal::kRegisters];
+            crystal::Constants(*m, crystal::Config(), crystal::Night(), (cls & crystal::kUnlitBit) != 0, look, weight, more, c);
+            dev->SetPixelShaderConstantF(kWeightConstant, weight, 1);
+            dev->SetPixelShaderConstantF(kLookConstant, look, terrainice::kModelConstantCount);
+            dev->SetPixelShaderConstantF(kStyleConstant, more, 1);
+            dev->SetPixelShaderConstantF(crystal::kConstant, c, crystal::kRegisters);
+            BindDetail(dev, detail);
+            const BOOL on = TRUE;
+            dev->SetPixelShaderConstantB(kSwitch, &on, 1);
+            crystal::NoteBatch(false);
             return true;
         }
 
@@ -176,25 +230,36 @@ namespace wxl_livingazeroth::modelice
             }
         }
 
+        // The ice (an ice model's style), else the crystal look (a crystal batch of any other model), for one batch.
+        bool BeginBlock(const void* ctx, Entry* e)
+        {
+            if (!e) return false;
+            if (e->kind.style != Style::None) return Begin(e->kind.style);
+            if (!crystal::Active() || g_patched == 0) return false;
+            return BeginCrystal(CrystalClass(ctx, *e));
+        }
+
         void __fastcall hkBatch(void* ctx, void* edx)
         {
-            const Kind kind = KindFor(ctx);
+            Entry* e = EntryFor(ctx);
+            const Kind kind = e ? e->kind : Kind{};
             if (kind.hat && g_hideHats) { ++g_hatsHidden; return; }
             const bool faded = BeginHatFade(kind);
-            const bool ice = Begin(kind.style);
+            const bool on = BeginBlock(ctx, e);
             g_origBatch(ctx, edx);
-            if (ice) End();
+            if (on) End();
             if (faded) EndHatFade();
         }
 
         void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
         {
-            const Kind kind = KindFor(ctx);
+            Entry* e = EntryFor(ctx);
+            const Kind kind = e ? e->kind : Kind{};
             if (kind.hat && g_hideHats) { ++g_hatsHidden; return; }
             const bool faded = BeginHatFade(kind);
-            const bool ice = Begin(kind.style);
+            const bool on = BeginBlock(ctx, e);
             g_origDoodad(ctx, edx, elements, indices);
-            if (ice) End();
+            if (on) End();
             if (faded) EndHatFade();
         }
 
@@ -427,15 +492,29 @@ namespace wxl_livingazeroth::modelice
                 "\n      mul r29.xyz, r12, r30.y"
                 "\n      mul r28.xyz, r26.x, c186"
                 "\n      lrp r26.xyz, c190.x, r29, r28"
+                // Crystals (features/Crystal; zeros for the ice): the body deeper toward the core, face on -- x (1 + (body x
+                // tint - 1) x c79.w x (N.V)^2), a crystal's light going further through it there.
+                "\n      dp3 r27.w, r13, r14"
+                "\n      mul r27.w, r27.w, r27.w"
+                "\n      mul r27.w, r27.w, c79.w"
+                "\n      mul r30.xyz, r26, c79"
+                "\n      add r30.xyz, r30, -c175.x"
+                "\n      mul r30.xyz, r30, r26"
+                "\n      mad r26.xyz, r30, r27.w, r26"
                 "\n      mul r27.x, r25.y, c178.w"
                 "\n      mad_sat r27.x, r25.x, c178.z, r27.x"
                 "\n      mad_sat r27.x, r27.x, c190.z, r27.x"
                 "\n      mul r27.x, r27.x, r22.w"
-                "\n      mov r29.xyz, c188"
-                "\n      lrp r28.xyz, r27.x, r29, r26"
                 "\n      dp3 r27.y, r12, c176"
                 "\n      mul r27.y, r27.y, c175.w"
                 "\n      min r27.y, r27.y, c174.x"
+                // Crystals: the highlight lit as the surface is, x (1 + (min(2 x luminance, 1.3) - 1) x c80.x) (the ice: 0, as
+                // it was), so the facets' edges and sparkles don't shine on their own at night.
+                "\n      add r30.w, r27.y, -c175.x"
+                "\n      mul r30.w, r30.w, c80.x"
+                "\n      add r30.w, r30.w, c175.x"
+                "\n      mul r29.xyz, r30.w, c188"
+                "\n      lrp r28.xyz, r27.x, r29, r26"
                 "\n      mov r29.w, c190.x"
                 "\n      lrp r30.z, r29.w, c175.x, r27.y"
                 "\n      mul r26.xyz, r28, r30.z"
@@ -461,17 +540,32 @@ namespace wxl_livingazeroth::modelice
                 "\n      min r27.y, r27.y, c175.x"
                 "\n      mul r30.w, r30.w, r27.y"
                 "\n      mad r31.xyz, r30.w, c185, r31"
+                // Crystals: a rim of the body's own colour, (1 - |N.V|)^2 x c80.w.
+                "\n      mul r29.y, r27.z, r27.z"
+                "\n      mul r29.y, r29.y, c80.w"
+                "\n      mad r31.xyz, r28, r29.y, r31"
                 "\n      add r31.xyz, r31, -r12"
                 "\n      mul r31.xyz, r31, c179.x"
                 "\n      mov r30.xyz, c189"
                 "\n      mad r31.xyz, r30, c179.x, r31"
+                // Crystals: the inner glow, c81.rgb x (the facets' shading + c81.w) x |N.V| (already x the weight); then the
+                // mask: what's kept is 1 - saturate(c78.w - dot(colour, c78.rgb) / (luminance + 0.04)) (zeros: all of it).
+                "\n      add r29.z, r25.z, c81.w"
+                "\n      mad r29.w, r27.z, -r29.z, r29.z"
+                "\n      mad r31.xyz, r29.w, c81, r31"
+                "\n      dp3 r29.x, r12, c176"
+                "\n      add r29.x, r29.x, c178.x"
+                "\n      rcp r29.x, r29.x"
+                "\n      dp3 r29.y, r12, c78"
+                "\n      mad_sat r29.x, r29.y, -r29.x, c78.w"
+                "\n      mad r31.xyz, r31, -r29.x, r31"
                 "\n    endif" + (rims ? RingBlock(vP) : std::string());
         }
 
         bool EditPixel(std::string& src, std::string& why, bool rims, bool glassBlocks = false)
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
-            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
+            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c7[89]|c8[01]|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
             // (the glass's too: the rooms' samplers s8..s13, c15..c25, c83..c100)
             static const std::regex glassClash(R"(\b(s([89]|1[0-3])|c1[5-9]|c2[0-5]|c8[3-9]|c9[0-9]|c100)\b)");
