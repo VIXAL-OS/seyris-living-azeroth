@@ -10,6 +10,7 @@
 #include "../env/WorldQuery.hpp"
 #include "../render/GxState.hpp"
 #include "../render/SceneDepth.hpp"
+#include "CloudTint.hpp"
 #include "FogFar.hpp"
 #include "SurfaceCover.hpp"
 #include "FogWake.hpp"
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -54,24 +56,40 @@ namespace wxl_livingazeroth::groundfog
         using LiquidFn     = void(__fastcall*)(void* bank, void* edx, void* transform, int passType);
         using DeviceDrawFn = void(__fastcall*)(void* device, void* edx, uint32_t* batch, int indexed);
         using FrameFn      = void(__fastcall*)(void* self, void* edx);
+        using DrawBatchFn  = void(__fastcall*)(void* ctx, void* edx);
+        using DrawDoodadFn = void(__fastcall*)(void* ctx, void* edx, void* elements, void* indices);
         WeatherFn    g_origWeather = nullptr;
         LiquidFn     g_origLiquid = nullptr;
         DeviceDrawFn g_origDraw = nullptr;
         FrameFn      g_origFrame = nullptr;
+        DrawBatchFn  g_origBatch = nullptr;
+        DrawDoodadFn g_origDoodad = nullptr;
 
         // See-through things drawn after the deck (Blizzard's own storm clouds at the Temple of Storms, effects) are
         // fogged by the client toward its own fog colour, near black at night, and came out as dark blobs in the white
         // cloud ("can we make the lightning at temple of storms not show black through the clouds", the user,
         // 2026-10-13). While the deck is drawn, from its draw to the end of the world frame (the window), the
         // client's pixel constant cache's c2 (the models' fog colour, core offsets/engine/Gx.hpp kPsConstCache) is
-        // swapped for the deck's colour right before each draw that has the stock fog colour there (additive batches
-        // fog to black and keep it), marked dirty so the draw's own flush uploads it; the stock value goes back at the
-        // window's end.
+        // swapped right before each draw (features/CloudTint: which draws, which colour), marked dirty so the draw's
+        // own flush uploads it; the client's value goes back at the window's end. The storm doodads (known by their
+        // M2 batch: its model and its fog mode) take the deck's colour at any sky; the rest fogged toward the stock
+        // colour take it moved toward the deck's as much as the sky is overcast (additive batches fog to black and keep
+        // it).
         bool     g_tintWindow = false;   // inside the window this frame
-        bool     g_tintHolds = false;    // the cache's c2 holds our colour
-        float    g_tintStock[3] = {};    // what it held before
-        float    g_tintColour[3] = {};   // ours this frame
-        unsigned g_tinted = 0, g_tintOther = 0, g_tintedShown = 0, g_tintOtherShown = 0; // draws this frame / last frame
+        cloudtint::State g_tint;         // the cache's c2: ours or the client's
+        float    g_tintColour[3] = {};   // the general colour this frame
+        float    g_stormColour[3] = {};  // the storm doodads' colour this frame
+        float    g_deckShade = 1.0f;     // set by Draw: the deck's brightness where the camera sees it (CloudTint DeckShade)
+        unsigned g_tinted = 0, g_stormTinted = 0, g_tintOther = 0;                  // draws this frame
+        unsigned g_tintedShown = 0, g_stormTintedShown = 0, g_tintOtherShown = 0;  // last frame
+        // The M2 batch drawing (the batch draw hooks; null between batches), whether it's a storm doodad's, and whether
+        // the client code that stores its fog mode is as expected (CloudTint kGuards; without it the fog mode is unknown).
+        const void* g_batchCtx = nullptr;
+        bool     g_batchStorm = false;
+        bool     g_fogModeGuarded = false;
+        bool     g_hookedBatches = false;
+        struct StemEntry { std::string stem; bool storm = false; };
+        std::unordered_map<const void*, StemEntry> g_stems; // per shared model
         bool     g_deckDrewInside = false; // set by Draw: the deck drawn this frame
         DeckFrame g_deckFrame;             // the same for the sun shafts (DeckThisFrame)
         bool     g_hookedFrame = false;      // the world frame hook (closes the window); without it no tint
@@ -2127,6 +2145,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             const bool deckOn = g_psDeck && g_deck.density > 0.0f;
             const bool deckInFront = deckOn && cam[2] > g_deck.top;
             g_deckDrewInside = deckOn; // (any camera: from below or above, the storm clouds are in the deck too)
+            g_deckShade = cloudtint::DeckShade(cam[2], g_deck.base, g_deck.top);
             // The lights glowing in the deck: the brightest for their distance, outdoors, within its heights.
             if (deckOn)
             {
@@ -2565,38 +2584,35 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (end < 2) end = 2; // inclusive: the flush (0x69F63D) uploads end - start + 1 registers from start
         }
 
-        // Right before a client draw inside the window: the stock fog colour in c2 -> the deck's.
+        // Right before a client draw inside the window: c2 set for it (features/CloudTint Step).
         void TintFogColour()
         {
             float* c2 = reinterpret_cast<float*>(wxl::offsets::engine::gx::kPsConstCache) + 2 * 4;
-            if (g_tintHolds && c2[0] == g_tintColour[0] && c2[1] == g_tintColour[1] && c2[2] == g_tintColour[2]) { ++g_tinted; return; }
-            const uint32_t argb = *reinterpret_cast<const uint32_t*>(kFogColor);
-            const float stock[3] = { ((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f, (argb & 0xFF) / 255.0f };
-            if (std::fabs(c2[0] - stock[0]) > 0.03f || std::fabs(c2[1] - stock[1]) > 0.03f || std::fabs(c2[2] - stock[2]) > 0.03f)
+            float stock[3];
+            cloudtint::FromArgb(*reinterpret_cast<const uint32_t*>(kFogColor), stock);
+            cloudtint::DrawIs is;
+            if (g_batchCtx)
             {
-                ++g_tintOther; // black (additive), or not a fog colour at all: left alone
-                g_tintHolds = false;
-                return;
-            }
-            for (int i = 0; i < 3; ++i) { g_tintStock[i] = c2[i]; c2[i] = g_tintColour[i]; }
-            g_tintHolds = true;
-            MarkC2Dirty();
-            ++g_tinted;
-        }
-
-        // The window's end: the stock fog colour back in the cache (where ours still is), for the next draws.
-        void EndTint()
-        {
-            if (g_tintHolds)
-            {
-                float* c2 = reinterpret_cast<float*>(wxl::offsets::engine::gx::kPsConstCache) + 2 * 4;
-                if (c2[0] == g_tintColour[0] && c2[1] == g_tintColour[1] && c2[2] == g_tintColour[2])
+                is.stormBatch = g_batchStorm;
+                if (g_fogModeGuarded)
                 {
-                    for (int i = 0; i < 3; ++i) c2[i] = g_tintStock[i];
-                    MarkC2Dirty();
+                    const int mode = *reinterpret_cast<const int*>(static_cast<const uint8_t*>(g_batchCtx) + cloudtint::kCtxFogMode);
+                    is.fogMode = mode >= cloudtint::kFogNone && mode <= cloudtint::kFogGrey ? mode : cloudtint::kFogUnknown;
                 }
             }
-            g_tintHolds = false;
+            bool dirty = false;
+            const cloudtint::Action a = cloudtint::Step(g_tint, c2, is, stock, g_tintColour, g_stormColour, dirty);
+            if (dirty) MarkC2Dirty();
+            if (a == cloudtint::Action::Storm) ++g_stormTinted;
+            else if (a == cloudtint::Action::General) ++g_tinted;
+            else ++g_tintOther; // black (additive), or not a fog colour at all: left alone
+        }
+
+        // The window's end: the client's value back in the cache (where ours still is), for the next draws.
+        void EndTint()
+        {
+            float* c2 = reinterpret_cast<float*>(wxl::offsets::engine::gx::kPsConstCache) + 2 * 4;
+            if (cloudtint::End(g_tint, c2)) MarkC2Dirty();
             g_tintWindow = false;
         }
 
@@ -2607,11 +2623,82 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             g_origDraw(device, edx, batch, indexed);
         }
 
+        // The model of an M2 batch draw's context (its path stem), or null. Guarded: a stale context reads as none.
+        const char* StemOf(const void* ctx, size_t& length)
+        {
+            length = 0;
+            __try
+            {
+                const auto* instance = *reinterpret_cast<const uint8_t* const*>(static_cast<const uint8_t*>(ctx) + cloudtint::kCtxInstance);
+                if (!instance) return nullptr;
+                const auto* shared = *reinterpret_cast<const uint8_t* const*>(instance + cloudtint::kInstShared);
+                if (!shared) return nullptr;
+                const char* stem = reinterpret_cast<const char*>(shared + cloudtint::kSharedStem);
+                length = strnlen(stem, cloudtint::kStemCapacity);
+                return stem;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { length = 0; return nullptr; }
+        }
+
+        // Whether the batch about to draw is a storm doodad's (by its shared model, cached by its stem).
+        bool StormBatch(const void* ctx)
+        {
+            size_t length = 0;
+            const char* stem = ctx ? StemOf(ctx, length) : nullptr;
+            if (!stem || !length) return false;
+            const void* shared = stem - cloudtint::kSharedStem;
+            if (g_stems.size() > 4096 && g_stems.find(shared) == g_stems.end()) g_stems.clear();
+            StemEntry& e = g_stems[shared];
+            if (e.stem.size() != length || std::memcmp(e.stem.data(), stem, length) != 0)
+            {
+                e.stem.assign(stem, length);
+                e.storm = cloudtint::IsStormModel(e.stem.c_str(), e.stem.size());
+            }
+            return e.storm;
+        }
+
+        // The M2 batch draws (outermost: around features/ModelIce's, DoodadFade's and PlayerDepth's): which batch the
+        // device draws inside belong to, while the window is open.
+        void __fastcall hkBatch(void* ctx, void* edx)
+        {
+            const void* const prevCtx = g_batchCtx;
+            const bool prevStorm = g_batchStorm;
+            g_batchCtx = ctx;
+            g_batchStorm = g_tintWindow && StormBatch(ctx);
+            g_origBatch(ctx, edx);
+            g_batchCtx = prevCtx;
+            g_batchStorm = prevStorm;
+        }
+
+        void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
+        {
+            const void* const prevCtx = g_batchCtx;
+            const bool prevStorm = g_batchStorm;
+            g_batchCtx = ctx;
+            g_batchStorm = g_tintWindow && StormBatch(ctx);
+            g_origDoodad(ctx, edx, elements, indices);
+            g_batchCtx = prevCtx;
+            g_batchStorm = prevStorm;
+        }
+
+        // CloudTint's guards against the running client (the 12340 image at its base, byte for byte).
+        bool FogModeGuardsHold()
+        {
+            if (reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)) != 0x00400000u) return false;
+            __try
+            {
+                for (const storm::Guard& g : cloudtint::kGuards)
+                    if (std::memcmp(reinterpret_cast<const void*>(g.address), g.bytes, g.size) != 0) return false;
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
         void __fastcall hkFrame(void* self, void* edx)
         {
             EndTint();
-            g_tintedShown = g_tinted; g_tintOtherShown = g_tintOther;
-            g_tinted = g_tintOther = 0;
+            g_tintedShown = g_tinted; g_stormTintedShown = g_stormTinted; g_tintOtherShown = g_tintOther;
+            g_tinted = g_stormTinted = g_tintOther = 0;
             const bool glow = g_settings.cloudDeckGlow > 0.0f;
             g_deckDrewInside = false;
             g_origFrame(self, edx);
@@ -2628,13 +2715,15 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             if (g_drawThisFrame || Decide())
                 if (auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice())) Draw(dev);
             g_drawThisFrame = false;
-            // The window opens: what's drawn from here on in the world frame is in (or behind) the cloud. The colour:
-            // the deck's, as much as the sky is overcast (a clear sky's thin wisps don't light up the night).
-            if (g_deckDrewInside && g_settings.cloudDeckTint && g_hookedFrame)
+            // The window opens: what's drawn from here on in the world frame is in (or behind) the cloud. The colours:
+            // for the storm doodads the deck's as it shows from the camera, at any sky; for the rest the deck's as much
+            // as the sky is overcast (a clear sky's thin wisps don't light up the night).
+            if (cloudtint::WindowOpens(g_deckDrewInside, g_settings.cloudDeckTint != 0, g_hookedFrame))
             {
-                const uint32_t argb = *reinterpret_cast<const uint32_t*>(kFogColor);
-                const float stock[3] = { ((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f, (argb & 0xFF) / 255.0f };
-                for (int i = 0; i < 3; ++i) g_tintColour[i] = stock[i] + (g_deck.color[i] - stock[i]) * g_deck.cover;
+                float stock[3];
+                cloudtint::FromArgb(*reinterpret_cast<const uint32_t*>(kFogColor), stock);
+                cloudtint::GeneralColour(stock, g_deck.color, g_deck.cover, g_tintColour);
+                cloudtint::StormColour(g_deck.color, g_deckShade, g_stormColour);
                 g_tintWindow = true;
             }
             g_origWeather(self, edx);
@@ -2660,9 +2749,17 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         const int b = AttachFront(api, "Gx.LiquidRenderPass", &hkLiquid, &g_origLiquid);
         const int c = AttachFront(api, "Gx.DeviceDraw", &hkDraw, &g_origDraw);
         g_hookedFrame = AttachFront(api, "Gx.WorldOnRender", &hkFrame, &g_origFrame) != 0;
+        // The M2 batch draws, for the storm doodads' tint (a batch drawn outside them reads as no batch: the colour match).
+        const int m = AttachFront(api, "M2.DrawBatch", &hkBatch, &g_origBatch);
+        const int n = AttachFront(api, "M2.DrawBatchDoodad", &hkDoodad, &g_origDoodad);
+        g_hookedBatches = m || n;
+        g_fogModeGuarded = g_hookedBatches && FogModeGuardsHold();
         if (!a) g_settings.enabled = 0;
         api->Log((a && b && c) ? WXL_LOG_INFO : WXL_LOG_WARN, kTag, "ground fog: hooks weather %d liquid %d draw %d%s",
                  a, b, c, a ? "" : " (no draw point: the fog stays off)");
+        api->Log(g_hookedBatches && g_fogModeGuarded ? WXL_LOG_INFO : WXL_LOG_WARN, kTag,
+                 "cloud deck tint: M2 batch hooks %d %d, batch fog modes %s", m, n,
+                 g_fogModeGuarded ? "read" : "not read (the client code differs or no hooks): storm doodads by their colour");
     }
 
     void DrawStatusLine()
@@ -2698,7 +2795,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             g_api->UiCheckbox("in the deck, see-through models fog to the cloud's colour##gfdeckt", &g_settings.cloudDeckTint);
             g_api->UiSliderFloat("deck glow: lights in it, and lightning and the moon beyond 60 yd##gfdeckg", &g_settings.cloudDeckGlow, 0.0f, 3.0f);
             g_api->UiCheckbox("smooth deck (half resolution, blurred: no pixel grain)##gfdecks", &g_settings.cloudDeckSmooth);
-            char line[200];
+            char line[320];
             if (g_deck.density > 0.0f)
             {
                 float camNow[3] = {};
@@ -2711,6 +2808,10 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 g_api->UiText(line);
                 std::snprintf(line, sizeof(line), "see-through draws after it: %u fogged to the cloud's colour, %u left (another fog colour)%s; lights glowing in it: %d",
                               g_tintedShown, g_tintOtherShown, g_hookedFrame ? "" : " -- no world frame hook: off", g_deckLightsUsed);
+                g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "storm clouds and lightning (Storm Peaks): %u draws took the deck's colour %.2f %.2f %.2f (x%.2f where you see it)%s",
+                              g_stormTintedShown, g_stormColour[0], g_stormColour[1], g_stormColour[2], g_deckShade,
+                              !g_hookedBatches ? " -- no M2 batch hooks: they fog like the rest" : (g_fogModeGuarded ? "" : " -- batch fog modes not read: told by their colour"));
             }
             else
                 std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");

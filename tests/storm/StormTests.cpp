@@ -3,11 +3,13 @@
 // and loudness by distance, the day-night colour shading (and that it never builds up), falling snow's
 // fog, sky and fog distance, the bolt's matrix, and -- given the client executable -- every guard against
 // its bytes. No game.
-// Also what the rain does elsewhere: the fog wake's weather scaling (features/FogWakeWeather.hpp).
+// Also what the rain does elsewhere: the fog wake's weather scaling (features/FogWakeWeather.hpp); and the cloud deck's
+// tint of what's drawn after it (features/CloudTint.hpp: the Temple of Storms' lightning, with the storm and snow shading).
 //
 // Usage:  storm_tests [<Wow.exe>] [<SoundEntries.dbc>]
 //   (the client's SoundEntries.dbc, extracted: checks every thunder kit and Lua row against its rows)
 #include "env/StormModel.hpp"
+#include "features/CloudTint.hpp"
 #include "features/FogWakeWeather.hpp"
 
 #include <windows.h>
@@ -24,6 +26,7 @@
 
 namespace st = wxl_livingazeroth::storm;
 namespace fw = wxl_livingazeroth::fogwake;
+namespace ct = wxl_livingazeroth::cloudtint;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__)); } while (false)
 
@@ -894,6 +897,171 @@ int main(int argc, char** argv)
             CHECK(!memory.valid && end == 278.0f && start == -0.5f);
         });
 
+        // --- the cloud deck's tint (features/CloudTint): the Temple of Storms' lightning ---
+        Test("cloud tint: the storm doodads by their path (the temple's lightning, Ulduar's clouds), nothing else", []
+        {
+            auto is = [](const char* p) { return ct::IsStormModel(p, std::strlen(p)); };
+            CHECK(is("World\\Expansion02\\Doodads\\StormPeaks\\Lightning\\StormPeaksLightning01"));
+            CHECK(is("world\\expansion02\\doodads\\stormpeaks\\lightning\\stormpeakslightning02.m2"));
+            CHECK(is("WORLD/EXPANSION02/DOODADS/STORMPEAKS/FOG/STORMPEAKS_ULDUAR_CLOUDS_03.M2"));
+            CHECK(is("World\\Expansion02\\Doodads\\StormPeaks\\Fog\\StormPeaks_Ulduar_Clouds"));
+            CHECK(!is("World\\Expansion02\\Doodads\\StormPeaks\\Rocks\\StormPeaks_RockA"));
+            CHECK(!is("World\\Generic\\PassiveDoodads\\ParticleEmitters\\BlastedLandsLightningBolt01")); // additive particles
+            CHECK(!is("Environments\\Stars\\StormPeaks_SkyC_Ulduar"));                                 // the skybox: before the deck
+            CHECK(!is("Spells\\CallLightning_Impact"));                                                // our own bolts (rain only)
+            CHECK(!is("") && !ct::IsStormModel(nullptr, 10));
+            // A stem longer than the client's inline field is read only that far.
+            const std::string longStem = std::string(400, 'x') + "doodads\\stormpeaks\\lightning\\";
+            CHECK(!ct::IsStormModel(longStem.c_str(), longStem.size()));
+            CHECK(!ct::IsStormModel("doodads\\stormpeaks\\lightning\\abc", 28)); // cut before the folder ends
+            CHECK(ct::IsStormModel("doodads\\stormpeaks\\lightning\\abc", 29));
+        });
+
+        // The report: Storm Peaks 36.8, 73.4 at 20:38, below the deck (1040..1950), under a clear sky; the Northrend
+        // default light's fog at night is #002D41, the deck's colour then its night floor (0.30, 0.34, 0.45) or brighter.
+        Test("cloud tint: the storm doodads take the deck's colour under any sky, from below, inside and above; not black", []
+        {
+            float stock[3], general[3], below[3], inside[3], above[3];
+            ct::FromArgb(Argb(0xFF, 0x00, 0x2D, 0x41), stock);
+            const float deck[3] = { 0.30f, 0.34f, 0.45f };
+            // Before: the swap's colour under a clear sky was the stock night colour itself.
+            ct::GeneralColour(stock, deck, 0.0f, general);
+            CHECK(ct::Same(general, stock));
+            ct::GeneralColour(stock, deck, 1.0f, general);
+            CHECK(Near(general[0], deck[0], 1e-6f) && Near(general[2], deck[2], 1e-6f));
+            // Now the storm doodads: the deck's, at its shade where the camera sees it.
+            CHECK(ct::DeckShade(500.0f, 1040.0f, 1950.0f) == 0.85f);          // far below: its underside
+            CHECK(ct::DeckShade(1040.0f, 1040.0f, 1950.0f) == 0.85f);
+            CHECK(Near(ct::DeckShade(1495.0f, 1040.0f, 1950.0f), 0.975f, 1e-5f)); // half way in
+            CHECK(Near(ct::DeckShade(2600.0f, 1040.0f, 1950.0f), 1.10f, 1e-6f)); // above: its top
+            CHECK(ct::DeckShade(std::nanf(""), 1040.0f, 1950.0f) == 0.85f);
+            CHECK(ct::DeckShade(1000.0f, 1000.0f, 1000.0f) == 0.85f);            // no thickness: no division by 0
+            ct::StormColour(deck, ct::DeckShade(900.0f, 1040.0f, 1950.0f), below);
+            ct::StormColour(deck, ct::DeckShade(1500.0f, 1040.0f, 1950.0f), inside);
+            ct::StormColour(deck, ct::DeckShade(2300.0f, 1040.0f, 1950.0f), above);
+            auto lum = [](const float c[3]) { return 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]; };
+            std::printf("     stock night fog L %.3f; storm doodads' colour below %.2f %.2f %.2f, inside %.2f %.2f %.2f, above %.2f %.2f %.2f\n",
+                        lum(stock), below[0], below[1], below[2], inside[0], inside[1], inside[2], above[0], above[1], above[2]);
+            CHECK(lum(below) > 2.0f * lum(stock) && lum(below) > 0.25f);
+            CHECK(lum(below) < lum(inside) && lum(inside) < lum(above));
+            CHECK(Near(below[2], 0.45f * 0.85f, 1e-5f));
+            // A bright day deck is clamped, never above white.
+            const float white[3] = { 0.98f, 1.0f, 0.99f };
+            ct::StormColour(white, 1.1f, above);
+            CHECK(above[0] == 1.0f && above[1] == 1.0f && above[2] == 1.0f);
+            // The window: whenever the deck is drawn, with the tint on and the frame hooked; the camera's height isn't in it.
+            CHECK(ct::WindowOpens(true, true, true));
+            CHECK(!ct::WindowOpens(false, true, true) && !ct::WindowOpens(true, false, true) && !ct::WindowOpens(true, true, false));
+        });
+
+        // The client's way from band 8 to an M2 batch's c2: Sky.FogUpdate copies the band (0x7F171A) into the fog colour;
+        // the batch's fog setup turns the model lighting's colour floats to bytes (x 255 + 0.5, truncated, 0x81FBAA) and
+        // 0x873210 uploads them x 1/255 (0x3B808081).
+        Test("cloud tint: the colour match holds with the storm and snow shading on (kFogColor is band 8 as shaded)", []
+        {
+            auto clientC2 = [](uint32_t argb, float out[3])
+            {
+                const int ch[3] = { R(argb), G(argb), B(argb) };
+                for (int i = 0; i < 3; ++i)
+                {
+                    const float lighting = ch[i] * (1.0f / 255.0f);
+                    const int back = static_cast<int>(lighting * 255.0f + 0.5f);
+                    out[i] = back * (1.0f / 255.0f);
+                }
+            };
+            const uint32_t nights[] = { Argb(0xFF, 0x00, 0x2D, 0x41), Argb(0xFF, 0x52, 0x54, 0x52), Argb(0xFF, 0x25, 0x1F, 0x32), Argb(0xFF, 0x37, 0x70, 0x83) };
+            const st::Shade shades[] = { st::Shade{}, HeavyRain(0.0f), HeavyRain(1.0f), Snow(0.0f), Snow(1.0f), Snow(0.5f, 0.6f) };
+            for (uint32_t band : nights)
+                for (const st::Shade& s : shades)
+                {
+                    const uint32_t shaded = st::Identity(s) ? band : st::ShadeBand(band, st::kFogBand, s);
+                    float stock[3], c2[3];
+                    ct::FromArgb(shaded, stock); // what TintFogColour reads at kFogColor
+                    clientC2(shaded, c2);        // what the batch uploads
+                    CHECK(ct::MatchesStock(c2, stock));
+                    CHECK(ct::Decide(ct::DrawIs{ false, ct::kFogScene }, c2, stock) == ct::Action::General);
+                    CHECK(ct::Decide(ct::DrawIs{ false, ct::kFogUnknown }, c2, stock) == ct::Action::General);
+                    CHECK(ct::Decide(ct::DrawIs{ true, ct::kFogScene }, c2, stock) == ct::Action::Storm);
+                    // Were the two ever apart (a band shaded after the upload, say), the storm doodads still take theirs: by
+                    // name and fog mode, not by colour.
+                    float unshaded[3];
+                    clientC2(band, unshaded);
+                    if (!ct::MatchesStock(unshaded, stock))
+                    {
+                        CHECK(ct::Decide(ct::DrawIs{ true, ct::kFogScene }, unshaded, stock) == ct::Action::Storm);
+                        CHECK(ct::Decide(ct::DrawIs{ false, ct::kFogUnknown }, unshaded, stock) == ct::Action::Leave);
+                    }
+                }
+            // Heavy rain and snow do move band 8 (the case the match must follow).
+            CHECK(st::ShadeBand(Argb(0xFF, 0x52, 0x54, 0x52), st::kFogBand, Snow(1.0f)) != Argb(0xFF, 0x52, 0x54, 0x52));
+            CHECK(st::ShadeBand(Argb(0xFF, 0x52, 0x54, 0x52), st::kFogBand, HeavyRain(0.0f)) != Argb(0xFF, 0x52, 0x54, 0x52));
+        });
+
+        Test("cloud tint: a batch's own blend fog (black, white, grey, none) is kept; additive stays black even at a near-black night", []
+        {
+            float stock[3], black[3] = { 0, 0, 0 }, white[3] = { 1, 1, 1 }, grey[3];
+            for (float& g : grey) g = 128.0f * (1.0f / 255.0f);
+            ct::FromArgb(Argb(0xFF, 0x02, 0x03, 0x06), stock); // a night fog within the match of black
+            CHECK(ct::MatchesStock(black, stock));
+            for (int mode : { ct::kFogNone, ct::kFogBlack, ct::kFogWhite, ct::kFogGrey })
+            {
+                CHECK(ct::Decide(ct::DrawIs{ true, mode }, black, stock) == ct::Action::Leave);
+                CHECK(ct::Decide(ct::DrawIs{ false, mode }, black, stock) == ct::Action::Leave);
+            }
+            // Without the fog mode (the guards differ): a storm batch's blend colours are told by their exact values.
+            CHECK(ct::Decide(ct::DrawIs{ true, ct::kFogUnknown }, black, stock) == ct::Action::Leave);
+            CHECK(ct::Decide(ct::DrawIs{ true, ct::kFogUnknown }, white, stock) == ct::Action::Leave);
+            CHECK(ct::Decide(ct::DrawIs{ true, ct::kFogUnknown }, grey, stock) == ct::Action::Leave);
+            CHECK(ct::Decide(ct::DrawIs{ true, ct::kFogUnknown }, stock, stock) == ct::Action::Storm);
+            CHECK(ct::BlendModeColour(black) && ct::BlendModeColour(white) && ct::BlendModeColour(grey) && !ct::BlendModeColour(stock));
+            // Not an M2 batch (particles, the weather): the colour match, as before.
+            CHECK(ct::Decide(ct::DrawIs{}, stock, stock) == ct::Action::General);
+            const float other[3] = { 0.5f, 0.2f, 0.1f };
+            CHECK(ct::Decide(ct::DrawIs{}, other, stock) == ct::Action::Leave);
+            CHECK(ct::Decide(ct::DrawIs{ true, ct::kFogScene }, other, stock) == ct::Action::Storm); // the storm's own: any colour
+        });
+
+        Test("cloud tint: c2 through a window: swapped per draw, kept while the client doesn't set it, its value back at the end", []
+        {
+            float stock[3];
+            ct::FromArgb(Argb(0xFF, 0x00, 0x2D, 0x41), stock);
+            const float general[3] = { 0.10f, 0.20f, 0.30f }, storm[3] = { 0.26f, 0.29f, 0.38f };
+            ct::State s;
+            float c2[3] = { stock[0], stock[1], stock[2] };
+            bool dirty = false;
+            // A lightning batch: the client set the stock colour; ours goes in.
+            CHECK(ct::Step(s, c2, ct::DrawIs{ true, ct::kFogScene }, stock, general, storm, dirty) == ct::Action::Storm);
+            CHECK(dirty && ct::Same(c2, storm) && s.holds && ct::Same(s.client, stock));
+            // Its next draw (the client didn't set c2 again: the setter skips equal values): ours stays, nothing to upload.
+            CHECK(ct::Step(s, c2, ct::DrawIs{ true, ct::kFogScene }, stock, general, storm, dirty) == ct::Action::Storm);
+            CHECK(!dirty && ct::Same(c2, storm));
+            // A draw outside any batch that didn't set c2 either: its value is the client's (the stock colour), so the
+            // general colour, not ours mistaken for another fog colour.
+            CHECK(ct::Step(s, c2, ct::DrawIs{}, stock, general, storm, dirty) == ct::Action::General);
+            CHECK(dirty && ct::Same(c2, general) && ct::Same(s.client, stock));
+            // An additive batch: the client set black; left.
+            c2[0] = c2[1] = c2[2] = 0.0f;
+            CHECK(ct::Step(s, c2, ct::DrawIs{ false, ct::kFogBlack }, stock, general, storm, dirty) == ct::Action::Leave);
+            CHECK(!dirty && c2[0] == 0.0f && !s.holds);
+            // A batch with a known mode other than the scene's while c2 still held ours: the client's value goes back.
+            for (int i = 0; i < 3; ++i) c2[i] = stock[i];
+            CHECK(ct::Step(s, c2, ct::DrawIs{ true, ct::kFogScene }, stock, general, storm, dirty) == ct::Action::Storm);
+            CHECK(ct::Step(s, c2, ct::DrawIs{ false, ct::kFogWhite }, stock, general, storm, dirty) == ct::Action::Leave);
+            CHECK(dirty && ct::Same(c2, stock) && !s.holds);
+            // The window's end: the client's value back where ours still is.
+            CHECK(ct::Step(s, c2, ct::DrawIs{ true, ct::kFogScene }, stock, general, storm, dirty) == ct::Action::Storm);
+            CHECK(ct::End(s, c2) && ct::Same(c2, stock) && !s.holds);
+            CHECK(!ct::End(s, c2)); // twice: nothing
+            // The client set another value after our last write: not ours, left alone at the end.
+            CHECK(ct::Step(s, c2, ct::DrawIs{ true, ct::kFogScene }, stock, general, storm, dirty) == ct::Action::Storm);
+            c2[0] = 0.7f;
+            CHECK(!ct::End(s, c2) && c2[0] == 0.7f);
+            // A general colour equal to the client's (cover 0): held, nothing uploaded, nothing to give back.
+            for (int i = 0; i < 3; ++i) c2[i] = stock[i];
+            CHECK(ct::Step(s, c2, ct::DrawIs{}, stock, stock, storm, dirty) == ct::Action::General);
+            CHECK(!dirty && !ct::End(s, c2) && ct::Same(c2, stock));
+        });
+
         Test("bolt matrix: scaled, turned about the vertical, standing at the strike", []
         {
             const float pos[3] = { 100.0f, -200.0f, 50.0f };
@@ -919,6 +1087,41 @@ int main(int argc, char** argv)
                 CheckGuards(im, st::kModelGuards);
                 CheckGuards(im, st::kSoundGuards);
                 CheckGuards(im, st::kSnowGuards);
+                CheckGuards(im, ct::kGuards);
+                // The cloud tint's: both M2 batch draws call the material setup, which stores the fog mode it switches on;
+                // alpha blending (the lightning's) takes the scene's colour, the additive modes black; and the fog setter
+                // pushes the colour it built (0xD43058) for pixel constant 2.
+                {
+                    auto callAt = [&](uintptr_t at)
+                    {
+                        const auto* c = static_cast<const uint8_t*>(im.At(at, 5));
+                        CHECK(c && c[0] == 0xE8);
+                        int32_t r = 0;
+                        std::memcpy(&r, c + 1, 4);
+                        return static_cast<uintptr_t>(at + 5 + r);
+                    };
+                    CHECK(callAt(0x0082040D) == ct::kMaterialSetup && callAt(0x00820B3E) == ct::kMaterialSetup);
+                    const auto* modes = static_cast<const uint8_t*>(im.At(ct::kBlendFogModes, 32));
+                    CHECK(modes);
+                    for (int b = 0; b < 8; ++b)
+                    {
+                        uint32_t m = 0;
+                        std::memcpy(&m, modes + 4 * b, 4);
+                        CHECK(m == ct::kBlendFogModeTable[b]);
+                    }
+                    CHECK(ct::kBlendFogModeTable[2] == static_cast<uint32_t>(ct::kFogScene) && ct::kBlendFogModeTable[4] == static_cast<uint32_t>(ct::kFogBlack));
+                    // The store is right after the table read in the setup: mov [esi+0x80], eax (esi: the context).
+                    const auto* store = static_cast<const uint8_t*>(im.At(0x0081FB88, 6));
+                    uint32_t disp = 0;
+                    std::memcpy(&disp, store + 2, 4);
+                    CHECK(disp == ct::kCtxFogMode);
+                    const auto* setup = static_cast<const uint8_t*>(im.At(ct::kMaterialSetup, 10));
+                    CHECK(setup && setup[7] == 0x56 && setup[8] == 0x8B && setup[9] == 0xF1); // push esi; mov esi, ecx
+                    const auto* push = static_cast<const uint8_t*>(im.At(0x008732D9, 5));
+                    uint32_t buffer = 0;
+                    std::memcpy(&buffer, push + 1, 4);
+                    CHECK(push[0] == 0x68 && buffer == 0x00D43058u);
+                }
                 // PlaySoundKit resets its own defaults with the same function (0x4C6ACD), and the listener getter we call
                 // is the one the sound interface's own (0x4C5B4B) calls.
                 auto callTarget = [&](uintptr_t at)
@@ -956,8 +1159,9 @@ int main(int argc, char** argv)
                 CHECK(scene == st::kWorldScene);
                 std::memcpy(&rel, spawn + 7, 4);
                 CHECK(static_cast<uintptr_t>(0x007BEEC8 + 11 + rel) == st::kCreateModel);
-                std::printf("  %zu + %zu + %zu + %zu guards\n", sizeof(st::kBandGuards) / sizeof(st::kBandGuards[0]), sizeof(st::kModelGuards) / sizeof(st::kModelGuards[0]),
-                            sizeof(st::kSoundGuards) / sizeof(st::kSoundGuards[0]), sizeof(st::kSnowGuards) / sizeof(st::kSnowGuards[0]));
+                std::printf("  %zu + %zu + %zu + %zu + %zu guards\n", sizeof(st::kBandGuards) / sizeof(st::kBandGuards[0]), sizeof(st::kModelGuards) / sizeof(st::kModelGuards[0]),
+                            sizeof(st::kSoundGuards) / sizeof(st::kSoundGuards[0]), sizeof(st::kSnowGuards) / sizeof(st::kSnowGuards[0]),
+                            sizeof(ct::kGuards) / sizeof(ct::kGuards[0]));
             });
         }
         else std::printf("SKIP guards (no Wow.exe given)\n");
