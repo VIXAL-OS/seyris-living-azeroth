@@ -119,6 +119,7 @@ namespace
         wxl_livingazeroth::lighttable::Load(cdbc);
         wxl_livingazeroth::windows::Load(cdbc);
         wxl_livingazeroth::glass::Load(cdbc);
+        wxl_livingazeroth::glass::LogLoad(g_api);
         wxl_livingazeroth::crystal::Load(cdbc);
         wxl_livingazeroth::debug::SetLightsCdbc(cdbc);
         wxl_livingazeroth::debug::SetLightEditorCdbc(cdbc);

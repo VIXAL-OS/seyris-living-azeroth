@@ -546,8 +546,8 @@ and, with an exact hash the window lights share, whether it's dark or lit.
 | Field | Meaning |
 |---|---|
 | ID | row id (GlassBuildings.Style) |
-| Class | 0 other, 1 house, 2 farm, 3 inn, 4 shop (smithy, bank, lab, trade), 5 temple, 6 keep (barracks, towers, walls, town halls, dungeons), 7 tower (mage towers: books), 8 city (a city's mixed buildings), 9 ship; Ironforge's parts: 10 forge (the Great Forge, the smithies), 11 commons (the ring road's shops, the bank, the inn, the halls, the High Seat, the gates), 12 quarter (the Military and Mystic Wards' homes), 13 cavern (the Forlorn Cavern). For the editor (and the panel's line); the columns below are what's read |
-| Palette | the generator's palette (PALETTES in gen_glass.py); for the editor |
+| Class | 0 other, 1 house, 2 farm, 3 inn, 4 shop (smithy, bank, lab, trade), 5 temple, 6 keep (barracks, towers, walls, town halls, dungeons), 7 tower (mage towers: books), 8 city (a city's mixed buildings), 9 ship; Ironforge's parts: 10 forge (the Great Forge, the smithies), 11 commons (the ring road's shops, the bank, the inn, the halls, the High Seat, the gates), 12 quarter (the Military and Mystic Wards' homes), 13 cavern (the Forlorn Cavern). Read: the rooms' depth and furniture, and with the palette the texture set (a farm or ship of the human palette the rustic one, Ironforge's parts the dwarven); the panel's line |
+| Palette | the generator's palette (PALETTES in gen_glass.py): the rooms' texture set (with the class) |
 | TintR/G/B, Tint2R/G/B | the rooms' colour by day at the two ends of a building's range: each building (in a city, each 14-yd block) picks a point between them by its hash |
 | LampR/G/B | the lamp at night (any brightness: the runtime makes a lit room as bright as the client's lit window) |
 | CurtainR/G/B | the curtains' cloth |

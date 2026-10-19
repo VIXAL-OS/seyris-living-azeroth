@@ -47,6 +47,13 @@ namespace wxl_livingazeroth::cdbcload
 
     inline float BitsToFloat(uint32_t b) { float f; std::memcpy(&f, &b, sizeof(f)); return f; }
 
+    /// A whole-number column, or `missing` when the file doesn't have it. Value's last argument is the array element
+    /// (always 0: the reader has no array fields and reads 0 for any other), not a default: a default goes here.
+    inline uint32_t Uint(const WXL_SeyrisCdbcApi* cdbc, void* table, const void* row, const char* field, uint32_t missing)
+    {
+        return Has(cdbc, table, field) ? cdbc->Value(table, row, field, 0) : missing;
+    }
+
     /// A float column, or `missing` when the file doesn't have it.
     inline float Float(const WXL_SeyrisCdbcApi* cdbc, void* table, const void* row, const char* field, float missing)
     {

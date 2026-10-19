@@ -91,6 +91,11 @@ namespace wxl_livingazeroth::glass
     /// reload button calls it too).
     void Load(const WXL_SeyrisCdbcApi* cdbc);
     const char* Status();
+    /// Status() to the log (wxl-core.log): each table's rows and what Load kept of them; a warning when a table is
+    /// missing or no rooms came of them (no windows kept, no placements). After each Load.
+    void LogLoad(const WXL_Api* api);
+    /// Whether the last Load warned (LogLoad's level).
+    bool LoadProblem();
     uint32_t    Generation();   // changes on every load
 
     /// One glass batch's constants (c192..c205, GlassShader.hpp): its material's look, seen from inside by `inside`

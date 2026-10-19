@@ -251,6 +251,8 @@ namespace wxl_livingazeroth::glass
         /// The row with this GlassBuildings ID (null: none).
         const Building* ById(uint32_t id) const;
         size_t Placements() const { return m_placements; }
+        /// A city's group rows found under a placement.
+        size_t Groups() const { return m_groups.size(); }
         size_t Size() const { return m_rows.size(); }
 
     private:

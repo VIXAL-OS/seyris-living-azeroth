@@ -140,6 +140,7 @@ namespace wxl_livingazeroth::glass
         std::unordered_map<uint32_t, uint32_t> g_materialById;   // GlassMaterials ID -> index + 1
         PaneIndex g_panes;
         std::string g_status = "not loaded yet", g_line;
+        bool g_loadProblem = false;              // the last Load missed a table, or kept no windows or no placements
         uint32_t g_generation = 1;
 
         // This frame.
@@ -844,7 +845,15 @@ namespace wxl_livingazeroth::glass
         g_styles.clear();
         g_styleById.clear();
         g_building = nullptr;
-        if (!cdbc || !cdbc->HasFeature("cdbc-load")) { g_status = "wxl-seyris-tools (cdbc) not available"; g_panes.Build({}); g_buildings.Build({}); g_windows.Build({}); g_tableDirty = true; return; }
+        g_loadProblem = false;
+        if (!cdbc || !cdbc->HasFeature("cdbc-load"))
+        {
+            g_status = "wxl-seyris-tools (cdbc) not available";
+            g_windowStatus = "GlassWindows.cdbc: not read, wxl-seyris-tools (cdbc) not available (no rooms behind the glass)";
+            g_loadProblem = true;
+            g_panes.Build({}); g_buildings.Build({}); g_windows.Build({}); g_tableDirty = true;
+            return;
+        }
         char err[256] = {};
         std::string status;
         if (void* t = cdbcload::LoadAppendOnly(cdbc, kMaterialDef, err, sizeof(err)))
@@ -885,7 +894,7 @@ namespace wxl_livingazeroth::glass
                           static_cast<unsigned>(g_materials.size()), backlitTextures);
             status = line;
         }
-        else status = std::string("GlassMaterials.cdbc: ") + (err[0] ? err : "not found") + " (no glass)";
+        else { status = std::string("GlassMaterials.cdbc: ") + (err[0] ? err : "not found") + " (no glass)"; g_loadProblem = true; }
 
         std::vector<Pane> panes;
         err[0] = 0;
@@ -932,7 +941,7 @@ namespace wxl_livingazeroth::glass
             std::snprintf(line, sizeof(line), "; GlassPanes.cdbc: %u panes (%u titan panes lit from behind)", static_cast<unsigned>(panes.size()), g_backlitPanes);
             status += line;
         }
-        else status += std::string("; GlassPanes.cdbc: ") + (err[0] ? err : "not found") + " (no floor light, no coloured shafts)";
+        else { status += std::string("; GlassPanes.cdbc: ") + (err[0] ? err : "not found") + " (no floor light, no coloured shafts)"; g_loadProblem = true; }
 
         // The rooms: their styles and the buildings.
         g_styles.clear();
@@ -947,7 +956,7 @@ namespace wxl_livingazeroth::glass
                 if (!row) continue;
                 RoomStyle s;
                 s.id = cdbc->Value(t, row, "ID", 0);
-                s.cls = cdbc->Value(t, row, "Class", kClassHouse);
+                s.cls = cdbcload::Uint(cdbc, t, row, "Class", kClassHouse);
                 s.palette = cdbc->Value(t, row, "Palette", 0);
                 const char* cols[4][3] = { { "TintR", "TintG", "TintB" }, { "Tint2R", "Tint2G", "Tint2B" }, { "LampR", "LampG", "LampB" },
                                            { "CurtainR", "CurtainG", "CurtainB" } };
@@ -965,12 +974,17 @@ namespace wxl_livingazeroth::glass
                 g_styles.push_back(s);
             }
             cdbc->Release(t);
+            bool seen[kClassCount + 1] = {};
+            unsigned classes = 0;
+            for (const RoomStyle& s : g_styles) { bool& b = seen[s.cls < kClassCount ? s.cls : kClassCount]; classes += b ? 0 : 1; b = true; }
             char line[96];
-            std::snprintf(line, sizeof(line), "; RoomStyles.cdbc: %u styles", static_cast<unsigned>(g_styles.size()));
+            std::snprintf(line, sizeof(line), "; RoomStyles.cdbc: %u styles (%u classes)", static_cast<unsigned>(g_styles.size()), classes);
             status += line;
         }
-        else status += std::string("; RoomStyles.cdbc: ") + (err[0] ? err : "not found") + " (every room the same)";
+        else { status += std::string("; RoomStyles.cdbc: ") + (err[0] ? err : "not found") + " (every room the same)"; g_loadProblem = true; }
         std::vector<Building> buildings;
+        bool buildingsRead = false;
+        unsigned wmoDefaults = 0;
         err[0] = 0;
         if (void* t = g_styles.empty() ? nullptr : cdbcload::LoadAppendOnly(cdbc, kBuildingDef, err, sizeof(err)))
         {
@@ -983,31 +997,46 @@ namespace wxl_livingazeroth::glass
                 b.map = cdbc->Value(t, row, "MapID", 0);
                 b.uniqueId = cdbc->Value(t, row, "UniqueID", 0);
                 b.pos[0] = F(row, "PosX", 0.0f); b.pos[1] = F(row, "PosY", 0.0f); b.pos[2] = F(row, "PosZ", 0.0f);
-                b.group = cdbc->Value(t, row, "Group", kWholePlacement);
+                b.group = cdbcload::Uint(cdbc, t, row, "Group", kWholePlacement);
                 b.style = cdbc->Value(t, row, "Style", 0);
                 b.seed = cdbc->Value(t, row, "Seed", 0);
                 b.flags = cdbc->Value(t, row, "Flags", 0);
                 b.area = cdbc->Value(t, row, "AreaID", 0);
                 b.id = cdbc->Value(t, row, "ID", 0);
                 b.path = PathHash(cdbc->GetString(t, row, "Wmo"));
+                wmoDefaults += b.uniqueId ? 0 : 1;
                 buildings.push_back(b);
             }
             cdbc->Release(t);
-            char line[128];
-            std::snprintf(line, sizeof(line), "; GlassBuildings.cdbc: %u rows", static_cast<unsigned>(buildings.size()));
-            status += line;
+            buildingsRead = true;
         }
-        else if (!g_styles.empty()) status += std::string("; GlassBuildings.cdbc: ") + (err[0] ? err : "not found") + " (every building the default house)";
+        else if (!g_styles.empty()) { status += std::string("; GlassBuildings.cdbc: ") + (err[0] ? err : "not found") + " (every building the default house)"; g_loadProblem = true; }
         g_buildings.Build(std::move(buildings));
         g_building = nullptr;
+        if (buildingsRead)
+        {
+            // The rows as the index uses them: placements (found where an instance stands), a city's groups under them,
+            // a WMO's default (instances not placed in the table). No placements from rows that have unique IDs: the
+            // rooms fall back to their WMO's default everywhere.
+            char line[160];
+            std::snprintf(line, sizeof(line), "; GlassBuildings.cdbc: %u rows: %u placements, %u city groups, %u WMO defaults",
+                          static_cast<unsigned>(g_buildings.Size()), static_cast<unsigned>(g_buildings.Placements()),
+                          static_cast<unsigned>(g_buildings.Groups()), wmoDefaults);
+            status += line;
+            if (g_buildings.Placements() == 0 && g_buildings.Size() > wmoDefaults) { status += " (none placed: every building by its WMO)"; g_loadProblem = true; }
+        }
 
         // One room per window: the windows (their WMO's space), the lookup table the shader reads.
         std::vector<Window> windows;
+        unsigned windowRows = 0, noWmo = 0, otherKind = 0;
+        bool windowsRead = false;
         err[0] = 0;
         if (void* t = cdbcload::LoadAppendOnly(cdbc, kWindowDef, err, sizeof(err)))
         {
             auto F = [&](const void* row, const char* f, float missing) { return cdbcload::Float(cdbc, t, row, f, missing); };
-            for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
+            windowsRead = true;
+            windowRows = cdbc->RowCount(t);
+            for (uint32_t i = 0, n = windowRows; i < n; ++i)
             {
                 const void* row = cdbc->RowAt(t, i);
                 if (!row) continue;
@@ -1015,7 +1044,7 @@ namespace wxl_livingazeroth::glass
                 w.path = PathHash(cdbc->GetString(t, row, "Wmo"));
                 w.group = cdbc->Value(t, row, "Group", 0);
                 w.ordinal = cdbc->Value(t, row, "Ordinal", 0);
-                w.kind = cdbc->Value(t, row, "Kind", Kind::kClear);
+                w.kind = cdbcload::Uint(cdbc, t, row, "Kind", Kind::kClear);
                 w.flags = cdbc->Value(t, row, "Flags", 0);
                 const char* c[3] = { "CenterX", "CenterY", "CenterZ" };
                 const char* nn[3] = { "NormalX", "NormalY", "NormalZ" };
@@ -1023,7 +1052,10 @@ namespace wxl_livingazeroth::glass
                 w.halfWidth = F(row, "HalfWidth", 0.0f);
                 w.halfHeight = F(row, "HalfHeight", 0.0f);
                 w.thickness = F(row, "Thickness", 0.0f);
-                if (w.path && (w.kind == Kind::kClear || w.kind == kLeaded || w.kind == kFrosted)) windows.push_back(w);
+                const bool kind = w.kind == Kind::kClear || w.kind == kLeaded || w.kind == kFrosted;
+                noWmo += w.path ? 0 : 1;
+                otherKind += w.path && !kind ? 1 : 0;
+                if (w.path && kind) windows.push_back(w);
             }
             cdbc->Release(t);
         }
@@ -1031,20 +1063,38 @@ namespace wxl_livingazeroth::glass
         g_windows.Build(std::move(windows));
         g_tableDirty = true;
         {
-            char line[200];
+            char line[400];
             if (haveWindows)
                 std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %u windows in %u WMO groups (a table of %d x %d)",
                               static_cast<unsigned>(g_windows.Windows()), static_cast<unsigned>(g_windows.Grids()), rooms::kWidth, g_windows.Height());
+            else if (windowsRead)
+                std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %u rows, no window kept (no rooms behind the glass)", windowRows);
             else
                 std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %s (no rooms behind the glass)", err[0] ? err : "not found");
-            g_windowStatus = line;
-            status += std::string("; ") + line;
+            std::string s = line;
+            // Rows left out: no WMO path (a WMO's windows are found by it) or a kind that has no room (none, stained).
+            if (noWmo || otherKind)
+            {
+                std::snprintf(line, sizeof(line), "; %u rows left out: %u without a WMO, %u not clear, leaded or frosted glass", noWmo + otherKind, noWmo, otherKind);
+                s += line;
+            }
+            g_loadProblem = g_loadProblem || !haveWindows;
+            g_windowStatus = s;
+            status += "; " + s;
         }
         g_status = status;
         g_panes.Build(std::move(panes));
         g_near.clear();
         g_floorPanes = 0;
     }
+
+    void LogLoad(const WXL_Api* api)
+    {
+        if (!api || !api->Log) return;
+        api->Log(g_loadProblem ? WXL_LOG_WARN : WXL_LOG_INFO, "wxl-seyris-living-azeroth", "glass: tables loaded: %s", g_status.c_str());
+    }
+
+    bool LoadProblem() { return g_loadProblem; }
 
     uint32_t MaterialOf(const char* texturePath)
     {
@@ -1451,12 +1501,14 @@ namespace wxl_livingazeroth::glass
     const char* WindowLine()
     {
         static std::string line;
-        int loaded = 0, failed = 0;
-        for (const SetTextures& st : g_sets) { loaded += st.state == 2 ? 1 : 0; failed += st.state == 3 ? 1 : 0; }
-        char buf[512];
-        std::snprintf(buf, sizeof(buf), "%s; on the device: table %s, atlas %s; texture sets loaded %d of %d (%d failed%s%s); last frame %u glass batches "
+        // A set loads the first time a batch drawn wants it (its building's palette and class), one a frame: those
+        // waiting are wanted and not loaded yet, the rest no batch has wanted (no building of theirs drawn).
+        int loaded = 0, failed = 0, waiting = 0;
+        for (const SetTextures& st : g_sets) { loaded += st.state == 2 ? 1 : 0; failed += st.state == 3 ? 1 : 0; waiting += st.state == 1 ? 1 : 0; }
+        char buf[768];
+        std::snprintf(buf, sizeof(buf), "%s; on the device: table %s, atlas %s; texture sets loaded %d of %d (%d waiting, %d failed%s%s); last frame %u glass batches "
                       "with rooms, %u without a placement frame, %u whose group has no windows",
-                      g_windowStatus.c_str(), g_tableTex ? "yes" : "no", g_atlasTex ? "yes" : "no", loaded, kTextureSets, failed,
+                      g_windowStatus.c_str(), g_tableTex ? "yes" : "no", g_atlasTex ? "yes" : "no", loaded, kTextureSets, waiting, failed,
                       g_textureError.empty() ? "" : ": ", g_textureError.c_str(), g_lastRoomBatches, g_lastNoFrame, g_lastNoGrid);
         line = buf;
         return line.c_str();
