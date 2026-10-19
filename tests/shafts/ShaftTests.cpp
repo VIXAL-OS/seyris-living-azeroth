@@ -7,9 +7,13 @@
 // --no-gpu on WARP (the CPU rasterizer behind D3D9On12): an occluder between a pixel and the sun darkens its shaft and
 // nothing beside it, branches breaking the line into gaps brighten it a little and the open sky not at all, the
 // deck's shadow only ever darkens the in-scatter, the composite adds nothing when the parts are off, never more than
-// its cap and less over near surfaces -- and on the GPU what the pass costs at 1920 x 1080. No game.
+// its cap and less over near surfaces; what stands in the sun's way (TerrainBlocks): a mountain in front of the sun
+// (Bor's Fall, the screenshots) keeps its face dark with the light round its peak, trees keep their shafts, the open
+// sky is as it was, the in-scatter fades where its shadow test can't see, nothing goes black (no NaN) -- and on the GPU
+// what the pass costs at 1920 x 1080. No game.
 //
-// Usage:  shafts_tests [<Wow.exe>] [--no-gpu] [--no-warp]
+// Usage:  shafts_tests [<Wow.exe>] [--no-gpu] [--no-warp] [--images <dir>]
+//         --images: the drawn scenes as BMPs, before (TerrainBlocks 0, the old shaders' look exactly) and after.
 #include "env/ShaftModel.hpp"
 #include "env/SkyPath.hpp"
 #include "features/SunShaftShaders.hpp"
@@ -38,10 +42,17 @@ namespace sky = wxl_livingazeroth::sky;
 
 namespace
 {
-    unsigned g_passed = 0;
+    unsigned g_passed = 0, g_failed = 0;
+    // One check: a failure is reported and the rest still run (the drawn ones each draw their own scene).
     template <class F> void Test(const char* name, F f)
     {
-        f();
+        try { f(); }
+        catch (const std::exception& e)
+        {
+            ++g_failed;
+            std::printf("FAIL %s: %s\n", name, e.what());
+            return;
+        }
         ++g_passed;
         std::printf("PASS %s\n", name);
     }
@@ -67,6 +78,30 @@ namespace
         in.night = SkyNight(hour);
         in.sunHeight = sunHeight;
         return in;
+    }
+
+    // Bor's Fall in the Storm Peaks (the screenshots): Fogginess 0.8, light snow, below its cloud deck (1040 .. 1950; the
+    // camera at ~800), the sky over it mostly overcast. The panel's two parts at an hour, as features/SunShafts works
+    // them out: the screen-space part (x the sky's sun's horizon fade; the sun on the screen) and the in-scatter under
+    // the deck.
+    struct Parts { float total = 0, horizon = 0, screen = 0, volume = 0, sunUp = 0, lightUp = 0, airPerYard = 0; };
+    Parts BorsFall(float hour)
+    {
+        float light[3], sun[3];
+        sky::LightToward(hour / 24.0f, light);
+        sky::SunToward(hour / 24.0f, sun);
+        sm::Inputs in = Place(0.8f, hour, light[2]);
+        in.precipitation = 0.3f;
+        const sm::Strength st = sm::Evaluate(in);
+        Parts p;
+        p.total = st.total;
+        p.horizon = sm::HorizonFade(sun[2]);
+        p.screen = st.total * p.horizon;
+        p.volume = light[2] > 0.05f ? st.total * sm::UnderDeck(800.0f, 1040.0f, 1950.0f) * (0.25f + 0.75f * 0.8f) : 0.0f;
+        p.sunUp = std::asin(std::clamp(sun[2], -1.0f, 1.0f)) * 57.29578f;
+        p.lightUp = std::asin(std::clamp(light[2], -1.0f, 1.0f)) * 57.29578f;
+        p.airPerYard = st.airPerYard;
+        return p;
     }
 
     // --- matrices as the client keeps them: row vectors (clip = p x view x proj), OpenGL-style depth, w = view depth
@@ -445,19 +480,30 @@ namespace
 
     // The scene's depth: 0..kMaxZ for the world (OpenGL-style: ndc = m22 + m32 / z), 1 for the sky.
     float DepthOf(const float proj[16], float z) { return kMaxZ * ((proj[10] + proj[14] / z) * 0.5f + 0.5f); }
+    float ViewZOf(const float proj[16], float d) { return proj[14] / ((d / kMaxZ) * 2.0f - 1.0f - proj[10]); }
 
-    // A depth picture: the sky above `groundFrom` (share of the height), the ground below; `box` (x0, y0, x1, y1, z)
-    // an occluder over it; `canopy`: branches 6 yd off across the top (rows 120 .. 400), 30 px wide with 30 px gaps.
-    IDirect3DTexture9* DepthTexture(IDirect3DDevice9* dev, const float proj[16], float groundFrom, const float* box, bool canopy = false)
+    // A depth picture, kept here for the images (tests/shafts --images).
+    using Picture = std::vector<float>;
+
+    IDirect3DTexture9* Upload(IDirect3DDevice9* dev, const Picture& p)
     {
         IDirect3DTexture9* t = nullptr;
         if (FAILED(dev->CreateTexture(kW, kH, 1, 0, D3DFMT_R32F, D3DPOOL_MANAGED, &t, nullptr))) throw std::runtime_error("no R32F texture");
         D3DLOCKED_RECT lr{};
         t->LockRect(0, &lr, nullptr, 0);
+        for (UINT y = 0; y < kH; ++y) std::memcpy(static_cast<uint8_t*>(lr.pBits) + y * lr.Pitch, &p[y * kW], kW * sizeof(float));
+        t->UnlockRect(0);
+        return t;
+    }
+
+    // The sky above `groundFrom` (share of the height), the ground below: from 300 yd at the horizon to 4 yd at the
+    // bottom; `box` (x0, y0, x1, y1, z) an occluder over it; `canopy`: branches 6 yd off across the top (rows 120 .. 400),
+    // 30 px wide with 30 px gaps.
+    Picture GroundPicture(const float proj[16], float groundFrom, const float* box, bool canopy = false)
+    {
+        Picture p(kW * kH);
         for (UINT y = 0; y < kH; ++y)
         {
-            float* row = reinterpret_cast<float*>(static_cast<uint8_t*>(lr.pBits) + y * lr.Pitch);
-            // Below groundFrom (share of the height): ground, from 300 yd at the horizon to 4 yd at the bottom.
             const float g = (static_cast<float>(y) / kH - groundFrom) / (1.0f - groundFrom);
             const float rowDepth = g < 0.0f ? 1.0f : DepthOf(proj, 300.0f * std::pow(4.0f / 300.0f, g));
             for (UINT x = 0; x < kW; ++x)
@@ -465,11 +511,95 @@ namespace
                 float d = rowDepth;
                 if (box && x >= box[0] && x < box[2] && y >= box[1] && y < box[3]) d = DepthOf(proj, box[4]);
                 if (canopy && y >= 120 && y < 400 && (x / 30) % 2 == 0) d = DepthOf(proj, 6.0f);
-                row[x] = d;
+                p[y * kW + x] = d;
             }
         }
-        t->UnlockRect(0);
-        return t;
+        return p;
+    }
+    IDirect3DTexture9* DepthTexture(IDirect3DDevice9* dev, const float proj[16], float groundFrom, const float* box, bool canopy = false)
+    {
+        return Upload(dev, GroundPicture(proj, groundFrom, box, canopy));
+    }
+
+    // A mountain in front of the sun, as at Bor's Fall in the Storm Peaks (the screenshots): its ridge from the peak at
+    // (960, ~175) down to both sides, jagged; its face from 700 yd at the ridge to 330 at the bottom of the screen, with
+    // gullies; the sky above. The sun (960, 250) is behind the peak.
+    float Ridge(float x) { return 175.0f + 0.5f * std::fabs(x - 960.0f) + 14.0f * std::sin(x * 0.031f) + 7.0f * std::sin(x * 0.093f + 1.3f); }
+    Picture MountainPicture(const float proj[16])
+    {
+        Picture p(kW * kH);
+        for (UINT y = 0; y < kH; ++y)
+            for (UINT x = 0; x < kW; ++x)
+            {
+                const float r = Ridge(static_cast<float>(x));
+                float d = 1.0f;
+                if (y >= r)
+                {
+                    const float down = (y - r) / (kH - r);
+                    d = DepthOf(proj, (700.0f + (330.0f - 700.0f) * down) * (1.0f + 0.04f * std::sin(x * 0.045f)));
+                }
+                p[y * kW + x] = d;
+            }
+        return p;
+    }
+
+    // Trees, as in Duskwood or Felwood: trunks 10 .. 18 yd off, 36 px wide every 110 px, from the ground up past the top
+    // of the screen; a fogged hillside 250 .. 400 yd off from row ~470 down to the ground (594); the sky between. The sun
+    // (960, 250) is in a gap.
+    bool Trunk(UINT x) { return (x + 70) % 110 < 36; }
+    Picture TreesPicture(const float proj[16])
+    {
+        Picture p = GroundPicture(proj, 0.55f, nullptr);
+        for (UINT y = 0; y < kH; ++y)
+            for (UINT x = 0; x < kW; ++x)
+            {
+                const float hill = 470.0f + 25.0f * std::sin(x * 0.006f) + 10.0f * std::sin(x * 0.021f);
+                if (y >= hill && y < 594) p[y * kW + x] = DepthOf(proj, 400.0f - 150.0f * (y - hill) / (594.0f - hill));
+                if (Trunk(x) && y < 700) p[y * kW + x] = DepthOf(proj, 10.0f + 8.0f * static_cast<float>((x + 70) / 110 * 37 % 10) / 10.0f);
+            }
+        return p;
+    }
+
+    // The scene's own colours from its depth (the sky lavender, far things snow-pale in the haze, near ones dark), with
+    // the light the composite added over its grey (64): a picture for the eye, as a 24-bit BMP.
+    void WriteImage(const std::string& path, const Picture& depth, const float proj[16], const std::vector<uint32_t>& frame)
+    {
+        const uint32_t row = (kW * 3 + 3) & ~3u, size = 54 + row * kH;
+        uint8_t hdr[54] = { 'B', 'M' };
+        auto put32 = [&](int at, uint32_t v) { for (int i = 0; i < 4; ++i) hdr[at + i] = static_cast<uint8_t>(v >> (8 * i)); };
+        put32(2, size); put32(10, 54); put32(14, 40); put32(18, kW); put32(22, kH);
+        hdr[26] = 1; hdr[28] = 24; put32(34, row * kH);
+        FILE* f = std::fopen(path.c_str(), "wb");
+        if (!f) throw std::runtime_error("can't write " + path);
+        std::fwrite(hdr, 1, 54, f);
+        std::vector<uint8_t> line(row, 0);
+        for (UINT yy = 0; yy < kH; ++yy)
+        {
+            const UINT y = kH - 1 - yy;
+            for (UINT x = 0; x < kW; ++x)
+            {
+                const float d = depth[y * kW + x];
+                float c[3];
+                if (d >= 1.0f)
+                {
+                    const float t = static_cast<float>(y) / kH;
+                    const float top[3] = { 0.40f, 0.40f, 0.60f }, low[3] = { 0.66f, 0.64f, 0.82f };
+                    for (int i = 0; i < 3; ++i) c[i] = top[i] + (low[i] - top[i]) * t;
+                }
+                else
+                {
+                    const float z = ViewZOf(proj, d);
+                    const float nearC[3] = { 0.15f, 0.15f, 0.18f }, farC[3] = { 0.78f, 0.80f, 0.88f }, fogC[3] = { 0.60f, 0.58f, 0.76f };
+                    const float fog = 1.0f - std::exp(-z * 0.0022f), what = std::clamp((z - 30.0f) / 150.0f, 0.0f, 1.0f);
+                    for (int i = 0; i < 3; ++i) c[i] = (nearC[i] + (farC[i] - nearC[i]) * what) * (1.0f - fog) + fogC[i] * fog;
+                }
+                const float add = std::max(((frame[y * kW + x] >> 16) & 0xFF) / 255.0f - 64.0f / 255.0f, 0.0f);
+                const float tint[3] = { 0.92f, 0.92f, 1.0f };
+                for (int i = 0; i < 3; ++i) line[x * 3 + 2 - i] = static_cast<uint8_t>(std::lround(std::clamp(c[i] + add * tint[i], 0.0f, 1.0f) * 255.0f));
+            }
+            std::fwrite(line.data(), 1, row, f);
+        }
+        std::fclose(f);
     }
 
     struct PassSetup
@@ -486,7 +616,40 @@ namespace
         bool  smooth = true;
         float gapBoost = 0.5f;   // features/SunShafts kGapBoost
         float shaftGain = 0.6f, volumeGain = 0.5f, cap = 0.6f;
+        bool  occlusion = true;  // what stands in the sun's way blocks the shafts (TerrainBlocks); off: the old look
+        const float* lightView = nullptr; // toward the light (the in-scatter's), view space; null: the sun's
+        bool  sourceOnly = false; // stop after the source (its quarter-resolution target)
     };
+
+    // The source pass's constants, packed as features/SunShafts packs them. The camera at the origin looking along +x
+    // (the world rows: view x -> world -y, y -> z, z -> x).
+    void SourceConstants(const PassSetup& s, float c[17 * 4])
+    {
+        namespace ss = wxl_livingazeroth::sunshafts;
+        const float* lv = s.lightView ? s.lightView : s.sunView;
+        const float lightWorld[3] = { lv[2], -lv[0], lv[1] };
+        const float* lw = s.lightView ? lightWorld : s.sunWorld;
+        const float k[17 * 4] = {
+            0.0f, 1.0f / kMaxZ, kMaxZ + 1.0e-4f, 0.0f,
+            s.proj[0], s.proj[5], s.proj[8], s.proj[9],
+            s.proj[10], s.proj[14], 1000.0f, s.airPerYard,
+            0.0f, 0.0f, 1.0f, 1.0f,
+            4.0f / kW, 4.0f / kH, 1.0f / kW, 1.0f / kH,
+            s.sunView[0], s.sunView[1], s.sunView[2], s.source ? 1.0f : 0.0f,
+            0.0f, 0.0f, 1.0f, 1.0f,
+            0.0f, -1.0f, 0.0f, 0.0f,   // view x -> world -y
+            0.0f, 0.0f, 1.0f, 0.0f,    // view y -> world z
+            1.0f, 0.0f, 0.0f, 0.0f,    // view z -> world x
+            0.0f, 0.0f, 0.0f, s.volume ? 1.0f : 0.0f,
+            200.0f, 320.0f, s.deckDensity, 1.0f / 600.0f,
+            0.3f, 600.0f, 2.0f, 1200.0f,
+            0.1f, 0.2f, 0.3f, 0.01f,
+            lw[0], lw[1], lw[2], 12.0f,
+            lv[0], lv[1], lv[2], s.occlusion ? 1.0f + ss::kThickness : 0.0f,
+            s.occlusion ? ss::kSurfaceAir : 1.0f, s.occlusion ? ss::kSunFadeFrom : 2.0f, s.occlusion ? ss::kSunFadeTo : 3.0f, s.occlusion ? ss::kUnsure : 1.0f,
+        };
+        std::memcpy(c, k, sizeof(k));
+    }
 
     // The source, the blurs and (optionally) the composite, constants packed as features/SunShafts packs them.
     IDirect3DTexture9* RunShafts(Gpu& g, IDirect3DTexture9* depth, const PassSetup& s, bool composite, IDirect3DTexture9* compositeDepth = nullptr)
@@ -503,27 +666,12 @@ namespace
         const D3DVIEWPORT9 tv = { 0, 0, tw, th, 0.0f, 1.0f };
         const float m22 = s.proj[10], m32 = s.proj[14];
         const float depthC[4] = { 0.0f, 1.0f / kMaxZ, kMaxZ + 1.0e-4f, 0.0f };
-        // 1. The source. The camera at the origin looking along +x (the world rows: view x = -y... any orthonormal set).
+        // 1. The source.
         Target(dev, g.quarter[0]);
         dev->SetViewport(&tv);
-        const float c[15 * 4] = {
-            depthC[0], depthC[1], depthC[2], depthC[3],
-            s.proj[0], s.proj[5], s.proj[8], s.proj[9],
-            m22, m32, 1000.0f, s.airPerYard,
-            0.0f, 0.0f, 1.0f, 1.0f,
-            4.0f / kW, 4.0f / kH, 1.0f / kW, 1.0f / kH,
-            s.sunView[0], s.sunView[1], s.sunView[2], s.source ? 1.0f : 0.0f,
-            0.0f, 0.0f, 1.0f, 1.0f,
-            0.0f, -1.0f, 0.0f, 0.0f,   // view x -> world -y
-            0.0f, 0.0f, 1.0f, 0.0f,    // view y -> world z
-            1.0f, 0.0f, 0.0f, 0.0f,    // view z -> world x
-            0.0f, 0.0f, 0.0f, s.volume ? 1.0f : 0.0f,
-            200.0f, 320.0f, s.deckDensity, 1.0f / 600.0f,
-            0.3f, 600.0f, 2.0f, 1200.0f,
-            0.1f, 0.2f, 0.3f, 0.01f,
-            s.sunWorld[0], s.sunWorld[1], s.sunWorld[2], 12.0f,
-        };
-        dev->SetPixelShaderConstantF(0, c, 15);
+        float c[17 * 4];
+        SourceConstants(s, c);
+        dev->SetPixelShaderConstantF(0, c, 17);
         dev->SetPixelShader(g.source);
         dev->SetTexture(0, depth);
         Sampler(dev, 0, D3DTEXF_POINT, D3DTADDRESS_CLAMP);
@@ -531,6 +679,7 @@ namespace
         Sampler(dev, 2, D3DTEXF_LINEAR, D3DTADDRESS_WRAP, D3DTEXF_LINEAR);
         Quad(dev, static_cast<float>(tw), static_cast<float>(th));
         dev->SetTexture(2, nullptr);
+        if (s.sourceOnly) return g.quarter[0];
         // 2. The blurs.
         IDirect3DTexture9* result = g.quarter[0];
         dev->SetPixelShader(g.blur);
@@ -618,10 +767,12 @@ int main(int argc, char** argv)
 {
     bool gpu = true, warp = true;
     const char* exe = nullptr;
+    std::string images; // --images <dir>: the drawn scenes as pictures, before (TerrainBlocks 0) and after
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--no-gpu") == 0) gpu = false;
         else if (std::strcmp(argv[i], "--no-warp") == 0) warp = false;
+        else if (std::strcmp(argv[i], "--images") == 0 && i + 1 < argc) images = argv[++i];
         else if (argv[i][0]) exe = argv[i];
     }
     try
@@ -705,6 +856,16 @@ int main(int argc, char** argv)
         Test("a light on the horizon gives nothing; just above it, the full low sun", [] {
             CHECK(sm::Evaluate(Place(0.6f, 7.0f, 0.0f)).total == 0.0f);
             CHECK(sm::Evaluate(Place(0.6f, 7.0f, 0.1f)).total > 0.7f);
+        });
+        Test("Bor's Fall at 05:15 in snow (the screenshots): the sky's sun is still below the horizon, so the panel's screen-space part is 0 and the shafts are the in-scatter under the deck", [] {
+            const Parts dawn = BorsFall(5.25f), later = BorsFall(7.0f);
+            std::printf("     05:15: the sun %.1f deg up, the light %.1f; strength %.2f; screen-space part %.2f, under the deck %.2f\n",
+                        dawn.sunUp, dawn.lightUp, dawn.total, dawn.screen, dawn.volume);
+            std::printf("     07:00: the sun %.1f deg up, the light %.1f; strength %.2f; screen-space part %.2f, under the deck %.2f\n",
+                        later.sunUp, later.lightUp, later.total, later.screen, later.volume);
+            CHECK(dawn.sunUp < -5.0f && dawn.horizon == 0.0f && dawn.screen == 0.0f);
+            CHECK(dawn.lightUp > 15.0f && dawn.volume > 0.15f);
+            CHECK(later.screen > 0.2f && later.volume > 0.2f);
         });
 
         // ---------------------------------------------------------------- the sky's sun and moon, and the light
@@ -1095,6 +1256,188 @@ int main(int argc, char** argv)
                     CHECK(sumOn > 1.05 * sumOff && worst > 1.25 && worst <= 1.5 + 0.03);
                     CHECK(openOn < 1.03 * openOff && openWorst < 0.03f);
                 });
+
+                // ------------------------------------------------ what stands in the sun's way (TerrainBlocks)
+                // Bor's Fall (the screenshots): a mountain in front of the sun, in the Storm Peaks' snowy air, under the deck.
+                const Picture mountainP = MountainPicture(proj);
+                IDirect3DTexture9* mountain = Upload(g.dev, mountainP);
+                auto added = [&](const std::vector<uint32_t>& f, UINT x, UINT y) { return std::max(R(f[y * kW + x]) - 64 / 255.0f, 0.0f); };
+                // The mean light added over the face well below the ridge, and over the sky just above the ridge round the
+                // peak, where the sun is behind it (within ~9 deg of it).
+                auto faceRim = [&](const std::vector<uint32_t>& f, float& face, float& rim) {
+                    double sf = 0, sr = 0;
+                    size_t nf = 0, nr = 0;
+                    for (UINT y = 0; y < kH; y += 2)
+                        for (UINT x = 360; x < 1560; x += 2)
+                        {
+                            const float r = Ridge(static_cast<float>(x));
+                            if (y > r + 140.0f && y < kH - 4) { sf += added(f, x, y); ++nf; }
+                            if (x >= 800 && x < 1120 && y + 60.0f > r && y + 6.0f < r) { sr += added(f, x, y); ++nr; }
+                        }
+                    face = static_cast<float>(sf / nf);
+                    rim = static_cast<float>(sr / nr);
+                };
+                auto picture = [&](const char* name, const Picture& depthP, const std::vector<uint32_t>& frame) {
+                    if (!images.empty()) WriteImage(images + "\\" + name + ".bmp", depthP, proj, frame);
+                };
+                // The pass as the panel's parts set it at Bor's Fall at an hour (strength 1).
+                auto bors = [&](float hour) {
+                    const Parts parts = BorsFall(hour);
+                    PassSetup p = s;
+                    p.airPerYard = parts.airPerYard;
+                    p.source = parts.screen >= 0.003f;
+                    p.shaftGain = 0.6f * parts.screen;   // features/SunShafts kScreenGain
+                    p.volume = true;
+                    p.deckDensity = 0.004f;              // Fogginess 0.8, as the mountain decks
+                    p.volumeGain = 0.5f * parts.volume;  // kVolumeGain
+                    return p;
+                };
+                Test(named("Bor's Fall at 05:15 (the screenshots): the in-scatter under the deck lit the whole mountain face; the mountain shades it now").c_str(), [&] {
+                    // The test's deck (0.004/yd, shading most of the light) and one wide open (no shade: all gaps); the
+                    // Storm Peaks' deck lies between, by its banks.
+                    for (const float density : { 0.004f, 0.0f })
+                    {
+                        PassSetup p = bors(5.25f);
+                        p.deckDensity = density;
+                        PassSetup old = p;
+                        old.occlusion = false;
+                        const std::vector<uint32_t> before = Run(g, mountain, old, true, w, h), after = Run(g, mountain, p, true, w, h);
+                        float faceB, rimB, faceA, rimA;
+                        faceRim(before, faceB, rimB);
+                        faceRim(after, faceA, rimA);
+                        std::printf("     deck %.3f/yd: the light added over the face %.3f before, %.3f now; over the sky at the ridge %.3f, %.3f (screen-space part %s)\n",
+                                    density, faceB, faceA, rimB, rimA, p.source ? "on" : "off: the sun is below the horizon");
+                        picture(density > 0.0f ? "borsfall-0515-before" : "borsfall-0515-opendeck-before", mountainP, before);
+                        picture(density > 0.0f ? "borsfall-0515-after" : "borsfall-0515-opendeck-after", mountainP, after);
+                        CHECK(!p.source && faceB > (density > 0.0f ? 0.02f : 0.08f)); // the in-scatter alone lit the face
+                        CHECK(faceA < 0.01f && faceA < 0.1f * faceB);
+                    }
+                });
+                Test(named("Bor's Fall after sunrise (07:00): the screen-space part lit the face too; now the face stays dark, the light round the peak").c_str(), [&] {
+                    const PassSetup p = bors(7.0f);
+                    PassSetup old = p, oldScreen = p, oldVolume = p;
+                    old.occlusion = oldScreen.occlusion = oldVolume.occlusion = false;
+                    oldScreen.volume = false;
+                    oldVolume.source = false;
+                    const std::vector<uint32_t> before = Run(g, mountain, old, true, w, h), after = Run(g, mountain, p, true, w, h);
+                    const std::vector<uint32_t> screenOnly = Run(g, mountain, oldScreen, true, w, h), volumeOnly = Run(g, mountain, oldVolume, true, w, h);
+                    float faceB, rimB, faceA, rimA, faceS, rimS, faceV, rimV;
+                    faceRim(before, faceB, rimB);
+                    faceRim(after, faceA, rimA);
+                    faceRim(screenOnly, faceS, rimS);
+                    faceRim(volumeOnly, faceV, rimV);
+                    std::printf("     before: the face %.3f (the screen-space part alone %.3f, the in-scatter alone %.3f), the rim %.3f\n", faceB, faceS, faceV, rimB);
+                    std::printf("     now:    the face %.3f, the rim %.3f\n", faceA, rimA);
+                    picture("borsfall-0700-before", mountainP, before);
+                    picture("borsfall-0700-after", mountainP, after);
+                    CHECK(p.source && faceS > 0.05f && faceV > 0.02f);
+                    CHECK(faceA < 0.015f && faceA < 0.1f * faceB);
+                    CHECK(rimA > 0.05f && rimA > 10.0f * faceA); // the light round the peak (less than before: the face lit it)
+                });
+                Test(named("trees (Duskwood, Felwood): the shafts between the trunks stay, the trunks still shade the light behind them").c_str(), [&] {
+                    const Picture treesP = TreesPicture(proj);
+                    IDirect3DTexture9* trees = Upload(g.dev, treesP);
+                    PassSetup p = s;
+                    p.airPerYard = 0.002f + 0.010f * 0.72f; // Duskwood's fog (air 0.72)
+                    PassSetup old = p;
+                    old.occlusion = false;
+                    const std::vector<uint32_t> before = Run(g, trees, old, false, w, h), after = Run(g, trees, p, false, w, h);
+                    // Along rows of the sky below the sun (between the trunks; rows 300 .. 460): the shafts and the shade
+                    // between them, as the brightest and the darkest tenth of the row.
+                    double sumB = 0, sumA = 0, contrastB = 0, contrastA = 0;
+                    int rows = 0;
+                    size_t n = 0;
+                    for (UINT y = 300 / 4; y < 460 / 4; y += 4, ++rows)
+                    {
+                        std::vector<float> rb, ra;
+                        for (UINT x = 400 / 4; x < 1520 / 4; ++x)
+                        {
+                            if (Trunk(x * 4 + 2)) continue;
+                            rb.push_back(R(before[y * w + x])); ra.push_back(R(after[y * w + x]));
+                            sumB += rb.back(); sumA += ra.back();
+                            ++n;
+                        }
+                        std::sort(rb.begin(), rb.end());
+                        std::sort(ra.begin(), ra.end());
+                        const size_t tenth = rb.size() / 10;
+                        auto spread = [&](const std::vector<float>& v) { return (v[v.size() - 1 - tenth] + 1e-3) / (v[tenth] + 1e-3); };
+                        contrastB += spread(rb);
+                        contrastA += spread(ra);
+                    }
+                    std::printf("     between the trunks: the shafts %.3f now, %.3f before (x%.2f); bright over dark x%.2f now, x%.2f before\n",
+                                sumA / n, sumB / n, sumA / sumB, contrastA / rows, contrastB / rows);
+                    const std::vector<uint32_t> fb = Run(g, trees, old, true, w, h), fa = Run(g, trees, p, true, w, h);
+                    picture("trees-before", treesP, fb);
+                    picture("trees-after", treesP, fa);
+                    trees->Release();
+                    CHECK(sumA > 0.85 * sumB);
+                    CHECK(contrastA / rows > 1.3 && contrastA > 0.9 * contrastB);
+                });
+                Test(named("open sky: the shafts over the sky are as they were, and the open ground doesn't shade the air above it").c_str(), [&] {
+                    PassSetup p = s;
+                    p.volume = true;
+                    p.deckDensity = 0.004f;
+                    PassSetup old = p;
+                    old.occlusion = false;
+                    const std::vector<uint32_t> before = Run(g, open, old, false, w, h), after = Run(g, open, p, false, w, h);
+                    float skyWorst = 0.0f;
+                    double gB = 0, gA = 0;
+                    for (UINT y = 0; y < h; ++y)
+                        for (UINT x = 0; x < w; ++x)
+                        {
+                            const size_t i = y * w + x;
+                            if (y * 4 + 8 < 594) skyWorst = std::max(skyWorst, std::fabs(R(after[i]) - R(before[i])));
+                            gB += G(before[i]); gA += G(after[i]);
+                        }
+                    std::printf("     the sky's shafts change by at most %.4f; the in-scatter x%.3f\n", skyWorst, gA / gB);
+                    const std::vector<uint32_t> fb = Run(g, open, old, true, w, h), fa = Run(g, open, p, true, w, h);
+                    const Picture openP = GroundPicture(proj, 0.55f, nullptr);
+                    picture("open-before", openP, fb);
+                    picture("open-after", openP, fa);
+                    CHECK(skyWorst <= 1.5f / 255.0f);
+                    CHECK(gA > 0.97 * gB && gA <= gB * 1.001 + 1);
+                });
+                Test(named("the light off the screen past the mountain's flank: where the shadow test can't see, the in-scatter fades to half; through the sky it stays").c_str(), [&] {
+                    float lightView[3];
+                    sm::ViewRay(proj, 1.6f, 0.3f, lightView);
+                    PassSetup p = s;
+                    p.source = false;
+                    p.volume = true;
+                    p.lightView = lightView;
+                    PassSetup old = p;
+                    old.occlusion = false;
+                    const std::vector<uint32_t> before = Run(g, mountain, old, false, w, h), after = Run(g, mountain, p, false, w, h);
+                    double lowB = 0, lowA = 0, skyB = 0, skyA = 0;
+                    for (UINT y = 0; y < h; ++y)
+                        for (UINT x = 0; x < w; ++x)
+                        {
+                            const size_t i = y * w + x;
+                            if (x * 4 >= 1700 && y * 4 >= 900) { lowB += G(before[i]); lowA += G(after[i]); }  // the flank, low right
+                            if (x * 4 >= 1600 && y * 4 < 200) { skyB += G(before[i]); skyA += G(after[i]); }   // the sky, top right
+                        }
+                    std::printf("     the flank x%.3f, the sky x%.3f\n", lowA / lowB, skyA / skyB);
+                    CHECK(lowA <= 0.55 * lowB && lowA > 0.0);
+                    CHECK(skyA > 0.97 * skyB);
+                });
+                Test(named("no NaN: the light straight ahead, at a pixel's centre, square to the view, behind, straight up; nothing goes black").c_str(), [&] {
+                    float atPixel[3];
+                    sm::ViewRay(proj, (1200.0f + 2.0f) / kW, (300.0f + 2.0f) / kH, atPixel);
+                    const float ahead[3] = { 0, 0, 1 }, square[3] = { 1, 0, 0 }, behind[3] = { 0.3f, 0.2f, -0.932738f }, up[3] = { 0, 1, 0 };
+                    const float* const lights[] = { ahead, atPixel, square, behind, up };
+                    for (const float* lv : lights)
+                    {
+                        PassSetup p = s;
+                        p.lightView = lv;
+                        p.sunView = lv[2] > 0.0f ? lv : sunView;
+                        p.volume = true;
+                        p.sourceOnly = true;
+                        const std::vector<uint32_t> src = Run(g, open, p, false, w, h);
+                        size_t black = 0;
+                        for (uint32_t v : src) if (G(v) < 0.5f / 255.0f) ++black;
+                        std::printf("     light (%.2f, %.2f, %.2f): %zu of %zu in-scatter pixels black\n", lv[0], lv[1], lv[2], black, src.size());
+                        CHECK(black == 0);
+                    }
+                });
                 if (g.warp) std::printf("SKIP the cost (WARP is the CPU; the GPU's is measured without --no-gpu)\n");
                 else Test(named("the cost at 1920 x 1080 (timestamps; medium quality, 32 samples)").c_str(), [&] {
                     IDirect3DQuery9* disjoint = nullptr, *freq = nullptr, *t0 = nullptr, *t1 = nullptr;
@@ -1139,6 +1482,7 @@ int main(int argc, char** argv)
                 open->Release();
                 blocked->Release();
                 nearer->Release();
+                mountain->Release();
                 ReleaseGpu(g);
             }
         }
@@ -1146,6 +1490,11 @@ int main(int argc, char** argv)
     catch (const std::exception& e)
     {
         std::printf("FAIL %s\n", e.what());
+        return 1;
+    }
+    if (g_failed)
+    {
+        std::printf("%u passed, %u FAILED\n", g_passed, g_failed);
         return 1;
     }
     std::printf("%u passed\n", g_passed);

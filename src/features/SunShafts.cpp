@@ -349,7 +349,9 @@ namespace wxl_livingazeroth::sunshafts
                 }
                 const float taps = div / 4.0f; // full pixels: the centres of the block's quarters
                 const int deckMode = deckOn ? (deck.result ? 1 : 2) : 0;
-                const float c[15 * 4] = {
+                // What stands in the sun's way (TerrainBlocks): off, the source and the in-scatter as they were.
+                const bool blocks = g_settings.terrainBlocks != 0;
+                const float c[17 * 4] = {
                     depthC[0], depthC[1], depthC[2], depthC[3],
                     proj[0], proj[5], proj[8], proj[9],
                     m22, m32, farClip, g_stats.model.airPerYard,
@@ -366,8 +368,10 @@ namespace wxl_livingazeroth::sunshafts
                     deck.banks, kVolumeReach, kDeckShadow, deck.range,
                     deck.drift[0], deck.drift[1], deck.drift[2], g_stats.model.airPerYard,
                     sunNow.dir[0], sunNow.dir[1], sunNow.dir[2], static_cast<float>(kVolumeSteps),
+                    g_stats.light.view[0], g_stats.light.view[1], g_stats.light.view[2], blocks ? 1.0f + kThickness : 0.0f,
+                    blocks ? kSurfaceAir : 1.0f, blocks ? kSunFadeFrom : 2.0f, blocks ? kSunFadeTo : 3.0f, blocks ? kUnsure : 1.0f,
                 };
-                dev->SetPixelShaderConstantF(0, c, 15);
+                dev->SetPixelShaderConstantF(0, c, 17);
                 dev->SetPixelShader(g_psSource);
                 dev->SetTexture(0, depthTex);
                 Sampler(dev, 0, D3DTEXF_POINT, D3DTADDRESS_CLAMP);
@@ -493,6 +497,7 @@ namespace wxl_livingazeroth::sunshafts
         api->UiSliderInt("samples per pixel toward the sun##shn", &s.samples, 8, 64);
         api->UiSliderFloat("length (share of the way to the sun)##shlen", &s.length, 0.2f, 1.0f);
         api->UiCheckbox("through the cloud deck: its gaps, and shafts under it##shdeck", &s.throughDeck);
+        api->UiCheckbox("what stands in the sun's way blocks them: a mountain, a wall, trees##shocc", &s.terrainBlocks);
         api->UiSliderFloat("moon: faint shafts at night (0 = none)##shmoon", &s.moon, 0.0f, 1.0f);
         int test = s.testAir >= 0.0f ? 1 : 0;
         if (api->UiCheckbox("test: set what's in the air here (instead of the fog)##shta", &test)) s.testAir = test ? 0.8f : -1.0f;

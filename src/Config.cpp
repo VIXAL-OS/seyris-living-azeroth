@@ -280,6 +280,7 @@ namespace wxl_livingazeroth::config
             h.samples = Whole(s, f, "Samples", "Taps per pixel along the line toward the sun (8 .. 64): more = smoother, longer shafts, slower.", h.samples);
             h.length = In(s, f, "Length", "How far the shafts reach: the share of the way to the sun each pixel looks (0.2 .. 1).", h.length);
             h.throughDeck = In(s, f, "ThroughCloudDeck", "In mountain zones with a cloud deck: the shafts come through its gaps, and below it shafts fall from its gaps even with the sun off the screen.", h.throughDeck);
+            h.terrainBlocks = In(s, f, "TerrainBlocks", "What stands in the sun's way blocks the shafts: a mountain in front of the sun stays dark and the light streams round its edges, and below the cloud deck the air in a mountain's shadow stays dark (tested against what's on the screen; where that can't be seen, the light below the deck is halved). 0 = the old look, where a fogged hillside glows like lit air.", h.terrainBlocks);
             h.moon = In(s, f, "Moon", "Faint shafts from the moon at night, from where the sky shows it: your multiplier, 0 = none.", h.moon);
         }
 

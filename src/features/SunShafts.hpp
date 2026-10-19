@@ -3,12 +3,14 @@
 //
 // A post pass at the weather render's entry, right after the ground fog (so name text, the UI, rain and snow, drawn
 // later, never take part): a source at a quarter of the resolution -- the sunlit air each pixel shows toward the sun,
-// from the scene depth (the sky full, a near trunk nothing), x what the cloud deck lets through there -- blurred
-// radially toward the place on the screen of the sun the player sees in the sky (or the moon; climate::SunNow().sky,
-// .moon: env/SkyPath), a little brighter where branches break the line into gaps, and added over the frame in the
-// light's colour. Under the cloud deck (GroundFog, AreaClimate CloudBase) the light scattered in along the view ray is
-// added too, each step lit by the deck's own density toward the light (climate::SunNow().dir, as the scene is
-// shaded): shafts below its gaps, with the sun off the screen as well.
+// from the scene depth (the sky full, a near trunk nothing, a surface at most a little and none in front of the sun's
+// glow: a mountain in front of the sun is an occluder, not lit air), x what the cloud deck lets through there --
+// blurred radially toward the place on the screen of the sun the player sees in the sky (or the moon;
+// climate::SunNow().sky, .moon: env/SkyPath), a little brighter where branches break the line into gaps, and added
+// over the frame in the light's colour. Under the cloud deck (GroundFog, AreaClimate CloudBase) the light scattered in
+// along the view ray is added too, each step lit by the deck's own density toward the light (climate::SunNow().dir, as
+// the scene is shaded) and shaded by what stands in the light's way on the screen (a screen-space shadow test over the
+// depth: a mountain's shadow stays dark): shafts below its gaps, with the sun off the screen as well.
 //
 // How strong: by what's in the air (the place's fogginess and the ground fog around the player), the time of day (the
 // low sun most), the weather (none in heavy rain or a storm) and indoors (none); fading as the sun leaves the screen
@@ -27,6 +29,8 @@ namespace wxl_livingazeroth::sunshafts
         int   samples = 32;         // taps per pixel along the line toward the sun (8 .. 64)
         float length = 0.85f;       // how far toward the sun the taps reach (share of the way)
         int   throughDeck = 1;      // the cloud deck: its gaps let the shafts through, and shafts under it from its own density
+        int   terrainBlocks = 1;    // what stands in the sun's way blocks the shafts (a mountain in front of the sun is dark, not
+                                    // lit air) and shades the air under the deck; 0: the old look
         float moon = 0.0f;          // faint shafts from the night light: x this (0 = none)
         float testAir = -1.0f;      // the panel's test (not saved): this much in the air, 0 .. 1, instead of the fog's; < 0 off
     };

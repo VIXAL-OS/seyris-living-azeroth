@@ -211,10 +211,12 @@ Screen Glow, what's drawn, and how many lights near are lit, dimmed or dark now.
 
 Light shafts through trees, fog and the gaps of the cloud deck: a post pass right after the ground fog (before rain,
 see-through models, name text and the UI, so those never take part), at a quarter of the resolution. Each pixel
-gathers the sunlit air along the line toward the sun's place on the screen: the sky and lit air far off are bright, a
-trunk or a wall near you shades the line behind it, and where branches break that line into gaps the shafts come a
-little brighter. Snow and other bright surfaces don't glow: what lights up comes from the scene's depth and the sun's
-direction, not from how bright the picture is.
+gathers the sunlit air along the line toward the sun's place on the screen: the sky and the fogged-out far end of the
+view are bright, a trunk or a wall near you shades the line behind it, and where branches break that line into gaps
+the shafts come a little brighter. Snow and other bright surfaces don't glow: what lights up comes from the scene's
+depth and the sun's direction, not from how bright the picture is. A surface counts only a little, for the lit air in
+front of it, and not at all where it stands in front of the sun's glow or its air is in the shadow of what stands
+toward the sun: a mountain in front of the sun stays dark, and the light streams round its edges into the sky.
 
 They radiate from the sun you see in the sky (or at night the moon), read from the client's sky each frame. That's not
 where the client's light comes from: it lights the world from a fixed north-west bearing 20 to 37 degrees up, while it
@@ -227,7 +229,9 @@ that at noon, faint in clear air, fading with the sky in the evening (gone by ab
 rain, a storm, under water or indoors. They fade as the sun leaves the screen or sets (the sky's sun is up from about
 06:10 to 20:30, the moon from about 22:20 to 03:25). Under a cloud deck (mountain zones with an AreaClimate CloudBase)
 its gaps let the shafts through, and below it shafts fall from its gaps along your view, worked out from the deck's own
-density, with the sun off the screen too. The fog panel's **Sun shafts** section changes all of this at runtime and
+density, with the sun off the screen too; the air in a mountain's shadow stays dark (a shadow test against what's on
+the screen, toward the light; where the test loses sight of what's in the way, off the screen, that light is halved).
+The fog panel's **Sun shafts** section changes all of this at runtime and
 shows the strength's parts, the visible sun and the light on the screen, which one the shafts radiate from, and the
 cost; the frame profiler has a row for their GPU time ("ours: sun shafts").
 
@@ -240,6 +244,7 @@ cost; the frame profiler has a row for their GPU time ("ours: sun shafts").
 | Length | 0.85 | How far the shafts reach: the share of the way to the sun each pixel looks (0.2 .. 1). |
 | ThroughCloudDeck | 1 | Under a cloud deck: the shafts come through its gaps, and below it shafts fall from its gaps (a short march through its density toward the sun). Needs the deck's smooth mode (`[LivingAzeroth.Fog]` CloudDeckSmooth 1) for the gaps; without it the deck dims them evenly. |
 | Moon | 0 | Faint shafts from the moon at night, radiating from where the sky shows it (up from about 22:20 to 03:25): your multiplier, 0 = none. |
+| TerrainBlocks | 1 | What stands in the sun's way blocks the shafts: a mountain in front of the sun stays dark and the light streams round its edges, and below a cloud deck the air in a mountain's shadow stays dark. 0 = the old look, where a fogged hillside glows like lit air (exactly as before). |
 
 ## `[LivingAzeroth.Glass]`: window glass
 
