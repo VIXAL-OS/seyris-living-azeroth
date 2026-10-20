@@ -59,6 +59,7 @@
 #include "features/TerrainWetness.hpp"
 #include "features/Glass.hpp"
 #include "features/GlassShafts.hpp"
+#include "features/SeeThrough.hpp"
 #include "features/WindowGlow.hpp"
 #include "features/Windows.hpp"
 #include "features/WmoIce.hpp"
@@ -138,10 +139,11 @@ namespace
         next = now + std::chrono::seconds(30);
         const auto& s = wxl_livingazeroth::world::Current();
         if (!s.inWorld) return;
-        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s",
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s; %s",
                    s.mapId, s.playerPos[0], s.playerPos[1], s.playerPos[2], s.playerTerrainType, s.outdoors ? "outdoors" : "indoors",
                    wxl_livingazeroth::terrainice::StatusLine(), wxl_livingazeroth::modelice::StatusLine(),
-                   wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine(), wxl_livingazeroth::crystal::StatusLine());
+                   wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine(), wxl_livingazeroth::crystal::StatusLine(),
+                   wxl_livingazeroth::seethrough::StatusLine());
     }
 
     // Between frames: the safe moment to swap the depth surface the next world pass will bind.
@@ -185,6 +187,7 @@ namespace
             prof::Scope scope(prof::kOursLights);
             wxl_livingazeroth::windows::Update(); // the night factor the window lights and glow follow
             wxl_livingazeroth::glass::Update();   // the light through the glass, the panes near the camera
+            wxl_livingazeroth::seethrough::Update(); // last frame's windows opened and glass redrawn; its leftovers go
             wxl_livingazeroth::crystal::Update(); // the night the crystals' inner glow goes by
             wxl_livingazeroth::lights::Update(dt, snap);
         }
@@ -212,6 +215,7 @@ namespace
         wxl_livingazeroth::windowglow::OnDeviceLost();
         wxl_livingazeroth::sunshafts::OnDeviceLost();
         wxl_livingazeroth::glassshafts::OnDeviceLost();
+        wxl_livingazeroth::seethrough::OnDeviceLost();
         wxl_livingazeroth::prof::OnDeviceLost();
         wxl_livingazeroth::cover::OnDeviceLost();
     }
@@ -261,6 +265,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::modellights::InstallProbe(api);
     wxl_livingazeroth::debug::InstallWmoBindProbe(api);
     wxl_livingazeroth::wmoice::Install(api);      // the WMO batch loops: ice textures switch the same block on
+    wxl_livingazeroth::seethrough::Install(api);  // see-through windows: the portal walk, the device draw, the model scene
     wxl_livingazeroth::debug::InstallFogProbe(api);
     // Ground fog: drawn at the weather render's entry (after the water, before rain and see-through models).
     wxl_livingazeroth::groundfog::Install(api);

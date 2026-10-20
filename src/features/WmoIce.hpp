@@ -9,7 +9,8 @@
 // The same hooks drive the window glass (features/Glass): a root's glass materials are looked up with its ice, the
 // group's MOGP flags go to glass::BeginGroup, and each batch to glass::Batch (the glass look, the floor light). One
 // more, Wmo.RenderGroup (around a placed instance's visible group), tells glass::BeginInstance which building it is:
-// the instance's origin, its WMO's path and the group, for the rooms behind its glass.
+// the instance's origin, its WMO's path and the group, for the rooms behind its glass. See-through windows
+// (features/SeeThrough) hear of the same group and of each batch that passes, to defer an opened window's glass.
 // The crystal textures (features/Crystal, CrystalMaterials.cdbc) drawn opaque or alpha-keyed switch the same block on with
 // the crystal's constants, per material as for the ice (the ice wins where a texture is both), the facets as big as the
 // batch's crystals call for (features/Crystal's WmoBatchPieceRadius over the group's triangles, once per batch).

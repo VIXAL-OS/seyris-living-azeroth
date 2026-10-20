@@ -10,6 +10,7 @@
 #include "../features/TerrainWetness.hpp"
 #include "../features/Crystal.hpp"
 #include "../features/Glass.hpp"
+#include "../features/SeeThrough.hpp"
 #include "../features/Windows.hpp"
 #include "../render/M2Effects.hpp"
 #include "ShaderDump.hpp"
@@ -230,6 +231,7 @@ namespace wxl_livingazeroth::debug
             }
             windows::DrawPanelSection(g_api);
             glass::DrawPanelSection(g_api);
+            seethrough::DrawPanelSection(g_api);
             g_api->UiSliderFloat("merge lights closer than (yd)", &cfg.mergeDistance, 0.0f, 3.0f);
             g_api->UiSliderFloat("flicker (how much a flame's light dips)", &cfg.flicker, 0.0f, 0.8f);
             g_api->UiSliderFloat("flicker speed", &cfg.flickerSpeed, 0.1f, 4.0f);

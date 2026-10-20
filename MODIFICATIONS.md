@@ -68,6 +68,13 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   `tools/gen_crystals.py`, `features/Crystal`, the ice block in `features/ModelIce`, `CrystalLook`). The facets inside
   grow with each crystal's size, and deepen with it: a shard's stay small, the Exodar's giant crystals' are up to 8 times
   bigger (19 October 2026; `CrystalCellScale`).
-- **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals.
+- **See-through windows** (20 October 2026, experimental, off by default): from outside, the real modelled room behind a
+  window seen through its glass, its furniture with it. A window with an interior group behind it opens like a doorway
+  in the client's own portal walk (a hook on `Wmo.RenderThroughPortals`; nothing in the WMO changes), and its glass is
+  drawn again after the room, blended at a constant opacity (`env/SeeThroughModel`, `features/SeeThrough`,
+  `[LivingAzeroth.Glass]` `SeeThroughWindows`, `SeeThroughOpacity`; the research in `docs/r&d/see-through-windows.md`,
+  the count in `tools/see_through_survey.py`). Only Goldshire's Lion's Pride Inn for now.
+- **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
+  see-through windows.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

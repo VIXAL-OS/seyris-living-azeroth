@@ -18,6 +18,7 @@
 #include "features/WmoIce.hpp"
 #include "features/TerrainWetness.hpp"
 #include "features/Glass.hpp"
+#include "features/SeeThrough.hpp"
 #include "features/SunShafts.hpp"
 #include "features/Windows.hpp"
 #include "render/PostAA.hpp"
@@ -325,6 +326,9 @@ namespace wxl_livingazeroth::config
             g.vezaxPulse = In(s, f, "VezaxPulse", "Your multiplier on the slow pulse of General Vezax's glass in the Descent into Madness (1 = a few percent over about six and a half seconds, deep purple-tinged). 0 = steady.", g.vezaxPulse);
             g.frostedRooms = In(s, f, "FrostedRooms", "Behind frosted glass (Ironforge's, the dwarves', the vrykul's, the draenei's, Dalaran's frosted panes) a heavily blurred room: its lamp a soft glow at night, its furniture soft dark shapes, the frosted glass in front of it. Its lights go out with the glass's (FrostedLightsOut); underground in Ironforge no daylight in it, lamp-lit at any hour. A dungeon's frosted glass keeps the client's look. 0 = no room behind frosted glass, as before.", g.frostedRooms);
             g.stainedRooms = In(s, f, "StainedRooms", "Behind stained glass (Dalaran's, Silvermoon's, the chapels' and cathedrals') a faint room tinted by the glass's colours: a hint of depth by day, mostly the glass's own glow at night, going dark with the rooms (LightsOut) and the window lights in front with it. Not a dungeon's, and titan glass lit from behind stays as it is. 0 = no room behind stained glass, and its window lights as before.", g.stainedRooms);
+            seethrough::Settings& st = seethrough::Config();
+            st.enabled = In(s, f, "SeeThroughWindows", "Experimental: from outside, the building's real modelled room seen through its windows, its furniture and the rooms beyond its doors with it, the glass over it (for now only Goldshire's Lion's Pride Inn). Each window with a room behind it opens as if it were a doorway, within 60 yards, and its glass is drawn again over the room. A window with nothing modelled behind it keeps its glass and fake room. 0 = off: the windows as before.", st.enabled);
+            st.opacity = In(s, f, "SeeThroughOpacity", "With SeeThroughWindows: how much the glass covers the room behind it (0.35 = the glass 35%, the room 65%; 1 = opaque, 0 = clear). The glass keeps its own look, its reflections and tint, but not its fake room.", st.opacity);
             g.darkRoomLight = In(s, f, "DarkRoomLight", "At night a room whose lamp is out isn't a black void: the moon's and the night's cool light at its window, its furniture dim shapes and its corners darker, this share of a lit room's light (0.12; underground the city's warm ambient). The window's glow and light stay off. 0 = dark rooms black, as before.", g.darkRoomLight);
         }
 
