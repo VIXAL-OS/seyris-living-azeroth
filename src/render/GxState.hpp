@@ -13,6 +13,20 @@ namespace wxl_livingazeroth::gxstate
 {
     constexpr int kDepthWrite = 15;
 
+    /// A Gx state's value in the cache (what the next draw sends the device, or sent it); false before the device is
+    /// ready.
+    inline bool Read(int state, uint32_t& value)
+    {
+        constexpr uintptr_t kGxDevice = 0x00C5DF88;
+        constexpr size_t    kCache = 0x28F4, kStride = 0x18, kReady = 0xF58;
+        const auto* gxDev = *reinterpret_cast<const uint8_t* const*>(kGxDevice);
+        if (!gxDev || !*reinterpret_cast<const uint32_t*>(gxDev + kReady)) return false;
+        const auto* cache = *reinterpret_cast<const uint8_t* const*>(gxDev + kCache);
+        if (!cache) return false;
+        value = *reinterpret_cast<const uint32_t*>(cache + state * kStride);
+        return true;
+    }
+
     /// Sets a Gx state for the next draw: dirty first (saves the old value for the push level),
     /// then the cache. Returns true if it changed something.
     inline bool Force(int state, uint32_t value)

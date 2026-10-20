@@ -3,6 +3,7 @@
 #include "Crystal.hpp"
 #include "Glass.hpp"
 #include "ModelIce.hpp"
+#include "SeeThrough.hpp"
 #include "SurfaceCover.hpp"
 #include "TerrainIce.hpp"
 
@@ -459,6 +460,8 @@ namespace wxl_livingazeroth::wmoice
                 if (g_on) crystal::NoteBatch(true);
             }
             else SwitchOff();
+            // See-through windows (features/SeeThrough): a glass batch of an opened group may be drawn later, over the room.
+            seethrough::Batch(g_group, record, glassRow != 0);
             // The window glass and the floor light (features/Glass): its material, and whether the rims hold c101..
             if (r && r->anyGlass) glass::Batch(glassRow, g_ringsOn, selfLit, unlit);
             return culled;
@@ -481,7 +484,9 @@ namespace wxl_livingazeroth::wmoice
                                          static_cast<uint32_t>(address ^ (address >> 16)) * 2654435761u);
                     began = true;
                 }
+            seethrough::BeginGroupDraw(root, group, instanceArg);   // which instance's group: its opened windows
             g_origGroup(root, edx, group, instanceArg, list);
+            seethrough::EndGroupDraw();
             if (began) glass::EndInstance();
         }
 
@@ -512,6 +517,7 @@ namespace wxl_livingazeroth::wmoice
                 }
             ++g_depth;
             (*Orig)(root, edx, group, flag);
+            seethrough::EndLoop();
             SwitchOff();
             RingsOff();
             if (g_rootIce && g_rootIce->anyGlass) glass::EndGroup();
