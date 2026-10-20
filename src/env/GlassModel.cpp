@@ -89,7 +89,25 @@ namespace wxl_livingazeroth::glass
         // The room behind the glass keeps the day's light until the client lights its windows (dusk: the sun's day is
         // over at 18:00, the windows light from 20:30): no black rooms between.
         l.rooms = Clamp01(1.0f - in.night);
+        MoonHue(in.ambient, l.moon);
         return l;
+    }
+
+    void MoonHue(const float clientLight[3], float out[3])
+    {
+        auto lum = [](const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
+        float hue[3];
+        const float ml = lum(room::kMoonHue);
+        for (int k = 0; k < 3; ++k) hue[k] = room::kMoonHue[k] / ml;
+        const float cl = clientLight ? lum(clientLight) : 0.0f;
+        if (cl > 1e-3f && std::isfinite(cl))
+            for (int k = 0; k < 3; ++k)
+            {
+                const float c = std::min(room::kSkyHue[1], std::max(room::kSkyHue[0], std::max(0.0f, clientLight[k]) / cl));
+                hue[k] += (c - hue[k]) * room::kMoonClient;
+            }
+        const float l = std::max(1e-3f, lum(hue));
+        for (int k = 0; k < 3; ++k) out[k] = hue[k] / l;
     }
 
     float Fresnel(float cosine, float f0)

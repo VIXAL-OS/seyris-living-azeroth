@@ -328,6 +328,36 @@ class Rooms(unittest.TestCase):
         rows = g.light_rooms(c, 0, 777, self.WMO, self.glass())
         self.assertEqual([(r[1], r[3]) for r in rows], [(4, 1.0)])
 
+    def test_stained_glass_finds_the_stained_windows_alone(self):
+        # group 3's stained window (ordinal 20) right where the clear one (ordinal 4) is: a stained pane's triangles go to it
+        # (CELL_STAINED), a clear pane's to the clear one; read as before stained glass had rooms (room_cells' legacy view)
+        # the stained pane's glass is the clear window's, read only without stained glass's rooms (CELL_UNSTAINED)
+        x = (1.0, 0.0, 0.0)
+        glass = self.glass()
+        glass["stained"] = {g.norm_path(self.WMO): {3: g.Windows([self.window(20, 2, (0.0, 1.0, 1.0), x, 1.0, 0.5)])}}
+        glass["kinds"] = {"x\\clear.blp": 1, "x\\stained.blp": 2}
+
+        class P:
+            def __init__(self, points, texture):
+                self.group, self.points, self.normal, self.texture = 3, points, x, texture
+
+        class C:
+            pass
+        C.panes = [P(self.quad((0.0, 1.0, 1.0), x, -1.0, 1.0, -0.5, 0.5), "X\\Clear.blp"), P(self.quad((0.0, 1.0, 1.0), x, -1.0, 1.0, -0.5, 0.5), "x/stained.blp")]
+        rows = g.light_rooms(C, 0, 777, self.WMO, glass)
+        self.assertEqual(sorted((r[1], r[2], round(r[3], 5), r[5]) for r in rows), [(4, 3, 0.5, 0), (20, 3, 0.5, g.CELL_STAINED)])
+        before = g.light_rooms(C, 0, 777, self.WMO, glass, legacy=True)
+        self.assertEqual([(r[1], round(r[3], 5), r[5]) for r in before], [(4, 1.0, 0)])
+        cells = g.room_cells(C, 0, 777, self.WMO, glass)
+        self.assertEqual([(r[1], round(r[3], 5), r[5]) for r in cells],
+                         [(4, 1.0, g.CELL_UNSTAINED), (4, 0.5, g.CELL_WITH_STAINED), (20, 0.5, g.CELL_STAINED)])
+        # read without stained glass's rooms: exactly the cells as before; with them: the clear and the stained
+        off = [(r[1], r[3], r[5] & ~g.CELL_UNSTAINED) for r in cells if not r[5] & (g.CELL_STAINED | g.CELL_WITH_STAINED)]
+        self.assertEqual(off, [(r[1], r[3], r[5]) for r in before])
+        # a light with no stained glass: the same rows both ways, none flagged
+        C.panes = C.panes[:1]
+        self.assertEqual(g.room_cells(C, 0, 777, self.WMO, glass), g.light_rooms(C, 0, 777, self.WMO, glass))
+
     def test_path_hash_is_the_runtimes(self):
         self.assertEqual(g.path_hash("World/WMO/Azeroth/Buildings/Stormwind/Stormwind.wmo"), 4036435193)
         self.assertEqual(g.path_hash(""), 0)
@@ -347,6 +377,7 @@ class Rooms(unittest.TestCase):
             (41, 0, 0, 0.0, 0.0, 0.0, g.WHOLE, 1, 5, 0, 0, "world\\wmo\\x\\house.wmo", "")]))
         glass = g.read_glass(d)
         self.assertEqual(glass["buildings"], {(0, 777, g.WHOLE): 40})    # a WMO's default names no placement
+        self.assertEqual((glass["stained"], glass["kinds"]), ({}, {}))     # no stained window; no GlassMaterials.cdbc
         ws = glass["windows"]["world\\wmo\\x\\house.wmo"][3]
         self.assertEqual((ws.ordinal, ws.kind), ([0, 1], [4, 1]))
         self.assertEqual(ws.at([(0.0, 1.0, 1.2)]).tolist(), [1])

@@ -197,14 +197,15 @@ namespace roomharness
             }
         }
 
-        /// The room's registers (c15..c25) for windows of WMO `path`, group `group` placed straight in the world, the
-        /// camera `cam` (world), the building's class, the settings; `plain`: gains of 1 (white faces).
+        /// The room's registers (c15..c27) for windows of WMO `path`, group `group` placed straight in the world, the
+        /// camera `cam` (world), the building's class, the settings; `plain`: gains of 1 (white faces); the batch's glass
+        /// kind (stained glass's grid, the kind's look: c26, c27).
         void Registers(const float cam[3], uint32_t path, uint32_t group, uint32_t cls, const gl::Settings& s, float out[4 * gl::kRoomRegisters],
-                       bool plain = false) const
+                       bool plain = false, uint32_t kind = gl::kClear) const
         {
             const float axes[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 }, origin[3] = { 0, 0, 0 };
             const float ones[4] = { 1, 1, 1, 1 };
-            gl::RoomRegisters(axes, origin, cam, table.Find(path, group), table.Height(), cls, scales, plain ? ones : gains, s, out);
+            gl::RoomRegisters(axes, origin, cam, table.Find(path, group, kind == gl::kStained), table.Height(), cls, scales, plain ? ones : gains, s, out, kind);
         }
     };
 

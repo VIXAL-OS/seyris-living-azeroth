@@ -201,6 +201,9 @@ namespace wxl_livingazeroth::glass
         std::string g_textureError;
         uint32_t g_samplerFrame = ~0u;
         unsigned g_roomBatches = 0, g_lastRoomBatches = 0, g_noFrame = 0, g_lastNoFrame = 0, g_noGrid = 0, g_lastNoGrid = 0;
+        // Of the batches with rooms: behind frosted and stained glass, this frame and last.
+        unsigned g_frostRooms = 0, g_lastFrostRooms = 0, g_stainRooms = 0, g_lastStainRooms = 0;
+        unsigned g_stainedWindows = 0, g_frostedWindows = 0;   // GlassWindows.cdbc as loaded
 
         float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : (v == v ? v : 0.0f)); }
         float Lum(const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; }
@@ -274,10 +277,12 @@ namespace wxl_livingazeroth::glass
         }
 
         // One glass batch's constants: its material's look, inside or outside, and the room of the building drawn; its
-        // day look (c85, c86); the room's registers (c15..c25) and the texture set it wants (-1: none, white).
+        // day look (c85, c86); the room's detail and its light lit and dark (c218); the room's registers (c15..c27) and the
+        // texture set it wants (-1: none, white).
         void GlassConstants(const Material& m, bool selfLit, bool unlit, float out[4 * kConstantCount], float seed[4 * kSeedRegisters],
-                            float day[4 * kDayRegisters], float rooms[4 * kRoomRegisters], int& set)
+                            float day[4 * kDayRegisters], float look[4 * kLookRegisters], float rooms[4 * kRoomRegisters], int& set)
         {
+            LookConstants(g_light, look);
             BatchConstants(m, InsideWeight(m.flags, g_groupFlags, g_indoors), g_light, g_sun, g_sunColour, g_sky, g_settings, out);
             const Building* b = g_inInstance ? g_building : nullptr;
             const RoomStyle* style = StyleOf(b);
@@ -286,14 +291,15 @@ namespace wxl_livingazeroth::glass
             in.selfLit = selfLit; in.fallbackSeed = g_fallbackSeed;
             in.origin = g_inInstance && g_hasOrigin ? g_origin : nullptr;
             in.kind = m.kind; in.unlit = unlit; in.hearthClock = g_hearth.Now();
-            RoomBatchConstants(style ? *style : DefaultStyle(), style ? b : nullptr, g_light, in, g_settings, out, seed);
+            RoomBatchConstants(style ? *style : DefaultStyle(), style ? b : nullptr, g_light, in, g_settings, out, seed, look);
             // Titan glass with no sky behind it: lit from behind, the same at any hour.
             if (BacklitBatch(m, b ? b->flags : 0, g_settings)) { BacklitConstants(m, g_pulseSeconds, g_settings, out, day); ++g_backlitBatches; }
             if (out[39] > 0.0f) { ++g_frostBatches; g_frostIronforge += IsIronforge(b) ? 1 : 0; }
             g_underground += b && (b->flags & kBuildingUnderground) ? 1 : 0;
-            // The room's: the group's grid and the instance's frame (none without either: no room, lit), the class, the
-            // palette's textures (with RoomTextures, once loaded; until then and without it white, a gain of 1).
-            const WindowTable::Grid* grid = g_inInstance && g_hasAxes && g_hasOrigin ? g_windows.Find(g_path, g_group) : nullptr;
+            // The room's: the group's grid and the instance's frame (none without either: no room, lit; stained glass's own
+            // grid), the class, the palette's textures (with RoomTextures, once loaded; until then and without it white, a
+            // gain of 1).
+            const WindowTable::Grid* grid = g_inInstance && g_hasAxes && g_hasOrigin ? g_windows.Find(g_path, g_group, m.kind == kStained) : nullptr;
             const bool wanted = out[6] > 0.0f || out[39] > 0.0f;
             if (wanted && !grid) { if (!g_hasAxes) ++g_noFrame; else ++g_noGrid; }
             const uint32_t cls = style ? style->cls : DefaultStyle().cls;
@@ -306,8 +312,11 @@ namespace wxl_livingazeroth::glass
                 if (g_sets[set].state == 2) for (int k = 0; k < 4; ++k) gains[k] = g_sets[set].gain[k];
                 else { if (g_sets[set].state == 0) g_sets[set].state = 1; set = -1; }
             }
-            RoomRegisters(g_axes, g_origin, g_view, grid, g_windows.Height(), cls, scales, gains, g_settings, rooms);
-            g_roomBatches += grid && out[6] > 0.0f ? 1 : 0;
+            RoomRegisters(g_axes, g_origin, g_view, grid, g_windows.Height(), cls, scales, gains, g_settings, rooms, m.kind);
+            const unsigned withRoom = grid && out[6] > 0.0f ? 1 : 0;
+            g_roomBatches += withRoom;
+            g_frostRooms += m.kind == kFrosted ? withRoom : 0;
+            g_stainRooms += m.kind == kStained ? withRoom : 0;
         }
 
         // The room's samplers: the floor, walls, ceiling and wood (a set's, or white), the atlas, the table; their states
@@ -579,7 +588,7 @@ namespace wxl_livingazeroth::glass
     }
 
     void RoomBatchConstants(const RoomStyle& style, const Building* b, const Light& light, const RoomInputs& in, const Settings& s,
-                            float out[4 * kConstantCount], float seed[4 * kSeedRegisters])
+                            float out[4 * kConstantCount], float seed[4 * kSeedRegisters], float look[4 * kLookRegisters])
     {
         float* c = out;
         const bool variety = s.roomVariety != 0;
@@ -588,6 +597,13 @@ namespace wxl_livingazeroth::glass
         const uint32_t flags = b ? b->flags : 0;
         const bool empty = variety && (flags & kBuildingEmpty);
         const bool darkPlace = (flags & kBuildingDarkPlace) != 0;
+        const bool underground = (flags & kBuildingUnderground) != 0;
+        // Frosted and stained glass's rooms (FrostedRooms, StainedRooms: BatchConstants gave them their share): none in a
+        // dungeon (its frosted glass keeps the client's look; its stained glass is architecture, or titan glass).
+        if ((in.kind == kFrosted || in.kind == kStained) && !KindHasRoom(in.kind, flags, s)) c[6] = 0.0f;
+        const bool frostedRoom = in.kind == kFrosted && c[6] > 0.0f;
+        // (underground, behind frosted glass: no daylight, its lamps lit and its dark rooms' ambient at any hour)
+        const float roomNight = frostedRoom && underground ? 1.0f : night;
         // c198.w the day's light in the room (x the style's brightness; about the glass's own: DayRoomLight, with the
         // darkening BatchConstants put in c197.x); c199.rgb and c202.rgb the building's tints (its hash picks between
         // them), c202.w how far buildings differ in brightness.
@@ -607,24 +623,25 @@ namespace wxl_livingazeroth::glass
                 const float l = Lum(c + base);
                 for (int k = 0; k < 3; ++k) c[base + k] = l + (c[base + k] - l) * rooms::kTintWithTextures;
             }
-        c[27] = DayRoomLight(light.rooms, c[20], c + 28, c + 40, variety ? style.brightness : 1.0f, s);
+        c[27] = frostedRoom && underground ? 0.0f : DayRoomLight(light.rooms, c[20], c + 28, c + 40, variety ? style.brightness : 1.0f, s);
         c[43] = variety ? Clamp01(style.spread * v * dayVariety) : 0.0f;
         // The dark band (c203.w lo, c200.w hi; c212.w its slope, c213.w its base): the share of rooms dark (DarkShare:
         // by day the style's few, at night by the hour, inns late, shops early; every room in an empty building, and at
         // night in a dark place) by the rooms' clock, so a room the threshold crosses, or a jump of the time, fades.
-        // Lit frosted glass (no room behind it): its own band (FrostedBand), the cell and hash run for it (c201.w).
+        // Lit frosted glass: its own band (FrostedBand), the cell and hash run for it (c201.w); a frosted room's the same.
         const bool frosted = in.kind == kFrosted && FrostedLit(in.kind, in.selfLit, in.unlit, flags, s);
-        const DarkBand band = frosted ? FrostedBand(style, b, in, s) : RoomBand(style, flags, in, s);
+        const DarkBand band = frosted || frostedRoom ? FrostedBand(style, b, in, s) : RoomBand(style, flags, in, s);
         c[47] = band.lo;
         c[35] = band.hi;
-        // c203.rgb the lamp at night, behind the windows the client lights (SIDN): its colour at luminance 1 over the
-        // room's mean light, so a lit room is about as bright as the client's window (the shader x its luminance).
-        const bool lamp = s.litRooms && in.selfLit && !darkPlace && !empty;
+        // c203.rgb the lamp at night, behind the windows the client lights (SIDN; frosted glass it draws at full too): its
+        // colour at luminance 1 over the room's mean light, so a lit room is about as bright as the client's window (the
+        // shader x its luminance).
+        const bool lamp = s.litRooms && (in.selfLit || (frostedRoom && in.unlit)) && !darkPlace && !empty;
         float lampN[3];
         const float ll = std::max(1e-3f, 0.2126f * style.lamp[0] + 0.7152f * style.lamp[1] + 0.0722f * style.lamp[2]);
         for (int k = 0; k < 3; ++k) lampN[k] = std::max(0.0f, style.lamp[k]) / ll;
         const float lit = std::max(1e-3f, 0.2126f * c[28] * lampN[0] + 0.7152f * c[29] * lampN[1] + 0.0722f * c[30] * lampN[2]);
-        const float gain = lamp ? night * std::max(0.0f, s.litRoomStrength) / (lit * room::kNightMean) : 0.0f;
+        const float gain = lamp ? roomNight * std::max(0.0f, s.litRoomStrength) / (lit * room::kNightMean) : 0.0f;
         for (int k = 0; k < 3; ++k) c[44 + k] = lampN[k] * gain;
         // c204 the curtains' band in the room's hash (the style's shelves' weight .. + its curtains': the layouts' thresholds)
         // and the detail's strength; c205 the curtains, and how much of the client's lit window a dark room hides at night.
@@ -645,10 +662,37 @@ namespace wxl_livingazeroth::glass
         c[39] = 0.0f;
         if (frosted)
         {
-            for (int k = 44; k < 47; ++k) c[k] = 0.0f;
+            if (!frostedRoom) for (int k = 44; k < 47; ++k) c[k] = 0.0f;   // (no room: no lamp; a frosted room's lamp flickers with the hearth)
             c[55] = s.frostedLightsOut ? hearth::kFrostedHidden * night : 0.0f;
             c[38] = FlickerAmplitude(s.hearthFlicker, night);
             c[39] = 1.0f;
+        }
+        else if (frostedRoom) { c[55] = 0.0f; c[38] = 0.0f; }   // frosted glass the client doesn't light, or neither lights out nor flicker: steady
+        // A dark room at night isn't a black void (DarkRoomLight): the moon's and the night's light at its window (the day's
+        // light's shading: brighter by the window, the corners darker, the furniture dim shapes), in Light::moon's colour
+        // (underground the city's warm ambient), mixed into c198 by its share; only dark rooms take it (c218.zw), every room
+        // where there's no lamp. Without it c198 and c218.zw are exactly the day's.
+        const float dayLight = c[27];
+        const float moon = MoonRoomLight(roomNight, c + 28, c + 40, s);
+        if (moon > 0.0f)
+        {
+            float hue[3];
+            const float ul = Lum(room::kUndergroundHue);
+            for (int k = 0; k < 3; ++k) hue[k] = underground ? room::kUndergroundHue[k] / ul : light.moon[k];
+            const float w = moon / (dayLight + moon);
+            for (int k = 0; k < 3; ++k) c[24 + k] += (hue[k] - c[24 + k]) * w;
+            c[27] = dayLight + moon;
+        }
+        if (look)
+        {
+            look[2] = 1.0f - room::kDarkDay;
+            look[3] = room::kDarkDay;
+            if (moon > 0.0f)
+            {
+                const float sum = dayLight + moon;
+                look[2] = ((1.0f - room::kDarkDay) * dayLight - (lamp ? moon : 0.0f)) / sum;
+                look[3] = (room::kDarkDay * dayLight + moon) / sum;
+            }
         }
         // Underground (Ironforge's streets are its interior groups: what's behind its glass is more of the city, not the
         // sky): the street's look whatever the camera's indoors blend, with no sky, darkening or glint in it.
@@ -679,7 +723,8 @@ namespace wxl_livingazeroth::glass
         // the settings' shares x the kind's), thickness
         c[4] = inside; c[5] = 1.0f;
         const float share = s.roomShareNight + (s.roomShareDay - s.roomShareNight) * Clamp01(light.rooms);
-        c[6] = s.fakeInteriors && s.outsideReflection ? Clamp01(share * look.room) : 0.0f;
+        const float room = m.kind == kFrosted ? (s.frostedRooms ? kFrostedRoom : 0.0f) : m.kind == kStained ? (s.stainedRooms ? kStainedRoom : 0.0f) : look.room;
+        c[6] = s.fakeInteriors && s.outsideReflection ? Clamp01(share * room) : 0.0f;
         c[7] = look.thickness;
         // c194 the sky through the glass, the sun's gain
         for (int k = 0; k < 3; ++k) c[8 + k] = light.sky[k];
@@ -727,6 +772,22 @@ namespace wxl_livingazeroth::glass
     {
         (void)light;
         RoomLook(out);
+        out[2] = 1.0f - room::kDarkDay;   // the room's light lit x .z + .w: by day a dark room keeps kDarkDay of it
+        out[3] = room::kDarkDay;
+    }
+
+    float MoonRoomLight(float night, const float tintA[3], const float tintB[3], const Settings& s)
+    {
+        if (!std::isfinite(s.darkRoomLight) || !(s.darkRoomLight > 0.0f)) return 0.0f;
+        const float tintLum = std::max(0.05f, 0.5f * (Lum(tintA) + Lum(tintB)));
+        return std::min(1.0f, s.darkRoomLight) * Clamp01(night) / (room::kMoonMean * tintLum);
+    }
+
+    bool KindHasRoom(uint32_t kind, uint32_t buildingFlags, const Settings& s)
+    {
+        if (kind == kFrosted) return s.frostedRooms && !(buildingFlags & kBuildingDungeon);
+        if (kind == kStained) return s.stainedRooms && !(buildingFlags & kBuildingDungeon);
+        return kind == Kind::kClear || kind == kLeaded;
     }
 
     void DayConstants(const Material& m, const Light& light, const Settings& s, uint32_t buildingFlags, float out[4 * kDayRegisters])
@@ -746,7 +807,8 @@ namespace wxl_livingazeroth::glass
     }
 
     void RoomRegisters(const float axes[9], const float origin[3], const float camera[3], const WindowTable::Grid* grid, int tableHeight,
-                       uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters])
+                       uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters],
+                       uint32_t glassKind)
     {
         std::memset(out, 0, sizeof(float) * 4 * kRoomRegisters);
         // c15..c17: the point in its WMO's space = the rows . (P about the camera, 1): row i its axis i in the world, the
@@ -786,6 +848,16 @@ namespace wxl_livingazeroth::glass
         }
         // c24, c25: the furniture's tiles, the middle's and the back's
         for (int k = 0; k < 4; ++k) { out[36 + k] = static_cast<float>(kind.mid[k]); out[40 + k] = static_cast<float>(kind.back[k]); }
+        // c26: behind frosted glass (FrostedRooms) the footprint at least kFrostedBlur yd, its windows' rooms allowed, the
+        // faces' shades kFrostedFlatten of the way to kFaceMean; c27: behind stained glass (StainedRooms) the room x
+        // lerp(1, the glass's hue, kStainedTint). Any other kind the room as it was: (0, 0, 0, kFaceMean), (1, 0, 0, 0).
+        const bool frosted = glassKind == kFrosted && s.frostedRooms, stained = glassKind == kStained && s.stainedRooms;
+        out[44] = frosted ? kFrostedBlur : 0.0f;
+        out[45] = frosted ? 1.0f : 0.0f;
+        out[46] = frosted ? kFrostedFlatten : 0.0f;
+        out[47] = kFaceMean;
+        out[48] = stained ? 1.0f - kStainedTint : 1.0f;
+        out[49] = stained ? kStainedTint : 0.0f;
     }
 
     bool IsRotation(const float a[9])
@@ -1029,6 +1101,7 @@ namespace wxl_livingazeroth::glass
         // One room per window: the windows (their WMO's space), the lookup table the shader reads.
         std::vector<Window> windows;
         unsigned windowRows = 0, noWmo = 0, otherKind = 0;
+        g_stainedWindows = g_frostedWindows = 0;
         bool windowsRead = false;
         err[0] = 0;
         if (void* t = cdbcload::LoadAppendOnly(cdbc, kWindowDef, err, sizeof(err)))
@@ -1052,10 +1125,15 @@ namespace wxl_livingazeroth::glass
                 w.halfWidth = F(row, "HalfWidth", 0.0f);
                 w.halfHeight = F(row, "HalfHeight", 0.0f);
                 w.thickness = F(row, "Thickness", 0.0f);
-                const bool kind = w.kind == Kind::kClear || w.kind == kLeaded || w.kind == kFrosted;
+                const bool kind = w.kind == Kind::kClear || w.kind == kLeaded || w.kind == kFrosted || w.kind == kStained;
                 noWmo += w.path ? 0 : 1;
                 otherKind += w.path && !kind ? 1 : 0;
-                if (w.path && kind) windows.push_back(w);
+                if (w.path && kind)
+                {
+                    g_stainedWindows += w.kind == kStained ? 1 : 0;
+                    g_frostedWindows += w.kind == kFrosted ? 1 : 0;
+                    windows.push_back(w);
+                }
             }
             cdbc->Release(t);
         }
@@ -1065,17 +1143,18 @@ namespace wxl_livingazeroth::glass
         {
             char line[400];
             if (haveWindows)
-                std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %u windows in %u WMO groups (a table of %d x %d)",
-                              static_cast<unsigned>(g_windows.Windows()), static_cast<unsigned>(g_windows.Grids()), rooms::kWidth, g_windows.Height());
+                std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %u windows in %u WMO groups (a table of %d x %d; %u frosted, %u stained in grids of their own)",
+                              static_cast<unsigned>(g_windows.Windows()), static_cast<unsigned>(g_windows.Grids()), rooms::kWidth, g_windows.Height(),
+                              g_frostedWindows, g_stainedWindows);
             else if (windowsRead)
                 std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %u rows, no window kept (no rooms behind the glass)", windowRows);
             else
                 std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %s (no rooms behind the glass)", err[0] ? err : "not found");
             std::string s = line;
-            // Rows left out: no WMO path (a WMO's windows are found by it) or a kind that has no room (none, stained).
+            // Rows left out: no WMO path (a WMO's windows are found by it) or no kind of glass.
             if (noWmo || otherKind)
             {
-                std::snprintf(line, sizeof(line), "; %u rows left out: %u without a WMO, %u not clear, leaded or frosted glass", noWmo + otherKind, noWmo, otherKind);
+                std::snprintf(line, sizeof(line), "; %u rows left out: %u without a WMO, %u not clear, leaded, frosted or stained glass", noWmo + otherKind, noWmo, otherKind);
                 s += line;
             }
             g_loadProblem = g_loadProblem || !haveWindows;
@@ -1130,6 +1209,8 @@ namespace wxl_livingazeroth::glass
         g_lastBacklitFloor = g_backlitFloor; g_backlitFloor = 0;
         g_lastRoomBatches = g_roomBatches; g_lastNoFrame = g_noFrame; g_lastNoGrid = g_noGrid;
         g_roomBatches = g_noFrame = g_noGrid = 0;
+        g_lastFrostRooms = g_frostRooms; g_lastStainRooms = g_stainRooms;
+        g_frostRooms = g_stainRooms = 0;
         if (g_settings.enabled && g_patched > 0) RoomTexturesUpdate();
         if (g_inWorld)
         {
@@ -1161,6 +1242,7 @@ namespace wxl_livingazeroth::glass
         {
             const float peak = std::max(diffuse[0], std::max(diffuse[1], diffuse[2]));
             for (int k = 0; k < 3; ++k) in.sunColour[k] = peak > 0.05f ? std::min(1.5f, diffuse[k] / peak * 1.2f) : 1.0f;
+            for (int k = 0; k < 3; ++k) in.ambient[k] = ambient[k] + diffuse[k];   // (at night the moon's and the night's: the dark rooms' hue)
         }
         g_light = Evaluate(in);
         for (int k = 0; k < 3; ++k) { g_sun[k] = in.sun[k]; g_sunColour[k] = in.sunColour[k]; g_sky[k] = in.sky[k]; }
@@ -1303,6 +1385,14 @@ namespace wxl_livingazeroth::glass
         return s.enabled && g_patched > 0 && s.frostedLightsOut;
     }
 
+    bool StainedRoomsOn()
+    {
+        const Settings& s = g_settings;
+        return s.enabled && g_patched > 0 && s.fakeInteriors && s.outsideReflection && s.stainedRooms;
+    }
+
+    bool StainedHideGlow() { return StainedRoomsOn() && RoomsHideGlow(); }
+
     DarkBand FrostedBandNow(const RoomStyle& style, const Building* building)
     {
         return FrostedBand(style, building, FrameInputs(), g_settings);
@@ -1333,8 +1423,7 @@ namespace wxl_livingazeroth::glass
         {
             float c[4 * kConstantCount], seed[4 * kSeedRegisters], look[4 * kLookRegisters], day[4 * kDayRegisters], rooms[4 * kRoomRegisters];
             int set = -1;
-            GlassConstants(*m, selfLit, unlit, c, seed, day, rooms, set);
-            LookConstants(g_light, look);
+            GlassConstants(*m, selfLit, unlit, c, seed, day, look, rooms, set);
             UploadFrame(dev);
             dev->SetPixelShaderConstantF(kFirstConstant, c, kConstantCount);
             dev->SetPixelShaderConstantF(kSeedConstant, seed, kSeedRegisters);
@@ -1434,6 +1523,9 @@ namespace wxl_livingazeroth::glass
         api->UiCheckbox("titan glass (Ulduar, Halls of Stone and Lightning): lit from behind, at any hour##glttn", &s.titanBacklit);
         api->UiSliderFloat("titan glass: its glow and the light it casts (x)##glttns", &s.backlitStrength, 0.0f, 3.0f);
         api->UiSliderFloat("titan glass: General Vezax's slow pulse (x; 0 = steady)##glvzx", &s.vezaxPulse, 0.0f, 3.0f);
+        api->UiCheckbox("rooms behind frosted glass: heavily blurred, the lamp a soft glow##glfrr", &s.frostedRooms);
+        api->UiCheckbox("rooms behind stained glass: faint, tinted by the glass##glstr", &s.stainedRooms);
+        api->UiSliderFloat("rooms: a dark room's light at night (share of a lit one: moon and night)##gldrl", &s.darkRoomLight, 0.0f, 0.4f);
         api->UiCheckbox("rooms: furniture (tables, beds, shelves, hearths...) at its depth##gldet", &s.roomDetail);
         api->UiCheckbox("rooms: floors, walls and ceilings in the client's interior textures##gltex", &s.roomTextures);
         api->UiCheckbox("rooms: curtains half drawn in some##gllay", &s.roomLayouts);
@@ -1505,11 +1597,12 @@ namespace wxl_livingazeroth::glass
         // waiting are wanted and not loaded yet, the rest no batch has wanted (no building of theirs drawn).
         int loaded = 0, failed = 0, waiting = 0;
         for (const SetTextures& st : g_sets) { loaded += st.state == 2 ? 1 : 0; failed += st.state == 3 ? 1 : 0; waiting += st.state == 1 ? 1 : 0; }
-        char buf[768];
+        char buf[1024];
         std::snprintf(buf, sizeof(buf), "%s; on the device: table %s, atlas %s; texture sets loaded %d of %d (%d waiting, %d failed%s%s); last frame %u glass batches "
-                      "with rooms, %u without a placement frame, %u whose group has no windows",
+                      "with rooms (%u behind frosted glass, %u behind stained), %u without a placement frame, %u whose group has no windows",
                       g_windowStatus.c_str(), g_tableTex ? "yes" : "no", g_atlasTex ? "yes" : "no", loaded, kTextureSets, waiting, failed,
-                      g_textureError.empty() ? "" : ": ", g_textureError.c_str(), g_lastRoomBatches, g_lastNoFrame, g_lastNoGrid);
+                      g_textureError.empty() ? "" : ": ", g_textureError.c_str(), g_lastRoomBatches, g_lastFrostRooms, g_lastStainRooms, g_lastNoFrame,
+                      g_lastNoGrid);
         line = buf;
         return line.c_str();
     }

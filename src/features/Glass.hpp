@@ -22,6 +22,12 @@
 //    HearthClockNow, HearthAmplitudeNow). A dungeon's frosted glass keeps the client's look.
 //  - Underground (GlassBuildings' kBuildingUnderground: Ironforge's interior groups) the glass has the street's look
 //    with no sky, sun or glint in it, and its panes (GlassPanes' kPaneNoSky) light no floor and make no shafts.
+//  - Behind frosted glass a heavily blurred room (FrostedRooms; not a dungeon's), behind stained glass a faint one tinted
+//    by its colours (StainedRooms; its windows in grids of their own, not a dungeon's, not titan glass lit from behind):
+//    "the rooms behind the windows look gorgeous but when lights in the windows are turned off I can't see the rooms at
+//    all. It also seems like rooms behind Dalaran and Ironforge windows don't work?" (the user, 2026-10-20). A dark room at
+//    night keeps DarkRoomLight of a lit one's light: the moon's and the night's, at its window (Light::moon); underground
+//    the city's warm ambient, and a frosted room there lamp-lit at any hour (no daylight).
 //  - Titan glass with no sky behind it (GlassBuildings' kBuildingBacklit, GlassMaterials' Backlit: Ulduar, the Halls of
 //    Stone and of Lightning) is lit from behind: its batches take the inside look with a steady light behind them (its
 //    texture's strength, General Vezax's with a slow pulse: BacklitConstants; no sky, sun or glint), the same at any hour,
@@ -43,6 +49,13 @@ namespace wxl_livingazeroth::glass
 {
     /// Leaded glass's share of the room (x RoomShareDay, RoomShareNight): its lead hides a little of it.
     constexpr float kLeadedRoom = 0.85f;
+    /// Frosted and stained glass's (with FrostedRooms, StainedRooms): the frosted glass in front dominates; stained glass
+    /// shows a faint room, mostly its own colours.
+    constexpr float kFrostedRoom = 0.75f, kStainedRoom = 0.45f;
+    /// Behind frosted glass the room's footprint at least kFrostedBlur yd (its textures at a low mip, its furniture's and
+    /// curtains' edges soft), its faces' shades kFrostedFlatten of the way to kFaceMean (no crisp corner); behind stained
+    /// glass the room x lerp(1, the glass's hue, kStainedTint).
+    constexpr float kFrostedBlur = 0.3f, kFrostedFlatten = 0.5f, kFaceMean = 0.75f, kStainedTint = 0.75f;
 
     struct Settings
     {
@@ -84,6 +97,10 @@ namespace wxl_livingazeroth::glass
         int   titanBacklit = 1;         // lit from behind: it glows at any hour, its colours on the floor and in the air (0: the sun's, as other glass)
         float backlitStrength = 1.0f;   // x its glow and the light it casts
         float vezaxPulse = 1.0f;        // x the slow pulse of General Vezax's glass (0: steady)
+        // The rooms behind frosted and stained glass; the dark rooms at night.
+        int   frostedRooms = 1;         // behind frosted glass a heavily blurred room, its lamp a soft glow (not a dungeon's)
+        int   stainedRooms = 1;         // behind stained glass a faint room tinted by its colours (not a dungeon's, not titan glass lit from behind)
+        float darkRoomLight = 0.12f;    // a dark room at night keeps this share of a lit one's light: the moon's and the night's at its window
     };
     Settings& Config();
 
@@ -103,14 +120,18 @@ namespace wxl_livingazeroth::glass
     /// The room is the plain warm one (as before room variety); RoomBatchConstants makes it a building's.
     void BatchConstants(const Material& m, float inside, const Light& light, const float sun[3], const float sunColour[3], const float sky[3],
                         const Settings& s, float out[4 * kConstantCount]);
-    /// The room's detail by the distance for a batch (c218: env/GlassModel's RoomLook).
+    /// The room's detail by the distance for a batch (c218.xy: env/GlassModel's RoomLook) and its light lit and dark as by
+    /// day (c218.zw: 1 - room::kDarkDay, room::kDarkDay; RoomBatchConstants sets a batch's own with the moon's at night).
     void LookConstants(const Light& light, float out[4 * kLookRegisters]);
-    /// The room's registers for a batch (c15..c25: GlassShader.hpp): the instance's frame (`axes`: its WMO's x, y and z in
+    /// The room's registers for a batch (c15..c27: GlassShader.hpp): the instance's frame (`axes`: its WMO's x, y and z in
     /// the world, three rows; `origin` where its 0, 0, 0 stands) about the camera; the group's grid in the window table
     /// (null: no rooms) and the table's height; the building's class (its rooms' depth and furniture: RoomKindOf); the
-    /// texture set's scales (yd a repeat) and gains (to a mean of 1); the settings (RoomDetail, LayoutStrength).
+    /// texture set's scales (yd a repeat) and gains (to a mean of 1); the settings (RoomDetail, LayoutStrength); the glass's
+    /// kind (c26, c27: frosted glass's blur and its windows' rooms with FrostedRooms, stained glass's tint with
+    /// StainedRooms; any other kind, or either off, (0, 0, 0, kFaceMean) and (1, 0, 0, 0): the room as it was).
     void RoomRegisters(const float axes[9], const float origin[3], const float camera[3], const WindowTable::Grid* grid, int tableHeight,
-                       uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters]);
+                       uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters],
+                       uint32_t kind = Kind::kClear);
     /// Whether a placement matrix's rotation (three rows) is a rotation: unit rows at right angles (else no rooms).
     bool IsRotation(const float axes[9]);
     /// The windows as loaded (GlassWindows.cdbc; for the tests and the panel).
@@ -153,14 +174,25 @@ namespace wxl_livingazeroth::glass
     DarkBand FrostedBand(const RoomStyle& style, const Building* building, const RoomInputs& in, const Settings& s);
     /// The flicker's amplitude at this night factor: `amount` (HearthFlicker, LampFlicker) x the night, 0..1.
     float FlickerAmplitude(float amount, float night);
-    /// Rewrites the room's part of `out` (c198.w, c199.rgb, c200.w, c201.yzw, c202..c205; `out` as BatchConstants left
-    /// it: the day's room light goes by its darkening, c197.x) and fills `seed` (c212: the seed, the block, the dark
-    /// band's slope; c213: the building's origin, else the instance's, and the band's base). The
-    /// band: c203.w lo, c200.w hi. Lit frosted glass (FrostedLit) gets its band, c201.w 1, the glow a dark one hides at
-    /// night (c205.w) and the hearth's flicker (c201.y the clock, c201.z its amplitude); a lamp-lit room the lamps'
-    /// (LampFlicker). Underground (kBuildingUnderground) the street's look without sky: c193.x, c196.w, c197.xy 0.
+    /// Rewrites the room's part of `out` (c193.z for a dungeon's frosted or stained glass, c198, c199.rgb, c200.w,
+    /// c201.yzw, c202..c205; `out` as BatchConstants left it: the day's room light goes by its darkening, c197.x) and fills
+    /// `seed` (c212: the seed, the block, the dark band's slope; c213: the building's origin, else the instance's, and the
+    /// band's base). The band: c203.w lo, c200.w hi. Lit frosted glass (FrostedLit) gets its band, c201.w 1, the glow a
+    /// dark one hides at night (c205.w) and the hearth's flicker (c201.y the clock, c201.z its amplitude); a lamp-lit room
+    /// the lamps' (LampFlicker); a frosted room (FrostedRooms) the frosted band and the lamp behind lit frosted glass,
+    /// underground lamp-lit at any hour with no daylight. Underground (kBuildingUnderground) the street's look without
+    /// sky: c193.x, c196.w, c197.xy 0. A dark room at night (DarkRoomLight): c198.w has the moon's light too (the moon's
+    /// part, MoonRoomLight) and c198.rgb its colour mixed in by its share; `look` (c218, when given) its .zw so only dark
+    /// rooms take it (lit x .z + .w; with no lamp, every room): exactly the day's (1 - kDarkDay, kDarkDay) without it.
     void RoomBatchConstants(const RoomStyle& style, const Building* building, const Light& light, const RoomInputs& in, const Settings& s,
-                            float out[4 * kConstantCount], float seed[4 * kSeedRegisters]);
+                            float out[4 * kConstantCount], float seed[4 * kSeedRegisters], float look[4 * kLookRegisters] = nullptr);
+    /// The moon's light in a dark room for a batch (c198.w's part): DarkRoomLight x `night` / (room::kMoonMean x the
+    /// building's tints' mean luminance), so a dark room is about DarkRoomLight of a lit one (whose lamp is the client's
+    /// window's light / room::kNightMean). 0 with DarkRoomLight 0 or not finite.
+    float MoonRoomLight(float night, const float tintA[3], const float tintB[3], const Settings& s);
+    /// Whether a batch's glass has a room behind it now by kind: clear and leaded, frosted with FrostedRooms (not a
+    /// dungeon's), stained with StainedRooms (not a dungeon's).
+    bool KindHasRoom(uint32_t kind, uint32_t buildingFlags, const Settings& s);
     /// The fallback seed of an instance the tables don't have: its WMO's PathHash when known (the same for every copy,
     /// and features/Windows can know it), else the hook's.
     uint32_t FallbackSeed(uint32_t path, uint32_t hookSeed);
@@ -196,6 +228,11 @@ namespace wxl_livingazeroth::glass
     bool RoomsHideGlow();
     /// Whether dark frosted glass hides its glow now (the glass on, its blocks in the shaders, FrostedLightsOut).
     bool FrostedHideGlow();
+    /// Whether stained glass has rooms now (the glass on, its blocks in the shaders, FakeInteriors with OutsideReflection,
+    /// StainedRooms): the window lights read WindowRooms' stained cells, else its cells as they were before.
+    bool StainedRoomsOn();
+    /// Whether a dark stained room hides its glass's glow now (StainedRoomsOn and RoomsHideGlow).
+    bool StainedHideGlow();
     /// This frame's dark band for lit frosted glass in a building (null: the default house).
     DarkBand FrostedBandNow(const RoomStyle& style, const Building* building);
     /// This frame's hearth clock and the flicker's amplitudes (the glass's, as its batches get them): frosted glass's

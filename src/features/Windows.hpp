@@ -36,16 +36,20 @@ namespace wxl_livingazeroth::windows
     Settings& Config();
 
     /// How much of the window's glass is lit now, 0..1 (features/Glass's rooms and lit frosted glass, WindowRooms.cdbc):
-    /// each room's or frosted cell's lit value x (1 - the flicker's dip: a hearth behind frosted glass, a room's lamp with
-    /// LampFlicker); 1 with LightsFollowRooms off, for cells whose glass doesn't hide its glow now (the glass, its rooms
-    /// or lamp-lit rooms off; FrostedLightsOut off), and for glass with neither (stained, not glass). Once per window per
-    /// frame.
+    /// each room's, frosted or stained cell's lit value x (1 - the flicker's dip: a hearth behind frosted glass, a room's
+    /// lamp with LampFlicker); 1 with LightsFollowRooms off, for cells whose glass doesn't hide its glow now (the glass,
+    /// its rooms or lamp-lit rooms off; FrostedLightsOut off; StainedRooms off; titan glass lit from behind), and for glass
+    /// with none (not glass, a dungeon's stained glass). The cells read are those of the stained glass's state now:
+    /// with its rooms (glass::StainedRoomsOn) kCellStained and kCellWithStained, without them kCellUnstained (so with
+    /// StainedRooms off every light dims as it did before stained glass had rooms). Once per window per frame.
     float LitShare(const Window& w);
     /// Whether the window light's flicker is in its LitShare, in time with the glass (a hearth's, a lamp's): env/Lights
     /// then leaves out the light's own.
     bool SyncedFlicker(const Window& w);
-    /// WindowRooms.Flags: the cell is lit frosted glass (no room behind it: the glass itself goes dark and flickers).
-    constexpr uint32_t kCellFrosted = 0x1;
+    /// WindowRooms.Flags: the cell is lit frosted glass (the glass itself goes dark and flickers; its room blurred);
+    /// stained glass (its faint room: read only while stained glass has rooms); read only while it hasn't (the cell as it
+    /// was before, the stained glass found among the other windows); a room or frosted cell read only while it has.
+    constexpr uint32_t kCellFrosted = 0x1, kCellStained = 0x2, kCellUnstained = 0x4, kCellWithStained = 0x8;
 
     /// (Re)loads WindowLights.cdbc from DBFilesClient (the lights panel's reload button calls it too).
     void Load(const WXL_SeyrisCdbcApi* cdbc);

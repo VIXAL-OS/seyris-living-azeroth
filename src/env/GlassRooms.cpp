@@ -450,7 +450,7 @@ namespace wxl_livingazeroth::glass
             const float l = std::sqrt(Dot3(w.normal, w.normal));
             if (!(l > 0.5f) || !(w.halfWidth > 0.0f) || !(w.halfHeight > 0.0f)) continue;
             for (float& v : w.normal) v /= l;
-            byGroup[Key(w.path, w.group)].push_back(i);
+            byGroup[Key(w.path, w.kind == kStained ? (w.group | kStainedGrid) : w.group)].push_back(i);
         }
         // each group's windows by ordinal: a cell lists them so, and where two overlap the shader takes the first
         for (auto& kv : byGroup)
@@ -561,9 +561,10 @@ namespace wxl_livingazeroth::glass
         }
     }
 
-    const WindowTable::Grid* WindowTable::Find(uint32_t path, uint32_t group) const
+    const WindowTable::Grid* WindowTable::Find(uint32_t path, uint32_t group, bool stained) const
     {
-        auto it = m_grids.find(Key(path, group));
+        if (group & kStainedGrid) return nullptr;
+        auto it = m_grids.find(Key(path, stained ? (group | kStainedGrid) : group));
         return it == m_grids.end() ? nullptr : &it->second;
     }
 

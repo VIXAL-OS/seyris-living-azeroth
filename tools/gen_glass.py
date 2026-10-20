@@ -37,15 +37,17 @@ GlassPanes (one row per window pane of every placed WMO with glass, all maps the
   light is its texture's x the share of the texture that is glass (at least 0.35). Windows painted into a wall texture
   have no panes (their triangles are the whole wall).
 
-GlassWindows (one row per window of every WMO file with clear, leaded or frosted glass; not per placement): one room
-behind each window (the shader finds the window a pixel is in and looks into that window's room), and the night's
-lights out by window (gen_window_lights' WindowRooms names the same windows).
+GlassWindows (one row per window of every WMO file with glass; not per placement): one room behind each window (the
+shader finds the window a pixel is in and looks into that window's room), and the night's lights out by window
+(gen_window_lights' WindowRooms names the same windows). Frosted glass's room is blurred, stained glass's tinted and faint
+(the user, 2026-10-20: "rooms behind Dalaran and Ironforge windows don't work?").
 - A window: a group's panes (connected coplanar glass, not tiled) that face within W_FACING on one plane (W_PLANE),
   side by side or stacked with at most W_GAP between their rectangles (a mullion; a facade's windows stand 0.6 yd or
-  more apart), up to W_WIDTH x W_HEIGHT; clear and leaded glass together, frosted only with frosted. Panes whose
-  rectangles overlap on one plane are one window whatever its size (duplicated faces, an arch over its window), so a
-  pixel lies in one window; so are windows facing within W_TWIN (or back to back: a sheet's two faces) where one's
-  middle lies in the other's lookup, if their glass stays within W_DEPTH of one plane (twins()). A window wider or
+  more apart), up to W_WIDTH x W_HEIGHT; clear and leaded glass together, frosted only with frosted, stained only with
+  stained (numbered after all the others, STAINED_SORT, so theirs stay as they were). Panes whose rectangles overlap on
+  one plane are one window whatever its size (duplicated faces, an arch over its window), so a pixel lies in one window;
+  so are windows facing within W_TWIN (or back to back: a sheet's two faces) where one's middle lies in the other's
+  lookup, if their glass stays within W_DEPTH of one plane (twins()). A window wider or
   taller than W_CUT (a tall tower window, a wall of hide panels) is cut into equal tiles, each a window, its glass cut
   exactly at their edges; the tiles keep the window's normal (their rectangles share its frame and never overlap; a
   curved sheet's tiles stand off it).
@@ -811,9 +813,11 @@ def titan_glass(scan, map_id, mapdir, wmo, uid, pos, rot):
 # A window divided by stone or wooden mullions into several pieces of glass is one window, with one room behind all of
 # them (the mullions stand in front of it). Per WMO file, not per placement (the runtime finds a pixel's window in WMO
 # space, so every instance and the transports work), and per group: the panes of clear and leaded glass (they may share
-# a window) and of frosted glass (only with frosted; stained glass has none) join when they face the same way on one
+# a window), of frosted glass (only with frosted) and of stained glass (only with stained) join when they face the same way on one
 # plane, side by side or stacked with no more than a mullion between their rectangles, up to a window's size.
-ROOM_GLASS = (CLEAR, LEADED)    # kinds with a room behind them
+ROOM_GLASS = (CLEAR, LEADED)    # kinds with a room behind them (frosted and stained glass too, each its own sort: a blurred
+                                # room, a tinted one; the runtime looks a stained pane's window up among the stained ones only)
+STAINED_SORT = 2                # wmo_windows' sorts: room glass, frosted, stained (its ordinals after the others')
 W_MIN_AREA = 0.02   # yd^2: glass pieces this small still join a window (a mullioned window's small lights)...
 W_ALONE = MIN_AREA  # ... but a window smaller than this in all is trim
 W_FACING = 0.985    # cos: the panes of one window face within ~10 degrees of each other
@@ -1131,8 +1135,17 @@ def windows_of(sorts):
     return windows
 
 
+def stained_rooms(wmo):
+    """Whether a WMO's stained glass has rooms behind it: not a dungeon's (Tempest Keep's walls and floors, Azjol-Nerub's
+    roof, the Sunwell, Karazhan: glass as architecture; Ulduar's and the Halls' titan glass, lit from behind)."""
+    return not is_dungeon(wmo)
+
+
 def wmo_windows(scan, wmo):
-    """The WMO's windows (WMO space; windows_of), or [] and why."""
+    """The WMO's windows (WMO space; windows_of), or [] and why. Its clear, leaded and frosted windows are numbered first,
+    as before stained glass had rooms; its stained windows (only with stained: STAINED_SORT; stained_rooms) after them, so
+    every other window keeps its ordinal (its room's key and the window lights' cells). A stained window cut into tiles
+    (wider or taller than W_CUT: a dome, a wall of glass, not a window into a room) is left out."""
     rp = flat(scan, wmo)
     if not rp.exists():
         return [], "root missing"
@@ -1140,13 +1153,20 @@ def wmo_windows(scan, wmo):
     mats = glass_materials(info, panes=True)
     room = {i: t for i, t in mats.items() if classify(t)[0] in ROOM_GLASS}
     frost = {i: t for i, t in mats.items() if classify(t)[0] == FROSTED}
-    if not room and not frost:
+    stained = {i: t for i, t in mats.items() if classify(t)[0] == STAINED} if stained_rooms(wmo) else {}
+    if not room and not frost and not stained:
         return [], "no glass"
-    _groups, sorts, tris, missing = read_groups(scan, wmo, info, [room, frost], W_MIN_AREA, tile=False)
+    _groups, sorts, tris, missing = read_groups(scan, wmo, info, [room, frost, stained], W_MIN_AREA, tile=False)
     if missing == info["groups"]:
         return [], "groups missing"
     face_out(sorts[0] + sorts[1], tris)
-    windows = windows_of(sorts)
+    windows = windows_of(sorts[:2])
+    if sorts[2]:
+        face_out(sorts[2], tris)
+        first = len(windows)
+        windows += [w for w in windows_of(sorts[2:]) if w.tile is None]
+        for k in range(first, len(windows)):
+            windows[k].ordinal = k
     return windows, ("%d groups missing" % missing if missing else "")
 
 
@@ -1861,7 +1881,7 @@ def write_windows(scan, folder):
     per_group = collections.Counter((r[1], r[2]) for r in rows)
     print(f"{len(rows)} windows in {report['WMOs']} WMOs ({len(per_group)} groups, at most {max(per_group.values(), default=0)} "
           f"in one): {report['single']} of one pane, {report['merged']} of panes merged, {report['tiles']} tiles of "
-          f"{report['cut']} big windows; " + ", ".join(f"{sum(1 for r in rows if r[4] == k)} {KIND_NAMES[k]}" for k in (CLEAR, LEADED, FROSTED)) +
+          f"{report['cut']} big windows; " + ", ".join(f"{sum(1 for r in rows if r[4] == k)} {KIND_NAMES[k]}" for k in (CLEAR, LEADED, FROSTED, STAINED)) +
           f"; {report['deep']} with glass more than {W_DEPTH} yd off their plane (curved)")
     missing = {k: n for k, n in report.items() if k.startswith("WMOs ")}
     if missing:

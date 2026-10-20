@@ -28,7 +28,7 @@ namespace wxl_livingazeroth::glass
     {
         uint32_t path = 0;                  // PathHash of its WMO
         uint32_t group = 0, ordinal = 0;    // its group; its index in its WMO (the room's key: ordinal, group)
-        uint32_t kind = Kind::kClear;       // clear, leaded or frosted (no room: its lights out only)
+        uint32_t kind = Kind::kClear;       // clear, leaded, frosted (a blurred room) or stained (a faint tinted one: its own grids)
         uint32_t flags = 0;
         float center[3] = {};
         float normal[3] = { 1, 0, 0 };      // unit; the shader puts the room on the side away from the eye
@@ -145,8 +145,11 @@ namespace wxl_livingazeroth::glass
     ///         its thickness: the point (WMO space, w = 1) dotted with them within 1 inside it;
     ///   3: (half width + kMargin, half height + kMargin, its thickness, its ordinal).
     /// A cell lists its windows by ordinal: where two overlap the shader takes the lower (as gen_window_lights does);
-    ///   4: (the room's half width, its floor, its ceiling (yd about the window's middle), 1 frosted: no room);
+    ///   4: (the room's half width, its floor, its ceiling (yd about the window's middle), 1 frosted: a room only for a
+    ///      batch that lets frosted windows have one, c26.y);
     ///   5: (its middle xyz, its group).
+    /// Stained windows have grids of their own (Find's `stained`): a stained batch's pixel finds only them, any other
+    /// batch's never (so the others find what they found before stained glass had rooms).
     class WindowTable
     {
     public:
@@ -158,8 +161,9 @@ namespace wxl_livingazeroth::glass
             uint32_t base = 0;      // the first cell's texel
             uint32_t windows = 0, entries = 0, worst = 0;   // windows, entries over its cells, the most in a cell
         };
+        static constexpr uint32_t kStainedGrid = 0x80000000u;   // a stained window's group in its grid's key
         void Build(std::vector<Window> windows);
-        const Grid* Find(uint32_t path, uint32_t group) const;
+        const Grid* Find(uint32_t path, uint32_t group, bool stained = false) const;
         /// The texels (RGBA), kWidth x Height().
         const std::vector<float>& Texels() const { return m_texels; }
         int Height() const { return m_height; }

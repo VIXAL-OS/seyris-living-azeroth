@@ -57,8 +57,14 @@ namespace wxl_livingazeroth::windows
         struct RoomCell
         {
             const glass::RoomStyle* style = nullptr; const glass::Building* building = nullptr;
-            uint32_t flags = 0; float hash = 0.5f, share = 0.0f; bool frosted = false;
+            uint32_t flags = 0; float hash = 0.5f, share = 0.0f; bool frosted = false, stained = false;
+            uint32_t cell = 0;   // the table's Flags (kCellStained, kCellUnstained, kCellWithStained: which state reads it)
         };
+        // Whether a cell is read with stained glass's rooms (`stainedOn`) or without them.
+        bool CellRead(uint32_t cellFlags, bool stainedOn)
+        {
+            return !(cellFlags & (stainedOn ? kCellUnstained : (kCellStained | kCellWithStained)));
+        }
         std::vector<RoomRef>  g_refs;
         std::vector<RoomCell> g_cells;
         uint32_t g_resolvedFor = 0;        // glass::Generation() g_cells were resolved for (0: never)
@@ -145,7 +151,7 @@ namespace wxl_livingazeroth::windows
                 ++cells;
             }
             cdbc->Release(t);
-            unsigned windows = 0, frostWindows = 0, frostCells = 0;
+            unsigned windows = 0, frostWindows = 0, frostCells = 0, stainWindows = 0, stainCells = 0, before = 0;
             for (Window& w : rows)
             {
                 auto it = byWindow.find(w.id);
@@ -153,14 +159,22 @@ namespace wxl_livingazeroth::windows
                 w.roomFirst = static_cast<uint32_t>(g_refs.size());
                 w.roomCount = static_cast<uint32_t>(it->second.size());
                 g_refs.insert(g_refs.end(), it->second.begin(), it->second.end());
-                bool frost = false;
-                for (const RoomRef& r : it->second) { frost = frost || (r.flags & kCellFrosted); frostCells += (r.flags & kCellFrosted) ? 1u : 0u; }
+                bool frost = false, stain = false;
+                for (const RoomRef& r : it->second)
+                {
+                    before += (r.flags & kCellUnstained) ? 1u : 0u;
+                    if (r.flags & kCellUnstained) continue;   // (counted as stained glass's rooms read them)
+                    frost = frost || (r.flags & kCellFrosted); frostCells += (r.flags & kCellFrosted) ? 1u : 0u;
+                    stain = stain || (r.flags & kCellStained); stainCells += (r.flags & kCellStained) ? 1u : 0u;
+                }
                 ++windows;
                 frostWindows += frost ? 1u : 0u;
+                stainWindows += stain ? 1u : 0u;
             }
-            char line[256];
-            std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u cells behind %u of the windows' glass (%u of them lit frosted glass, at %u windows)",
-                          cells, windows, frostCells, frostWindows);
+            char line[384];
+            std::snprintf(line, sizeof(line), "WindowRooms.cdbc: %u cells behind %u of the windows' glass (%u of them lit frosted glass, at %u windows; "
+                          "%u stained glass, at %u windows; %u read only without stained glass's rooms)",
+                          cells, windows, frostCells, frostWindows, stainCells, stainWindows, before);
             g_roomStatus = line;
         }
 
@@ -187,6 +201,8 @@ namespace wxl_livingazeroth::windows
                 c.hash = glass::LitHash(r.cell[0], r.cell[1], static_cast<float>(seed & 1023u), static_cast<float>((seed >> 10) & 1023u));
                 c.share = r.share;
                 c.frosted = (r.flags & kCellFrosted) != 0;
+                c.stained = (r.flags & kCellStained) != 0;
+                c.cell = r.flags;
             }
         }
     }
@@ -194,8 +210,11 @@ namespace wxl_livingazeroth::windows
     float LitShare(const Window& w)
     {
         if (!g_settings.lightsFollowRooms || !w.roomCount) return 1.0f;
-        // What follows the glass now: the rooms (dark ones, a lamp's flicker), lit frosted glass (dark, a hearth's flicker).
+        // What follows the glass now: the rooms (dark ones, a lamp's flicker), lit frosted glass (dark, a hearth's flicker),
+        // stained glass's rooms (with StainedRooms; titan glass lit from behind never dims).
         const bool rooms = glass::RoomsHideGlow(), frost = glass::FrostedHideGlow();
+        const bool stainedOn = glass::StainedRoomsOn(), stainedHide = glass::StainedHideGlow();
+        const bool titan = glass::Config().titanBacklit != 0;
         const float lampA = glass::LampAmplitudeNow(), hearthA = glass::HearthAmplitudeNow();
         if (!rooms && !frost && lampA <= 0.0f && hearthA <= 0.0f) return 1.0f;
         const std::vector<Window>& all = g_index.All();
@@ -213,9 +232,18 @@ namespace wxl_livingazeroth::windows
         for (uint32_t i = w.roomFirst; i < w.roomFirst + w.roomCount && i < g_cells.size(); ++i)
         {
             const RoomCell& c = g_cells[i];
+            if (!CellRead(c.cell, stainedOn)) continue;   // the other state's cell
             glass::LightCell lc;
             lc.hash = c.hash; lc.share = c.share;
-            if (c.frosted)
+            if (c.stained)
+            {
+                // stained glass's faint room, as its batch gets it: a room's band and lamp, none for titan glass lit from behind
+                const bool follows = stainedHide && !(titan && (c.flags & glass::kBuildingBacklit));
+                lc.band = follows ? glass::BandNow(*c.style, c.flags) : allLit;
+                lc.dip = follows ? glass::HearthDip(c.hash, clock, lampA) : 0.0f;
+                anyRoom = anyRoom || follows;
+            }
+            else if (c.frosted)
             {
                 // lit frosted glass, as its batch (features/Glass: FrostedLit) gets it: a dungeon's keeps the client's look
                 const bool dungeon = (c.flags & glass::kBuildingDungeon) != 0;
@@ -263,10 +291,15 @@ namespace wxl_livingazeroth::windows
         const float lampA = glass::LampAmplitudeNow(), hearthA = glass::HearthAmplitudeNow();
         if (lampA <= 0.0f && hearthA <= 0.0f) return false;
         ResolveRooms();
+        const bool stainedOn = glass::StainedRoomsOn(), stainedHide = glass::StainedHideGlow();
+        const bool titan = glass::Config().titanBacklit != 0;
         for (uint32_t i = w.roomFirst; i < w.roomFirst + w.roomCount && i < g_cells.size(); ++i)
         {
             const RoomCell& c = g_cells[i];
-            if (c.frosted ? hearthA > 0.0f && !(c.flags & glass::kBuildingDungeon) : lampA > 0.0f) return true;
+            if (!CellRead(c.cell, stainedOn)) continue;
+            if (c.stained ? lampA > 0.0f && stainedHide && !(titan && (c.flags & glass::kBuildingBacklit))
+                          : c.frosted ? hearthA > 0.0f && !(c.flags & glass::kBuildingDungeon) : lampA > 0.0f)
+                return true;
         }
         return false;
     }

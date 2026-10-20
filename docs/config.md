@@ -285,8 +285,8 @@ text, the UI, characters).
   vrykul firelit wood and furs, goblin cluttered and warm, Forsaken dim green, orc firelight, dwarf forge-warm, Outland's
   outposts ruddy, Zangarmarsh teal...). A few rooms are dark, and nobody lives in a few buildings. Each window is its own
   room: its depth, furniture, lamp and curtains picked by its hash, weighted by the building's kind and place (shops
-  shelves and a counter, inns tables and a bar, keeps racks and banners, homes beds, tables and wardrobes). Stained and
-  frosted glass has no room, as before.
+  shelves and a counter, inns tables and a bar, keeps racks and banners, homes beds, tables and wardrobes). Frosted and
+  stained glass have rooms of their own (below).
 - **At night** the windows the client lights (self-lit materials) show a lamp-lit room, about as bright as the client's own
   lit window it replaces, the lamp's light falling off across the room and the curtains glowing with it behind them. More
   of them go dark as the night goes on: 8% in the evening, half at midnight, three quarters by 03:00, a few early risers
@@ -295,9 +295,15 @@ text, the UI, characters).
   panel's time, every room it crossed together), and the window lights and their glow in front of it go with it
   (`[LivingAzeroth.Windows]` LightsFollowRooms): each light dims with the windows its glass is in, the same windows the
   glass finds. A dark room's whole window goes dark with it, its lead and frame as much as its glass (no glowing lattice).
-  The lamp-lit rooms take `RoomShareNight` of the glass, their edges about a pixel soft.
-- **Frosted glass** (the dwarves' glowing panes, the vrykul's icy ones, the draenei's, the winter orcs', the orcs' hide
-  windows...) has no room behind it, but the windows the client lights (its self-lit materials, and the unlit ones drawn
+  The lamp-lit rooms take `RoomShareNight` of the glass, their edges about a pixel soft. A dark room isn't a black void
+  (`DarkRoomLight`, 0.12 of a lit room's light): the moon's and the night's cool light comes in at its window (the
+  client's own night light's hue), brighter by the glass, its furniture dim shapes, its corners darker; its window's glow
+  and light stay off, and the glass in front reflects the night sky. Lit rooms keep their lamp alone; a window the client
+  doesn't light has no lamp, so all its rooms take the moon's light.
+- **Frosted glass** (the dwarves' glowing panes, the vrykul's icy ones, the draenei's, Dalaran's, the winter orcs', the
+  orcs' hide windows...) has a heavily blurred room behind it (`FrostedRooms`): the frosted glass dominates, the room's
+  textures at a low mip, its furniture soft dark shapes, its faces' shades evened out (no crisp corner), and at night its
+  lamp a soft glow behind the glass. The windows the client lights (its self-lit materials, and the unlit ones drawn
   at full day and night) go dark through the night the same way (`FrostedLightsOut`): the same windows, hash and fades, each
   building's hours by its kind (inns late, shops early), the glass's own glow down to 15% when dark (a banked fire), and
   the window lights in front with it. A lit one flickers gently, a hearth behind it (`HearthFlicker`: by up to 8% at
@@ -310,7 +316,15 @@ text, the UI, characters).
   and Mystic Wards dim late and gently (at most 45%), and the Forlorn Cavern is darker (an hour early, up to 90%).
   Tinker Town has no glass. Its streets are interior groups with no sky: its glass has the street's look whatever the
   camera, with no daylight, sky or glint in it, and its panes put no sunlight on its floors (`IronforgeAlwaysLit` keeps
-  every window lit).
+  every window lit). The blurred rooms behind its frosted glass have no daylight either: lamp-lit at any hour by its
+  parts' hours, a dark one in the city's warm ambient.
+- **Stained glass** (Dalaran's, Silvermoon's, the chapels', abbeys' and cathedrals') has a faint room behind it
+  (`StainedRooms`, 0.45 of the clear glass's share): the room tinted by the glass's own colours, a hint of depth by day,
+  mostly the glass's glow at night. Its lights go out with the rooms' (`LightsOut`), the glass's glow and the window
+  lights in front with them: Dalaran's lit windows over stained glass now dim through the night. Its windows are numbered
+  after every other window (`GlassWindows.cdbc`), and only a stained batch finds them. A dungeon's stained glass (Tempest
+  Keep's walls and floors, Azjol-Nerub's roof, the Sunwell, Karazhan) and a sheet of it bigger than a window (a dome, a
+  wall of glass) have no room; titan glass lit from behind stays as it is.
 - **Titan glass lit from behind** (`TitanBacklit`): in Ulduar, the Halls of Stone and the Halls of Lightning the titans'
   stained glass has no real sky behind it, so it no longer waits for the sun: it glows on its own in its own colours at
   any hour (the same at noon and at midnight, never below the client's own colour, no sky reflection or sun glint), each
@@ -339,7 +353,7 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | Enabled | 1 | Window glass (everything below). |
 | InsideGlow | 1 | Seen from inside: the light coming through the glass. |
 | OutsideReflection | 1 | Seen from outside by day: the glass darker and cooler, the sky in it, the sun's glint. |
-| FakeInteriors | 1 | Seen from outside: a room behind clear and leaded panes (with OutsideReflection). |
+| FakeInteriors | 1 | Seen from outside: a room behind the panes, clear and leaded glass's (frosted glass's with `FrostedRooms`, stained glass's with `StainedRooms`; with OutsideReflection). |
 | ColouredShafts | 1 | Indoors: shafts of light in the room's air through sunlit windows, in the glass's colours. |
 | FloorLight | 1 | Indoors: the sunlit panes' light on the room's floor and walls. |
 | InsideStrength | 1 | Your multiplier on the light coming through the glass. |
@@ -371,3 +385,6 @@ time ("ours: glass shafts"). The look itself is part of the buildings' own draws
 | TitanBacklit | 1 | Titan stained glass with no sky behind it (Ulduar, the Halls of Stone and of Lightning) is lit from behind: it glows in its own colours at any hour, never below the client's own colour, no sky or glint in it, and a light behind each pane casts its colours on the floor and in the air. Panes facing real sky keep the daylight look. 0 = the sun's light, as other glass. |
 | BacklitStrength | 1 | Your multiplier on the titan glass's glow and the light it casts (each texture has its own strength, GlassMaterials' Backlit). |
 | VezaxPulse | 1 | Your multiplier on the slow pulse of General Vezax's glass (1 = a few percent over 6.5 s, deep purple). 0 = steady. |
+| FrostedRooms | 1 | Behind frosted glass (Ironforge's, the dwarves', the vrykul's, the draenei's, Dalaran's frosted panes) a heavily blurred room: its lamp a soft glow at night, its furniture soft dark shapes, the frosted glass dominating. Its lights go out with the glass's (`FrostedLightsOut`); underground in Ironforge no daylight in it, lamp-lit at any hour. A dungeon's frosted glass keeps the client's look. 0 = no room behind frosted glass (exactly as before). |
+| StainedRooms | 1 | Behind stained glass (Dalaran's, Silvermoon's, the chapels' and cathedrals') a faint room tinted by the glass's colours: a hint of depth by day, mostly the glass's own glow at night, going dark with the rooms (`LightsOut`), the window lights in front with it. Not a dungeon's (its stained glass is architecture), and titan glass lit from behind stays as it is. 0 = no room behind stained glass and its window lights as before (exactly). |
+| DarkRoomLight | 0.12 | At night a room whose lamp is out still shows faintly: the moon's and the night's cool light at its window (the client's own night light's hue), its furniture dim shapes, its corners darker; this share of a lit room's light (0.08 .. 0.15 reads as clearly dark but readable; underground the city's warm ambient). The window's glow and light stay off. 0 = dark rooms black (exactly as before). |

@@ -5,10 +5,14 @@
 // the working folder, the client's root in the game).
 //  1. The reader's Value: its last argument is the array element, not a default (any other than 0 reads 0).
 //  2. glass::Load: each table read raw (its WDBC bytes) and what Load kept checked against it. Every window of a clear,
-//     leaded or frosted kind with a WMO is in the window table and its group's grid is found; every whole placement (a
-//     unique ID, group -1) is a placement and is found at its own origin (placed, not by WMO); a city group under its
-//     placement; every style's class is the file's. The lines the lights panel shows say so, and LogLoad's one line
-//     to the log (info).
+//     leaded, frosted or stained kind with a WMO is in the window table and its group's grid is found (a stained window's
+//     in its group's stained grid, and never in the other); every whole placement (a unique ID, group -1) is a placement
+//     and is found at its own origin (placed, not by WMO); a city group under its placement; every style's class is the
+//     file's. The lines the lights panel shows say so, and LogLoad's one line to the log (info).
+//  2b. The window lights' cells (features/Windows: WindowLights.cdbc, WindowRooms.cdbc through the same reader): each
+//     light's share lit as its cells say, with stained glass's rooms (its stained cells, not the ones read only without
+//     them) and without (StainedRooms off: the cells as they were before), against the rules worked here from the raw rows;
+//     a light with neither kind of cell the same both ways.
 //  3. An older GlassWindows.cdbc (without its last column, Thickness) loads every window the same way.
 //  4. The tables as the bug read them (every window's kind 0, every building's group 0; Value given a default as its
 //     element, 2026-10-19): Load names the rows it left out and why, and LogLoad warns.
@@ -18,6 +22,7 @@
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
 #include "features/Glass.hpp"
+#include "features/Windows.hpp"
 #include "wxl/PluginApi.h"
 #include "wxl_seyris/CdbcApi.hpp"
 
@@ -60,6 +65,8 @@ namespace wxl_seyris::cdbc
 namespace
 {
     int g_failures = 0;
+
+    uint32_t Bits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
 
     void Check(bool ok, const std::string& what)
     {
@@ -212,13 +219,14 @@ namespace
         return static_cast<bool>(f);
     }
 
-    const char* const kTables[] = { "GlassMaterials.cdbc", "GlassPanes.cdbc", "RoomStyles.cdbc", "GlassBuildings.cdbc", "GlassWindows.cdbc" };
+    const char* const kTables[] = { "GlassMaterials.cdbc", "GlassPanes.cdbc", "RoomStyles.cdbc", "GlassBuildings.cdbc", "GlassWindows.cdbc",
+                                    "WindowLights.cdbc", "WindowRooms.cdbc" };
 
     // What the files say Load should keep (tools/gen_glass.py's columns).
     struct Expected
     {
-        size_t windows = 0, grids = 0, styles = 0, buildingRows = 0, placements = 0, cityGroups = 0;
-        std::set<uint64_t> windowGroups;               // (PathHash, group) of the windows kept
+        size_t windows = 0, grids = 0, styles = 0, buildingRows = 0, placements = 0, cityGroups = 0, stained = 0, frosted = 0;
+        std::set<uint64_t> windowGroups;               // (PathHash, group | kStainedGrid for stained windows) of the windows kept
         std::map<uint32_t, uint32_t> styleClass;       // style ID -> class
         std::set<uint32_t> classes;
     };
@@ -231,9 +239,11 @@ namespace
         for (uint32_t r = 0; r < windows.rows; ++r)
         {
             const uint32_t kind = windows.At(r, 4), path = gl::PathHash(windows.Str(r, 1));
-            if (!path || !(kind == gl::kClear || kind == gl::kLeaded || kind == gl::kFrosted)) continue;
+            if (!path || !(kind == gl::kClear || kind == gl::kLeaded || kind == gl::kFrosted || kind == gl::kStained)) continue;
             ++e.windows;
-            e.windowGroups.insert((static_cast<uint64_t>(path) << 32) | windows.At(r, 2));
+            e.stained += kind == gl::kStained ? 1 : 0;
+            e.frosted += kind == gl::kFrosted ? 1 : 0;
+            e.windowGroups.insert((static_cast<uint64_t>(path) << 32) | windows.At(r, 2) | (kind == gl::kStained ? gl::WindowTable::kStainedGrid : 0u));
         }
         e.grids = e.windowGroups.size();
         e.buildingRows = buildings.rows;
@@ -300,13 +310,24 @@ namespace
 
         const gl::WindowTable& wt = gl::Windows();
         char line[400];
-        std::snprintf(line, sizeof(line), "%s: GlassWindows.cdbc: %zu windows kept of %zu clear, leaded or frosted with a WMO; %zu WMO groups of %zu",
-                      via, wt.Windows(), windowsWanted, wt.Grids(), e.grids);
-        Check(wt.Windows() > 0 && wt.Windows() == windowsWanted && wt.Grids() == e.grids, line);
-        size_t found = 0;
-        for (uint64_t key : e.windowGroups) found += wt.Find(static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key)) ? 1 : 0;
-        std::snprintf(line, sizeof(line), "%s: each window's group grid found (%zu of %zu)", via, found, e.windowGroups.size());
-        Check(found == e.windowGroups.size() && found > 0, line);
+        size_t keptStained = 0, keptFrosted = 0;
+        for (const gl::Window& w : wt.All()) { keptStained += w.kind == gl::kStained ? 1 : 0; keptFrosted += w.kind == gl::kFrosted ? 1 : 0; }
+        std::snprintf(line, sizeof(line), "%s: GlassWindows.cdbc: %zu windows kept of %zu clear, leaded, frosted or stained with a WMO (frosted %zu of %zu, stained %zu "
+                      "of %zu); %zu WMO groups of %zu", via, wt.Windows(), windowsWanted, keptFrosted, e.frosted, keptStained, e.stained, wt.Grids(), e.grids);
+        Check(wt.Windows() > 0 && wt.Windows() == windowsWanted && wt.Grids() == e.grids && keptStained == e.stained && keptFrosted == e.frosted &&
+              e.stained > 1000, line);
+        // each grid found as its batch asks for it: a stained window's with `stained`, never without (it's apart from the others)
+        size_t found = 0, crossed = 0;
+        for (uint64_t key : e.windowGroups)
+        {
+            const uint32_t path = static_cast<uint32_t>(key >> 32), group = static_cast<uint32_t>(key) & ~gl::WindowTable::kStainedGrid;
+            const bool stained = (static_cast<uint32_t>(key) & gl::WindowTable::kStainedGrid) != 0;
+            found += wt.Find(path, group, stained) ? 1 : 0;
+            if (stained && !e.windowGroups.count((static_cast<uint64_t>(path) << 32) | group)) crossed += wt.Find(path, group) ? 1 : 0;
+        }
+        std::snprintf(line, sizeof(line), "%s: each window's group grid found (%zu of %zu; a stained-only group found without `stained` %zu)", via, found,
+                      e.windowGroups.size(), crossed);
+        Check(found == e.windowGroups.size() && found > 0 && crossed == 0, line);
 
         const gl::BuildingIndex& bi = gl::Buildings();
         std::snprintf(line, sizeof(line), "%s: GlassBuildings.cdbc: %zu rows (file %zu), %zu placements (file: %zu whole placements)", via, bi.Size(),
@@ -377,10 +398,85 @@ namespace
         std::printf("      %s: the bug's tables: log (level %d): %s\n", via, logged.first, logged.second.c_str());
         char want[256];
         std::snprintf(want, sizeof(want), "GlassWindows.cdbc: %u rows, no window kept (no rooms behind the glass); %u rows left out: 0 without a WMO, %u not clear, "
-                      "leaded or frosted glass", w.rows, w.rows, w.rows);
+                      "leaded, frosted or stained glass", w.rows, w.rows, w.rows);
         Check(logged.first == WXL_LOG_WARN && gl::LoadProblem() && logged.second.find(want) != std::string::npos &&
               logged.second.find("0 placements") != std::string::npos && logged.second.find("(none placed: every building by its WMO)") != std::string::npos,
               std::string(via) + ": no window kept and no placement: a warning naming the rows left out and why");
+    }
+
+    // 2b. The window lights' cells, through the same reader: each light's share lit with and without stained glass's rooms
+    // against the rules worked here from the raw rows (features/Windows' choice of cells; env/GlassModel's band and hash).
+    void LightTests(const WXL_SeyrisCdbcApi* cdbc, const char* via, const fs::path& db)
+    {
+        Raw lights, cells;
+        if (!ReadRaw(db / "WindowLights.cdbc", lights) || !ReadRaw(db / "WindowRooms.cdbc", cells)) { Check(false, std::string(via) + ": the window lights' tables read raw"); return; }
+        namespace wn = wxl_livingazeroth::windows;
+        gl::Settings& gs = gl::Config();
+        const gl::Settings saved = gs;
+        gs.varietyStrength = 4.0f;   // (by day a few rooms dark: four times the share, so the shares differ)
+        if (!gl::PatchedVariants()) gl::NotePatchedVariant();   // (the blocks in the shaders: the rooms hide the glow)
+        std::map<uint32_t, std::vector<uint32_t>> byLight;
+        for (uint32_t r = 0; r < cells.rows; ++r) byLight[cells.At(r, 1)].push_back(r);
+        // A light's share as the rules have it: its cells read in this state (stained glass's rooms or not), each lit by its
+        // building's band now (a room's, frosted glass's, stained glass's; none for a dungeon's frosted glass or titan glass
+        // lit from behind), the rest of its glass lit. (By day: no flicker.)
+        auto expected = [&](uint32_t light, bool stainedOn) {
+            std::vector<gl::LightCell> lc;
+            const gl::DarkBand allLit = gl::Band(0.0f, 0.0f);
+            for (uint32_t r : byLight[light])
+            {
+                const uint32_t flags = cells.At(r, 7);
+                if (flags & (stainedOn ? wn::kCellUnstained : (wn::kCellStained | wn::kCellWithStained))) continue;
+                const gl::Building* b = cells.At(r, 2) ? gl::Buildings().ById(cells.At(r, 2)) : nullptr;
+                const gl::RoomStyle* st = b ? gl::StyleById(b->style) : nullptr;
+                if (!st) b = nullptr;
+                const uint32_t seed = st ? b->seed : cells.At(r, 6), bflags = b ? b->flags : 0;
+                gl::LightCell c;
+                c.hash = gl::LitHash(static_cast<float>(static_cast<int32_t>(cells.At(r, 3))), static_cast<float>(static_cast<int32_t>(cells.At(r, 4))),
+                                     static_cast<float>(seed & 1023u), static_cast<float>((seed >> 10) & 1023u));
+                c.share = cells.F(r, 5);
+                const gl::RoomStyle& style = st ? *st : gl::DefaultStyle();
+                if (flags & wn::kCellStained) c.band = gl::StainedHideGlow() && !(gs.titanBacklit && (bflags & gl::kBuildingBacklit)) ? gl::BandNow(style, bflags) : allLit;
+                else if (flags & wn::kCellFrosted) c.band = gl::FrostedHideGlow() && !(bflags & gl::kBuildingDungeon) ? gl::FrostedBandNow(style, b) : allLit;
+                else c.band = gl::RoomsHideGlow() ? gl::BandNow(style, bflags) : allLit;
+                if (c.share > 0.0f && std::isfinite(c.share)) lc.push_back(c);
+            }
+            return gl::LitShare(lc.data(), lc.size());
+        };
+        int checked = 0, offWrong = 0, onWrong = 0, stainedLights = 0, stainedDim = 0, stainedDimOff = 0;
+        std::string worst;
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            gs.stainedRooms = pass;
+            wn::Load(cdbc);   // (a fresh frame's shares)
+            for (uint32_t map : { 0u, 1u, 530u, 571u })
+            {
+                std::vector<const wn::Window*> lightsOnMap;
+                const float origin[3] = { 0, 0, 0 };
+                wn::Near(map, origin, 24500.0f, true, 1u << 20, lightsOnMap);   // (the whole map: its corners 24,135 yd out)
+                for (const auto* w : lightsOnMap)
+                {
+                    const float got = wn::LitShare(*w), want = expected(w->id, pass == 1);
+                    bool stained = false, legacy = false;
+                    for (uint32_t r : byLight[w->id]) { stained = stained || (cells.At(r, 7) & wn::kCellStained); legacy = legacy || (cells.At(r, 7) & (wn::kCellUnstained | wn::kCellWithStained)); }
+                    if (Bits(got) != Bits(want))
+                    {
+                        (pass ? onWrong : offWrong)++;
+                        if (worst.empty()) { char at[160]; std::snprintf(at, sizeof(at), " (light %u, stained rooms %s: %.4f against %.4f)", w->id, pass ? "on" : "off", got, want); worst = at; }
+                    }
+                    if (pass == 1 && stained) { ++stainedLights; stainedDim += got < 0.999f ? 1 : 0; }
+                    if (pass == 0 && stained) stainedDimOff += legacy ? 0 : (got < 0.999f ? 1 : 0);
+                    ++checked;
+                }
+            }
+        }
+        gs = saved;
+        wn::Load(cdbc);
+        char line[600];
+        std::snprintf(line, sizeof(line), "%s: the window lights' cells: %d lights' shares (with stained glass's rooms and without) against the rules from the raw rows: "
+                      "%d differ with, %d without%s; %d lights over stained glass, %d of them dimmed by its dark rooms (by day, 4 x the dark share), %d of those "
+                      "with only stained cells dimmed without", via, checked, onWrong, offWrong, worst.c_str(), stainedLights, stainedDim, stainedDimOff);
+        Check(checked > 5000 && onWrong == 0 && offWrong == 0 && stainedLights > 1000 && stainedDim > 50, line);
     }
 
     void Run(const WXL_SeyrisCdbcApi* cdbc, const char* via, const fs::path& src, const fs::path& db, const Expected& e, const Raw& windows, const Raw& buildings)
@@ -389,6 +485,7 @@ namespace
         if (!cdbc || !cdbc->HasFeature("cdbc-load")) return;
         ValueTests(cdbc, via);
         LoadTests(cdbc, via, e, buildings, e.windows);
+        LightTests(cdbc, via, db);
 
         // 3. An older GlassWindows.cdbc, without Thickness: LoadAppendOnly's probe and the fields that exist.
         const fs::path file = db / "GlassWindows.cdbc";
@@ -432,7 +529,7 @@ int main(int argc, char** argv)
     fs::create_directories(db, ec);
     bool copied = !ec;
     for (const char* name : kTables) copied = copied && fs::copy_file(fs::path(data) / name, db / name, fs::copy_options::overwrite_existing, ec);
-    Check(copied, "the five glass tables copied to " + db.string());
+    Check(copied, "the five glass tables and the window lights' two copied to " + db.string());
     if (!copied) { std::printf("FAILED (%d failure%s)\n", g_failures, g_failures == 1 ? "" : "s"); return 1; }
     const fs::path cwd = fs::current_path();
     fs::current_path(root);
@@ -440,8 +537,9 @@ int main(int argc, char** argv)
     Expected e;
     Raw windows, buildings;
     Check(ReadExpected(db, e, windows, buildings), "the tables read raw");
-    std::printf("      the files: %zu windows (clear, leaded or frosted with a WMO) in %zu WMO groups; %zu styles in %zu classes; %zu building rows, "
-                "%zu whole placements, %zu city group rows\n", e.windows, e.grids, e.styles, e.classes.size(), e.buildingRows, e.placements, e.cityGroups);
+    std::printf("      the files: %zu windows (clear, leaded, frosted or stained with a WMO; %zu frosted, %zu stained) in %zu WMO groups; %zu styles in %zu "
+                "classes; %zu building rows, %zu whole placements, %zu city group rows\n", e.windows, e.frosted, e.stained, e.grids, e.styles, e.classes.size(),
+                e.buildingRows, e.placements, e.cityGroups);
 
     const WXL_SeyrisCdbcApi linked = LinkedApi();
     Run(&linked, "linked Cdbc.cpp", data, db, e, windows, buildings);

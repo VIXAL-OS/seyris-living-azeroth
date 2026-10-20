@@ -20,11 +20,17 @@
 //    dark; per window its furniture by the building's class and its hash, curtains half drawn in some (weighted by the
 //    class and its place); at night lamp-lit behind the client's own lit windows, more of them dark as the night goes
 //    on (each fading over 1.5 s), the window lights in front of them with them (features/Windows works out the same
-//    rooms: the window's key in WindowRooms.cdbc, LitHash, the dark band, the rooms' clock, below).
-//  - Frosted glass has no room, but the windows the client lights (self-lit, SIDN, or unlit: always at full) go dark
-//    the same way: the same windows, hash, schedule and fades, the glass's own glow hidden when dark; and a lit one has a
-//    hearth's gentle flicker (HearthDip), its window light in time with it. Ironforge's parts each keep their own hours
-//    (the forge never sleeps), and underground no sky comes through its glass.
+//    rooms: the window's key in WindowRooms.cdbc, LitHash, the dark band, the rooms' clock, below). A dark room at night
+//    isn't a black void: the moon's cool light and the night's ambient come in at its window (DarkRoomLight, about an
+//    eighth of a lit room; Light::moon), its furniture dim shapes, its corners darker.
+//  - Frosted glass: the windows the client lights (self-lit, SIDN, or unlit: always at full) go dark the same way: the
+//    same windows, hash, schedule and fades, the glass's own glow hidden when dark; and a lit one has a hearth's gentle
+//    flicker (HearthDip), its window light in time with it. Ironforge's parts each keep their own hours (the forge never
+//    sleeps), and underground no sky comes through its glass. Behind it a heavily blurred room (FrostedRooms): its lamp a
+//    soft glow, its furniture soft dark shapes, the frosted glass in front of it; underground lamp-lit at any hour, no
+//    daylight in it.
+//  - Stained glass (not a dungeon's; StainedRooms): a faint room behind it, tinted by the glass's colours: a hint of depth
+//    by day, mostly the glass's own glow at night, its lights out with the rooms'.
 //  - Titan glass with no sky behind it (Ulduar, the Halls of Stone and of Lightning: tools/gen_glass.py TITAN_MAPS) is
 //    lit from behind: it glows in its own colours at any hour, General Vezax's with a slow faint pulse, and a light
 //    behind each pane puts its colours on the floor and in the room's air (BacklitDirection, BacklitGlow).
@@ -108,6 +114,7 @@ namespace wxl_livingazeroth::glass
         float storm = 0.0f;                  // a storm's darkness, 0..1
         float sky[3] = { 0.6f, 0.7f, 0.8f }; // the sky's (fog's) colour
         float sunColour[3] = { 1.0f, 0.95f, 0.85f };
+        float ambient[3] = { 0, 0, 0 };      // the client's light on the land (ambient + diffuse; 0: unknown): the night's hue
     };
 
     struct Light
@@ -120,8 +127,15 @@ namespace wxl_livingazeroth::glass
         /// The room behind the glass: 1 while the client's windows are unlit (by day, and at dusk until they light up,
         /// 20:30 .. 21:30) .. 0 at night: seen by the day's light, soft, its share by day; at night the lamp-lit rooms.
         float rooms = 0.0f;
+        /// The dark rooms' light at night (the moon's and the night's ambient through the window), luminance 1: room::kMoonHue
+        /// moved room::kMoonClient of the way to the client's own night light's hue (each channel within kSkyHue).
+        float moon[3] = { 1.0f, 1.0f, 1.0f };
     };
     Light Evaluate(const Inputs& in);
+    /// The dark rooms' light colour at night (Light::moon): room::kMoonHue moved room::kMoonClient of the way to the hue
+    /// of `clientLight` (the client's ambient + diffuse; its colour over its luminance, each channel within kSkyHue; none
+    /// when its luminance is under 0.001 or not finite), at luminance 1.
+    void MoonHue(const float clientLight[3], float out[3]);
 
     /// Schlick's Fresnel: the share of light the glass reflects at this cosine to its normal.
     float Fresnel(float cosine, float f0);
@@ -321,6 +335,16 @@ namespace wxl_livingazeroth::glass
         constexpr float kLitMod = 289.0f, kLitInv = 1.0f / 289.0f, kLitPoly = 34.0f;
         /// The narrowest band a moving threshold makes (1 / this: the steepest slope).
         constexpr float kBandMin = 1e-6f;
+        /// A dark room at night (its lamp out): the moon's and the night's light come in at its window, DarkRoomLight of a lit
+        /// room's brightness (its furniture dim shapes, its corners darker), in the moon's cool colour: kMoonHue (luminance 1
+        /// after normalising) kMoonClient of the way to the hue of the client's own light on the land. Underground (Ironforge)
+        /// no moon: the city's warm ambient, kUndergroundHue. kMoonMean: that light's mean in a room at night (the window's
+        /// falloff x the faces' shades x the corners, over many rooms and views, measured on WARP by tests/glass), so
+        /// DarkRoomLight is the share of a lit room's light.
+        constexpr float kMoonHue[3] = { 0.72f, 0.88f, 1.35f };
+        constexpr float kMoonClient = 0.5f;
+        constexpr float kUndergroundHue[3] = { 1.12f, 0.97f, 0.8f };
+        constexpr float kMoonMean = 0.7f;
     }
 
     // --- lit or dark, shared by the shader and the window lights (features/Windows) ---------------------------------

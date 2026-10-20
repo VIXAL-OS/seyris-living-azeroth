@@ -11,9 +11,9 @@
 //  coming through it (the texel more saturated x (the sky + the sun beyond the pane), never below the stock colour:
 //  the client's own lit windows at night); seen from outside, the client's painted glass a little darker by day
 //  (c197.x: clear most, stained barely), by day cooler (c85: toward the sky's hue at its luminance, more toward the top
-//  of the pane and at a slant, env/GlassModel's DayCool), behind clear and leaded glass a room (c193.z of it), with the
-//  sky in it (Schlick's Fresnel from F0 c197.z, x c196.w; the sky deeper toward the zenith along the reflected ray) and
-//  the sun's glint; inside and outside mixed by c193.x.
+//  of the pane and at a slant, env/GlassModel's DayCool), behind clear and leaded glass a room (c193.z of it; frosted
+//  glass's blurred, stained glass's tinted and faint), with the sky in it (Schlick's Fresnel from F0 c197.z, x c196.w;
+//  the sky deeper toward the zenith along the reflected ray) and the sun's glint; inside and outside mixed by c193.x.
 //
 //  One room per window (env/GlassRooms: "actual 3D fake room renders instead of flat 2D ones", the user, 2026-10-18).
 //  The point and the way to the eye go into the building's own space (its WMO's: c15..c17, the instance's frame about
@@ -26,16 +26,22 @@
 //  lo, c200.w hi, c212.w slope, c213.w base: a room the threshold crossed in the last 1.5 s, or every room a jump of the
 //  time crossed, is part lit, so it fades). At night the lit rooms behind the client's lit windows have a lamp (c203.rgb,
 //  as bright as the client's window: x its luminance); dark ones there hide most of its glow (c205.w) from the whole
-//  window, lead and frame too (the client lights all of it). A frosted window (no room: the table's flag) runs the same
-//  for its lights out, and a lit one (and, with LampFlicker, a lamp-lit room and its lamp) flickers like a hearth: its
-//  glow down by the dip c201.z x (0.5 + the three waves of env/GlassModel's HearthDip on the hearth clock c201.y, each
-//  window its own phase from its lit hash), so the window light in front (features/Windows) dips with it.
+//  window, lead and frame too (the client lights all of it); their room keeps the moon's and the night's light coming in
+//  at the window (c198: the day's light by day, the moon's at night, in dark rooms only: lit x c218.z + c218.w, so a
+//  lit room's lamp is as it was). A frosted window (the table's flag: a room only for a batch that allows it, c26.y)
+//  runs the same for its lights out, and a lit one (and, with LampFlicker, a lamp-lit room and its lamp) flickers like a
+//  hearth: its glow down by the dip c201.z x (0.5 + the three waves of env/GlassModel's HearthDip on the hearth clock
+//  c201.y, each window its own phase from its lit hash), so the window light in front (features/Windows) dips with it.
+//  Stained windows are in grids of their own (a stained batch's c18..c20), so no other batch ever finds one.
 //  The room: the window's opening extruded inward (the table's box: a little wider than the window, the floor below the
 //  sill; c21.x deep by the building's class, x (1 + c21.y (hash - 0.5))), ray-cast in the window's own frame (CastRoom
 //  is the CPU's twin). Its floor, walls and ceiling sample the palette's client interior textures (s8, s9, s10: c22 1 /
 //  the yards each repeats over, c23 each one's gain to a mean of 1), their gradients from the pixel's footprint at the
 //  face (anisotropic along the face's slant: no aliasing, no seam at the corners); the floor darker, the ceiling the
 //  dimmest, the side walls lit by the window's light falling off, the corners darker (c209 by day, c210 at night, c215).
+//  Behind frosted glass the footprint is at least c26.x yd (the textures at a low mip, the furniture's and the curtains'
+//  edges soft: soft dark shapes, the lamp a soft glow) and the faces' shades c26.z of the way to c26.w (no crisp edge
+//  where two faces meet); behind stained glass the room x lerp(1, the glass's hue, c27.y) (c27.x = 1 - c27.y).
 //  Two layers of furniture at their depths (the back wall's: shelves, a hearth, a wardrobe, a painting...; the middle's:
 //  a table and chairs, a bed, a counter...; c25, c24: the class's four each, picked by the room's hash) are cut-outs
 //  from the atlas (s12: a signed distance, crisp over a pixel's footprint at any size), their wood the palette's (s11),
@@ -64,12 +70,15 @@
 //  c203 (the lamp rgb; the dark band's lower end); c204 (the curtains' band in the room's hash; .w their detail's
 //  strength); c205 (the curtains rgb, the glow dark rooms hide); c212 (the building's seed xy, 1 / its block (0: one
 //  building), the dark band's slope); c213 (.w the dark band's base); c218 (the room's detail by the distance squared:
-//  base, slope); c85 (by day the glass cooler: how much, more up, more at a slant, the sky's hue's share), c86 (by day
+//  base, slope; .zw the room's light lit and dark); c85 (by day the glass cooler: how much, more up, more at a slant, the sky's hue's share), c86 (by day
 //  the room: the sun's patch's gain, farther darker, the light falling; zeros: the night's look); c15..c17 (the
 //  instance's frame: WMO space = the rows . (P about the camera, 1)), c18..c20 (the group's grid: its corner, the first
 //  cell's texel; 1 / the cell, x, x y cells, 1 / the table's height; the last cell, 1 with a grid), c21 (the room's depth,
 //  its spread, the furniture's strength), c22, c23 (the textures' scales and gains), c24, c25 (the furniture: the middle
-//  and back layers' tiles); c206, c207, c208, c209, c210, c211, c214..c217, c220, c221, c83, c84, c87..c100 defined;
+//  and back layers' tiles), c26 (the kind's room: the footprint's least yd, frosted windows' rooms allowed 1, the faces'
+//  shades' flattening and their mean), c27 (1 - the stained tint, the tint); c218.zw (the room's light by lit x .z + .w:
+//  by day a dark room keeps room::kDarkDay, at night the moon's in dark rooms only); c206, c207, c208, c209, c210, c211,
+//  c214..c217, c220, c221, c83, c84, c87..c100 defined;
 //  the floor light's panes c101..c172 (six registers each; the rims' range: a batch has one or the other, features/Glass
 //  re-uploads when the rims took it). ps_3_0 has c0..c223, and an instruction reads at most one constant register.
 #pragma once
@@ -96,8 +105,8 @@ namespace wxl_livingazeroth::glass
     constexpr int kLookRegisters = 1;
     constexpr int kDayConstant = 85;     // c85: the glass cooler by day (DayCool); c86: the room by day (the sun's patch, farther darker)
     constexpr int kDayRegisters = 2;     // (zeros: neither, the night's look)
-    constexpr int kRoomConstant = 15;    // c15..c25: the instance's frame, the group's grid, the room's depth, textures, furniture
-    constexpr int kRoomRegisters = 11;
+    constexpr int kRoomConstant = 15;    // c15..c27: the instance's frame, the group's grid, the room's depth, textures, furniture,
+    constexpr int kRoomRegisters = 13;   // the kind's look (c26, c27: frosted glass's blur, stained glass's tint)
     constexpr int kFirstSampler = 8;     // s8 floor, s9 walls, s10 ceiling, s11 wood, s12 the furniture atlas, s13 the window table
     constexpr int kTableSampler = 13;
 
@@ -541,7 +550,8 @@ namespace wxl_livingazeroth::glass
             "\n          mad r14.y, r22.w, -c193.x, r22.w" + probe +
             // the room (clear and leaded glass: c193.z of it; not a frosted window), its lamp down by the flicker's dip too
             "\n          mov r22.w, c193.z"
-            "\n          cmp r22.w, -r30.w, r22.w, c175.y"
+            "\n          add r22.z, c26.y, -r30.w"
+            "\n          cmp r22.w, r22.z, r22.w, c175.y"
             "\n          if_gt r22.w, c175.y"
             // the window's frame (its rows' directions: across, up, out), the ray into the room (across, up, deep: away
             // from the eye, never edge-on: r28), where it enters (r27.xy: across, up about the window's middle, yd)
@@ -600,6 +610,7 @@ namespace wxl_livingazeroth::glass
             "\n            add r25.y, r14.x, c207.x"
             "\n            rsq r25.y, r25.y"
             "\n            rcp r13.y, r25.y"
+            "\n            max r13.y, r13.y, c26.x"
             // where the ray leaves the box: across (W - pa sign(da)) / |da|, up |bound - pb| / |db| (the ceiling going up,
             // the floor going down), deep D / dc; the nearest (r13.w); which face (r25: back wall, side wall, floor or
             // ceiling, ceiling); where (r26: across, up, deep)
@@ -659,7 +670,8 @@ namespace wxl_livingazeroth::glass
             "\n            mov r22.w, r25.x"
             "\n            dp4 r15.z, r22, c209"
             "\n            dp4 r15.w, r22, c210"
-            "\n            mul r15.xy, r15, r15.zwzw"
+            "\n            lrp r22.zw, c26.z, c26.w, r15"
+            "\n            mul r15.xy, r15, r22.zwzw"
             "\n            add r22.x, r30.x, -r26_abs.x"
             "\n            add r22.y, r26.y, -r30.y"
             "\n            add r22.z, r30.z, -r26.y"
@@ -726,7 +738,7 @@ namespace wxl_livingazeroth::glass
             "\n            mul r19.z, r19.z, r19.w"
             "\n            min r19.z, r19.z, c83.z"
             "\n            mul r19.z, r19.z, c98.y"
-            "\n            mad r19.x, r14.z, c87.x, c87.y"
+            "\n            mad r19.x, r14.z, c218.z, c218.w"
             "\n            mul r19.x, r19.x, r20.w"
             "\n            mul r19.x, r19.x, c198.w"
             "\n            mul r19.x, r19.x, r19.z"
@@ -787,7 +799,14 @@ namespace wxl_livingazeroth::glass
             "\n            mul r22.yzw, r22, c205.xxyz"
             "\n            mul r22.yzw, r22, r22.x"
             "\n            lrp r17.xyz, r15.y, r22.yzww, r26"
-            // then the room behind the glass
+            // tinted by the glass's colours (stained glass: x lerp(1, the inside colour over its luminance, c27.y); any
+            // other kind x 1), then the room behind the glass
+            "\n            dp3 r30.w, r21, c176"
+            "\n            max r30.w, r30.w, c206.x"
+            "\n            rcp r30.w, r30.w"
+            "\n            mul r30.xyz, r21, r30.w"
+            "\n            mad r30.xyz, r30, c27.y, c27.x"
+            "\n            mul r17.xyz, r17, r30"
             "\n            mov r29.w, c193.z"
             "\n            lrp r30.xyz, r29.w, r17, r23"
             "\n            mov r23.xyz, r30"

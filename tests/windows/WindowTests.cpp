@@ -551,10 +551,12 @@ int main(int argc, char** argv)
                 for (size_t i = 0; i < w.rows.size(); ++i) window[w.rows[i][0]] = i;
                 for (size_t i = 0; i < b.rows.size(); ++i) building[b.rows[i][0]] = i;
                 for (size_t i = 0; i < st.rows.size(); ++i) style[st.rows[i][0]] = i;
-                std::map<uint32_t, std::vector<size_t>> cells;   // per window, its rows
+                // per window, its rows as read with stained glass's rooms (StainedRooms: not those flagged 0x4) and without
+                // (StainedRooms off: not those flagged 0x2 or 0x8, the cells as they were before)
+                std::map<uint32_t, std::vector<size_t>> cells, cellsWithout;
                 std::map<uint32_t, bool> frosted;                // per window: it has lit frosted glass
                 uint32_t lastId = 0;
-                unsigned noBuilding = 0, frostCells = 0;
+                unsigned noBuilding = 0, frostCells = 0, stainCells = 0;
                 for (size_t i = 0; i < r.rows.size(); ++i)
                 {
                     const auto& row = r.rows[i];
@@ -563,8 +565,10 @@ int main(int argc, char** argv)
                     CHECK(window.count(row[1]));
                     const float share = r.F(i, 5);
                     CHECK(share > 0.0f && share <= 1.0f);
-                    CHECK(row[7] <= 1u);   // Flags: 0x1 lit frosted glass
-                    if (row[7] & 1u) { ++frostCells; frosted[row[1]] = true; }
+                    // Flags: 0x1 lit frosted glass, 0x2 stained glass (with its rooms only), 0x4 only without them, 0x8 only with
+                    CHECK(row[7] <= 0xFu && !((row[7] & 2u) && (row[7] & 5u)) && !((row[7] & 4u) && (row[7] & 8u)));
+                    if ((row[7] & 1u) && !(row[7] & 4u)) { ++frostCells; frosted[row[1]] = true; }
+                    stainCells += (row[7] & 2u) ? 1u : 0u;
                     const int32_t cx = static_cast<int32_t>(row[3]), cy = static_cast<int32_t>(row[4]);
                     CHECK(cx > -200000 && cx < 200000 && cy > -200000 && cy < 200000);   // a cell about its anchor, its offset in
                     if (!row[2]) { ++noBuilding; continue; }
@@ -575,16 +579,19 @@ int main(int argc, char** argv)
                     const float dx = b.F(bi, 3) - w.F(wi, 3), dy = b.F(bi, 4) - w.F(wi, 4);
                     CHECK(dx * dx + dy * dy < 1200.0f * 1200.0f);
                     CHECK(row[6] == gl::PathHash(b.S(bi, 11).c_str()));
-                    cells[row[1]].push_back(i);
+                    if (!(row[7] & 4u)) cells[row[1]].push_back(i);
+                    if (!(row[7] & 0xAu)) cellsWithout[row[1]].push_back(i);
                 }
                 size_t most = 0;
-                for (const auto& c : cells)
-                {
-                    double sum = 0;
-                    for (size_t i : c.second) sum += r.F(i, 5);
-                    CHECK(sum <= 1.0001);
-                    most = std::max(most, c.second.size());
-                }
+                for (const auto* view : { &cells, &cellsWithout })
+                    for (const auto& c : *view)
+                    {
+                        double sum = 0;
+                        for (size_t i : c.second) sum += r.F(i, 5);
+                        CHECK(sum <= 1.0001);
+                        most = std::max(most, c.second.size());
+                    }
+                CHECK(stainCells > 1000);
                 CHECK(most <= 32);
                 // A night: the lights' mean lit share by the hour, each cell by its building's style and seed (at rest).
                 auto styleOf = [&](size_t bi) {
@@ -629,7 +636,8 @@ int main(int argc, char** argv)
                     for (int p = 0; p < 2; ++p) place[p][k] = placeLights[p] ? static_cast<float>(sumPlace[p] / placeLights[p]) : 0.0f;
                     for (int p = 0; p < 3; ++p) frostPlace[p][k] = frostLights[p] ? static_cast<float>(sumFrost[p] / frostLights[p]) : 0.0f;
                 }
-                std::printf("  %zu rooms (windows) behind %zu lights (%u without a building), at most %zu a light\n", r.rows.size(), cells.size(), noBuilding, most);
+                std::printf("  %zu rooms (windows) behind %zu lights (%u without a building; %u stained glass), at most %zu a light\n", r.rows.size(), cells.size(),
+                            noBuilding, stainCells, most);
                 std::printf("  the lights with rooms, lit on average:");
                 for (int k = 0; k < 9; ++k) std::printf(" %02d:%02d %.0f%%", static_cast<int>(hours[k]), static_cast<int>((hours[k] - std::floor(hours[k])) * 60), 100 * mean[k]);
                 std::printf("\n  Stormwind (%u lights) at 23:00 %.0f%%, 02:00 %.0f%%; Goldshire (%u) at 23:00 %.0f%%, 02:00 %.0f%%\n",

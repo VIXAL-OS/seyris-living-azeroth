@@ -377,7 +377,7 @@ class Windows(unittest.TestCase):
 
     def test_the_inside_face_faces_out_and_the_table(self):
         # a house: the window's outside face in the exterior group 0, its inside face (facing in) in the interior group 1;
-        # stained glass beside it has no window
+        # stained glass beside it a window of its own, numbered after the others (theirs as before stained glass had rooms)
         wmo = "World\\WMO\\Test\\House.wmo"
         stained = "x\\mm_stained_01.blp"
         ext = group(0x8, ((-6, -4, 0), (0.5, 4, 5)), [(0, wall_x(0.0, -1, 1, 1, 3, out=True)), (2, wall_x(0.0, 2, 3, 1, 3))])
@@ -386,10 +386,12 @@ class Windows(unittest.TestCase):
                           [wmo.lower(), wmo.lower()])
         ws, why = g.wmo_windows(scan, wmo.lower())
         self.assertEqual(why, "")
-        self.assertEqual([(w.group, w.ordinal, w.exterior) for w in ws], [(0, 0, True), (1, 1, False)])
+        self.assertEqual([(w.group, w.ordinal, w.exterior, w.kind) for w in ws],
+                         [(0, 0, True, g.LEADED), (1, 1, False, g.LEADED), (0, 2, True, g.STAINED)])
         self.assertEqual(ws[1].normal, (1.0, 0.0, 0.0))     # out of the house, though its triangles face in
         rows, report = g.windows_table(scan)
-        self.assertEqual(len(rows), 2)                      # per WMO file, not per placement
+        self.assertEqual(len(rows), 3)                      # per WMO file, not per placement
+        self.assertEqual(rows[2][:5], [3, "world\\wmo\\test\\house.wmo", 0, 2, g.STAINED])
         r = rows[0]
         self.assertEqual(len(r), len(g.GLASS_WINDOWS))
         self.assertEqual(r[:5], [1, "world\\wmo\\test\\house.wmo", 0, 0, g.LEADED])
@@ -401,6 +403,27 @@ class Windows(unittest.TestCase):
         self.assertEqual([g.io.as_float(v) for v in raw[0][5:13]], r[5:13])   # float32 exactly
         self.assertEqual(g.io.as_float(raw[0][16]), r[16])
 
+
+    def test_stained_windows_come_after_and_not_a_dungeons_or_a_sheet(self):
+        # A chapel: a leaded window in group 1, a stained one in group 0 (sorted first by group, but numbered after all the
+        # others); a stained sheet 14 yd wide (a wall of glass: cut into tiles, so left out); and the same WMO in a dungeon's
+        # folder: no stained windows at all, its leaded one as before.
+        stained = "x\\mm_stained_01.blp"
+        g0 = group(0x8, ((-6, -20, 0), (0.5, 20, 9)), [(1, wall_x(0.0, -1, 1, 1, 3)), (1, wall_x(0.0, -18, -4, 1, 3))])
+        g1 = group(0x8, ((-6, -4, 0), (0.5, 4, 9)), [(0, wall_x(0.0, 2, 3, 5, 7))])
+        for wmo, want in (("World\\WMO\\Test\\Chapel.wmo", [(1, 0, g.LEADED), (0, 1, g.STAINED)]),
+                          ("World\\WMO\\Dungeon\\Test\\Chapel.wmo", [(1, 0, g.LEADED)])):
+            scan = self.build({wmo: root([WINDOW, stained], 2), wmo[:-4] + "_000.wmo": g0, wmo[:-4] + "_001.wmo": g1}, [wmo.lower()])
+            ws, why = g.wmo_windows(scan, wmo.lower())
+            self.assertEqual(why, "")
+            self.assertEqual([(w.group, w.ordinal, w.kind) for w in ws], want, wmo)
+            self.assertTrue(all(w.tile is None for w in ws if w.kind == g.STAINED))
+        # the same without the stained glass: the leaded window's ordinal is the same (0), so its room and lights are too
+        wmo = "World\\WMO\\Test\\Chapel.wmo"
+        scan = self.build({wmo: root([WINDOW, stained], 2), wmo[:-4] + "_000.wmo": group(0x8, ((-6, -4, 0), (0.5, 4, 9)), []),
+                           wmo[:-4] + "_001.wmo": g1}, [wmo.lower()])
+        ws, _ = g.wmo_windows(scan, wmo.lower())
+        self.assertEqual([(w.group, w.ordinal, w.kind) for w in ws], [(1, 0, g.LEADED)])
 
 def root_with_groups(textures, names, lit=(), unlit=(), wmo_id=0, group_flags=None):
     """A root with MOGI and MOGN (the groups' names, their flags: exterior unless `group_flags` says), its materials

@@ -46,8 +46,9 @@ window's rectangle, in WMO space: light_rooms), of which building (GlassBuilding
 placement's), and what share of the light's glass each is. The runtime hashes each window (its ordinal and group) with
 the building's seed as the shader does and dims the light and its glow by the share whose room is lit. Frosted glass has
 no room, but a lit window's frosted glass goes dark by the same schedule and flickers like a hearth (the user,
-2026-10-18): its windows too, flagged frosted (Flags 0x1), so the light goes dark and flickers with the glass. The glass
-tables are gen_glass.py's (read, not rebuilt).
+2026-10-18): its windows too, flagged frosted (Flags 0x1), so the light goes dark and flickers with the glass. Stained
+glass has a faint room too since 2026-10-20 (Dalaran's, the chapels'): its windows are flagged stained (Flags 0x2), each
+looked up among the stained windows alone, as its batch does. The glass tables are gen_glass.py's (read, not rebuilt).
 
 Usage:
   python gen_window_lights.py <scan> --group-list <out.txt>   the group files to extract (after the roots)
@@ -536,12 +537,19 @@ def light_of(c):
 # the glass of its panes; each glass triangle belongs to the window of the same WMO and group whose rectangle holds its
 # middle as the runtime finds it (in the window's frame, within WINDOW_MARGIN of its edges and its Thickness of its
 # plane; the lowest ordinal if several, as the shader's table lists them), and the rows say how much of the light's glass each window is, so the runtime dims the light as those rooms
-# go dark. A window of clear or leaded glass has a room; a frosted one has none, but goes dark the same way (the glass
-# itself) and flickers: flagged CELL_FROSTED. Glass in no window (stained, painted into a wall, not glass) has neither:
-# the share it leaves stays lit.
+# go dark. A window of clear or leaded glass has a room; a frosted one goes dark the same way (the glass itself, and its
+# blurred room) and flickers: flagged CELL_FROSTED. Stained glass (its texture's kind, GlassMaterials) is looked up among
+# the group's stained windows only (the runtime keeps them apart: a stained batch's pixel finds only those) and flagged
+# CELL_STAINED: its faint tinted room goes dark with the rooms (with StainedRooms). Glass in no window (painted into a
+# wall, a dungeon's stained glass, not glass) has neither: the share it leaves stays lit.
 ROOM_KINDS = (1, 4)                                # GlassWindows.Kind clear, leaded: a room behind the window
-FROSTED_KIND = 3                                   # ... frosted: no room, the glass itself goes dark (a lit window's)
+FROSTED_KIND = 3                                   # ... frosted: the glass itself goes dark (a lit window's), its room blurred
+STAINED_KIND = 2                                   # ... stained: a faint room tinted by the glass (its own windows)
 CELL_FROSTED = 0x1                                 # WindowRooms.Flags: the window is frosted glass
+CELL_STAINED = 0x2                                 # ... stained glass (read only while stained glass has rooms)
+CELL_UNSTAINED = 0x4                               # ... read only while stained glass has no rooms (StainedRooms off): the
+                                                   # cell as it was before, its stained glass looked up among the others
+CELL_WITH_STAINED = 0x8                            # ... a room or frosted cell read only while stained glass has rooms
 MIN_SHARE = 0.004                                  # a window with less of the light's glass is folded into the others
 WHOLE = 0xFFFFFFFF                                 # GlassBuildings.Group of a whole placement
 WINDOW_MARGIN = 0.03                               # yd: a point this far outside a window's rectangle is in it (the
@@ -549,6 +557,7 @@ WINDOW_MARGIN = 0.03                               # yd: a point this far outsid
 WINDOW_DEPTH = 0.3                                 # yd: ... if within its Thickness of its plane (this without one:
                                                    # rooms::kThickness)
 GLASS_TABLES = ("GlassWindows.cdbc", "GlassBuildings.cdbc")
+GLASS_MATERIALS = "GlassMaterials.cdbc"            # the textures' kinds (stained glass's cells); without it none
 
 
 def path_hash(wmo):
@@ -605,27 +614,38 @@ class Windows:
 
 
 def read_glass(folder):
-    """The glass tables the rooms come from (gen_glass.py's, as installed): {"windows": {WMO path: {group: Windows}},
-    "buildings": {(map, unique ID, group): GlassBuildings ID}}."""
+    """The glass tables the rooms come from (gen_glass.py's, as installed): {"windows": {WMO path: {group: Windows}} (clear,
+    leaded and frosted), "stained": {WMO path: {group: Windows}} (stained: kept apart, as the runtime keeps them),
+    "buildings": {(map, unique ID, group): GlassBuildings ID}, "kinds": {texture path: GlassMaterials.Kind} (none without
+    GlassMaterials.cdbc)}."""
     _, raw, string_at = io.read((folder / "GlassWindows.cdbc").read_bytes())
     by = collections.defaultdict(lambda: collections.defaultdict(list))
+    by_stained = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in raw:
         f = [io.as_float(v) for v in r[5:13]]
         thickness = io.as_float(r[16]) if len(r) > 16 else WINDOW_DEPTH
-        by[norm_path(string_at(r[1]))][r[2]].append((r[3], r[4], tuple(f[0:3]), tuple(f[3:6]), f[6], f[7], thickness))
+        (by_stained if r[4] == STAINED_KIND else by)[norm_path(string_at(r[1]))][r[2]].append(
+            (r[3], r[4], tuple(f[0:3]), tuple(f[3:6]), f[6], f[7], thickness))
     windows = {wmo: {gi: Windows(rows) for gi, rows in groups.items()} for wmo, groups in by.items()}
+    stained = {wmo: {gi: Windows(rows) for gi, rows in groups.items()} for wmo, groups in by_stained.items()}
     _, raw, _s = io.read((folder / "GlassBuildings.cdbc").read_bytes())
     buildings = {}
     for r in raw:
         if r[2]:   # a WMO's default (unique ID 0) names no placement
             buildings[(r[1], r[2], r[6])] = r[0]
-    return {"windows": windows, "buildings": buildings}
+    kinds = {}
+    if (folder / GLASS_MATERIALS).exists():
+        _, raw, string_at = io.read((folder / GLASS_MATERIALS).read_bytes())
+        kinds = {norm_path(string_at(r[1])): r[2] for r in raw}
+    return {"windows": windows, "stained": stained, "buildings": buildings, "kinds": kinds}
 
 
-def light_rooms(c, map_id, uid, wmo, glass):
+def light_rooms(c, map_id, uid, wmo, glass, legacy=False):
     """A light's windows: [(GlassBuildings ID or 0, the window's ordinal, its group, share of the light's glass, seed,
-    flags)], its frosted windows flagged CELL_FROSTED. In WMO space: each glass triangle of the light's panes (p.points,
-    three per triangle; p.group) goes to the window of the same WMO and group that holds its middle (Windows.at). Each
+    flags)], its frosted windows flagged CELL_FROSTED, its stained ones CELL_STAINED. In WMO space: each glass triangle of
+    the light's panes (p.points, three per triangle; p.group) goes to the window of the same WMO and group that holds its
+    middle (Windows.at): a stained pane's (its texture's kind) among the stained windows only, any other's among the
+    rest (`legacy`: every pane among the rest and no stained cells, as before stained glass had rooms: room_cells). Each
     pane's building is its group's row (a city's group), else its placement's; with neither, 0 (the runtime then takes
     the shader's default: the built-in house, the WMO's path as the seed). Windows under MIN_SHARE are folded into the
     building's others of the same kind (the rooms keep their share of the glass)."""
@@ -633,11 +653,14 @@ def light_rooms(c, map_id, uid, wmo, glass):
     per = collections.defaultdict(lambda: collections.defaultdict(float))   # (building, flags) -> windows
     seed = path_hash(wmo)
     groups = glass["windows"].get(norm_path(wmo), {})
+    stained_groups = glass.get("stained", {}).get(norm_path(wmo), {})
+    kinds = glass.get("kinds", {})
     for p in c.panes:
         tris = [p.points[t:t + 3] for t in range(0, len(p.points) - 2, 3)]
         areas = [0.5 * length(cross(sub(t[1], t[0]), sub(t[2], t[0]))) for t in tris]
         total += sum(areas)
-        ws = groups.get(p.group)
+        stained = not legacy and kinds.get(norm_path(getattr(p, "texture", None) or ""), 0) == STAINED_KIND
+        ws = (stained_groups if stained else groups).get(p.group)
         if ws is None or not tris:
             continue
         bid = glass["buildings"].get((map_id, uid, p.group)) or glass["buildings"].get((map_id, uid, WHOLE)) or 0
@@ -645,7 +668,9 @@ def light_rooms(c, map_id, uid, wmo, glass):
             if w < 0 or not areas[k] > 0.0:
                 continue
             kind = ws.kind[w]
-            if kind in ROOM_KINDS or kind == FROSTED_KIND:
+            if stained:
+                per[(bid, CELL_STAINED)][(ws.ordinal[w], p.group)] += areas[k]
+            elif kind in ROOM_KINDS or kind == FROSTED_KIND:
                 per[(bid, CELL_FROSTED if kind == FROSTED_KIND else 0)][(ws.ordinal[w], p.group)] += areas[k]
     out_rows = []
     if total <= 0.0:
@@ -661,6 +686,20 @@ def light_rooms(c, map_id, uid, wmo, glass):
             share = struct.unpack("<f", struct.pack("<f", a * scale / total))[0]
             out_rows.append((bid, ordinal, group, share, seed, flags))
     return out_rows
+
+
+def room_cells(c, map_id, uid, wmo, glass):
+    """A light's WindowRooms rows (light_rooms' tuples) with stained glass's rooms and without: the cells both ways agree
+    on as they are; the stained cells (CELL_STAINED) and any other cell only with them (CELL_WITH_STAINED) read while
+    stained glass has rooms; the cells as they were before (CELL_UNSTAINED: a stained pane's glass in a frosted or clear
+    window beside it) read while it hasn't, so StainedRooms off dims every light exactly as before. By building and
+    flags (without CELL_UNSTAINED, CELL_WITH_STAINED), then ordinal and group, as light_rooms orders them."""
+    now, before = light_rooms(c, map_id, uid, wmo, glass), light_rooms(c, map_id, uid, wmo, glass, legacy=True)
+    a, b = set(now), set(before)
+    out = [r for r in now if r in b or r[5] & CELL_STAINED]
+    out += [r[:5] + (r[5] | CELL_WITH_STAINED,) for r in now if r not in b and not r[5] & CELL_STAINED]
+    out += [r[:5] + (r[5] | CELL_UNSTAINED,) for r in before if r not in a]
+    return sorted(out, key=lambda r: (r[0], r[5] & ~(CELL_UNSTAINED | CELL_WITH_STAINED), r[1], r[2], r[5]))
 
 
 # --- placement (noggit's convention; checked against all 1,559 tilted MODF extents, waterfall-scan tilt_check.py) ---
@@ -846,7 +885,7 @@ def build(scan, survey=False, glass=None):
                    light_for_texture(texture), strength, 0, "%s: %s" % (name, wmo.split(BS)[-1][:-4])]
             rows.append(row)
             if glass is not None:
-                rooms[id(row)] = light_rooms(c, CONTINENTS[mapdir], int(uid), wmo, glass)
+                rooms[id(row)] = room_cells(c, CONTINENTS[mapdir], int(uid), wmo, glass)
     thin(rows)
     rows.sort(key=lambda r: (r[1], math.floor(r[3] / 64), math.floor(r[4] / 64), r[3], r[4], r[5]))
     for i, r in enumerate(rows):
@@ -910,20 +949,29 @@ def main():
     casting = [r for r in rows if not r[R_FLAGS] & GLOW_ONLY]
     print(f"{len(rows)} lit windows in {len(report)} places: {len(casting)} cast light, {len(rows) - len(casting)} only glow; "
           f"busiest 16-yd cell: {max(cells.values()) if cells else 0} window lights")
-    frost_rows = [r for r in room_rows if r[7] & CELL_FROSTED]
+    # (as the runtime reads them with stained glass's rooms: CELL_UNSTAINED rows are the ones read without them)
+    room_rows_now = [r for r in room_rows if not r[7] & CELL_UNSTAINED]
+    frost_rows = [r for r in room_rows_now if r[7] & CELL_FROSTED]
     frost_lights = collections.Counter(r[1] for r in frost_rows)
     by_name = {r[0]: r[16].split(":")[0] for r in rows}
     frost_places = collections.Counter(by_name[w] for w in frost_lights)
     print(f"lit frosted glass: {len(frost_rows)} windows at {len(frost_lights)} lights: " +
           ", ".join(f"{n} {p}" for p, n in frost_places.most_common()))
-    room_rows_only = [r for r in room_rows if not r[7] & CELL_FROSTED]
+    stained_rows = [r for r in room_rows_now if r[7] & CELL_STAINED]
+    stained_lights = collections.Counter(r[1] for r in stained_rows)
+    stained_places = collections.Counter(by_name[w] for w in stained_lights)
+    print(f"stained glass: {len(stained_rows)} windows at {len(stained_lights)} lights: " +
+          ", ".join(f"{n} {p}" for p, n in stained_places.most_common()))
+    room_rows_only = [r for r in room_rows_now if not r[7] & (CELL_FROSTED | CELL_STAINED)]
+    print(f"{sum(1 for r in room_rows if r[7] & CELL_UNSTAINED)} cells read only without stained glass's rooms (as they were), "
+          f"{sum(1 for r in room_rows if r[7] & CELL_WITH_STAINED)} other cells only with them")
     with_rooms = collections.Counter(r[1] for r in room_rows_only)
     per_light = sorted(with_rooms.values())
     room_share = collections.defaultdict(float)
     for r in room_rows_only:
         room_share[r[1]] += r[5]
     print(f"rooms behind the glass (glass tables from {glass_dir}): {len(room_rows_only)} rooms (windows) for {len(with_rooms)} of the "
-          f"{len(rows)} lights ({len(rows) - len(with_rooms)} have no room glass: stained, frosted, not glass); rooms per light: "
+          f"{len(rows)} lights ({len(rows) - len(with_rooms)} have no clear or leaded glass: stained, frosted, not glass); rooms per light: "
           f"median {per_light[len(per_light) // 2] if per_light else 0}, most {per_light[-1] if per_light else 0}; "
           f"room glass {100.0 * sum(room_share.values()) / max(1, len(with_rooms)):.0f}% of those lights' glass on average; "
           f"{sum(1 for r in room_rows_only if r[2] == 0)} rooms with no GlassBuildings row (the default house)")
