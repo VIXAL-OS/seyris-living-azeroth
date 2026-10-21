@@ -49,8 +49,10 @@ namespace wxl_livingazeroth::glass
             // titan glass lit from behind (2026-10-18)
             {"Backlit", 16, WXL_CDBC_FIELD_VALUE}, {"Pulse", 17, WXL_CDBC_FIELD_VALUE},   {"PulseSeconds", 18, WXL_CDBC_FIELD_VALUE},
             {"PulseR", 19, WXL_CDBC_FIELD_VALUE},  {"PulseG", 20, WXL_CDBC_FIELD_VALUE},  {"PulseB", 21, WXL_CDBC_FIELD_VALUE},
+            // the corner of the texture that isn't glass (2026-10-20: the forge's fire slots)
+            {"NotGlassU", 22, WXL_CDBC_FIELD_VALUE}, {"NotGlassV", 23, WXL_CDBC_FIELD_VALUE},
         };
-        constexpr WXL_SeyrisCdbcDefinition kMaterialDef = { "GlassMaterials", kMaterialsFile, kMaterialFields, 22 };
+        constexpr WXL_SeyrisCdbcDefinition kMaterialDef = { "GlassMaterials", kMaterialsFile, kMaterialFields, 24 };
         constexpr WXL_SeyrisCdbcField kPaneFields[] = {
             {"ID", 0, WXL_CDBC_FIELD_VALUE},         {"MapID", 1, WXL_CDBC_FIELD_VALUE},     {"WmoID", 2, WXL_CDBC_FIELD_VALUE},
             {"PosX", 3, WXL_CDBC_FIELD_VALUE},       {"PosY", 4, WXL_CDBC_FIELD_VALUE},      {"PosZ", 5, WXL_CDBC_FIELD_VALUE},
@@ -312,7 +314,7 @@ namespace wxl_livingazeroth::glass
                 if (g_sets[set].state == 2) for (int k = 0; k < 4; ++k) gains[k] = g_sets[set].gain[k];
                 else { if (g_sets[set].state == 0) g_sets[set].state = 1; set = -1; }
             }
-            RoomRegisters(g_axes, g_origin, g_view, grid, g_windows.Height(), cls, scales, gains, g_settings, rooms, m.kind);
+            RoomRegisters(g_axes, g_origin, g_view, grid, g_windows.Height(), cls, scales, gains, g_settings, rooms, m.kind, m.notGlass);
             const unsigned withRoom = grid && out[6] > 0.0f ? 1 : 0;
             g_roomBatches += withRoom;
             g_frostRooms += m.kind == kFrosted ? withRoom : 0;
@@ -808,7 +810,7 @@ namespace wxl_livingazeroth::glass
 
     void RoomRegisters(const float axes[9], const float origin[3], const float camera[3], const WindowTable::Grid* grid, int tableHeight,
                        uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters],
-                       uint32_t glassKind)
+                       uint32_t glassKind, const float notGlass[2])
     {
         std::memset(out, 0, sizeof(float) * 4 * kRoomRegisters);
         // c15..c17: the point in its WMO's space = the rows . (P about the camera, 1): row i its axis i in the world, the
@@ -858,6 +860,13 @@ namespace wxl_livingazeroth::glass
         out[47] = kFaceMean;
         out[48] = stained ? 1.0f - kStainedTint : 1.0f;
         out[49] = stained ? kStainedTint : 0.0f;
+        // c27.zw: the texture's corner that isn't glass (Material::notGlass), as 1 - where it starts; 0: none (the
+        // shader's frac(uv) - 1 + this is never >= 0)
+        if (notGlass && notGlass[0] < 1.0f && notGlass[1] < 1.0f)
+        {
+            out[50] = 1.0f - notGlass[0];
+            out[51] = 1.0f - notGlass[1];
+        }
     }
 
     bool IsRotation(const float a[9])
@@ -954,16 +963,24 @@ namespace wxl_livingazeroth::glass
                 m.pulseSeconds = F(row, "PulseSeconds", 0.0f);
                 const char* pulse[3] = { "PulseR", "PulseG", "PulseB" };
                 for (int k = 0; k < 3; ++k) m.pulseColour[k] = std::max(0.0f, F(row, pulse[k], 1.0f));
+                // the corner that isn't glass (none in an older file; anything but 0 .. 1: none)
+                const float ng[2] = { F(row, "NotGlassU", 1.0f), F(row, "NotGlassV", 1.0f) };
+                for (int k = 0; k < 2; ++k) m.notGlass[k] = std::isfinite(ng[k]) && ng[k] >= 0.0f && ng[k] < 1.0f ? ng[k] : 1.0f;
+                if (m.notGlass[0] >= 1.0f || m.notGlass[1] >= 1.0f) m.notGlass[0] = m.notGlass[1] = 1.0f;
                 g_materials.push_back(m);
                 g_byTexture[Key(texture)] = static_cast<uint32_t>(g_materials.size());
                 g_materialById[cdbc->Value(t, row, "ID", 0)] = static_cast<uint32_t>(g_materials.size());
             }
             cdbc->Release(t);
-            char line[128];
-            unsigned backlitTextures = 0;
-            for (const Material& mm : g_materials) backlitTextures += mm.backlit > 0.0f ? 1 : 0;
-            std::snprintf(line, sizeof(line), "GlassMaterials.cdbc: %u glass textures (%u titan glass that can be lit from behind)",
-                          static_cast<unsigned>(g_materials.size()), backlitTextures);
+            char line[160];
+            unsigned backlitTextures = 0, cornered = 0;
+            for (const Material& mm : g_materials)
+            {
+                backlitTextures += mm.backlit > 0.0f ? 1 : 0;
+                cornered += mm.notGlass[0] < 1.0f ? 1 : 0;
+            }
+            std::snprintf(line, sizeof(line), "GlassMaterials.cdbc: %u glass textures (%u titan glass that can be lit from behind, %u with a corner that isn't glass)",
+                          static_cast<unsigned>(g_materials.size()), backlitTextures, cornered);
             status = line;
         }
         else { status = std::string("GlassMaterials.cdbc: ") + (err[0] ? err : "not found") + " (no glass)"; g_loadProblem = true; }

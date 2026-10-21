@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <utility>
 
 namespace wxl_livingazeroth::seethrough
 {
@@ -116,6 +118,182 @@ namespace wxl_livingazeroth::seethrough
             (r.windows[i].interior >= 0 ? r.real : r.fake) += 1;
         }
         return r;
+    }
+
+    namespace
+    {
+        // Moller-Trumbore: t along o + t d to the triangle (a, e1, e2 from it), and det (> 0: its front faces the ray's
+        // origin, cross(e1, e2) . d < 0); false when it misses or the ray runs along it.
+        bool Intersect(const float* tri, const float o[3], const float d[3], float& t, float& det)
+        {
+            const float e1[3] = { tri[3] - tri[0], tri[4] - tri[1], tri[5] - tri[2] };
+            const float e2[3] = { tri[6] - tri[0], tri[7] - tri[1], tri[8] - tri[2] };
+            const float p[3] = { d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0] };
+            det = Dot(e1, p);
+            if (!(std::fabs(det) > 1e-12f)) return false;
+            const float inv = 1.0f / det;
+            const float s[3] = { o[0] - tri[0], o[1] - tri[1], o[2] - tri[2] };
+            const float u = Dot(s, p) * inv;
+            if (u < 0.0f || u > 1.0f) return false;
+            const float q[3] = { s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0] };
+            const float v = Dot(d, q) * inv;
+            if (v < 0.0f || u + v > 1.0f) return false;
+            t = Dot(e2, q) * inv;
+            return std::isfinite(t);
+        }
+    }
+
+    bool RoomMesh::Build(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
+                         const std::vector<std::pair<uint32_t, uint32_t>>& ranges)
+    {
+        *this = RoomMesh{};
+        if (!vertices || !indices) return false;
+        for (const auto& r : ranges)
+        {
+            if (r.first > indexCount || r.second > indexCount - r.first || r.second % 3) { *this = RoomMesh{}; return false; }
+            for (uint32_t k = r.first; k < r.first + r.second; ++k)
+            {
+                const uint32_t i = indices[k];
+                if (i >= vertexCount) { *this = RoomMesh{}; return false; }
+                for (int c = 0; c < 3; ++c) m_tris.push_back(vertices[3 * static_cast<size_t>(i) + c]);
+            }
+        }
+        for (const float f : m_tris)
+            if (!std::isfinite(f)) { *this = RoomMesh{}; return false; }
+        if (m_tris.empty()) return true;
+        float hi[3];
+        for (int k = 0; k < 3; ++k) { m_lo[k] = m_tris[k]; hi[k] = m_tris[k]; }
+        for (size_t i = 0; i < m_tris.size(); i += 3)
+            for (int k = 0; k < 3; ++k) { m_lo[k] = std::min(m_lo[k], m_tris[i + k]); hi[k] = std::max(hi[k], m_tris[i + k]); }
+        float longest = 0.0f;
+        for (int k = 0; k < 3; ++k) { m_lo[k] -= 0.01f; hi[k] += 0.01f; longest = std::max(longest, hi[k] - m_lo[k]); }
+        m_cell = std::max(kGridLeast, longest / static_cast<float>(kGridCells));
+        for (int k = 0; k < 3; ++k) m_n[k] = std::clamp(static_cast<int>(std::ceil((hi[k] - m_lo[k]) / m_cell)), 1, 2 * kGridCells);
+        const size_t cells = static_cast<size_t>(m_n[0]) * m_n[1] * m_n[2];
+        // each triangle in every cell its box (a hair grown) touches: counted, then placed
+        auto range = [&](size_t t, int lo[3], int hiCell[3]) {
+            const float* v = &m_tris[9 * t];
+            for (int k = 0; k < 3; ++k)
+            {
+                const float a = std::min({ v[k], v[3 + k], v[6 + k] }) - 1e-3f, b = std::max({ v[k], v[3 + k], v[6 + k] }) + 1e-3f;
+                lo[k] = std::clamp(static_cast<int>(std::floor((a - m_lo[k]) / m_cell)), 0, m_n[k] - 1);
+                hiCell[k] = std::clamp(static_cast<int>(std::floor((b - m_lo[k]) / m_cell)), 0, m_n[k] - 1);
+            }
+        };
+        m_cellStart.assign(cells + 1, 0);
+        const size_t n = Triangles();
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            std::vector<uint32_t> fill;
+            if (pass) { for (size_t c = 0; c < cells; ++c) m_cellStart[c + 1] += m_cellStart[c]; m_refs.resize(m_cellStart[cells]); fill.assign(m_cellStart.begin(), m_cellStart.end() - 1); }
+            for (size_t t = 0; t < n; ++t)
+            {
+                int lo[3], hiCell[3];
+                range(t, lo, hiCell);
+                for (int z = lo[2]; z <= hiCell[2]; ++z)
+                    for (int y = lo[1]; y <= hiCell[1]; ++y)
+                        for (int x = lo[0]; x <= hiCell[0]; ++x)
+                        {
+                            const size_t c = (static_cast<size_t>(z) * m_n[1] + y) * m_n[0] + x;
+                            if (pass) m_refs[fill[c]++] = static_cast<uint32_t>(t);
+                            else ++m_cellStart[c + 1];
+                        }
+            }
+        }
+        return true;
+    }
+
+    bool RoomMesh::TestCell(int cell, const float o[3], const float d[3], float tmin, float& best, int& bestTri) const
+    {
+        bool any = false;
+        for (uint32_t r = m_cellStart[static_cast<size_t>(cell)]; r < m_cellStart[static_cast<size_t>(cell) + 1]; ++r)
+        {
+            float t, det;
+            if (Intersect(&m_tris[9 * static_cast<size_t>(m_refs[r])], o, d, t, det) && t > tmin && t < best)
+            {
+                best = t;
+                bestTri = static_cast<int>(m_refs[r]);
+                any = true;
+            }
+        }
+        return any;
+    }
+
+    RoomMesh::Hit RoomMesh::First(const float o[3], const float d[3], float tmin, float tmax, float* tOut) const
+    {
+        if (m_tris.empty() || !Finite3(o) || !Finite3(d) || !(tmax > tmin)) return kNone;
+        // the ray within the grid's box
+        float t0 = tmin, t1 = tmax;
+        for (int k = 0; k < 3; ++k)
+        {
+            const float hi = m_lo[k] + m_cell * static_cast<float>(m_n[k]);
+            if (std::fabs(d[k]) < 1e-12f)
+            {
+                if (o[k] < m_lo[k] || o[k] > hi) return kNone;
+                continue;
+            }
+            float a = (m_lo[k] - o[k]) / d[k], b = (hi - o[k]) / d[k];
+            if (a > b) std::swap(a, b);
+            t0 = std::max(t0, a);
+            t1 = std::min(t1, b);
+            if (t0 > t1) return kNone;
+        }
+        int c[3], step[3];
+        float next[3], delta[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            const float p = o[k] + d[k] * t0;
+            c[k] = std::clamp(static_cast<int>(std::floor((p - m_lo[k]) / m_cell)), 0, m_n[k] - 1);
+            if (d[k] > 1e-12f) { step[k] = 1; next[k] = (m_lo[k] + m_cell * static_cast<float>(c[k] + 1) - o[k]) / d[k]; delta[k] = m_cell / d[k]; }
+            else if (d[k] < -1e-12f) { step[k] = -1; next[k] = (m_lo[k] + m_cell * static_cast<float>(c[k]) - o[k]) / d[k]; delta[k] = -m_cell / d[k]; }
+            else { step[k] = 0; next[k] = std::numeric_limits<float>::infinity(); delta[k] = next[k]; }
+        }
+        float best = tmax;
+        int bestTri = -1;
+        for (int guard = 0; guard < 4 * (m_n[0] + m_n[1] + m_n[2]) + 8; ++guard)
+        {
+            TestCell((c[2] * m_n[1] + c[1]) * m_n[0] + c[0], o, d, tmin, best, bestTri);
+            const int k = next[0] < next[1] ? (next[0] < next[2] ? 0 : 2) : (next[1] < next[2] ? 1 : 2);
+            const float exit = next[k];
+            if ((bestTri >= 0 && best <= exit) || exit > t1) break;
+            c[k] += step[k];
+            if (c[k] < 0 || c[k] >= m_n[k]) break;
+            next[k] += delta[k];
+        }
+        if (bestTri < 0) return kNone;
+        float t, det;
+        if (!Intersect(&m_tris[9 * static_cast<size_t>(bestTri)], o, d, t, det)) return kNone;
+        if (tOut) *tOut = best;
+        return det > 0.0f ? kFront : kBack;
+    }
+
+    RoomMesh::Hit RoomMesh::FirstBrute(const float o[3], const float d[3], float tmin, float tmax, float* tOut) const
+    {
+        float best = tmax, bestDet = 0.0f;
+        bool any = false;
+        for (size_t i = 0; i < Triangles(); ++i)
+        {
+            float t, det;
+            if (Intersect(&m_tris[9 * i], o, d, t, det) && t > tmin && t < best) { best = t; bestDet = det; any = true; }
+        }
+        if (!any) return kNone;
+        if (tOut) *tOut = best;
+        return bestDet > 0.0f ? kFront : kBack;
+    }
+
+    bool SeesRoom(const SeeWindow& w, const float eye[3], const RoomMesh& room)
+    {
+        if (room.Empty() || !Finite3(eye)) return false;
+        for (const auto& s : kSight)
+        {
+            float d[3];
+            for (int k = 0; k < 3; ++k) d[k] = w.center[k] + w.along[k] * s[0] * w.halfWidth + w.up[k] * s[1] * w.halfHeight - eye[k];
+            const float len = std::sqrt(Dot(d, d));
+            if (!(len > 1e-3f) || !std::isfinite(len)) return false;
+            for (float& v : d) v /= len;
+            if (room.First(eye, d, len, len + kSightReach) != RoomMesh::kFront) return false;
+        }
+        return true;
     }
 
     void Corners(const SeeWindow& w, float grow, float out[4][3])
@@ -284,10 +462,29 @@ namespace wxl_livingazeroth::seethrough
         bool opened = false;
         for (const uint16_t w : b.windows)
         {
-            if (w >= stateCount || states[w] == kShut) return false;
+            if (w >= stateCount) return false;
             opened = opened || states[w] == kOpened;
         }
         return opened;
+    }
+
+    void OpenBits(const BatchWindows& b, const SeeWindow* windows, const uint8_t* states, size_t count, float& first, uint32_t& bits)
+    {
+        first = 0.0f;
+        bits = 0;
+        if (!windows || !states) return;
+        bool any = false;
+        uint32_t lo = 0;
+        for (const uint16_t w : b.windows)
+            if (w < count && states[w] == kOpened && (!any || windows[w].ordinal < lo))
+            {
+                lo = windows[w].ordinal;
+                any = true;
+            }
+        if (!any) return;
+        first = static_cast<float>(lo);
+        for (const uint16_t w : b.windows)
+            if (w < count && states[w] == kOpened && windows[w].ordinal - lo < kOpenBits) bits |= 1u << (windows[w].ordinal - lo);
     }
 
     bool DrawArgsOf(const uint32_t batch[4], uint32_t baseVertexMode, uint32_t streamOffset, uint32_t streamStride, uint32_t indexOffset,
@@ -307,18 +504,26 @@ namespace wxl_livingazeroth::seethrough
         return true;
     }
 
-    uint32_t BlendFactor(float opacity)
+    void ReplayConstants(float opacity, bool alphaTest, uint32_t alphaFunc, uint32_t alphaRef, float first, uint32_t bits, float out[4])
     {
         const float o = std::isfinite(opacity) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
-        const uint32_t a = static_cast<uint32_t>(std::lround(o * 255.0f));
-        return (a << 24) | (a << 16) | (a << 8) | a;
+        out[0] = 1.0f - o;
+        const float ref = static_cast<float>(std::min<uint32_t>(alphaRef, 255u));
+        out[1] = !alphaTest ? -1.0f
+               : alphaFunc == kD3dCmpGreaterEqual ? ref / 255.0f
+               : alphaFunc == kD3dCmpGreater ? (ref + 0.5f) / 255.0f
+               : -1.0f;
+        out[2] = std::isfinite(first) ? first : 0.0f;
+        out[3] = static_cast<float>(bits & ((1u << kOpenBits) - 1u));
     }
 
-    void Deferral::BeginBatch(bool deferrable, uint32_t start, uint32_t count)
+    void Deferral::BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first, uint32_t bits)
     {
         m_pending = deferrable;
         m_start = start;
         m_count = count;
+        m_first = first;
+        m_bits = bits;
     }
 
     Deferral::Draw Deferral::OnDraw(bool indexed, uint32_t primitive, uint32_t start, uint32_t count, uint32_t blendingMode)
@@ -334,7 +539,12 @@ namespace wxl_livingazeroth::seethrough
         return Draw::Defer;
     }
 
-    void Deferral::Captured(const Entry& entry) { m_entries.push_back(entry); }
+    void Deferral::Captured(const Entry& entry)
+    {
+        m_entries.push_back(entry);
+        m_entries.back().first = m_first;
+        m_entries.back().bits = m_bits;
+    }
 
     std::vector<Deferral::Entry> Deferral::Take()
     {

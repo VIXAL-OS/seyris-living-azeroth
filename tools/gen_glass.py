@@ -21,6 +21,9 @@ candidate texture):
   colour space, saturate(dot(texel.rgb, MaskRGB) + MaskBias), half-way between the clusters, soft over 60% of the gap.
 - The glass's average colour (the texels by mask), and the colour of the light it lets in: stained glass its own colour
   at full value; clear, leaded and frosted glass nearly white, with a quarter (frosted: half) of its tint.
+- A corner of a glass texture that isn't glass (NOT_GLASS: the human window atlases' fourth quadrant, four glowing fire
+  slots, a smithy's forge mouth): NotGlassU, NotGlassV (1: none). Its triangles (all three corners in it) are no pane's and
+  no window's, and the shader leaves its texels as the client draws them.
 
 GlassPanes (one row per window pane of every placed WMO with glass, all maps the scan has, no lived-in filter):
 - The pane: the connected, coplanar glass triangles of one group (a curved band of glass is cut where it turns, and a
@@ -280,6 +283,17 @@ SKIP = {
     "silvermyst_inn_window01": "a ruined inn", "azr_window01": "ruins", "cer_window01": "ruins",
 }
 BROKEN_WORDS = ("abndn", "abandn", "abandon", "burn", "broken", "destroyed", "ruin")
+# Not glass in a glass texture: a corner of it, from (u, v) to the far corner of its tile. The human window atlases'
+# fourth quadrant (u and v from 0.5) is four tall glowing fire slots with red tops, not a window: the forge mouths in the
+# blacksmiths' stone domes, their chimney tops and hearth vents (Goldshire's, Darkshire's, Lakeshire's, Westfall's and New
+# Hearthglen's smithies, the Venture Co.'s log machines; nothing else uses it). "blacksmith windows look very weird lol"
+# (the user, 2026-10-20, at Goldshire's forge: lit glass with a room behind each slot). A triangle with all three
+# corners in it (NOT_GLASS_SLACK of slack: the texels' edge) is no pane's and no window's; a triangle over the whole
+# texture (Westfall's guard towers' lanterns) still is.
+NOT_GLASS = {b: (0.5, 0.5) for b in ("mm_elwynn_wnd_ext__01", "mm_elwynn_wnd_int__01", "mm_duskwood_wnd_ext__01",
+                                       "mm_duskwood_wnd_int__01", "mm_rr_wnd_ext__01", "mm_rr_wnd_int__01",
+                                       "mm_westfall_wnd_ext__01", "mm_westfall_wnd_int__01")}
+NOT_GLASS_SLACK = 0.02
 
 # Titan glass lit from behind (see the docstring): the maps, and per texture (the glow's strength x the texel, its pulse's
 # amplitude, its period in seconds, the colour the pulse adds or None for white). Strengths by eye from the textures'
@@ -316,6 +330,18 @@ def backlit_values(texture):
 def base_name(path):
     b = path.lower().replace("/", BS).split(BS)[-1]
     return b[:-4] if b.endswith(".blp") else b
+
+
+def not_glass(texture, uvs):
+    """Whether a triangle (its three texture coordinates) lies in its texture's NOT_GLASS corner, in the tile its middle
+    is in (the shader's frac(uv))."""
+    corner = NOT_GLASS.get(base_name(texture))
+    if corner is None or len(uvs) != 3:
+        return False
+    tu = math.floor(sum(u for u, _v in uvs) / 3.0)
+    tv = math.floor(sum(v for _u, v in uvs) / 3.0)
+    return all(corner[0] - NOT_GLASS_SLACK <= u - tu <= 1.0 + NOT_GLASS_SLACK and
+               corner[1] - NOT_GLASS_SLACK <= v - tv <= 1.0 + NOT_GLASS_SLACK for u, v in uvs)
 
 
 def is_candidate(path):
@@ -472,13 +498,17 @@ def group_panes(g, gi, materials, exterior, min_area=MIN_AREA, tile=True):
     """The glass panes of one group: connected triangles of glass facing within FLAT of each other (at least min_area
     yd^2 of glass); with `tile`, a sheet larger than 2 x TILE across cut into tiles by its triangles' middles (a tile's
     rectangle is its triangles', so a long triangle's tile crosses its neighbours': the windows take sheets whole and
-    cut() them exactly)."""
+    cut() them exactly). A triangle in its texture's NOT_GLASS corner (by the group's first texture coordinates) isn't
+    glass."""
     v, idx = g["vertices"], g["indices"]
+    uv = g.get("uvs") or []
     tris = []
     for start, count, _mn, _mx, _fl, material in g["batches"]:
         if material in materials:
             for k in range(start, start + count - 2, 3):
                 i = idx[k:k + 3]
+                if len(i) == 3 and max(i) < len(uv) and not_glass(materials[material], [uv[x] for x in i]):
+                    continue
                 if len(i) == 3 and max(i) < len(v):
                     n = wl.cross(wl.sub(v[i[1]], v[i[0]]), wl.sub(v[i[2]], v[i[0]]))
                     a = 0.5 * wl.length(n)
@@ -1698,9 +1728,11 @@ def hash_path(wmo):
 
 
 # --- the tables ----------------------------------------------------------------------------------------------------
-GLASS_MATERIALS = ["u", "s", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "s", "f", "f", "f", "f", "f", "f"]
+GLASS_MATERIALS = ["u", "s", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "s", "f", "f", "f", "f", "f", "f",
+                   "f", "f"]
 #  ID Texture Kind Flags ColorR ColorG ColorB LightR LightG LightB MaskR MaskG MaskB MaskBias Share Comment
 #  Backlit Pulse PulseSeconds PulseR PulseG PulseB (2026-10-18: titan glass lit from behind)
+#  NotGlassU NotGlassV (2026-10-20: the corner that isn't glass, NOT_GLASS; 1 none)
 GLASS_PANES = ["u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "f",
                "f", "f", "f", "u", "f", "f", "f", "f", "f", "f", "u", "s", "u"]
 #  ID MapID WmoID PosX PosY PosZ OutX OutY OutZ AlongX AlongY AlongZ HalfWidth HalfHeight
@@ -1773,7 +1805,8 @@ def materials_table(scan, textures, sheets=None):
         avg, light = glass_colours(px, plane, bias, kind)
         report[kind] += 1
         rows.append([0, t, kind, flags | (BACKLIT_PULSE if base_name(t) == VEZAX else 0), *avg, *light, *plane, bias, share,
-                     "%s (%s): %s" % (base_name(t), KIND_NAMES[kind], ", ".join(sorted(cands[t])[:3])), *backlit_values(t)])
+                     "%s (%s): %s" % (base_name(t), KIND_NAMES[kind], ", ".join(sorted(cands[t])[:3])), *backlit_values(t),
+                     *NOT_GLASS.get(base_name(t), (1.0, 1.0))])
         previews.append((path, plane, bias, base_name(t)))
     for i, r in enumerate(rows):
         r[0] = i + 1

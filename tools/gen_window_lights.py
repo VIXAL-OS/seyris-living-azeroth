@@ -222,7 +222,7 @@ def window_materials(info):
 
 
 def parse_group(b):
-    g = {"flags": 0, "indices": (), "vertices": [], "normals": [], "batches": []}
+    g = {"flags": 0, "indices": (), "vertices": [], "normals": [], "batches": [], "uvs": []}
     for tag, p, size in chunks(b):
         if tag != "MOGP":
             continue
@@ -234,6 +234,9 @@ def parse_group(b):
                 g["vertices"] = [struct.unpack_from("<3f", b, d + 12 * i) for i in range(s // 12)]
             elif t == "MONR":
                 g["normals"] = [struct.unpack_from("<3f", b, d + 12 * i) for i in range(s // 12)]
+            elif t == "MOTV" and not g["uvs"]:
+                # the first texture's coordinates (a second MOTV is the second texture's)
+                g["uvs"] = [struct.unpack_from("<2f", b, d + 8 * i) for i in range(s // 8)]
             elif t == "MOBA":
                 # bbox (6 x int16), startIndex u32, count u16, minIndex u16, maxIndex u16, flags u8, material u8
                 g["batches"] = [struct.unpack_from("<6hIHHHBB", b, d + 24 * i)[6:] for i in range(s // 24)]

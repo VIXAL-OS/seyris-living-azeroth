@@ -58,10 +58,16 @@
 //     same at noon and at midnight), a pane's light (backlit at any hour, sunlit by day, TitanBacklit off: the sun's), the
 //     facing; the shipped tables (the 7 textures, Vezax's pulse, the backlit panes per map, the buildings, none
 //     elsewhere); and on WARP the glass and its light on the floor at noon and at midnight: the same pixels, the rules'.
+// 10. On WARP, see-through windows' redraw (features/SeeThrough: b11, c219) and the corner that isn't glass (c27.zw): with
+//     b11 off and no corner every pixel and its alpha the block's as it was, bit for bit (by day, at night lit and dark,
+//     two masks, two stock alphas); in the redraw an open window has no fake room and hides no glow, its alpha 1 - mask x
+//     (1 - the opacity), its lead opaque, a shut one exactly as it was and opaque, the bits from the first ordinal, the
+//     batch's alpha test kept (texkill); the corner (the forge's fire slots) the client's colour exactly, the rest glass.
+//     And (2) every patched variant writes its alpha once, last, from r12.w, with the redraw in it; no stock shader has it.
 // Run: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]
 // GLASS_TEXTURES=<folder>: the client's interior BLPs (waterscan --extract-list's names) for the rooms on WARP, else
 // synthetic ones. GLASS_ONLY=<parts>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms,
-// lit, frosted, titan).
+// lit, frosted, titan, replay).
 #include "env/Flame.hpp"
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
@@ -86,6 +92,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <regex>
@@ -841,7 +849,9 @@ namespace
         if (!std::filesystem::exists(folder)) { Check(false, "WMO shader folder " + folder.string()); return; }
         const std::vector<Blob> blobs = LoadBlobs(folder);
         static const std::regex position(R"(dp3 r\d+\.\w, (v\d+), c3\b)"), normal(R"(dp3 r\d+\.\w, c4, (v\d+))");
+        static const std::regex alphaOut(R"(\n[ \t]*\w+ oC0\.w, )");
         int shadow = 0, patched = 0, assembled = 0, withBlocks = 0, maxSlots = 0, maxIceSlots = 0;
+        int alphaLast = 0, withReplay = 0, stockReplay = 0;
         std::string worst;
         std::map<std::string, int> reasons;
         for (const Blob& b : blobs)
@@ -850,11 +860,18 @@ namespace
             if (!sp::Disassemble(b.code.data(), b.code.size(), src, why)) { reasons["disassemble: " + why]++; continue; }
             const bool isShadow = std::regex_search(src, position) && std::regex_search(src, normal);
             shadow += isShadow ? 1 : 0;
+            stockReplay += gl::HasReplaySwitch(reinterpret_cast<const uint32_t*>(b.code.data()), b.code.size() / 4) ? 1 : 0;
             std::string ice = src;
             std::string glassSrc = src;
             if (!mi::EditPixelWmoGlassForTests(glassSrc, why)) { reasons[std::string(isShadow ? "SHADOW VARIANT skipped: " : "skipped: ") + why]++; continue; }
             ++patched;
             withBlocks += glassSrc.find("if b9") != std::string::npos && glassSrc.find("if b10") != std::string::npos ? 1 : 0;
+            // its alpha written once, last, from r12.w (the stock write moved there, the redraw's change after it)
+            const auto writes = std::distance(std::sregex_iterator(glassSrc.begin(), glassSrc.end(), alphaOut), std::sregex_iterator());
+            const size_t last = glassSrc.find_last_not_of(" \t\r\n");
+            const size_t lineStart = glassSrc.rfind('\n', last);
+            alphaLast += writes == 1 && glassSrc.compare(lineStart + 1, std::string::npos, "    mov oC0.w, r12.w\n") == 0 &&
+                         glassSrc.find("if b11") != std::string::npos ? 1 : 0;
             std::vector<uint8_t> code;
             if (!sp::Assemble(glassSrc, b.name.c_str(), code, why))
             {
@@ -874,6 +891,7 @@ namespace
                 continue;
             }
             ++assembled;
+            withReplay += gl::HasReplaySwitch(reinterpret_cast<const uint32_t*>(code.data()), code.size() / 4) ? 1 : 0;
             const int slots = Slots(code);
             if (slots > maxSlots) { maxSlots = slots; worst = b.name; }
             std::vector<uint8_t> iceCode;
@@ -884,6 +902,9 @@ namespace
         Check(patched == shadow && shadow == 84 && withBlocks == patched, "every WMO shadow variant takes the glass and floor blocks: " +
               std::to_string(withBlocks) + " of " + std::to_string(shadow));
         Check(assembled == patched, "every one assembles: " + std::to_string(assembled));
+        Check(alphaLast == patched && withReplay == assembled && stockReplay == 0,
+              "every one writes its alpha once, last, from r12.w after the redraw's (b11) change: " + std::to_string(alphaLast) +
+              "; the redraw found in " + std::to_string(withReplay) + " assembled, in " + std::to_string(stockReplay) + " stock shaders");
         char line[256];
         std::snprintf(line, sizeof(line), "largest WMO variant with the ice, the rims, the glass and the floor light: %d instruction slots (%s; %d before the glass), "
                       "under kGlassMinSlots %u and the ~3,500 the GTX 1660 SUPER takes", maxSlots, worst.c_str(), maxIceSlots, mi::kGlassMinSlots);
@@ -1743,8 +1764,9 @@ namespace
         Table m, p;
         if (!ReadTable(data / "GlassMaterials.cdbc", m) || !ReadTable(data / "GlassPanes.cdbc", p)) { Check(false, "the shipped glass tables read"); return; }
         std::map<uint32_t, int> kinds;
-        bool sane = m.fields == 22;
+        bool sane = m.fields == 24;
         std::map<std::string, uint32_t> byName;
+        std::map<std::string, std::pair<float, float>> corner;
         for (const auto& r : m.rows)
         {
             kinds[r[2]]++;
@@ -1753,9 +1775,20 @@ namespace
             {
                 std::string t = &m.strings[r[1]];
                 byName[t.substr(t.find_last_of('\\') + 1)] = r[2];
+                if (m.fields >= 24) corner[t.substr(t.find_last_of('\\') + 1)] = { F(r[22]), F(r[23]) };
             }
             for (int k = 7; k <= 9; ++k) sane = sane && F(r[k]) >= 0 && F(r[k]) <= 1.0001f;
         }
+        // the corner that isn't glass (NotGlassU, NotGlassV): the eight human window atlases' fourth quadrant (a forge's fire
+        // slots), nothing else
+        int cornered = 0;
+        for (const auto& [name, uv] : corner) cornered += uv.first != 1.0f || uv.second != 1.0f ? 1 : 0;
+        bool atlases = true;
+        for (const char* a : { "mm_elwynn_wnd_ext__01.blp", "mm_elwynn_wnd_int__01.blp", "mm_duskwood_wnd_ext__01.blp", "mm_duskwood_wnd_int__01.blp",
+                               "mm_rr_wnd_ext__01.blp", "mm_rr_wnd_int__01.blp", "mm_westfall_wnd_ext__01.blp", "mm_westfall_wnd_int__01.blp" })
+            atlases = atlases && corner.count(a) && corner[a].first == 0.5f && corner[a].second == 0.5f;
+        Check(cornered == 8 && atlases, "GlassMaterials.cdbc: the corner that isn't glass on the eight human window atlases (0.5, 0.5: the forge's fire slots), " +
+              std::to_string(cornered) + " textures with one");
         char line[256];
         std::snprintf(line, sizeof(line), "GlassMaterials.cdbc: %zu glass textures (clear %d, stained %d, frosted %d, leaded %d), all sane",
                       m.rows.size(), kinds[1], kinds[2], kinds[3], kinds[4]);
@@ -3046,6 +3079,284 @@ namespace
 
     // --- 7. lit or dark: the shader and the window lights agree (on WARP) -------------------------------------------
     // The blocks with a probe right after the window's lit value: r0 = (lit, the lit hash, its key: ordinal, group).
+    // --- 10. the redraw (features/SeeThrough: b11, c219) and the corner that isn't glass (c27.zw) --------------------------
+    // The blocks with the stock alpha in c0.x (r12.w), as the WMO edit gives it: `parts` of GlassBlock's, and the redraw's
+    // alpha (ReplayAlpha) or the stock one as it was.
+    std::string ReplayShader(int parts, bool replayAlpha)
+    {
+        return "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c176, 0.2126, 0.7152, 0.0722, 0.2\n" + gl::ShaderDefs() +
+               "    dcl_texcoord0 v0.xyz\n    dcl_texcoord1 v1.xyz\n    dcl_texcoord2 v2.xy\n    dcl_texcoord3 v3.xyz\n    dcl_2d s0\n"
+               "    mov r12.xyz, v3\n    mov r12.w, c0.x\n    mov r31.xyz, c175.y" +
+               gl::GlassBlock("v0", "v1", "v2", std::string(), std::string(), parts) + gl::FloorBlock("v0", "v1", "v2") +
+               "\n    add oC0.xyz, r12, r31" + (replayAlpha ? gl::ReplayAlpha() : std::string()) + "\n    mov oC0.w, r12.w\n";
+    }
+
+    void ReplayTests(const std::filesystem::path& data)
+    {
+        Warp w;
+        std::string why;
+        if (!InitWarp(w, why)) { std::printf("skip  the redraw: %s\n", why.c_str()); return; }
+        gl::RoomStyle style;
+        gl::Building building;
+        float stormMask[4];
+        if (!StormwindBuilding(data, style, building, stormMask)) building.seed = 4242;
+        std::vector<uint8_t> oldCode, newCode, uvCode;
+        const std::string uvText = "ps_3_0\n    def c0, 0, 0, 0, 1\n    dcl_texcoord2 v2.xy\n    mov oC0.xy, v2\n    mov oC0.zw, c0\n";
+        if (!wxl_livingazeroth::shaderpatch::Assemble(ReplayShader(0, false), "as it was", oldCode, why) ||
+            !wxl_livingazeroth::shaderpatch::Assemble(ReplayShader(gl::kAllParts, true), "the redraw", newCode, why) ||
+            !wxl_livingazeroth::shaderpatch::Assemble(uvText, "uv", uvCode, why))
+        { Check(false, "the redraw: the shaders assemble: " + why.substr(0, 300)); return; }
+        IDirect3DPixelShader9 *oldPs = nullptr, *newPs = nullptr, *uvPs = nullptr;
+        constexpr int kS = 96;
+        constexpr float kFocal = 200.0f;   // (both windows whole on the target)
+        IDirect3DSurface9 *target = nullptr, *readback = nullptr;
+        if (FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(oldCode.data()), &oldPs)) ||
+            FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(newCode.data()), &newPs)) ||
+            FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(uvCode.data()), &uvPs)) ||
+            FAILED(w.dev->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
+            FAILED(w.dev->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
+        { Check(false, "the redraw: WARP resources"); return; }
+        rh::Rooms rooms;
+        rooms.Textures(w.dev, TexturesFolder(), gl::TextureSetOf(style.palette, style.cls));
+        // two windows side by side (ordinals 40 and 41, the facade's group 0), each its own room, facing the eye
+        const float cam[3] = { -8838.6f, 627.4f, 99.3f }, heading = 0.37f, dist = 9.0f;
+        const float C[3] = { cam[0] + dist * std::cos(heading), cam[1] + dist * std::sin(heading), cam[2] };
+        const float N[3] = { -std::cos(heading), -std::sin(heading), 0 };
+        float A[3], U[3];
+        gl::WindowFrame(N, A, U);
+        const float hw = 0.8f, hh = 1.0f;
+        std::vector<gl::Window> ws;
+        for (int k = 0; k < 2; ++k)
+        {
+            const float m3[3] = { C[0] + A[0] * 1.2f * (k ? 1 : -1), C[1] + A[1] * 1.2f * (k ? 1 : -1), C[2] };
+            ws.push_back(rh::MakeWindow(kFacadePath, 0, static_cast<uint32_t>(40 + k), m3, N, hw, hh, gl::kLeaded));
+        }
+        rooms.Table(w.dev, ws);
+        float F3[3] = { C[0] - cam[0], C[1] - cam[1], C[2] - cam[2] }; Norm(F3);
+        const float fl = std::sqrt(F3[0] * F3[0] + F3[1] * F3[1]);
+        const float R[3] = { F3[1] / fl, -F3[0] / fl, 0 };
+        const float Uv[3] = { R[1] * F3[2] - R[2] * F3[1], R[2] * F3[0] - R[0] * F3[2], R[0] * F3[1] - R[1] * F3[0] };
+        // The batch's constants at an hour (by day, at night with every room lit or dark), a glass mask (all, a half), the
+        // texture's corner (c27.zw)
+        struct Look { float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters], look[4], day[4 * gl::kDayRegisters]; };
+        auto constants = [&](int hour, bool dark, float mask) {
+            gl::Inputs in;
+            if (hour == 0) { in.sun[0] = 0.3f; in.sun[1] = -0.2f; in.sun[2] = -0.5f; in.daylight = 0; in.night = 1; in.sky[0] = 0.04f; in.sky[1] = 0.05f; in.sky[2] = 0.09f; }
+            else { in.sun[0] = -0.4f; in.sun[1] = 0.3f; in.sun[2] = 0.86f; in.daylight = 1; in.night = 0; in.sky[0] = 0.55f; in.sky[1] = 0.65f; in.sky[2] = 0.8f; }
+            Norm(in.sun);
+            const gl::Light light = gl::Evaluate(in);
+            gl::Material m;
+            m.kind = gl::kLeaded; m.mask[0] = m.mask[1] = m.mask[2] = 0; m.mask[3] = mask;
+            gl::Settings s;
+            Look l;
+            gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, l.c);
+            gl::LookConstants(light, l.look);
+            gl::RoomInputs ri;
+            ri.night = hour == 0 ? 1.0f : 0.0f; ri.hour = hour == 0 ? 23.0f : 13.0f; ri.selfLit = true; ri.kind = gl::kLeaded;
+            gl::RoomBatchConstants(style, &building, light, ri, s, l.c, l.seed, l.look);
+            l.c[47] = l.c[35] = dark ? 1.0f : 0.0f;
+            gl::DayConstants(m, light, s, building.flags, l.day);
+            return l;
+        };
+        // One draw of one window (0, 1; or both: -1) with a shader, the constants, b11 and c219, c27.zw, the stock alpha, the
+        // uv across the quad (0..1) or 0.5 everywhere, b9; the pixels (rgba), the target cleared to 0 first.
+        auto draw = [&](IDirect3DPixelShader9* ps, int which, const Look& l, bool b11, const float c219[4], const float corner[2], float stockAlpha,
+                        bool uvAcross, bool glassOn, std::vector<float>& img) -> bool
+        {
+            IDirect3DDevice9* d = w.dev;
+            float regs[4 * gl::kRoomRegisters];
+            rooms.Registers(cam, kFacadePath, 0, style.cls, gl::Settings{}, regs, false, gl::kLeaded);
+            regs[50] = corner[0]; regs[51] = corner[1];
+            d->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+            rooms.Bind(d);
+            float cv[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+            d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
+            d->SetPixelShaderConstantF(gl::kFirstConstant, l.c, gl::kConstantCount);
+            d->SetPixelShaderConstantF(gl::kSeedConstant, l.seed, gl::kSeedRegisters);
+            d->SetPixelShaderConstantF(gl::kLookConstant, l.look, gl::kLookRegisters);
+            d->SetPixelShaderConstantF(gl::kDayConstant, l.day, gl::kDayRegisters);
+            const float stock[4] = { stockAlpha, 0, 0, 0 };
+            d->SetPixelShaderConstantF(0, stock, 1);
+            d->SetPixelShaderConstantF(gl::kReplayConstant, c219, 1);
+            d->SetRenderTarget(0, target);
+            D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
+            d->SetViewport(&vp);
+            d->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            d->SetRenderState(D3DRS_ZENABLE, FALSE); d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); d->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+            d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE); d->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+            d->SetVertexShader(nullptr); d->SetPixelShader(ps);
+            d->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2) | D3DFVF_TEXCOORDSIZE3(3));
+            d->SetTexture(0, w.texel);
+            const BOOL on9 = glassOn ? TRUE : FALSE, off = FALSE, on11 = b11 ? TRUE : FALSE;
+            d->SetPixelShaderConstantB(gl::kSwitch, &on9, 1);
+            d->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
+            d->SetPixelShaderConstantB(gl::kReplaySwitch, &on11, 1);
+            if (FAILED(d->BeginScene())) return false;
+            struct PV { float x, y, z, rhw, p[3], n[3], uv[2], base[3]; };
+            const float lit[3] = { 0.9f, 0.7f, 0.42f };
+            for (int k = 0; k < 2; ++k)
+            {
+                if (which >= 0 && which != k) continue;
+                PV v[4];
+                const float cornerXY[4][2] = { { -hw, hh }, { hw, hh }, { -hw, -hh }, { hw, -hh } };
+                const float uvs[4][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 } };
+                for (int c = 0; c < 4; ++c)
+                {
+                    float q[3];
+                    for (int i = 0; i < 3; ++i) q[i] = ws[k].center[i] + A[i] * cornerXY[c][0] * 0.995f + U[i] * cornerXY[c][1] * 0.995f - cam[i];
+                    const float zf = q[0] * F3[0] + q[1] * F3[1] + q[2] * F3[2];
+                    const float sx = kS * 0.5f + kFocal * (q[0] * R[0] + q[1] * R[1] + q[2] * R[2]) / zf;
+                    const float sy = kS * 0.5f - kFocal * (q[0] * Uv[0] + q[1] * Uv[1] + q[2] * Uv[2]) / zf;
+                    v[c] = { sx - 0.5f, sy - 0.5f, 0.5f, 1.0f / zf, { q[0], q[1], q[2] }, { N[0], N[1], N[2] },
+                             { uvAcross ? uvs[c][0] : 0.5f, uvAcross ? uvs[c][1] : 0.5f }, { lit[0], lit[1], lit[2] } };
+                }
+                d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(PV));
+            }
+            d->EndScene();
+            D3DLOCKED_RECT lr{};
+            if (FAILED(d->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY))) return false;
+            img.resize(static_cast<size_t>(kS) * kS * 4);
+            for (int row = 0; row < kS; ++row)
+                std::memcpy(&img[static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
+            readback->UnlockRect();
+            return true;
+        };
+        const float none[4] = { 0, 0, 0, 0 }, noCorner[2] = { 0, 0 };
+        auto drawn = [](const std::vector<float>& im, size_t p) { return im[p * 4 + 3] != 0.0f || im[p * 4] != 0.0f; };
+        char line[400];
+
+        // (a) b11 off and no corner: every pixel and its alpha the block's as it was, bit for bit (by day, at night lit and
+        // dark, the glass all of the texel and half of it, the stock alpha 1 and 0.6)
+        {
+            int draws = 0, pixels = 0, differ = 0;
+            bool ok = true;
+            for (const int hour : { 13, 0 })
+                for (const bool dark : { false, true })
+                    for (const float mask : { 1.0f, 0.5f })
+                        for (const float alpha : { 1.0f, 0.6f })
+                        {
+                            if (hour && dark) continue;
+                            const Look l = constants(hour, dark, mask);
+                            std::vector<float> a, b;
+                            ok = ok && draw(oldPs, -1, l, false, none, noCorner, alpha, false, true, a) && draw(newPs, -1, l, false, none, noCorner, alpha, false, true, b);
+                            if (!ok) break;
+                            ++draws;
+                            for (size_t i = 0; i < a.size(); ++i) differ += Bits(a[i]) != Bits(b[i]) ? 1 : 0;
+                            for (size_t p = 0; p < a.size() / 4; ++p) pixels += drawn(a, p) ? 1 : 0;
+                        }
+            std::snprintf(line, sizeof(line), "the redraw's and the corner's parts inert (b11 off, c27.zw 0): %d draws, %d pixels, %d channels differ from the block as it was",
+                          draws, pixels, differ);
+            Check(ok && draws == 12 && pixels > 1000 && differ == 0, line);
+        }
+
+        // (b) the redraw: window 40 open (bit 0 from 40), 41 shut. The open one: no fake room and no glow hidden (the block as it
+        // was with no room and no lookup), its alpha 1 - mask x (1 - 0.35); the shut one: exactly as it was, alpha 1.
+        {
+            const float replay[4] = { 0.65f, -1.0f, 40.0f, 1.0f };
+            int checked = 0, openRgb = 0, openAlpha = 0, shutRgb = 0, shutAlpha = 0;
+            float worstAlpha = 0;
+            bool ok = true;
+            for (const int hour : { 13, 0 })
+                for (const bool dark : { false, true })
+                    for (const float mask : { 1.0f, 0.5f })
+                    {
+                        if (hour && dark) continue;
+                        const Look l = constants(hour, dark, mask);
+                        Look plain = l;
+                        plain.c[6] = 0.0f;    // c193.z: no room
+                        plain.c[39] = 0.0f;   // c201.w: no lit frosted lookup
+                        std::vector<float> open, openWant, shut, shutWant;
+                        ok = ok && draw(newPs, 0, l, true, replay, noCorner, 1.0f, false, true, open) && draw(oldPs, 0, plain, false, none, noCorner, 1.0f, false, true, openWant) &&
+                             draw(newPs, 1, l, true, replay, noCorner, 1.0f, false, true, shut) && draw(oldPs, 1, l, false, none, noCorner, 1.0f, false, true, shutWant);
+                        if (!ok) break;
+                        const float want = 1.0f - mask * 0.65f;
+                        for (size_t p = 0; p < open.size() / 4; ++p)
+                        {
+                            if (drawn(openWant, p))
+                            {
+                                ++checked;
+                                for (int k = 0; k < 3; ++k) openRgb += Bits(open[p * 4 + k]) != Bits(openWant[p * 4 + k]) ? 1 : 0;
+                                worstAlpha = std::max(worstAlpha, std::fabs(open[p * 4 + 3] - want));
+                                openAlpha += std::fabs(open[p * 4 + 3] - want) > 1e-6f ? 1 : 0;
+                            }
+                            if (drawn(shutWant, p))
+                            {
+                                ++checked;
+                                for (int k = 0; k < 3; ++k) shutRgb += Bits(shut[p * 4 + k]) != Bits(shutWant[p * 4 + k]) ? 1 : 0;
+                                shutAlpha += shut[p * 4 + 3] != 1.0f ? 1 : 0;
+                            }
+                        }
+                    }
+            std::snprintf(line, sizeof(line), "the redraw (b11): %d pixels; the open window as the glass with no fake room and no glow hidden (%d channels differ), its alpha "
+                          "1 - mask x 0.65 (%d off, worst %.2g); the shut one as it was (%d channels differ), opaque (%d not)", checked, openRgb, openAlpha, worstAlpha,
+                          shutRgb, shutAlpha);
+            Check(ok && checked > 1000 && openRgb == 0 && openAlpha == 0 && shutRgb == 0 && shutAlpha == 0, line);
+            // the lead (mask 0): opaque in the open window too
+            const Look lead = constants(13, false, 0.0f);
+            std::vector<float> img;
+            int notOpaque = 0, px = 0;
+            ok = draw(newPs, 0, lead, true, replay, noCorner, 1.0f, false, true, img);
+            for (size_t p = 0; ok && p < img.size() / 4; ++p)
+                if (drawn(img, p)) { ++px; notOpaque += img[p * 4 + 3] != 1.0f ? 1 : 0; }
+            std::snprintf(line, sizeof(line), "the redraw: the open window's lead and frame (mask 0) opaque: %d of %d pixels not", notOpaque, px);
+            Check(ok && px > 100 && notOpaque == 0, line);
+            // which windows: the bits from the first ordinal (41 alone open: from 41, bit 0; 40 then shut); none open
+            const float only41[4] = { 0.65f, -1.0f, 41.0f, 1.0f }, noneOpen[4] = { 0.65f, -1.0f, 40.0f, 0.0f }, both[4] = { 0.65f, -1.0f, 40.0f, 3.0f };
+            const Look l = constants(13, false, 1.0f);
+            std::vector<float> a40, a41, n40, b41;
+            ok = draw(newPs, 0, l, true, only41, noCorner, 1.0f, false, true, a40) && draw(newPs, 1, l, true, only41, noCorner, 1.0f, false, true, a41) &&
+                 draw(newPs, 0, l, true, noneOpen, noCorner, 1.0f, false, true, n40) && draw(newPs, 1, l, true, both, noCorner, 1.0f, false, true, b41);
+            const size_t mid0 = 0, mid = static_cast<size_t>(kS / 2) * kS;   // (the rows' middles: each window's own draw)
+            auto alphaOf = [&](const std::vector<float>& im) { float a = -1; for (size_t p = mid0; p < im.size() / 4; ++p) if (drawn(im, p)) { a = im[p * 4 + 3]; break; } return a; };
+            (void)mid;
+            std::snprintf(line, sizeof(line), "the redraw's bits: from 41, 40 shut (alpha %.2f) and 41 open (%.2f); none open (%.2f); 40 and 41 open: 41 (%.2f)",
+                          alphaOf(a40), alphaOf(a41), alphaOf(n40), alphaOf(b41));
+            Check(ok && alphaOf(a40) == 1.0f && Near(alphaOf(a41), 0.35f, 1e-6f) && alphaOf(n40) == 1.0f && Near(alphaOf(b41), 0.35f, 1e-6f), line);
+        }
+
+        // (c) the batch's own alpha test on the stock alpha (c219.y): below it nothing drawn, at or above it drawn
+        {
+            const Look l = constants(13, false, 1.0f);
+            const float keyed[4] = { 0.65f, 0.878f, 40.0f, 1.0f };
+            std::vector<float> below, above;
+            const bool ok = draw(newPs, 0, l, true, keyed, noCorner, 0.5f, false, true, below) && draw(newPs, 0, l, true, keyed, noCorner, 0.95f, false, true, above);
+            int belowDrawn = 0, aboveDrawn = 0;
+            for (size_t p = 0; ok && p < below.size() / 4; ++p) { belowDrawn += drawn(below, p) ? 1 : 0; aboveDrawn += drawn(above, p) ? 1 : 0; }
+            std::snprintf(line, sizeof(line), "the redraw keeps the batch's alpha test (texkill on the stock alpha): %d pixels below its reference, %d at or above", belowDrawn, aboveDrawn);
+            Check(ok && belowDrawn == 0 && aboveDrawn > 100, line);
+        }
+
+        // (d) the corner that isn't glass: c27.zw (0.5, 0.5) and the uv across the window: its fourth quadrant (u, v >= 0.5)
+        // the client's colour exactly (as with the glass off), the rest the glass as without the corner
+        {
+            const Look l = constants(0, false, 1.0f);
+            const float corner[2] = { 0.5f, 0.5f };
+            std::vector<float> cornered, plain, off, uv;
+            const bool ok = draw(newPs, 0, l, false, none, corner, 1.0f, true, true, cornered) && draw(newPs, 0, l, false, none, noCorner, 1.0f, true, true, plain) &&
+                            draw(newPs, 0, l, false, none, noCorner, 1.0f, true, false, off) && draw(uvPs, 0, l, false, none, noCorner, 1.0f, true, true, uv);
+            int inCorner = 0, rest = 0, wrong = 0, glassy = 0, uHigh = 0, vHigh = 0;
+            for (size_t p = 0; ok && p < cornered.size() / 4; ++p)
+            {
+                if (!drawn(off, p)) continue;
+                const float u = uv[p * 4], v = uv[p * 4 + 1];
+                uHigh += u >= 0.5f ? 1 : 0;
+                vHigh += v >= 0.5f ? 1 : 0;
+                if (std::fabs(u - 0.5f) < 0.02f || std::fabs(v - 0.5f) < 0.02f) continue;   // (the quadrant's edge: either)
+                const bool in = u >= 0.5f && v >= 0.5f;
+                const std::vector<float>& want = in ? off : plain;
+                bool same = true;
+                for (int k = 0; k < 3; ++k) same = same && Bits(cornered[p * 4 + k]) == Bits(want[p * 4 + k]);
+                wrong += same ? 0 : 1;
+                (in ? inCorner : rest) += 1;
+                glassy += !in && Bits(plain[p * 4]) != Bits(off[p * 4]) ? 1 : 0;
+            }
+            std::snprintf(line, sizeof(line), "the corner that isn't glass: %d pixels in it the client's colour, %d outside it the glass (%d unlike the client's); %d wrong "
+                          "(u >= 0.5 at %d, v >= 0.5 at %d)", inCorner, rest, glassy, wrong, uHigh, vHigh);
+            Check(ok && inCorner > 200 && rest > 600 && glassy > rest / 2 && wrong == 0, line);
+        }
+        for (IUnknown* u : std::initializer_list<IUnknown*>{ oldPs, newPs, uvPs, target, readback }) if (u) u->Release();
+    }
+
     std::string LitProbeShader(const std::string& probe)
     {
         return "ps_3_0\n    def c175, 1, 0, 0.5, 2\n    def c176, 0.2126, 0.7152, 0.0722, 0.2\n" + gl::ShaderDefs() +
@@ -4110,7 +4421,7 @@ namespace
         bool vezax = false, shimmers = true;
         for (const auto& r : m.rows)
         {
-            if (m.fields < 22) break;
+            if (m.fields < 24) break;
             std::string t = text(m, r[1]);
             t = t.substr(t.find_last_of('\\') + 1);
             t = t.substr(0, t.size() - 4);
@@ -4132,7 +4443,7 @@ namespace
         std::snprintf(line, sizeof(line), "GlassMaterials.cdbc: %u columns; %zu titan textures backlit (the 7 named), Vezax's evil glass alone pulsing (%d; a few "
                       "percent over several seconds, purple), the others a slow shimmer; pulse colours at luminance 1 (%d off)",
                       m.fields, backlitNames.size(), pulsing, lumOff);
-        Check(m.fields == 22 && named && pulsing == 1 && vezax && shimmers && lumOff == 0, line);
+        Check(m.fields == 24 && named && pulsing == 1 && vezax && shimmers && lumOff == 0, line);
 
         std::map<uint32_t, int> backlit, titan, other;
         int elsewhere = 0, wrongMaterial = 0, noMaterial = 0;
@@ -4186,7 +4497,8 @@ int main(int argc, char** argv)
         else args.push_back(argv[i]);
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
-    // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan)
+    // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
+    // replay)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -4208,6 +4520,7 @@ int main(int argc, char** argv)
     if (warp && run("frosted")) FrostedAgreementTests();
     if (run("titan")) { BacklitRulesTests(); BacklitTableTests(args[1]); }
     if (warp && run("titan")) BacklitWarpTests();
+    if (warp && run("replay")) ReplayTests(args[1]);
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

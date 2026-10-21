@@ -62,6 +62,11 @@ namespace wxl_livingazeroth::glass
         // amplitude (a share of the glow), period (s) and the colour the pulse adds (luminance 1; white: a brightening).
         float backlit = 0.0f, pulse = 0.0f, pulseSeconds = 0.0f;
         float pulseColour[3] = { 1, 1, 1 };
+        // A corner of the texture that isn't glass (GlassMaterials' NotGlassU, NotGlassV; tools/gen_glass.py NOT_GLASS): its
+        // texels from (u, v) to the far corner of its tile, drawn as the client draws them. 1: none. The human window
+        // atlases' fourth quadrant (0.5, 0.5): a smithy's forge mouth, "blacksmith windows look very weird lol" (the
+        // user, 2026-10-20).
+        float notGlass[2] = { 1.0f, 1.0f };
     };
     const char* KindName(uint32_t kind);
 

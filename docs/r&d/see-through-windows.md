@@ -126,7 +126,8 @@ Flags 0x1) with an interior group behind it (below):
    with a window-sized frustum (its batches culled to it), its doodads culled to it, the rooms beyond its own doors
    clipped to it, its interior lighting (vertex colours) as through the door.
 
-At most 48 windows a frame. A window not opened (no room, far, unloadable, over budget) is *shut*.
+At most 48 windows a frame. A window not opened (no room, far, unloadable, over budget, its room not seen through it:
+below) is *shut*.
 
 ### Which interior group is behind a window
 
@@ -136,6 +137,30 @@ such box; none: a *fake* window. This is `tools/gen_glass.py`'s `interior_room` 
 with a second, deeper probe for thick walls; at run time it uses the root's MOGI, so no new table. `InteriorBehind` and
 the survey's `interior_behind` are twins; the tests check the Lion's Pride Inn's 17 windows against the survey.
 
+### Is the room seen through it from here
+
+"certain attic windows shouldn't be able to see through the roof" (the user, 2026-10-20, at the inn at night). A box says
+nothing of where the room's walls and ceiling are: a dormer's probe lands in the upstairs room's box, but from the street
+the line of sight through it passes over the room's ceiling (nothing behind the glass: the void) or meets the ceiling from
+above, where the client culls it (its faces face into the room): opened, the room showed through the roof. So a candidate
+opens only where **every one of nine rays from the eye through the window** (its middle and a ring at half its half sizes:
+inside the frame; an outer window's glass reaches past the room's opening, and its edge is mostly lead and frame) **meets
+the room's own surfaces from inside first**: a triangle whose winding's front faces the eye (`cross(b - a, c - a) . d < 0`,
+the walls', the floor's and the ceiling's inner side), not a back face and not nothing (`SeesRoom`). The room's surfaces are
+its group's rendered triangles (its MOBA batches; the collision-only ones after them are left out) but its glass (the
+window's own inner face, `mm_elwynn_wnd_int__01` in the inn: its back is to the street), copied out of the group the first
+time a window of it is a candidate (MOVT at +0xE8, MOVI at +0xE0, MOBA at +0xF8 and their counts, guarded at the group
+walker 0x7D7F50; the root's MOMT and MOTX for which materials are glass, guarded at the root walker 0x7D7470) into a grid
+of cells (`RoomMesh`: about 32 along its longest side), one build a frame (the inn's kitchen: 10,847 triangles). Each
+frame the rays run against the actual camera, so the answer follows the viewing angle.
+
+With the map scan's files, from street viewpoints in front of each window (8, 15 and 30 yd out, straight and 30 / 60
+degrees aside, the eye 2 and 6 yd up; `seethrough_tests` prints them): the ground floor's windows open from most of them,
+the back dormers (z 15.5) from none. Weighting rays by the glass mask of the texels they cross (offline, 2026-10-20), the
+windows under the back eaves (5, 6) show about a third of their glass through the room's walls from outside, and the upper
+floor's (7..11) a rim of about a fifth where the outer glass is wider than the room's opening; the nine rays keep the
+first mostly shut and the second mostly open.
+
 ## 4. Drawing the glass see-through
 
 The pane is an opaque batch of the exterior group, drawn before the room (the room's groups join the list after it) and
@@ -144,9 +169,10 @@ would cover it. So it is **deferred**:
 
 - **Which batches**: `features/WmoIce`'s hooks say which instance's group draws (`Wmo.RenderGroup`) and each batch passing
   `Wmo.CullBatch`. A glass batch (its texture in GlassMaterials) of a group whose windows were opened this frame is
-  deferred when every window its triangles lie in (each triangle's middle in a window's lookup box, cached per batch) is
-  open or unseen, and at least one is open; a batch that also covers a shut window (a fake one, a far one) stays opaque,
-  else the void behind that window would show. The inn's exterior glass is one batch over all 17 windows.
+  deferred when every triangle lies in a window (each triangle's middle in a window's lookup box, cached per batch; stray
+  trim up to 0.25 yd^2) and at least one of its windows is open, with the glass's look on (LA's glass block: the redraw
+  needs its mask and its window lookup). Its shut and unseen windows are told apart per pixel in the redraw (below), so a
+  shut dormer no longer keeps the whole batch opaque. The inn's exterior glass is one batch over all 17 windows.
 - **In the opaque pass**: at that batch's device draw (`Gx.DeviceDraw`, 0x006A3620, right after `CullBatch` let it
   through, its range checked against the MOBA record; blending mode 0 or 1 only), the client's own Gx cache is set to
   colour writes 0 and depth writes 0 (`render/GxState`: the client's flush sends them, so its cache and the device agree),
@@ -156,10 +182,18 @@ would cover it. So it is **deferred**:
   0; first index + the index buffer's offset / 2; min, max; count / 3). The writes go back for the next draw.
 - **The redraw**: after `CM2Scene::Draw` pass 0 of `World::s_m2Scene` (the opaque models: the room's furniture is in),
   before detail doodads, liquids, weather and see-through models, each captured state is applied and the batch drawn
-  again: colour RGB only (no alpha), depth test on, no depth write, `SRCBLEND = BLENDFACTOR`, `DESTBLEND = INVBLENDFACTOR`,
-  `D3DRS_BLENDFACTOR` = `SeeThroughOpacity`. No shader change: LA's glass look (b9: reflection, darkening, coolness) stays
-  in the redraw; only its fake room is switched off (c193.z = 0). The device's state is captured before and put back after
-  (the client's cache never sees it). The render target and depth surface must be the ones captured.
+  again with LA's glass look (b9: reflection, darkening, coolness) and its redraw switched on (b11, c219:
+  `features/GlassShader`; the WMO edit moves the stock alpha write to r12.w and writes oC0.w last). Each pixel looks up
+  its window (the window table the fake rooms use; the lookup forced even where the batch wouldn't look) and reads
+  whether it's open from c219.w's bits (one a window from the lowest open ordinal c219.z, 24 of them): an open window has
+  no fake room and hides none of its glow, and its alpha is 1 - the glass mask x (1 - `SeeThroughOpacity`), so the
+  painted lead, frame and tracery stay opaque ("the tracery also becomes more transparent", the user, 2026-10-20); a shut
+  or unseen one is exactly as the client draws it, alpha 1. Two draws, split by that alpha with the device's alpha test
+  (>= 255, then < 255): the opaque with its depth written, then the open windows' glass over the room, `SRCALPHA` /
+  `INVSRCALPHA`, no depth. The batch's own alpha test (alpha-keyed glass) moves into the shader (texkill on the stock
+  alpha against c219.y). Colour RGB only, depth test on. A shader without the redraw (`if b11` not in its code: a variant
+  without the glass blocks) is drawn opaque, as the client would have. The device's state is captured before and put back
+  after (the client's cache never sees it). The render target and depth surface must be the ones captured.
 - **Sorting**: the glass lands after everything opaque and before everything see-through. Liquids, weather, particles and
   see-through models in front of it are drawn after it: right. Those *behind* it inside the room (a candle's flame, a
   hearth's particles) are drawn after it too, so they sit over the glass, not under it: a small error for additive flames.
@@ -181,14 +215,15 @@ would cover it. So it is **deferred**:
 - **LOD**: WMO groups have none in 3.3.5a; doodads fade by distance as through a door.
 - **Group-visibility caching**: `s_portalExt` rectangles are per stamp and portal index, untouched; the batch "drawn"
   bits (0xF0) are per frame. Our state is per frame (cleared on OnUpdate) and per instance and group.
-- **What reads the glass's depth**: a deferred pane writes no depth, so whatever reads the depth buffer at a window later
-  sees the room's: LA's window glow (it keeps only pixels at the window's own depth) gives an opened window no glow at
-  night, and the water's reflections see the room. Only while the window is open.
-- **Painted lead and frames**: the glass textures paint lead and frame into the glass; with a constant opacity they go
-  as see-through as the glass. Keeping them opaque needs per-texel alpha (the glass mask GlassMaterials already has) from
-  the pixel shader: the largest WMO pixel shader has 88 slots left, so it would need its own small shader in the redraw.
+- **What reads the glass's depth**: a deferred pane's see-through texels write no depth, so whatever reads the depth buffer
+  there later sees the room's: LA's window glow (it keeps only pixels at the window's own depth) gives an opened window no
+  glow at night, and the water's reflections see the room. Its opaque texels (lead, frame, shut windows) write theirs in
+  the redraw's first draw.
+- **Painted lead and frames**: kept opaque by the glass mask in the redraw (above), in the WMO variants' own shader:
+  glass_tests reports the largest variant's slots against kGlassMinSlots.
 - **The client's code**: the walk's statics, the frustum stack (32 deep; refused past 20), the callback, the device
-  draw's fields and the Gx cache are guarded (27 byte guards, never a hooked function's first bytes); every hook body is
+  draw's fields, the Gx cache and where the walkers put the room's arrays are guarded (32 byte guards, never a hooked
+  function's first bytes); every hook body is
   under `__try`/`__except` (the callback, the frustum index and the Gx writes put back in `__finally`); any fault switches
   the feature off for the session and the lights panel says where.
 - **Option A's crash risk**: none taken: no client array is changed.
@@ -223,6 +258,7 @@ glass) with last frame's counts: exterior groups walked, windows opened and shut
 groups, kept opaque, deferred and redrawn, faults. Whitelist: `goldshireinn.wmo` only. It needs the glass feature on
 (its batch hooks name the glass batches).
 
-Next, in order: try it in game at the inn; widen the whitelist to the 109 all-real WMOs; per-texel opacity from the glass
-mask (keep lead and frames opaque) in a redraw shader of its own; the same windows as portals *outward* from inside (the
-street through the window), which wants the interior pass's exterior portal views and the glass deferred from inside too.
+Next, in order: try it in game at the inn; widen the whitelist to the 109 all-real WMOs; the same windows as portals
+*outward* from inside (the street through the window), which wants the interior pass's exterior portal views and the glass
+deferred from inside too. Done 2026-10-20: the lead and frames opaque (the glass mask in the redraw), a shut window no
+longer keeping its batch opaque, and windows opened only where the room is seen through them.

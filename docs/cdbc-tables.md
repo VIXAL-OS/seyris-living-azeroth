@@ -454,6 +454,7 @@ row also says which texels are glass.
 | Pulse | the glow's pulse: its amplitude, a share of the glow (Vezax's evil glass 0.05: a few percent; the others 0.012, a very slow shimmer). 0 = steady. Appended |
 | PulseSeconds | the pulse's period (s): 6.5 for the evil glass, 37 .. 59 for the others (each its own). Appended |
 | PulseR/G/B | the colour the pulse adds, at luminance 1 (the evil glass's deep purple; white: a plain brightening). Appended |
+| NotGlassU, NotGlassV | a corner of the texture that isn't glass: its texels from (u, v) to the far corner of its tile keep the client's colour (no glass look, no room, no lights out), and its triangles are no window's or pane's. 0.5, 0.5 on the human window atlases (`mm_elwynn`, `mm_duskwood`, `mm_rr`, `mm_westfall` `_wnd_ext__01`/`_int__01`): their fourth quadrant is a smithy's forge mouth, four glowing fire slots (gen_glass.py NOT_GLASS). 1, 1 = none. Appended 2026-10-20 |
 
 ### GlassPanes.cdbc — `GlassPanes.xml`
 

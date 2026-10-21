@@ -73,7 +73,13 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   in the client's own portal walk (a hook on `Wmo.RenderThroughPortals`; nothing in the WMO changes), and its glass is
   drawn again after the room, blended at a constant opacity (`env/SeeThroughModel`, `features/SeeThrough`,
   `[LivingAzeroth.Glass]` `SeeThroughWindows`, `SeeThroughOpacity`; the research in `docs/r&d/see-through-windows.md`,
-  the count in `tools/see_through_survey.py`). Only Goldshire's Lion's Pride Inn for now.
+  the count in `tools/see_through_survey.py`). Only Goldshire's Lion's Pride Inn for now. Only the glass texels go
+  see-through, the painted lead, frame and tracery stay opaque, and a window opens only where its room is really seen
+  through it (not over its ceiling or through its walls); a shut window keeps its glass and fake room (20 October 2026).
+- **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
+  slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
+  `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's
+  smithies and the Venture Co.'s log machines.
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
   see-through windows.
 

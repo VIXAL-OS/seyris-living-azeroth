@@ -5,13 +5,21 @@
 //  - The window on the screen: its quad, its rectangle through a camera (in front, behind, across the near plane, off to
 //    a side, through a placement's turn), Overlap, the client's CRect order, Facing; PlanWindows (facing, range, budget,
 //    fake, off the screen).
-//  - Which windows a glass batch is in (WindowOf, WindowsOfBatch: strays, a bad index) and when it may be deferred.
-//  - The deferred draw: DrawIndexedPrimitive's arguments as the client's device draw works them out, the blend factor, and
-//    the deferral's bookkeeping with stand-in draws (one capture a batch, the range, the blending mode, the cap).
+//  - The room seen through a window: RoomMesh's first hit (front from inside, back from outside, none; the grid against the
+//    brute force on 6,000 random rays), SeesRoom (a window onto its room, a dormer over the ceiling from the street and from
+//    above, a window on a blind wall, half over the opening, no room); the walkers' guarded stores are the fields read.
+//  - Which windows a glass batch is in (WindowOf, WindowsOfBatch: strays, a bad index), when it may be deferred (a shut
+//    window no longer stops it) and its open windows' bits (OpenBits).
+//  - The deferred draw: DrawIndexedPrimitive's arguments as the client's device draw works them out, the redraw's c219
+//    (ReplayConstants), and the deferral's bookkeeping with stand-in draws (one capture a batch, the range, the blending
+//    mode, the cap, each entry its own batch's open windows).
 //  - The real data through the real reader: glass::Load over wxl-seyris-tools' Cdbc.cpp on copies of the shipped tables,
 //    then the Lion's Pride Inn's windows (GlassWindows.cdbc) against its root's group boxes: 17 windows, every one with the
 //    room the map scan's survey found (tools/see_through_survey.py); with the scan's WMO files (optional), the boxes
-//    against its root file and its one glass batch against its group's triangles: all 17 windows, no strays.
+//    against its root file and its one glass batch against its group's triangles: all 17 windows, no strays; and each room's
+//    surfaces from its group file (its glass aside, by GlassMaterials.cdbc), the grid against the brute force on the
+//    kitchen, and which of the 17 windows show their room from 30 street viewpoints each (printed; the ground floor's
+//    front two head on, the back dormers never).
 // Usage:  seethrough_tests <Wow.exe> <repo data folder> [<map scan's wmo-windows folder>]
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
@@ -22,12 +30,14 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -206,6 +216,108 @@ namespace
         return out;
     }
 
+    // A group file's rendered geometry (MOVI, MOVT, MOBA: first index, index count, material).
+    struct ScanGroup
+    {
+        std::vector<uint16_t> indices;
+        std::vector<float> vertices;
+        struct Moba { uint32_t start; uint16_t count; uint8_t material; };
+        std::vector<Moba> batches;
+    };
+    ScanGroup ReadScanGroup(const std::string& path)
+    {
+        const std::vector<uint8_t> g = ReadFile(path);
+        ScanGroup out;
+        for (const Chunk& c : Chunks(g, 0, g.size()))
+            if (c.tag == "MOGP")
+                for (const Chunk& s : Chunks(g, c.at + 0x44, c.at + c.size))
+                {
+                    if (s.tag == "MOVI") { out.indices.resize(s.size / 2); std::memcpy(out.indices.data(), &g[s.at], out.indices.size() * 2); }
+                    else if (s.tag == "MOVT") { out.vertices.resize(s.size / 4); std::memcpy(out.vertices.data(), &g[s.at], out.vertices.size() * 4); }
+                    else if (s.tag == "MOBA")
+                        for (size_t at = s.at; at + 24 <= s.at + s.size; at += 24)
+                        {
+                            ScanGroup::Moba m;
+                            std::memcpy(&m.start, &g[at + 12], 4);
+                            std::memcpy(&m.count, &g[at + 16], 2);
+                            m.material = g[at + 23];
+                            out.batches.push_back(m);
+                        }
+                }
+        return out;
+    }
+    // A root file's materials' first textures (MOTX, MOMT: +0x0C the texture's offset).
+    std::vector<std::string> ReadRootTextures(const std::string& path)
+    {
+        const std::vector<uint8_t> r = ReadFile(path);
+        std::string motx;
+        std::vector<std::string> out;
+        std::vector<uint32_t> offsets;
+        for (const Chunk& c : Chunks(r, 0, r.size()))
+        {
+            if (c.tag == "MOTX") motx.assign(reinterpret_cast<const char*>(&r[c.at]), c.size);
+            else if (c.tag == "MOMT")
+                for (size_t at = c.at; at + 64 <= c.at + c.size; at += 64)
+                {
+                    uint32_t o;
+                    std::memcpy(&o, &r[at + 12], 4);
+                    offsets.push_back(o);
+                }
+        }
+        for (const uint32_t o : offsets) out.push_back(o < motx.size() ? std::string(motx.c_str() + o) : std::string());
+        return out;
+    }
+    // The room's surfaces as the runtime takes them: its batches but the glass ones (`glass`: per material).
+    bool BuildMesh(const ScanGroup& g, const std::vector<bool>& glass, st::RoomMesh& mesh)
+    {
+        std::vector<std::pair<uint32_t, uint32_t>> ranges;
+        for (const ScanGroup::Moba& m : g.batches)
+            if (!(m.material < glass.size() && glass[m.material])) ranges.emplace_back(m.start, m.count);
+        return mesh.Build(g.vertices.data(), static_cast<uint32_t>(g.vertices.size() / 3), g.indices.data(), static_cast<uint32_t>(g.indices.size()), ranges);
+    }
+
+    // A quad (corners in order round it) as two triangles facing `n` (their winding's front: cross(b - a, c - a) . n > 0).
+    void AddQuad(std::vector<float>& v, std::vector<uint16_t>& idx, const float (&q)[4][3], const float n[3])
+    {
+        const float e1[3] = { q[1][0] - q[0][0], q[1][1] - q[0][1], q[1][2] - q[0][2] };
+        const float e2[3] = { q[2][0] - q[0][0], q[2][1] - q[0][1], q[2][2] - q[0][2] };
+        const float c[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
+        const bool flip = c[0] * n[0] + c[1] * n[1] + c[2] * n[2] < 0.0f;
+        const uint16_t base = static_cast<uint16_t>(v.size() / 3);
+        for (int k = 0; k < 4; ++k)
+            for (int i = 0; i < 3; ++i) v.push_back(q[flip ? 3 - k : k][i]);
+        for (const uint16_t i : { 0, 1, 2, 0, 2, 3 }) idx.push_back(static_cast<uint16_t>(base + i));
+    }
+    // An axis-aligned rectangle on the plane `axis` = `at`, from (a0, b0) to (a1, b1) on the other two axes in order.
+    void AddRect(std::vector<float>& v, std::vector<uint16_t>& idx, int axis, float at, float a0, float a1, float b0, float b1, float facing)
+    {
+        const int a = (axis + 1) % 3, b = (axis + 2) % 3;
+        float q[4][3] = {};
+        const float as[4] = { a0, a1, a1, a0 }, bs[4] = { b0, b0, b1, b1 };
+        for (int k = 0; k < 4; ++k) { q[k][axis] = at; q[k][a] = as[k]; q[k][b] = bs[k]; }
+        float n[3] = { 0, 0, 0 };
+        n[axis] = facing;
+        AddQuad(v, idx, q, n);
+    }
+    // A room x -5..5, y 0..8, z 0..4, its faces facing in, a hole x -1..1, z 1..3 in its front wall (y 0).
+    st::RoomMesh TestRoom()
+    {
+        std::vector<float> v;
+        std::vector<uint16_t> idx;
+        AddRect(v, idx, 2, 0, -5, 5, 0, 8, 1);     // floor (z = 0: a = x, b = y)
+        AddRect(v, idx, 2, 4, -5, 5, 0, 8, -1);    // ceiling
+        AddRect(v, idx, 1, 8, 0, 4, -5, 5, -1);    // back wall (y = 8: a = z, b = x)
+        AddRect(v, idx, 0, -5, 0, 8, 0, 4, 1);     // side walls (x: a = y, b = z)
+        AddRect(v, idx, 0, 5, 0, 8, 0, 4, -1);
+        AddRect(v, idx, 1, 0, 0, 4, -5, -1, 1);    // the front wall round the hole
+        AddRect(v, idx, 1, 0, 0, 4, 1, 5, 1);
+        AddRect(v, idx, 1, 0, 0, 1, -1, 1, 1);
+        AddRect(v, idx, 1, 0, 3, 4, -1, 1, 1);
+        st::RoomMesh m;
+        CHECK(m.Build(v.data(), static_cast<uint32_t>(v.size() / 3), idx.data(), static_cast<uint32_t>(idx.size()), { { 0u, static_cast<uint32_t>(idx.size()) } }));
+        return m;
+    }
+
     // --- the linked reader ----------------------------------------------------------------------------------------------
     int __cdecl LinkedHasFeature(const char* name)
     {
@@ -304,6 +416,17 @@ int main(int argc, char** argv)
             CHECK(static_cast<uintptr_t>(0x004F911D + 5 + rel) == 0x00823CB0u);
             std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x004F90EC, 6)) + 2, 4);
             CHECK(v == st::client::kM2Scene);
+            // The walkers' stores are the fields the room's surfaces are read from (and their counts' divisors the strides).
+            auto field = [&](uintptr_t va, uint32_t at) { uint32_t f = 0; std::memcpy(&f, static_cast<const uint8_t*>(im.At(va, at + 4)) + at, 4); return f; };
+            CHECK(field(0x007D7F76, 2) == st::client::kGroupIndices && field(0x007D7F76, 13) == st::client::kGroupIndexCount);
+            CHECK(field(0x007D7F94, 2) == st::client::kGroupVertices && field(0x007D7F94, 14) == st::client::kGroupVertexCount);
+            CHECK(field(0x007D7FEC, 2) == st::client::kGroupBatches && field(0x007D7FEC, 14) == st::client::kGroupBatchCount);
+            CHECK(field(0x007D7499, 2) == st::client::kRootMotx && field(0x007D7499, 11) == st::client::kRootMotxSize);
+            CHECK(field(0x007D74B0, 2) == st::client::kRootMaterials && field(0x007D74B0, 14) == st::client::kRootMaterialCount);
+            // (MOBA's count: x 0xAAAAAAAB >> 32, >> 4: / 24; MOMT's: >> 6: / 64)
+            CHECK(static_cast<const uint8_t*>(im.At(0x007D7FE2, 1))[1] == 0xAB && static_cast<const uint8_t*>(im.At(0x007D7FF5, 3))[2] == 4 &&
+                  st::client::kMobaStride == 24);
+            CHECK(static_cast<const uint8_t*>(im.At(0x007D74B9, 3))[2] == 6 && st::client::kMomtStride == 64);
             std::printf("  %zu guards\n", sizeof(st::kGuards) / sizeof(st::kGuards[0]));
         });
     else std::printf("SKIP guards (no Wow.exe given)\n");
@@ -480,6 +603,83 @@ int main(int argc, char** argv)
         CHECK(plan[0].state == st::kUnseen && plan[5].candidate && plan[5].clip.minX >= 0.0f);
     });
 
+    // --- the room seen through a window ---------------------------------------------------------------------------------
+    Test("RoomMesh: a room's faces from inside are front, from outside back; the grid's first hit is every triangle's", [] {
+        const st::RoomMesh room = TestRoom();
+        CHECK(room.Triangles() == 18);
+        float t = 0;
+        const float in[3] = { 0, 4, 2 }, up[3] = { 0, 0, 1 }, down[3] = { 0, 0, -1 }, back[3] = { 0, 1, 0 };
+        CHECK(room.First(in, up, 0, 100, &t) == st::RoomMesh::kFront && Close(t, 2, 1e-5f));     // the ceiling from below
+        CHECK(room.First(in, back, 0, 100, &t) == st::RoomMesh::kFront && Close(t, 4, 1e-5f));   // the back wall
+        const float above[3] = { 0, 4, 10 };
+        CHECK(room.First(above, down, 0, 100, &t) == st::RoomMesh::kBack && Close(t, 6, 1e-5f)); // the ceiling from above
+        CHECK(room.First(above, up, 0, 100) == st::RoomMesh::kNone);
+        CHECK(room.First(in, up, 0, 1.5f) == st::RoomMesh::kNone);                               // tmax short of it
+        CHECK(room.First(above, down, 6.5f, 100, &t) == st::RoomMesh::kFront && Close(t, 10, 1e-5f));   // past the ceiling: the floor
+        // random rays through the room and a soup of triangles: the grid's answer is the brute force's
+        uint32_t seed = 12345;
+        auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+        std::vector<float> v;
+        std::vector<uint16_t> idx;
+        for (int i = 0; i < 1500; ++i)
+        {
+            const float c[3] = { rnd() * 60 - 30, rnd() * 60 - 30, rnd() * 20 };
+            for (int k = 0; k < 3; ++k)
+                for (int j = 0; j < 3; ++j) v.push_back(c[j] + (rnd() - 0.5f) * (k == 0 ? 0.0f : 6.0f));
+            for (int k = 0; k < 3; ++k) idx.push_back(static_cast<uint16_t>(3 * i + k));
+        }
+        st::RoomMesh soup;
+        CHECK(soup.Build(v.data(), static_cast<uint32_t>(v.size() / 3), idx.data(), static_cast<uint32_t>(idx.size()), { { 0u, static_cast<uint32_t>(idx.size()) } }));
+        int agree = 0, hits = 0, n = 0;
+        for (const st::RoomMesh* m : { &room, static_cast<const st::RoomMesh*>(&soup) })
+            for (int i = 0; i < 3000; ++i, ++n)
+            {
+                float o[3] = { rnd() * 80 - 40, rnd() * 80 - 40, rnd() * 30 - 5 }, d[3] = { rnd() - 0.5f, rnd() - 0.5f, rnd() - 0.5f };
+                const float l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                for (float& x : d) x /= l;
+                float ta = -1, tb = -1;
+                const auto a = m->First(o, d, 0.0f, 200.0f, &ta), b = m->FirstBrute(o, d, 0.0f, 200.0f, &tb);
+                agree += a == b && (a == st::RoomMesh::kNone || Close(ta, tb, 1e-4f)) ? 1 : 0;
+                hits += a != st::RoomMesh::kNone ? 1 : 0;
+            }
+        std::printf("  %d of %d random rays as the brute force's (%d meet a triangle)\n", agree, n, hits);
+        CHECK(agree == n && hits > n / 10);
+        // bad input: an index past the vertices, a range past the indices, not whole triangles
+        st::RoomMesh bad;
+        const uint16_t wrong[3] = { 0, 1, 99 };
+        CHECK(!bad.Build(v.data(), 3, wrong, 3, { { 0u, 3u } }) && bad.Empty());
+        CHECK(!bad.Build(v.data(), 3, idx.data(), 3, { { 0u, 6u } }) && !bad.Build(v.data(), 3, idx.data(), 3, { { 0u, 2u } }));
+        CHECK(bad.Build(v.data(), 3, idx.data(), 3, {}) && bad.Empty() && bad.First(in, up, 0, 10) == st::RoomMesh::kNone);
+    });
+
+    Test("SeesRoom: a window onto its room opens; a dormer over the ceiling, a window on a blind wall, no room: shut", [] {
+        const st::RoomMesh room = TestRoom();
+        // the window in the front wall's hole (its outer glass a little in front of the wall), facing out (-y)
+        const st::SeeWindow w = MakeWindow(0, -0.2f, 2, 0, -1, 0, 1, 1, 0);
+        const float street[3] = { 0, -15, 2 }, aside[3] = { -6, -12, 3 }, low[3] = { 0, -10, 0.5f };
+        CHECK(st::SeesRoom(w, street, room) && st::SeesRoom(w, aside, room) && st::SeesRoom(w, low, room));
+        // a dormer above the ceiling (z 4): from the street the line of sight goes over the room (nothing), from up high
+        // it meets the ceiling from above (its back): shut either way
+        const st::SeeWindow dormer = MakeWindow(0, -0.2f, 6, 0, -1, 0, 1, 1, 0);
+        const float high[3] = { 0, -6, 20 };
+        CHECK(!st::SeesRoom(dormer, street, room) && !st::SeesRoom(dormer, high, room));
+        float t = 0, d[3] = { 0, 5.8f, -14.0f };
+        const float l = std::sqrt(d[1] * d[1] + d[2] * d[2]);
+        d[1] /= l; d[2] /= l;
+        CHECK(room.First(high, d, 15.0f, 100.0f, &t) == st::RoomMesh::kBack);   // (what it meets: the ceiling's back)
+        // a window painted on the blind side wall (x -5): its line of sight meets the wall from outside
+        const st::SeeWindow blind = MakeWindow(-5.2f, 4, 2, -1, 0, 0, 1, 1, 0);
+        const float west[3] = { -20, 4, 2 };
+        CHECK(!st::SeesRoom(blind, west, room));
+        // a window half over the hole: some of its rays meet the front wall from outside
+        const st::SeeWindow half = MakeWindow(1.0f, -0.2f, 2, 0, -1, 0, 1, 1, 0);
+        CHECK(!st::SeesRoom(half, street, room));
+        // nothing to look into, or no eye
+        CHECK(!st::SeesRoom(w, street, st::RoomMesh{}));
+        const float nan[3] = { NAN, 0, 0 };
+        CHECK(!st::SeesRoom(w, nan, room));
+    });
+
     // --- which windows a batch is in -----------------------------------------------------------------------------------
     Test("WindowOf, WindowsOfBatch: each triangle's middle in a window's box; strays and their area; a bad index reads nothing", [] {
         const st::SeeWindow w[2] = { MakeWindow(0, 0, 0, 0, -1, 0, 1, 1, 1, 0), MakeWindow(4, 0, 0, 0, -1, 0, 1, 1, 1, 1) };
@@ -500,7 +700,7 @@ int main(int argc, char** argv)
         CHECK(!st::WindowsOfBatch(idx, 15, v, 11, 0, 4, w, 2).valid);    // not whole triangles
     });
 
-    Test("Deferrable: every window it covers open or unseen, at least one open, strays only as trim", [] {
+    Test("Deferrable: at least one of its windows open (shut ones stay opaque in the redraw), strays only as trim", [] {
         st::BatchWindows b;
         b.valid = true;
         b.windows = { 0, 2 };
@@ -508,10 +708,12 @@ int main(int argc, char** argv)
         const uint8_t oneUnseen[3] = { st::kOpened, st::kShut, st::kUnseen };
         const uint8_t oneShut[3] = { st::kOpened, st::kOpened, st::kShut };
         const uint8_t none[3] = { st::kUnseen, st::kOpened, st::kUnseen };
+        const uint8_t allShut[3] = { st::kShut, st::kOpened, st::kShut };
         CHECK(st::Deferrable(b, open2, 3));
         CHECK(st::Deferrable(b, oneUnseen, 3));      // window 1 isn't the batch's
-        CHECK(!st::Deferrable(b, oneShut, 3));
+        CHECK(st::Deferrable(b, oneShut, 3));        // its shut window: opaque, its fake room in it (OpenBits)
         CHECK(!st::Deferrable(b, none, 3));          // nothing open to see through
+        CHECK(!st::Deferrable(b, allShut, 3));
         CHECK(!st::Deferrable(b, open2, 2));         // a window past the states
         b.strayArea = st::kTrimArea * 0.5f;
         CHECK(st::Deferrable(b, open2, 3));
@@ -520,6 +722,35 @@ int main(int argc, char** argv)
         b.strayArea = 0;
         b.valid = false;
         CHECK(!st::Deferrable(b, open2, 3));
+    });
+
+    Test("OpenBits: the lowest open ordinal and a bit for each open window within 24 of it; shut, unseen and other batches' none", [] {
+        std::vector<st::SeeWindow> w;
+        for (uint32_t o : { 7u, 3u, 5u, 40u, 9u, 31u }) w.push_back(MakeWindow(0, 0, 0, 0, -1, 0, 1, 1, 1, o));
+        st::BatchWindows b;
+        b.valid = true;
+        b.windows = { 0, 1, 2, 3, 5 };   // window 4 (ordinal 9) another batch's
+        const uint8_t states[6] = { st::kOpened, st::kShut, st::kOpened, st::kOpened, st::kOpened, st::kOpened };
+        float first = -1;
+        uint32_t bits = 0;
+        st::OpenBits(b, w.data(), states, w.size(), first, bits);
+        // open: 7, 5, 40, 31 (3 shut, 9 not the batch's); from 5: 7 -> bit 2, 5 -> bit 0, 31 -> bit 26 (past 24: opaque), 40 past
+        CHECK(first == 5.0f && bits == ((1u << 0) | (1u << 2)));
+        const uint8_t noneOpen[6] = { st::kShut, st::kShut, st::kUnseen, st::kShut, st::kOpened, st::kShut };
+        st::OpenBits(b, w.data(), noneOpen, w.size(), first, bits);
+        CHECK(first == 0.0f && bits == 0);
+        st::OpenBits(b, nullptr, states, w.size(), first, bits);
+        CHECK(bits == 0);
+        // the inn's batch from the street: 1, 2, 10, 11 open, the rest shut: from 1, bits 0, 1, 9, 10
+        std::vector<st::SeeWindow> inn;
+        for (uint32_t o = 1; o <= 17; ++o) inn.push_back(MakeWindow(0, 0, 0, 0, -1, 0, 1, 1, 5, o));
+        st::BatchWindows all;
+        all.valid = true;
+        for (uint16_t i = 0; i < 17; ++i) all.windows.push_back(i);
+        std::vector<uint8_t> s(17, st::kShut);
+        s[0] = s[1] = s[9] = s[10] = st::kOpened;
+        st::OpenBits(all, inn.data(), s.data(), s.size(), first, bits);
+        CHECK(first == 1.0f && bits == 0x603u);
     });
 
     // --- the deferred draw ---------------------------------------------------------------------------------------------
@@ -539,10 +770,22 @@ int main(int argc, char** argv)
         CHECK(!st::DrawArgsOf(backwards, 0, 0, 32, 0, 4, a));
     });
 
-    Test("BlendFactor: the opacity's byte in all four channels", [] {
-        CHECK(st::BlendFactor(0.35f) == 0x59595959u);
-        CHECK(st::BlendFactor(0.0f) == 0u && st::BlendFactor(1.0f) == 0xFFFFFFFFu && st::BlendFactor(2.0f) == 0xFFFFFFFFu);
-        CHECK(st::BlendFactor(-1.0f) == 0u && st::BlendFactor(NAN) == 0xFFFFFFFFu);
+    Test("ReplayConstants: 1 - the opacity, the batch's alpha test as the stock alpha's threshold (or none), the open windows", [] {
+        float c[4];
+        st::ReplayConstants(0.35f, false, 0, 0, 1.0f, 0x603u, c);
+        CHECK(Close(c[0], 0.65f, 1e-6f) && c[1] == -1.0f && c[2] == 1.0f && c[3] == 1539.0f);
+        st::ReplayConstants(0.35f, true, st::kD3dCmpGreaterEqual, 224, 3.0f, 1u, c);      // alpha-keyed: >= 224
+        CHECK(Close(c[1], 224.0f / 255.0f, 1e-6f));
+        st::ReplayConstants(0.35f, true, st::kD3dCmpGreater, 128, 3.0f, 1u, c);
+        CHECK(Close(c[1], 128.5f / 255.0f, 1e-6f));
+        st::ReplayConstants(0.35f, true, 8 /* always */, 128, 3.0f, 1u, c);
+        CHECK(c[1] == -1.0f);
+        st::ReplayConstants(2.0f, false, 0, 0, 0, 0, c);
+        CHECK(c[0] == 0.0f);                                                            // opaque
+        st::ReplayConstants(-1.0f, false, 0, 0, 0, 0, c);
+        CHECK(c[0] == 1.0f);                                                            // clear
+        st::ReplayConstants(NAN, false, 0, 0, NAN, 0xFFFFFFFFu, c);
+        CHECK(c[0] == 0.0f && c[2] == 0.0f && c[3] == 16777215.0f);                     // 24 bits, exactly
     });
 
     Test("Deferral: the pending batch's one draw is deferred (its range, opaque or alpha-keyed); everything else drawn", [] {
@@ -550,8 +793,8 @@ int main(int argc, char** argv)
         using D = st::Deferral::Draw;
         // nothing pending: drawn
         CHECK(d.OnDraw(true, 3, 0, 3, 0) == D::Pass && d.Passed() == 0);
-        // a deferrable batch: its draw deferred, once
-        d.BeginBatch(true, 120, 186);
+        // a deferrable batch: its draw deferred, once, its open windows with it
+        d.BeginBatch(true, 120, 186, 1.0f, 0x603u);
         CHECK(d.Pending() && d.OnDraw(true, 3, 120, 186, 0) == D::Defer && !d.Pending());
         st::Deferral::Entry e;
         e.args.primitives = 62;
@@ -585,6 +828,7 @@ int main(int argc, char** argv)
         // taken in order, the list emptied
         const auto all = d.Take();
         CHECK(all.size() == st::kMaxDeferred && all[0].args.primitives == 62 && d.Count() == 0);
+        CHECK(all[0].first == 1.0f && all[0].bits == 0x603u && all[1].bits == 0);   // each its own batch's open windows
         d.ResetCounts();
         CHECK(d.Passed() == 0 && d.Failed() == 0);
     });
@@ -708,10 +952,100 @@ int main(int argc, char** argv)
                     CHECK(st::Deferrable(b, states.data(), states.size()));
                     for (uint32_t i = 0; i < n; ++i) states[i] = i < 4 ? st::kOpened : st::kUnseen;   // from the street: four open
                     CHECK(st::Deferrable(b, states.data(), states.size()));
-                    states[5] = st::kShut;                                                         // one facing but not drawn
+                    states[5] = st::kShut;                                                         // one facing but not drawn:
+                    CHECK(st::Deferrable(b, states.data(), states.size()));                        // opaque in the redraw
+                    for (uint8_t& s : states) s = s == st::kOpened ? st::kShut : s;                // none open: as it was
                     CHECK(!st::Deferrable(b, states.data(), states.size()));
                 }
                 CHECK(glassBatches == 1);
+            });
+        if (!scan.empty())
+            Test("the scan's inn from the street: which windows show their room (SeesRoom over its real groups, the glass aside)", [&] {
+                CHECK(inn.windows.size() == 17);
+                const std::string base = (fs::path(scan) / "world#wmo#azeroth#buildings#goldshireinn#goldshireinn").string();
+                const std::vector<std::string> textures = ReadRootTextures(base + ".wmo");
+                std::vector<bool> glass(textures.size());
+                unsigned glassMaterials = 0;
+                for (size_t i = 0; i < textures.size(); ++i) glassMaterials += (glass[i] = gl::MaterialOf(textures[i].c_str()) != 0) ? 1 : 0;
+                std::printf("  the root's %zu materials, %u of them glass (GlassMaterials.cdbc)\n", textures.size(), glassMaterials);
+                CHECK(glassMaterials >= 2);
+                // each room's surfaces, as the runtime copies them out (timed: the frame's one build)
+                std::map<int, st::RoomMesh> rooms;
+                double buildMs = 0;
+                for (const st::SeeWindow& w : inn.windows)
+                    if (!rooms.count(w.interior))
+                    {
+                        char name[16];
+                        std::snprintf(name, sizeof(name), "_%03d.wmo", w.interior);
+                        const ScanGroup g = ReadScanGroup(base + name);
+                        const auto t0 = std::chrono::steady_clock::now();
+                        CHECK(BuildMesh(g, glass, rooms[w.interior]));
+                        buildMs = std::max(buildMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                        std::printf("  room %d: %zu triangles (its glass aside)\n", w.interior, rooms[w.interior].Triangles());
+                    }
+                // the grid against the brute force on the biggest room (the kitchen: rays from round the inn into it)
+                {
+                    const st::RoomMesh& kitchen = rooms.at(5);
+                    uint32_t seed = 777;
+                    auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+                    int agree = 0;
+                    for (int i = 0; i < 2000; ++i)
+                    {
+                        const float o[3] = { rnd() * 80 - 40, rnd() * 80 - 40, rnd() * 30 };
+                        const float at[3] = { rnd() * 30 - 16, rnd() * 26 - 11, rnd() * 16 };
+                        float d[3] = { at[0] - o[0], at[1] - o[1], at[2] - o[2] };
+                        const float l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                        for (float& x : d) x /= l;
+                        float ta = -1, tb = -1;
+                        const auto a = kitchen.First(o, d, 0.0f, 200.0f, &ta), b = kitchen.FirstBrute(o, d, 0.0f, 200.0f, &tb);
+                        agree += a == b && (a == st::RoomMesh::kNone || Close(ta, tb, 1e-3f)) ? 1 : 0;
+                    }
+                    std::printf("  the kitchen: %d of 2000 random rays as the brute force's\n", agree);
+                    CHECK(agree >= 1998);   // (a ray along a shared edge may take either triangle)
+                }
+                // typical street viewpoints in front of each window: 8, 15 and 30 yd out, straight and 30 / 60 degrees
+                // aside, the eye 2 and 6 yd up (the inn's ground floor is at 0.4)
+                uint32_t n = 0;
+                const st::SeeWindow* w = inn.Group(4, n);
+                CHECK(w && n == 17);
+                int raysTimed = 0;
+                double rayUs = 0;
+                std::vector<int> opens(n), views(n), headOn(n);
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    const float nx = w[i].normal[0], ny = w[i].normal[1], l = std::sqrt(nx * nx + ny * ny);
+                    for (const float r : { 8.0f, 15.0f, 30.0f })
+                        for (const float deg : { -60.0f, -30.0f, 0.0f, 30.0f, 60.0f })
+                            for (const float z : { 2.0f, 6.0f })
+                            {
+                                const float a = deg * 3.14159265f / 180.0f;
+                                const float dx = (nx * std::cos(a) - ny * std::sin(a)) / l, dy = (ny * std::cos(a) + nx * std::sin(a)) / l;
+                                const float eye[3] = { w[i].center[0] + r * dx, w[i].center[1] + r * dy, z };
+                                if (!st::Facing(w[i], eye)) continue;
+                                const auto t0 = std::chrono::steady_clock::now();
+                                const bool sees = st::SeesRoom(w[i], eye, rooms.at(w[i].interior));
+                                rayUs += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+                                raysTimed += static_cast<int>(sizeof(st::kSight) / sizeof(st::kSight[0]));
+                                ++views[i];
+                                opens[i] += sees ? 1 : 0;
+                                if (r == 15.0f && deg == 0.0f && z == 2.0f) headOn[i] = sees ? 1 : -1;
+                            }
+                }
+                std::printf("  (the biggest room's build %.1f ms; %.2f us a ray)\n", buildMs, raysTimed ? rayUs / raysTimed : 0.0);
+                for (uint32_t i = 0; i < n; ++i)
+                    std::printf("  window %2u (z %4.1f, facing %+.2f %+.2f %+.2f, room %d): opens from %2d of %2d street views%s\n", w[i].ordinal,
+                                w[i].center[2], w[i].normal[0], w[i].normal[1], w[i].normal[2], w[i].interior, opens[i], views[i],
+                                headOn[i] > 0 ? ", head on from 15 yd" : headOn[i] < 0 ? ", shut head on from 15 yd" : "");
+                // the ground floor's front windows (south: the street) open head on; the back dormers (z 15.5) never from the
+                // street; the inn's batch still goes see-through with them shut (Deferrable)
+                CHECK(headOn[0] > 0 && headOn[1] > 0);
+                CHECK(opens[14] == 0 && opens[15] == 0 && opens[16] == 0);
+                std::vector<uint8_t> states(n, st::kShut);
+                states[0] = states[1] = st::kOpened;
+                st::BatchWindows b;
+                b.valid = true;
+                for (uint16_t k = 0; k < n; ++k) b.windows.push_back(k);
+                CHECK(st::Deferrable(b, states.data(), states.size()));
             });
         else std::printf("SKIP the scan's inn (no wmo-windows folder given)\n");
     }

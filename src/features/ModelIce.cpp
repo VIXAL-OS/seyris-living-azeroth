@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <regex>
 #include <unordered_map>
 
@@ -576,8 +577,8 @@ namespace wxl_livingazeroth::modelice
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
             static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c7[89]|c8[01]|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
-            // (the glass's too: the rooms' samplers s8..s13, c15..c25, c83..c100)
-            static const std::regex glassClash(R"(\b(s([89]|1[0-3])|c1[5-9]|c2[0-5]|c8[3-9]|c9[0-9]|c100)\b)");
+            // (the glass's too: the rooms' samplers s8..s13, c15..c27, c83..c100)
+            static const std::regex glassClash(R"(\b(s([89]|1[0-3])|c1[5-9]|c2[0-7]|c8[3-9]|c9[0-9]|c100)\b)");
             if (glassBlocks && std::regex_search(src, glassClash)) { why = "uses a register the glass needs"; return false; }
             // The variant's view-space position and normal: what its shadow fade reads (dp3 with c3) and
             // what its sun-facing term reads (dp3 with c4). Shadow-less variants have neither.
@@ -589,7 +590,11 @@ namespace wxl_livingazeroth::modelice
             const std::string vP = mp[1].str(), vN = mn[1].str();
             static const std::regex texcoord(R"(texld r\d+, (v\d+), s0\b)");
             std::smatch mt;
-            const bool glassHere = glassBlocks && std::regex_search(src, mt, texcoord);
+            // The glass also takes the variant's alpha write (exactly one): see-through windows' redraw changes the alpha
+            // (GlassShader's ReplayAlpha), so it goes to r12.w and oC0.w is written from there at the end.
+            static const std::regex alphaWrite(R"(\n([ \t]*)(mov|mul) oC0\.w, ([^\n]*))");
+            const auto alphaWrites = std::distance(std::sregex_iterator(src.begin(), src.end(), alphaWrite), std::sregex_iterator());
+            const bool glassHere = glassBlocks && alphaWrites == 1 && std::regex_search(src, mt, texcoord);
             const std::string vT = glassHere ? mt[1].str() : std::string();
             // The stock fog ending: the colour minus the fog colour (mad: a product minus it), then lerped
             // toward it by the fog factor. When the product already reads a constant, the fog colour is
@@ -645,7 +650,14 @@ namespace wxl_livingazeroth::modelice
             // variant's first texture's coordinates (its stock `texld rK, vT, s0`) as well.
             const std::string glassText = glassHere ? glass::GlassBlock(vP, vN, vT) + glass::FloorBlock(vP, vN, vT) : std::string();
             src.insert(subtraction, base + Block(vP, vN, rims) + glassText);
-            if (glassHere) src.insert(src.find('\n') + 1, glass::ShaderDefs());
+            if (glassHere)
+            {
+                // the stock alpha into r12.w (the blocks never touch it), the redraw's change to it, then the output
+                src = std::regex_replace(src, alphaWrite, "\n$1$2 r12.w, $3", std::regex_constants::format_first_only);
+                while (!src.empty() && (src.back() == '\n' || src.back() == ' ' || src.back() == '\t' || src.back() == '\r')) src.pop_back();
+                src += glass::ReplayAlpha() + "\n    mov oC0.w, r12.w\n";
+                src.insert(src.find('\n') + 1, glass::ShaderDefs());
+            }
             src.insert(src.find('\n') + 1,
                        "    def c175, 1, 0, 0.5, 2\n"
                        "    def c176, 0.2126, 0.7152, 0.0722, 0.2\n"

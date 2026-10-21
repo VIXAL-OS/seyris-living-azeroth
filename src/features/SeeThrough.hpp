@@ -8,12 +8,21 @@
 //    depth 1, as through a doorway), so the room joins the frame's sort table clipped to the window, its doodads (the
 //    furniture) culled to the same frustum, and the rooms beyond its own doors. Nothing in the WMO changes.
 //  - The glass: features/WmoIce's batch hooks tell this which group of which instance draws (Wmo.RenderGroup) and each
-//    batch that passes the cull test (Wmo.CullBatch). A glass batch of an opened group whose every window is open (or
-//    unseen) is deferred: its device draw (Gx.DeviceDraw) runs with the client's colour and depth writes off (the client's
+//    batch that passes the cull test (Wmo.CullBatch). A glass batch of an opened group with at least one of its windows
+//    open is deferred: its device draw (Gx.DeviceDraw) runs with the client's colour and depth writes off (the client's
 //    own state cache: no pixel, no depth), and the device's whole state at it is captured. After the model scene's first
 //    pass (M2.SceneDraw, World::s_m2Scene, pass 0: the opaque models, the room's furniture among them) each is drawn again
-//    from that state, blended at SeeThroughOpacity (D3DRS_BLENDFACTOR), depth tested, no depth or alpha written, with the
-//    glass's look (LA's b9 block) but not its fake room (c193.z 0): the real room behind it shows through.
+//    from that state with the glass's look (LA's b9 block) and its redraw (b11, c219: features/GlassShader): each pixel
+//    finds its window; an open one has no fake room (the real room is behind it) and its glass texels' alpha is
+//    1 - the mask x (1 - SeeThroughOpacity), so its lead, frame and tracery stay opaque ("the tracery also becomes more
+//    transparent", the user, 2026-10-20); a shut or unseen window of the batch stays as the client draws it, opaque with
+//    its fake room. Two draws split by that alpha (the device's alpha test): the opaque with its depth, then the glass
+//    over the room, blended (SRCALPHA), no depth. A shader without the redraw (a variant without the blocks): drawn
+//    opaque, as the client would have.
+//  - The room is opened only where it's seen through the window (env/SeeThroughModel's SeesRoom: rays from the eye
+//    through the window meet the room's own surfaces from inside first, its glass aside), its rendered triangles copied
+//    out of its group once (MOVT, MOVI, MOBA: RoomMesh): "certain attic windows shouldn't be able to see through the
+//    roof" (the user, 2026-10-20).
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
@@ -25,7 +34,7 @@ namespace wxl_livingazeroth::seethrough
     struct Settings
     {
         int   enabled = 0;          // SeeThroughWindows: experimental, off by default
-        float opacity = 0.35f;      // SeeThroughOpacity: the glass's share over the room behind it (0..1)
+        float opacity = 0.35f;      // SeeThroughOpacity: the glass's share over the room behind it (0..1; its lead and frame stay opaque)
     };
     Settings& Config();
 

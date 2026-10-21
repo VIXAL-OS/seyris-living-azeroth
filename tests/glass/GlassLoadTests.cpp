@@ -8,7 +8,9 @@
 //     leaded, frosted or stained kind with a WMO is in the window table and its group's grid is found (a stained window's
 //     in its group's stained grid, and never in the other); every whole placement (a unique ID, group -1) is a placement
 //     and is found at its own origin (placed, not by WMO); a city group under its placement; every style's class is the
-//     file's. The lines the lights panel shows say so, and LogLoad's one line to the log (info).
+//     file's; GlassMaterials' corner that isn't glass (NotGlassU, NotGlassV) on the eight human window atlases (the
+//     forge's fire slots) and on nothing else, and Goldshire's smithy left its four real windows. The lines the lights
+//     panel shows say so, and LogLoad's one line to the log (info).
 //  2b. The window lights' cells (features/Windows: WindowLights.cdbc, WindowRooms.cdbc through the same reader): each
 //     light's share lit as its cells say, with stained glass's rooms (its stained cells, not the ones read only without
 //     them) and without (StainedRooms off: the cells as they were before), against the rules worked here from the raw rows;
@@ -362,6 +364,25 @@ namespace
         std::snprintf(line, sizeof(line), "%s: RoomStyles.cdbc: every style's class the file's (%zu of %zu; %zu classes, file %zu)", via, same,
                       e.styleClass.size(), loadedClasses.size(), e.classes.size());
         Check(same == e.styleClass.size() && same > 0 && loadedClasses.size() == e.classes.size(), line);
+
+        // GlassMaterials' corner that isn't glass (NotGlassU, NotGlassV, 2026-10-20): the human window atlases' fourth
+        // quadrant, a smithy's forge mouth, as the reader gives it; every other texture none. And the forge's slots no
+        // window's: Goldshire's smithy keeps its four real windows.
+        size_t cornered = 0, quadrants = 0;
+        for (uint32_t i = 1; const gl::Material* m = gl::MaterialAt(i); ++i)
+        {
+            cornered += m->notGlass[0] < 1.0f || m->notGlass[1] < 1.0f ? 1 : 0;
+            quadrants += m->notGlass[0] == 0.5f && m->notGlass[1] == 0.5f ? 1 : 0;
+        }
+        const gl::Material* elwynn = gl::MaterialAt(gl::MaterialOf("Dungeons\\Textures\\Windows\\MM_Elwynn_Wnd_Ext__01.blp"));
+        const uint32_t smithy = gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireblacksmith\\goldshireblacksmith.wmo");
+        size_t smithyWindows = 0;
+        for (const gl::Window& w : wt.All()) smithyWindows += w.path == smithy ? 1 : 0;
+        std::snprintf(line, sizeof(line), "%s: GlassMaterials.cdbc: %zu textures with a corner that isn't glass (%zu the fourth quadrant; Elwynn's %.2f %.2f); "
+                      "Goldshire's smithy %zu windows", via, cornered, quadrants, elwynn ? elwynn->notGlass[0] : -1.0f, elwynn ? elwynn->notGlass[1] : -1.0f,
+                      smithyWindows);
+        Check(cornered == 8 && quadrants == 8 && elwynn && elwynn->notGlass[0] == 0.5f && elwynn->notGlass[1] == 0.5f && smithyWindows == 4 &&
+              status.find("8 with a corner that isn't glass") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).
         const std::string rooms = gl::RoomLine(), windows = gl::WindowLine();

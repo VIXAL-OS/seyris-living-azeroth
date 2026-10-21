@@ -128,10 +128,11 @@ namespace wxl_livingazeroth::glass
     /// (null: no rooms) and the table's height; the building's class (its rooms' depth and furniture: RoomKindOf); the
     /// texture set's scales (yd a repeat) and gains (to a mean of 1); the settings (RoomDetail, LayoutStrength); the glass's
     /// kind (c26, c27: frosted glass's blur and its windows' rooms with FrostedRooms, stained glass's tint with
-    /// StainedRooms; any other kind, or either off, (0, 0, 0, kFaceMean) and (1, 0, 0, 0): the room as it was).
+    /// StainedRooms; any other kind, or either off, (0, 0, 0, kFaceMean) and (1, 0, 0, 0): the room as it was); c27.zw the
+    /// texture's corner that isn't glass (`notGlass`: Material::notGlass, null or 1 none) as 1 - where it starts (0, 0: none).
     void RoomRegisters(const float axes[9], const float origin[3], const float camera[3], const WindowTable::Grid* grid, int tableHeight,
                        uint32_t cls, const float scales[4], const float gains[4], const Settings& s, float out[4 * kRoomRegisters],
-                       uint32_t kind = Kind::kClear);
+                       uint32_t kind = Kind::kClear, const float notGlass[2] = nullptr);
     /// Whether a placement matrix's rotation (three rows) is a rotation: unit rows at right angles (else no rooms).
     bool IsRotation(const float axes[9]);
     /// The windows as loaded (GlassWindows.cdbc; for the tests and the panel).

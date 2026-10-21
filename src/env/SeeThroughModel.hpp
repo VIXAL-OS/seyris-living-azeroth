@@ -8,16 +8,18 @@
 // WMO's portal arrays: when the walk from outside reaches an exterior group, each of its windows that has an interior
 // group behind it (InteriorBehind), faces the camera and lies on the screen is projected to a screen rectangle
 // (ScreenRect), and the client's own walk runs on into that group through that rectangle, as through a doorway (the
-// room drawn clipped to the window, its furniture with it, and the rooms beyond its own doors). The glass batch in front
-// is then drawn after the room and its furniture, blended at a constant opacity (the deferral below), so the room shows
-// through it. A batch covering a window with no room behind it (a "fake" window: the glass is painted on a shell), or
-// one whose room couldn't be drawn this frame, stays as it was: opaque.
+// room drawn clipped to the window, its furniture with it, and the rooms beyond its own doors), where the room is really
+// seen through the window (SeesRoom: not over its ceiling or through its walls). The glass batch in front is then drawn
+// after the room and its furniture (the deferral below), its open windows' glass texels at the opacity and their lead,
+// frame and tracery opaque, so the room shows through the glass. A window with no room behind it (a "fake" window: the
+// glass is painted on a shell), or whose room couldn't be drawn this frame, stays as it was: opaque, its fake room in it.
 #pragma once
 
 #include "GlassRooms.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace wxl_livingazeroth::seethrough
@@ -56,11 +58,18 @@ namespace wxl_livingazeroth::seethrough
         constexpr size_t kRootGroups = 0x1F8;               // CMapObjGroup* [512]
         constexpr uint32_t kMaxGroups = 512;
         constexpr size_t kGroupInfoStride = 0x20;
-        // CMapObjGroup
+        // CMapObjGroup (the group walker 0x7D7F50 fills them: MOVI, MOVT, MOBA and their counts, offsets/game/WMO.hpp)
         constexpr size_t kGroupFlags = 0x30, kGroupLoadedFlags = 0x198;   // loaded: bit 0 (GetGroup's test)
         constexpr size_t kGroupIndices = 0xE0, kGroupIndexCount = 0x154, kGroupVertices = 0xE8, kGroupVertexCount = 0x15C;
-        // SMOBatch (MOBA)
+        constexpr size_t kGroupBatches = 0xF8, kGroupBatchCount = 0x16C;
+        // SMOBatch (MOBA, 0x18 each)
         constexpr size_t kMobaStart = 0x0C, kMobaCount = 0x10;   // uint32 first index, uint16 index count
+        constexpr size_t kMobaStride = 0x18, kMobaMaterial = 0x17;   // uint8 its material
+        // the root's materials (the root walker 0x7D7470): MOTX and its size, MOMT (0x40 each: +0x0C its texture's MOTX
+        // offset) and their count
+        constexpr size_t kRootMotx = 0x124, kRootMotxSize = 0x164, kRootMaterials = 0x160, kRootMaterialCount = 0x19C;
+        constexpr size_t kMomtStride = 0x40, kMomtTexture = 0x0C;
+        constexpr uint32_t kMaxMaterials = 4096;
         // CMapObjDef (a placed instance); Wmo.RenderGroup gets its +0xB0 (m_invMat)
         constexpr size_t kDefInvMat = 0xB0, kDefOwner = 0xF4;
         constexpr size_t kDefGroups = 0x120, kDefGroupsCount = 0x130;    // TSCGrowableArray<CMapObjDefGroup*, 4>: count
@@ -128,6 +137,18 @@ namespace wxl_livingazeroth::seethrough
         {"device draw: DrawIndexedPrimitive (vtable +0x148)", 0x006A36C8, 6, {0x8B, 0x88, 0x48, 0x01, 0x00, 0x00}},
         {"primitive table: triangles are a triangle list", 0x00A2F8E0, 4, {0x04, 0x00, 0x00, 0x00}},
         {"Gx state dirty: the render-state cache", 0x00685979, 8, {0x8B, 0xF9, 0x8B, 0x8F, 0xF4, 0x28, 0x00, 0x00}},
+        // The room's surfaces for the line of sight through a window (RoomMesh): the group's and the root's chunks where
+        // the walkers put them.
+        {"group walker: MOVI at +0xE0, its index count (size / 2) at +0x154", 0x007D7F76, 17,
+         {0x89, 0xB1, 0xE0, 0x00, 0x00, 0x00, 0x8B, 0x50, 0x04, 0xD1, 0xEA, 0x89, 0x91, 0x54, 0x01, 0x00, 0x00}},
+        {"group walker: MOVT at +0xE8, its count (size / 12) at +0x15C", 0x007D7F94, 18,
+         {0x89, 0xB1, 0xE8, 0x00, 0x00, 0x00, 0xF7, 0x67, 0x04, 0xC1, 0xEA, 0x03, 0x89, 0x91, 0x5C, 0x01, 0x00, 0x00}},
+        {"group walker: MOBA at +0xF8, its count (size / 24) at +0x16C", 0x007D7FEC, 18,
+         {0x89, 0xB1, 0xF8, 0x00, 0x00, 0x00, 0xF7, 0x67, 0x04, 0xC1, 0xEA, 0x04, 0x89, 0x91, 0x6C, 0x01, 0x00, 0x00}},
+        {"root walker: MOTX at +0x124, its size at +0x164", 0x007D7499, 15,
+         {0x89, 0xB7, 0x24, 0x01, 0x00, 0x00, 0x8B, 0x48, 0x04, 0x89, 0x8F, 0x64, 0x01, 0x00, 0x00}},
+        {"root walker: MOMT at +0x160, its count (size / 64) at +0x19C", 0x007D74B0, 18,
+         {0x89, 0xB7, 0x60, 0x01, 0x00, 0x00, 0x8B, 0x50, 0x04, 0xC1, 0xEA, 0x06, 0x89, 0x97, 0x9C, 0x01, 0x00, 0x00}},
     };
 
     /// The first guard of `guards` whose bytes differ (read through `read(address, size)`, a pointer to that many bytes or
@@ -200,6 +221,52 @@ namespace wxl_livingazeroth::seethrough
     /// A WMO's windows from the loaded table (glass::Windows().All()) and its root's MOGI (`groups`, `count`).
     RootWindows BuildRoot(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count);
 
+    // --- the room seen through a window ---------------------------------------------------------------------------------
+    // "certain attic windows shouldn't be able to see through the roof" (the user, 2026-10-20, the Lion's Pride Inn at
+    // night). The room behind a window is the interior group whose box holds a point behind its middle; a box says
+    // nothing of where the room's walls and ceiling are. A dormer's line of sight from the street goes over the room's
+    // ceiling or meets it from above, where the client culls its faces (they face into the room): opened, the room showed
+    // through the roof. A window opens only where the line of sight through it meets the room's own surfaces from inside
+    // first: every one of kSight's rays from the eye through the window meets a face of the room facing it (its winding's
+    // front: the walls', the ceiling's and the floor's inner side), not a back face and not nothing.
+    /// One room group's surfaces, apart from the client (the runtime copies them out of the group): its rendered triangles
+    /// but its glass (a window's inner face is the same window, its back to the street), in a grid of cells (WMO space).
+    class RoomMesh
+    {
+    public:
+        enum Hit : uint8_t { kNone = 0, kFront = 1, kBack = 2 };
+        /// From the group's vertices (MOVT: three floats a vertex), its indices (MOVI) and the index ranges to take (its
+        /// batches but the glass ones: first index, count). False (and empty) when an index or a range is out of bounds.
+        bool Build(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
+                   const std::vector<std::pair<uint32_t, uint32_t>>& ranges);
+        /// The first triangle along o + t d (t in (tmin, tmax)): kFront when it faces the ray's origin (its winding's front:
+        /// cross(b - a, c - a) . d < 0), kBack when it faces away, kNone. Its t in `t` when one is met.
+        Hit First(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr) const;
+        /// The same over every triangle (the tests' reference).
+        Hit FirstBrute(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr) const;
+        size_t Triangles() const { return m_tris.size() / 9; }
+        bool Empty() const { return m_tris.empty(); }
+
+    private:
+        std::vector<float> m_tris;                // a, b, c: nine floats a triangle
+        std::vector<uint32_t> m_cellStart, m_refs;   // cell i's triangles: m_refs[m_cellStart[i] .. m_cellStart[i + 1])
+        float m_lo[3] = {}, m_cell = 1.0f;
+        int m_n[3] = {};
+        bool TestCell(int cell, const float o[3], const float d[3], float tmin, float& best, int& bestTri) const;
+    };
+    /// The grid's cells: about kGridCells along the room's longest side, none smaller than kGridLeast yd.
+    constexpr int kGridCells = 32;
+    constexpr float kGridLeast = 0.5f;
+    /// Where the rays cross a window (its half sizes' shares along and up): its middle and a ring round it, inside the
+    /// frame (an outer window's glass reaches past the room's opening behind it; its edge is mostly lead and frame).
+    constexpr float kSight[9][2] = { { 0, 0 }, { -0.5f, -0.5f }, { 0, -0.5f }, { 0.5f, -0.5f }, { -0.5f, 0 },
+                                     { 0.5f, 0 }, { -0.5f, 0.5f }, { 0, 0.5f }, { 0.5f, 0.5f } };
+    /// How far past the glass (yd) a ray looks for the room.
+    constexpr float kSightReach = 120.0f;
+    /// Whether the room is seen through the window from `eye` (WMO space): every kSight ray, from the glass on, meets
+    /// `room`'s surfaces first from inside (kFront).
+    bool SeesRoom(const SeeWindow& w, const float eye[3], const RoomMesh& room);
+
     // --- a window on the screen --------------------------------------------------------------------------------------
     /// The quad (WMO space), grown by `grow` yd along and up: corners counter-clockwise from (-along, -up).
     void Corners(const SeeWindow& w, float grow, float out[4][3]);
@@ -222,7 +289,8 @@ namespace wxl_livingazeroth::seethrough
     {
         kUnseen = 0,   // facing away or off the screen: its glass hides nothing
         kOpened = 1,   // its room is drawn through it
-        kShut = 2,     // on the screen and facing, but no room drawn behind it (fake, out of range, the budget, not loaded)
+        kShut = 2,     // on the screen and facing, but no room drawn behind it (fake, out of range, the budget, not loaded,
+                       // its room not seen through it: SeesRoom)
     };
     struct WindowPlan
     {
@@ -260,9 +328,16 @@ namespace wxl_livingazeroth::seethrough
                                 uint32_t start, uint32_t count, const SeeWindow* windows, uint32_t windowCount);
     /// Strays up to this area (yd^2) don't stop a batch going see-through (trim at a frame's edge).
     constexpr float kTrimArea = 0.25f;
-    /// Whether a batch may be drawn see-through this frame: all its triangles read and in windows (but kTrimArea), and
-    /// none of its windows shut; at least one opened (else there's nothing to see through).
+    /// Whether a batch may be drawn see-through this frame: all its triangles read and in windows (but kTrimArea), at least
+    /// one of its windows opened (else there's nothing to see through). Its shut and unseen windows stay as the client
+    /// draws them, opaque with their fake room: the redraw tells the windows apart per pixel (OpenBits, GlassShader's b11).
     bool Deferrable(const BatchWindows& b, const uint8_t* states, size_t stateCount);
+    /// The windows c219.w holds (GlassShader's kReplayBits).
+    constexpr uint32_t kOpenBits = 24;
+    /// A deferred batch's open windows for the redraw (c219.zw): the lowest open ordinal (`windows`: the group's, `states`
+    /// theirs), and a bit for each open window within kOpenBits of it (its ordinal - first). An open window past them is
+    /// redrawn opaque, as a shut one.
+    void OpenBits(const BatchWindows& b, const SeeWindow* windows, const uint8_t* states, size_t count, float& first, uint32_t& bits);
 
     // --- the deferred glass ---------------------------------------------------------------------------------------------
     /// DrawIndexedPrimitive's arguments for a Gx batch, as the client's device draw (0x6A3620) works them out: the batch
@@ -274,8 +349,11 @@ namespace wxl_livingazeroth::seethrough
     };
     bool DrawArgsOf(const uint32_t batch[4], uint32_t baseVertexMode, uint32_t streamOffset, uint32_t streamStride, uint32_t indexOffset,
                     uint32_t d3dPrimitive, DrawArgs& out);
-    /// D3DRS_BLENDFACTOR for a glass opacity (0..1): its byte in all four channels.
-    uint32_t BlendFactor(float opacity);
+    /// The redraw's c219 (GlassShader's kReplayConstant) for a glass opacity (0..1; not finite: opaque), the batch's own
+    /// alpha test as the device had it (D3DRS_ALPHATESTENABLE, ALPHAFUNC, ALPHAREF: greater-or-equal its reference / 255,
+    /// greater half a step more; off, or any other test, -1: none) and its open windows (OpenBits).
+    void ReplayConstants(float opacity, bool alphaTest, uint32_t alphaFunc, uint32_t alphaRef, float first, uint32_t bits, float out[4]);
+    constexpr uint32_t kD3dCmpGreater = 5, kD3dCmpGreaterEqual = 7;   // D3DCMPFUNC
 
     /// The deferral's bookkeeping between the batch loop's cull test (BeginBatch), the device draw (OnDraw, Captured) and
     /// the model scene's first pass (Take), apart from the device (`state` is the runtime's captured device state).
@@ -288,17 +366,20 @@ namespace wxl_livingazeroth::seethrough
             DrawArgs args;
             const void* target = nullptr;   // the render target and depth surface it drew into
             const void* depth = nullptr;
+            float first = 0.0f;        // its open windows (OpenBits: Captured takes BeginBatch's)
+            uint32_t bits = 0;
         };
         enum class Draw { Pass, Defer };
         /// A batch passed the loop's cull test: `deferrable` (Deferrable, a glass batch of an opened group) with its
-        /// range (MOBA's first index and count), else a batch to draw as it is. Any earlier pending batch is dropped.
-        void BeginBatch(bool deferrable, uint32_t start, uint32_t count);
+        /// range (MOBA's first index and count) and its open windows (OpenBits), else a batch to draw as it is. Any
+        /// earlier pending batch is dropped.
+        void BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first = 0.0f, uint32_t bits = 0);
         /// The batch loop ended (nothing pending past it).
         void EndLoop() { m_pending = false; }
         /// A device draw: defer it when it's the pending batch's (indexed triangles, the same range), the client draws it
         /// opaque or alpha-keyed (blending mode 0 or 1), and there's room; else draw it. Once per batch.
         Draw OnDraw(bool indexed, uint32_t primitive, uint32_t start, uint32_t count, uint32_t blendingMode);
-        /// The deferred draw's state was captured (`entry`), or not (`ok` false: the runtime drew it after all).
+        /// The deferred draw's state was captured (`entry`; its open windows the pending batch's).
         void Captured(const Entry& entry);
         void CaptureFailed() { ++m_failed; }
         /// Every entry, in order, for the redraw (and the list emptied).
@@ -312,6 +393,8 @@ namespace wxl_livingazeroth::seethrough
     private:
         bool m_pending = false;
         uint32_t m_start = 0, m_count = 0;
+        float m_first = 0.0f;
+        uint32_t m_bits = 0;
         std::vector<Entry> m_entries;
         unsigned m_failed = 0, m_passed = 0;
     };

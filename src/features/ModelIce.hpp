@@ -27,10 +27,12 @@
 // walking trail of about four seconds: "snow rims work but fade too fast imo" (the user, 2026-10-12).
 //
 // Behind b9 and b10, after the rims, on the buildings' variants only: the window glass and the light through sunlit
-// panes on a room's floor (features/GlassShader has their register map: c85, c86, c192..c205, c212, c213, c218, c219 per
+// panes on a room's floor (features/GlassShader has their register map: c85, c86, c192..c205, c212, c213, c218 per
 // batch, c83, c84, c87..c100, c206..c211 defined, and the rims' c101..c172 for the panes; features/Glass switches them per
 // batch, from features/WmoIce's hooks). Taken in the buildings' variants so far: c83..c223 (c220, c221 defined: the terrain's ice
-// uploads its own there, which the buildings' shaders don't see); c0..c14 stock.
+// uploads its own there, which the buildings' shaders don't see; c219 read only under b11, see-through windows' redraw);
+// c0..c14 stock. With the glass the variant's alpha write goes to r12.w and oC0.w is written from it last, after the
+// redraw's change (GlassShader's ReplayAlpha).
 //
 // Frozen waterfalls get their own style: brighter, glassier ice whose detail is streaked along the
 // flow, at a scale that still reads from a distance (Bor's Fall in the Storm Peaks is 366 yd tall).

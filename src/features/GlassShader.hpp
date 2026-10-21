@@ -58,8 +58,20 @@
 //  any hour, its colour the glow's, and the facing (c195 in a floor batch) toward its lights (features/Glass's
 //  LightOfPane, LightFacing). Its glass's look is the inside look with a steady light behind it in c194 (BacklitConstants).
 //
+// The texture's corner that isn't glass (c27.zw, GlassMaterials' NotGlassU, NotGlassV): its texels keep the client's colour
+//  (the glass mask 0 there): the human window atlases' fourth quadrant is a forge's fire slots ("blacksmith windows look
+//  very weird lol", the user, 2026-10-20).
+// The redraw (b11: features/SeeThrough draws a deferred glass batch again over the real room behind it, and only then):
+//  every pixel looks up its window (r31.w: whether it's open, its bit in c219.w from the ordinal c219.z); an open window
+//  has no fake room and hides none of its glow (r29.w: 0 for it and for a window the batch wouldn't have looked up, 1
+//  otherwise and outside the redraw), and the alpha (ReplayAlpha, the edit's last lines: the stock alpha in r12.w) is
+//  1 - the mask x (1 - the opacity, c219.x) where it's open, 1 elsewhere: an open window's glass texels see-through at
+//  the opacity, its lead, frame and tracery and every shut window opaque ("the tracery also becomes more transparent",
+//  the user, 2026-10-20). The batch's own alpha test (c219.y, -1 none) on the stock alpha is a texkill there.
+//
 // Registers (WMO pixel shaders; the stock ones use r0..r11, c0..c14, s0..s7 and no b/i registers):
-//  b9 glass, b10 floor light; r12..r31 (shared with the ice and the rims, see ModelIce.hpp); i1 (defined: the window
+//  b9 glass, b10 floor light, b11 the redraw; r12..r31 (shared with the ice and the rims, see ModelIce.hpp; r12.w the stock
+//  alpha with the glass blocks, r29.w and r31.w the redraw's); i1 (defined: the window
 //  loop's bound); s8..s13 (the room: floor, walls, ceiling, wood, the furniture atlas, the window table);
 //  c180..c183 the camera and the view's rows (terrainice::FillModelConstants, as the ice); c175, c176 (the ice's defs);
 //  c192 mask plane; c193 (inside weight, strength, the room's share, thickness yd); c194 (the sky through the glass
@@ -78,7 +90,8 @@
 //  and back layers' tiles), c26 (the kind's room: the footprint's least yd, frosted windows' rooms allowed 1, the faces'
 //  shades' flattening and their mean), c27 (1 - the stained tint, the tint); c218.zw (the room's light by lit x .z + .w:
 //  by day a dark room keeps room::kDarkDay, at night the moon's in dark rooms only); c206, c207, c208, c209, c210, c211,
-//  c214..c217, c220, c221, c83, c84, c87..c100 defined;
+//  c214..c217, c220, c221, c83, c84, c87..c100 defined; c27.zw the corner that isn't glass; c219 the redraw's (b11 only:
+//  1 - the opacity, the alpha test's reference, the first ordinal, the open windows' bits);
 //  the floor light's panes c101..c172 (six registers each; the rims' range: a batch has one or the other, features/Glass
 //  re-uploads when the rims took it). ps_3_0 has c0..c223, and an instruction reads at most one constant register.
 #pragma once
@@ -86,6 +99,8 @@
 #include "../env/GlassModel.hpp"
 #include "../env/GlassRooms.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
@@ -109,6 +124,12 @@ namespace wxl_livingazeroth::glass
     constexpr int kRoomRegisters = 13;   // the kind's look (c26, c27: frosted glass's blur, stained glass's tint)
     constexpr int kFirstSampler = 8;     // s8 floor, s9 walls, s10 ceiling, s11 wood, s12 the furniture atlas, s13 the window table
     constexpr int kTableSampler = 13;
+    constexpr int kReplaySwitch = 11;    // PS b11: features/SeeThrough's redraw of a deferred glass batch (never on otherwise)
+    constexpr int kReplayConstant = 219; // c219, read under b11 only: 1 - the opacity, the batch's alpha-test reference (-1:
+                                         // none), the first ordinal of .w's bits, the open windows' bits
+    constexpr int kReplayBits = 24;      // windows c219.w holds (the whole numbers a float keeps exactly)
+    /// GlassBlock's parts besides the look as it was (the tests build the block without them to hold it to the old one).
+    enum BlockPart : int { kPartNotGlass = 1, kPartReplay = 2, kAllParts = 3 };
 
     inline std::string ShaderDefs()
     {
@@ -307,10 +328,47 @@ namespace wxl_livingazeroth::glass
     /// worked out (r14.z lit, r22.x the lit hash, r13.w and r20.w its key: the window's ordinal and group, r21.w the
     /// flicker's dip, r14.y the share of the glow hidden). `probeRoom`: right after the ray meets the room (r13.w its t,
     /// r25 the faces (back wall, side wall, floor or ceiling, ceiling), r26.xyz where: across, up, deep, r30 the room's
-    /// box: half width, floor, ceiling, depth).
+    /// box: half width, floor, ceiling, depth). `parts`: the corner that isn't glass (kPartNotGlass) and the redraw's
+    /// (kPartReplay), both inert with c27.zw 0 and b11 off.
     inline std::string GlassBlock(const std::string& vP, const std::string& vN, const std::string& vT, const std::string& probe = std::string(),
-                                  const std::string& probeRoom = std::string())
+                                  const std::string& probeRoom = std::string(), int parts = kAllParts)
     {
+        // Not glass: the texture's corner from c27.zw's (1 - where it starts, u and v; 0 none) to its tile's far corner, the
+        // human window atlases' fire slots (a forge's mouth): its texels keep the client's colour.
+        const std::string notGlass = !(parts & kPartNotGlass) ? std::string() :
+            "\n      frc r15.xy, " + vT +
+            "\n      add r15.xy, r15, c27.zwzw"
+            "\n      add r15.xy, r15, -c175.x"
+            "\n      min r15.x, r15.x, r15.y"
+            "\n      cmp r14.w, r15.x, c175.y, r14.w";
+        const bool replay = (parts & kPartReplay) != 0;
+        // The redraw: the window looked up whatever the batch wants (r29.w: what it wants, > 0 to look; outside the redraw
+        // 1), none open yet (r31.w).
+        const std::string replayLook = !replay ? std::string() :
+            "\n      mov r29.w, c175.x"
+            "\n      if b11"
+            "\n        mov r31.w, c175.y"
+            "\n        mov r29.w, r19.x"
+            "\n        max r19.x, r19.x, c175.x"
+            "\n      endif";
+        // ... and found: open when its bit is in c219.w (from ordinal c219.z: frac(bits / 2^(k + 1)) >= 0.5, k at least -1,
+        // so none below the first and none past kReplayBits); r29.w its share of the fake room and of the glow hidden: none
+        // for an open window (the real room behind it) or one the batch wouldn't have looked up, all for any other.
+        const std::string replayOpen = !replay ? std::string() :
+            "\n          if b11"
+            "\n            add r19.x, r13.w, -c219.z"
+            "\n            max r19.x, r19.x, -c175.x"
+            "\n            add r19.x, r19.x, c175.x"
+            "\n            exp r19.x, -r19.x"
+            "\n            mul r19.x, r19.x, c219.w"
+            "\n            frc r19.x, r19.x"
+            "\n            add r19.x, r19.x, -c175.z"
+            "\n            cmp r31.w, r19.x, c175.x, c175.y"
+            "\n            cmp r29.w, -r29.w, c175.y, c175.x"
+            "\n            add r19.x, c175.x, -r31.w"
+            "\n            mul r29.w, r29.w, r19.x"
+            "\n          endif";
+        const std::string replayKeep = !replay ? std::string() : "\n          mul r22.w, r22.w, r29.w";
         // Mod 289 of r22.x (a whole number below 2^22) in place, exactly: v - floor((v + 0.5) / 289) 289.
         const std::string mod =
             "\n          add r22.z, r22.x, c214.z"
@@ -338,7 +396,7 @@ namespace wxl_livingazeroth::glass
             "\n      texld r13, " + vT + ", s0"
             "\n      dp3 r14.w, r13, c192"
             "\n      add_sat r14.w, r14.w, c192.w"
-            "\n      mul r14.w, r14.w, c193.y"
+            "\n      mul r14.w, r14.w, c193.y" + notGlass +
             // P (world; camera-relative until the screen gradients are taken), V (world, toward the eye), N (world,
             // facing the eye), cos = N.V
             "\n      dp3 r15.x, " + vP + ", c181"
@@ -454,7 +512,7 @@ namespace wxl_livingazeroth::glass
             "\n      mov r14.y, c175.y"
             "\n      mov r14.z, c175.x"
             "\n      mov r19.x, c193.z"
-            "\n      max r19.x, r19.x, c201.w"
+            "\n      max r19.x, r19.x, c201.w" + replayLook +
             "\n      if_gt r19.x, c175.y"
             "\n        mov r18.w, r17.w"
             // the group's grid: the cell holding the point (c18: its corner; c19.x 1 / its size; c20.xyz the last cell,
@@ -504,7 +562,7 @@ namespace wxl_livingazeroth::glass
             "\n          add r22.x, r22.x, c208.x"
             "\n          texldl r30, r22, s13"
             "\n          add r22.x, r22.x, c208.x"
-            "\n          texldl r20, r22, s13"
+            "\n          texldl r20, r22, s13" + replayOpen +
             // lit or dark: the exact hash of the key and the seed, P(M(P(M(x)) + M(y))) with M mod 289 and P the
             // permutation (34 v + 1) v (every step a whole number below 2^22: the same bits everywhere), then
             // h = (k + 0.5) / 289 against the dark band: at or below lo (c203.w) dark, above hi (c200.w) lit, between
@@ -545,13 +603,13 @@ namespace wxl_livingazeroth::glass
             // seen from inside, only the glass
             "\n          add r22.w, c175.x, -r14.z"
             "\n          mul r22.w, r22.w, c205.w"
-            "\n          mad r22.w, r14.z, r21.w, r22.w"
+            "\n          mad r22.w, r14.z, r21.w, r22.w" + replayKeep +
             "\n          mad r23.xyz, r23, -r22.w, r23"
             "\n          mad r14.y, r22.w, -c193.x, r22.w" + probe +
             // the room (clear and leaded glass: c193.z of it; not a frosted window), its lamp down by the flicker's dip too
             "\n          mov r22.w, c193.z"
             "\n          add r22.z, c26.y, -r30.w"
-            "\n          cmp r22.w, r22.z, r22.w, c175.y"
+            "\n          cmp r22.w, r22.z, r22.w, c175.y" + replayKeep +
             "\n          if_gt r22.w, c175.y"
             // the window's frame (its rows' directions: across, up, out), the ray into the room (across, up, deep: away
             // from the eye, never edge-on: r28), where it enters (r27.xy: across, up about the window's middle, yd)
@@ -842,6 +900,35 @@ namespace wxl_livingazeroth::glass
             "\n      mad r31.xyz, r27, r14.w, r31"
             "\n      mad r31.xyz, r12, -r14.y, r31"
             "\n    endif";
+    }
+
+    /// Whether a pixel shader's code (its tokens, version token first) has the redraw: an `if b11` (D3DSIO_IF, one parameter,
+    /// on the bool constant kReplaySwitch). features/SeeThrough redraws a batch see-through only with such a shader (a
+    /// variant without the glass blocks would give its stock alpha, not the mask's).
+    inline bool HasReplaySwitch(const uint32_t* tokens, size_t count)
+    {
+        // D3DSPR_CONSTBOOL (14): its low three bits at 28..30, its high two at 11..12; any swizzle, no modifier
+        constexpr uint32_t kIf = 0x01000028u;
+        constexpr uint32_t kB11 = 0x80000000u | (6u << 28) | (1u << 11) | static_cast<uint32_t>(kReplaySwitch);
+        if (!tokens) return false;
+        for (size_t i = 0; i + 1 < count; ++i)
+            if (tokens[i] == kIf && (tokens[i + 1] & ~0x00FF0000u) == kB11) return true;
+        return false;
+    }
+
+    /// The redraw's alpha, after the stock alpha is in r12.w (the edit moves the stock shader's alpha write there and writes
+    /// oC0.w from it after this): under b11 the batch's own alpha test on the stock alpha (c219.y; -1 none: the device's
+    /// alpha test is the redraw's own split, features/SeeThrough), then 1 - the mask x open x (1 - the opacity, c219.x).
+    /// Reads r14.w and r31.w (GlassBlock's); r13 a temporary.
+    inline std::string ReplayAlpha()
+    {
+        return "\n    if b11"
+               "\n      add r13, r12.w, -c219.y"
+               "\n      texkill r13"
+               "\n      mul r13.x, r14.w, r31.w"
+               "\n      mul r13.x, r13.x, c219.x"
+               "\n      add r12.w, -r13.x, c175.x"
+               "\n    endif";
     }
 
     inline std::string FloorBlock(const std::string& vP, const std::string& vN, const std::string& vT)

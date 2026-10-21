@@ -191,6 +191,23 @@ class Panes(unittest.TestCase):
         self.assertEqual(len(p.points), 6)                 # two triangles, three corners each
         self.assertEqual(p.areas, {WINDOW: p.area})
 
+    def test_the_forge_slots_are_not_glass(self):
+        # "blacksmith windows look very weird lol" (the user, 2026-10-20): the human window atlases' fourth quadrant is a
+        # forge's fire slots. A quad textured from it is no pane; one over the whole texture, or another quadrant, is.
+        self.assertTrue(g.not_glass(WINDOW, [(0.5, 0.5), (1.0, 0.5), (1.0, 1.0)]))
+        self.assertTrue(g.not_glass(WINDOW_IN, [(2.51, 3.6), (2.99, 3.5), (2.6, 3.99)]))     # another tile of it (wrapped)
+        self.assertTrue(g.not_glass(WINDOW, [(0.49, 0.5), (1.01, 0.5), (1.0, 1.0)]))         # its texels' edge
+        self.assertFalse(g.not_glass(WINDOW, [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]))          # the whole texture
+        self.assertFalse(g.not_glass(WINDOW, [(0.0, 0.5), (0.5, 0.5), (0.5, 1.0)]))          # the arched window beside it
+        self.assertFalse(g.not_glass(CLEAR_TEX, [(0.5, 0.5), (1.0, 0.5), (1.0, 1.0)]))       # another texture's corner is glass
+        self.assertEqual(g.NOT_GLASS.get("mm_westfall_wnd_ext__01"), (0.5, 0.5))
+        quad = wall_x(0.0, -1, 1, 1, 3, out=True)
+        for uvs, panes in (([(0.5, 1.0), (1.0, 1.0), (1.0, 0.5), (0.5, 0.5)], 0), ([(0, 1), (0.5, 1), (0.5, 0.5), (0, 0.5)], 1)):
+            grp = g.wl.parse_group(group(0x8, ((-6, -4, 0), (0.5, 4, 5)), [(0, quad)]))
+            grp["uvs"] = uvs
+            self.assertEqual(len(g.group_panes(grp, 0, {0: WINDOW}, True)), panes)
+            self.assertEqual(len(g.group_panes(grp, 0, {0: CLEAR_TEX}, True)), 1)
+
 
 CLEAR_TEX = "dungeons\\textures\\windows\\am_bbay_windows.blp"
 FROST_TEX = "dungeons\\textures\\windows\\mm_irnfg_windows_01.blp"

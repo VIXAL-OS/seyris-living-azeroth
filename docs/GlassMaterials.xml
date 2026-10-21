@@ -21,4 +21,6 @@
     <Field Name="PulseR" Type="float" />
     <Field Name="PulseG" Type="float" />
     <Field Name="PulseB" Type="float" />
+    <Field Name="NotGlassU" Type="float" />
+    <Field Name="NotGlassV" Type="float" />
   </Table>

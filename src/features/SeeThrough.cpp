@@ -23,6 +23,7 @@ namespace wxl_livingazeroth::seethrough
         namespace gx = wxl::game::gx;
         constexpr const char* kTag = "wxl-seyris-living-azeroth";
         constexpr uintptr_t kFrustumIndex = 0x00CD8798;   // CWorldScene::frustumIndex (FrustumPush's and FrustumPop's)
+        static_assert(kOpenBits == static_cast<uint32_t>(glass::kReplayBits), "c219.w's windows");
 
         using WalkFn = void(__fastcall*)(void* root, void* edx, uint32_t group, uint32_t fromGroup, float* rect, uint32_t depth, int interior);
         using DeviceDrawFn = void(__fastcall*)(void* device, void* edx, uint32_t* batch, int indexed);
@@ -49,6 +50,8 @@ namespace wxl_livingazeroth::seethrough
         {
             unsigned groups = 0, opened = 0, shut = 0, groupsAdded = 0, glassBatches = 0, kept = 0, deferred = 0, redrawn = 0;
             unsigned passed = 0, captureFailed = 0, targetMoved = 0, dropped = 0;
+            unsigned blind = 0;      // shut: the room not seen through the window from here (SeesRoom)
+            unsigned opaque = 0;     // redrawn opaque: the batch's shader without the redraw (or its glass off)
         };
         Counts g_now, g_last;
         unsigned g_everOpened = 0, g_everRedrawn = 0;
@@ -92,6 +95,47 @@ namespace wxl_livingazeroth::seethrough
             }
             __except (EXCEPTION_EXECUTE_HANDLER) { path[0] = 0; return false; }
         }
+        // The root's materials: which are glass (GlassMaterials.cdbc by their first texture; MOTX bounded by its size).
+        bool ReadMaterialCount(const uint8_t* root, const char*& motx, uint32_t& motxSize, const uint8_t*& materials, uint32_t& count)
+        {
+            __try
+            {
+                motx = *reinterpret_cast<const char* const*>(root + client::kRootMotx);
+                motxSize = *reinterpret_cast<const uint32_t*>(root + client::kRootMotxSize);
+                materials = *reinterpret_cast<const uint8_t* const*>(root + client::kRootMaterials);
+                count = *reinterpret_cast<const uint32_t*>(root + client::kRootMaterialCount);
+                return motx && materials && count > 0 && count <= client::kMaxMaterials;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        bool ReadTextureName(const char* motx, uint32_t motxSize, const uint8_t* materials, uint32_t i, char (&out)[260])
+        {
+            __try
+            {
+                const uint32_t at = *reinterpret_cast<const uint32_t*>(materials + client::kMomtStride * i + client::kMomtTexture);
+                if (at >= motxSize) return false;
+                const uint32_t limit = std::min<uint32_t>(motxSize - at, sizeof(out) - 1);
+                uint32_t n = 0;
+                for (; n < limit && motx[at + n]; ++n) out[n] = motx[at + n];
+                out[n] = 0;
+                return n > 0;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        std::vector<uint8_t> GlassMaterials(const uint8_t* root)
+        {
+            const char* motx = nullptr;
+            const uint8_t* materials = nullptr;
+            uint32_t motxSize = 0, count = 0;
+            std::vector<uint8_t> out;
+            if (!ReadMaterialCount(root, motx, motxSize, materials, count)) return out;
+            out.assign(count, 0);
+            char name[260];
+            for (uint32_t i = 0; i < count; ++i)
+                if (ReadTextureName(motx, motxSize, materials, i, name)) out[i] = glass::MaterialOf(name) ? 1 : 0;
+            return out;
+        }
+
         bool ReadGroupInfos(const uint8_t* infos, uint32_t count, GroupInfo* out)
         {
             __try
@@ -130,6 +174,7 @@ namespace wxl_livingazeroth::seethrough
             bool whitelisted = false;
             std::vector<GroupInfo> groups;
             RootWindows windows;
+            std::vector<uint8_t> glassMaterial;   // per material: 1 glass (the room's surfaces leave it out)
         };
         std::unordered_map<const void*, RootEntry> g_roots;
         std::unordered_map<uint32_t, bool> g_logged;   // a whitelisted WMO's windows logged once
@@ -158,6 +203,7 @@ namespace wxl_livingazeroth::seethrough
                 return &e;
             }
             e.windows = BuildRoot(e.path, glass::Windows().All(), e.groups.data(), e.groups.size());
+            e.glassMaterial = GlassMaterials(r);
             if (g_api && !g_logged[e.path])
             {
                 g_logged[e.path] = true;
@@ -211,6 +257,89 @@ namespace wxl_livingazeroth::seethrough
                 return data && index < have && have <= client::kMaxGroups && data[index] != nullptr;
             }
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        // --- the room's surfaces for the line of sight (RoomMesh), copied out of its group once ----------------------------
+        struct GroupArrays
+        {
+            const void* vertices = nullptr; const void* indices = nullptr; const void* batches = nullptr;
+            uint32_t vertexCount = 0, indexCount = 0, batchCount = 0;
+        };
+        bool ReadGroupArrays(const uint8_t* root, uint32_t index, const uint8_t*& group, GroupArrays& a)
+        {
+            __try
+            {
+                group = reinterpret_cast<const uint8_t* const*>(root + client::kRootGroups)[index];
+                if (!group) return false;
+                a.vertices = *reinterpret_cast<const void* const*>(group + client::kGroupVertices);
+                a.vertexCount = *reinterpret_cast<const uint32_t*>(group + client::kGroupVertexCount);
+                a.indices = *reinterpret_cast<const void* const*>(group + client::kGroupIndices);
+                a.indexCount = *reinterpret_cast<const uint32_t*>(group + client::kGroupIndexCount);
+                a.batches = *reinterpret_cast<const void* const*>(group + client::kGroupBatches);
+                a.batchCount = *reinterpret_cast<const uint32_t*>(group + client::kGroupBatchCount);
+                return a.vertices && a.indices && a.batches;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        bool CopyOut(const void* from, void* to, size_t bytes)
+        {
+            __try { std::memcpy(to, from, bytes); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        struct MeshEntry
+        {
+            GroupArrays arrays;
+            uint32_t generation = 0;
+            bool ok = false;
+            RoomMesh mesh;
+        };
+        std::unordered_map<const void*, MeshEntry> g_meshes;   // by the room's group object
+        unsigned g_meshBuilds = 0;                             // this frame's: one a frame (a big room takes a few ms)
+
+        // The room's surfaces (its rendered triangles but its glass), built the first time a window of it is a candidate
+        // and again whenever the group's arrays move; null this frame when the frame's one build went elsewhere.
+        const RoomMesh* MeshOf(const RootEntry& r, const void* root, uint32_t room)
+        {
+            const uint8_t* group = nullptr;
+            GroupArrays a;
+            if (!ReadGroupArrays(static_cast<const uint8_t*>(root), room, group, a)) return nullptr;
+            if (a.vertexCount == 0 || a.vertexCount > 65536 || a.indexCount == 0 || a.indexCount > (3u << 20) || a.batchCount == 0 || a.batchCount > 4096)
+                return nullptr;
+            if (const auto it = g_meshes.find(group); it != g_meshes.end())
+            {
+                const MeshEntry& e = it->second;
+                if (e.arrays.vertices == a.vertices && e.arrays.indices == a.indices && e.arrays.batches == a.batches &&
+                    e.arrays.vertexCount == a.vertexCount && e.arrays.indexCount == a.indexCount && e.arrays.batchCount == a.batchCount &&
+                    e.generation == glass::Generation())
+                    return e.ok ? &e.mesh : nullptr;
+            }
+            if (g_meshBuilds) return nullptr;
+            ++g_meshBuilds;
+            if (g_meshes.size() > 64) g_meshes.clear();
+            MeshEntry& e = g_meshes[group];
+            e = MeshEntry{};
+            e.arrays = a;
+            e.generation = glass::Generation();
+            std::vector<float> vertices(3 * static_cast<size_t>(a.vertexCount));
+            std::vector<uint16_t> indices(a.indexCount);
+            std::vector<uint8_t> batches(client::kMobaStride * static_cast<size_t>(a.batchCount));
+            if (!CopyOut(a.vertices, vertices.data(), vertices.size() * sizeof(float)) || !CopyOut(a.indices, indices.data(), indices.size() * 2) ||
+                !CopyOut(a.batches, batches.data(), batches.size()))
+                return nullptr;
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            for (uint32_t b = 0; b < a.batchCount; ++b)
+            {
+                const uint8_t* m = batches.data() + client::kMobaStride * b;
+                uint32_t start = 0;
+                uint16_t count = 0;
+                std::memcpy(&start, m + client::kMobaStart, 4);
+                std::memcpy(&count, m + client::kMobaCount, 2);
+                const uint8_t material = m[client::kMobaMaterial];
+                if (material < r.glassMaterial.size() && r.glassMaterial[material]) continue;   // a window's inner face
+                ranges.emplace_back(start, count);
+            }
+            e.ok = e.mesh.Build(vertices.data(), a.vertexCount, indices.data(), a.indexCount, ranges);
+            return e.ok ? &e.mesh : nullptr;
         }
 
         // The group render callback while our walk runs: notes the room reached, then the client's (the sort table's).
@@ -301,10 +430,16 @@ namespace wxl_livingazeroth::seethrough
                 bool opened = false;
                 if (Enterable(static_cast<const uint8_t*>(root), static_cast<const uint8_t*>(instance), room, r->groupCount))
                 {
-                    float clip[4], frustum[4];
-                    ToCRect(p.clip, clip);
-                    FrustumRect(p.clip, frustum);
-                    opened = OpenWindow(root, room, group, clip, frustum);
+                    // only where the room is seen through it from here: not over its ceiling, nor through its walls
+                    const RoomMesh* mesh = MeshOf(*r, root, room);
+                    if (mesh && !SeesRoom(windows[i], cam, *mesh)) ++g_now.blind;
+                    else if (mesh)
+                    {
+                        float clip[4], frustum[4];
+                        ToCRect(p.clip, clip);
+                        FrustumRect(p.clip, frustum);
+                        opened = OpenWindow(root, room, group, clip, frustum);
+                    }
                 }
                 f.states[i] = opened ? kOpened : kShut;
                 ++(opened ? g_now.opened : g_now.shut);
@@ -488,8 +623,46 @@ namespace wxl_livingazeroth::seethrough
             }
         }
 
-        // The glass again, over the room and its furniture: each from its state, blended at the opacity (the colour only:
-        // no depth, no alpha written), its fake room off; the device's state put back after.
+        // Whether a pixel shader has the redraw (GlassShader's `if b11`), looked up once per shader object.
+        std::unordered_map<const void*, bool> g_replayShaders;
+
+        bool ShaderCode(IDirect3DPixelShader9* ps, std::vector<uint32_t>& tokens)
+        {
+            UINT bytes = 0;
+            if (FAILED(ps->GetFunction(nullptr, &bytes)) || bytes < 8 || bytes > (1u << 20)) return false;
+            tokens.resize(bytes / 4);
+            UINT got = bytes;
+            return SUCCEEDED(ps->GetFunction(tokens.data(), &got));
+        }
+
+        bool HasReplay(IDirect3DDevice9* dev)
+        {
+            IDirect3DPixelShader9* ps = nullptr;
+            if (FAILED(dev->GetPixelShader(&ps)) || !ps) return false;
+            auto it = g_replayShaders.find(ps);
+            if (it == g_replayShaders.end())
+            {
+                std::vector<uint32_t> tokens;
+                if (g_replayShaders.size() > 4096) g_replayShaders.clear();
+                it = g_replayShaders.emplace(ps, ShaderCode(ps, tokens) && glass::HasReplaySwitch(tokens.data(), tokens.size())).first;
+            }
+            const bool has = it->second;
+            ps->Release();
+            return has;
+        }
+
+        bool Draw(IDirect3DDevice9* dev, const DrawArgs& a)
+        {
+            return SUCCEEDED(dev->DrawIndexedPrimitive(static_cast<D3DPRIMITIVETYPE>(a.primitive), static_cast<INT>(a.baseVertex), a.minIndex,
+                                                       a.vertices, a.startIndex, a.primitives));
+        }
+
+        // The glass again, over the room and its furniture: each from its state, the colour only (no alpha written), depth
+        // tested. With the glass's look and the redraw in its shader (b11, c219: GlassShader) in two draws split by the
+        // shader's alpha: what's opaque (the open windows' lead, frame and tracery, every shut window with its fake room)
+        // with its depth, as the client would have drawn it; then the open windows' glass texels over the room, blended at
+        // the opacity (SRCALPHA), no depth. Without (the glass off, a variant without the blocks): as the client would
+        // have, opaque. The device's state put back after.
         void Replay(Deferral::Entry* entries, size_t n)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
@@ -502,7 +675,6 @@ namespace wxl_livingazeroth::seethrough
             dev->GetDepthStencilSurface(&depth);
             if (target) target->Release();
             if (depth) depth->Release();
-            const DWORD factor = BlendFactor(g_settings.opacity);
             __try
             {
                 for (size_t i = 0; i < n; ++i)
@@ -511,30 +683,40 @@ namespace wxl_livingazeroth::seethrough
                     if (!e.state) continue;
                     if (e.target != target || e.depth != depth) { ++g_now.targetMoved; continue; }
                     static_cast<IDirect3DStateBlock9*>(e.state)->Apply();
+                    BOOL glassOn = FALSE;
+                    const bool redraw = SUCCEEDED(dev->GetPixelShaderConstantB(glass::kSwitch, &glassOn, 1)) && glassOn && HasReplay(dev);
+                    // the batch's own alpha test (the stock alpha's: the shader's texkill in the redraw)
+                    DWORD test = FALSE, func = D3DCMP_ALWAYS, ref = 0;
+                    dev->GetRenderState(D3DRS_ALPHATESTENABLE, &test);
+                    dev->GetRenderState(D3DRS_ALPHAFUNC, &func);
+                    dev->GetRenderState(D3DRS_ALPHAREF, &ref);
                     dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
                     dev->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
-                    dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+                    if (!redraw)
+                    {
+                        dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+                        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+                        if (Draw(dev, e.args)) { ++g_now.redrawn; ++g_now.opaque; }
+                        continue;
+                    }
+                    float c[4];
+                    ReplayConstants(g_settings.opacity, test != FALSE, func, ref, e.first, e.bits, c);
+                    dev->SetPixelShaderConstantF(glass::kReplayConstant, c, 1);
+                    const BOOL on = TRUE;
+                    dev->SetPixelShaderConstantB(glass::kReplaySwitch, &on, 1);
                     dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
                     dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
                     dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
-                    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_BLENDFACTOR);
-                    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVBLENDFACTOR);
-                    dev->SetRenderState(D3DRS_BLENDFACTOR, factor);
-                    // The glass's own look stays; its fake room goes (the real one is behind it).
-                    BOOL glassOn = FALSE;
-                    if (SUCCEEDED(dev->GetPixelShaderConstantB(glass::kSwitch, &glassOn, 1)) && glassOn)
-                    {
-                        float c[4];
-                        if (SUCCEEDED(dev->GetPixelShaderConstantF(glass::kFirstConstant + 1, c, 1)))
-                        {
-                            c[2] = 0.0f;
-                            dev->SetPixelShaderConstantF(glass::kFirstConstant + 1, c, 1);
-                        }
-                    }
-                    const DrawArgs& a = e.args;
-                    if (SUCCEEDED(dev->DrawIndexedPrimitive(static_cast<D3DPRIMITIVETYPE>(a.primitive), static_cast<INT>(a.baseVertex), a.minIndex,
-                                                            a.vertices, a.startIndex, a.primitives)))
-                        ++g_now.redrawn;
+                    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+                    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+                    dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
+                    dev->SetRenderState(D3DRS_ALPHAREF, 255);
+                    dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL);
+                    dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+                    const bool opaque = Draw(dev, e.args);
+                    dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_LESS);
+                    dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+                    if (Draw(dev, e.args) && opaque) ++g_now.redrawn;
                 }
             }
             __finally
@@ -643,6 +825,7 @@ namespace wxl_livingazeroth::seethrough
         g_frame.clear();
         if (g_roots.size() > 2048) g_roots.clear();   // only here: nothing of this frame points at them now
         g_budget = kMaxOpenPerFrame;
+        g_meshBuilds = 0;
         g_draw = DrawCtx{};
     }
 
@@ -650,6 +833,7 @@ namespace wxl_livingazeroth::seethrough
     {
         std::vector<Deferral::Entry> left = g_deferral.Take();
         Release(left);
+        g_replayShaders.clear();
     }
 
     void BeginGroupDraw(const void* root, int group, const void* instanceArg)
@@ -690,9 +874,14 @@ namespace wxl_livingazeroth::seethrough
         }
         ++g_now.glassBatches;
         const BatchWindows* b = WindowsOf(group, record, start, count);
-        const bool deferrable = b && Deferrable(*b, g_draw.frame->states.data(), g_draw.frame->states.size());
+        // (without the glass's look there's no mask to keep the lead opaque, nor a way to tell its windows apart: opaque)
+        const bool glassLook = glass::Config().enabled && glass::PatchedVariants() > 0;
+        const bool deferrable = glassLook && b && Deferrable(*b, g_draw.frame->states.data(), g_draw.frame->states.size());
         if (!deferrable) ++g_now.kept;
-        g_deferral.BeginBatch(deferrable, start, count);
+        float first = 0.0f;
+        uint32_t bits = 0;
+        if (deferrable) OpenBits(*b, g_draw.windows, g_draw.frame->states.data(), g_draw.frame->states.size(), first, bits);
+        g_deferral.BeginBatch(deferrable, start, count, first, bits);
     }
 
     void EndLoop() { g_deferral.EndLoop(); }
@@ -701,14 +890,15 @@ namespace wxl_livingazeroth::seethrough
     {
         if (!api->UiCollapsingHeader("See-through windows (experimental): the real room behind the glass##seethrough")) return;
         api->UiCheckbox("see-through windows (the Lion's Pride Inn in Goldshire only, for now)##ston", &g_settings.enabled);
-        api->UiSliderFloat("the glass's opacity over the room##stop", &g_settings.opacity, 0.0f, 1.0f);
+        api->UiSliderFloat("the glass's opacity over the room (its lead and frame stay opaque)##stop", &g_settings.opacity, 0.0f, 1.0f);
         api->UiText(StatusLine());
-        char line[256];
-        std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget), %u rooms added",
-                      g_last.groups, g_last.opened, g_last.shut, g_last.groupsAdded);
+        char line[320];
+        std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget; "
+                      "%u of them: the room not seen through it from here), %u rooms added",
+                      g_last.groups, g_last.opened, g_last.shut, g_last.blind, g_last.groupsAdded);
         api->UiText(line);
-        std::snprintf(line, sizeof(line), "Glass batches: %u in opened groups, %u kept opaque, %u deferred, %u drawn over the room; %u drawn as they were",
-                      g_last.glassBatches, g_last.kept, g_last.deferred, g_last.redrawn, g_last.passed);
+        std::snprintf(line, sizeof(line), "Glass batches: %u in opened groups, %u kept opaque, %u deferred, %u drawn over the room (%u opaque: no redraw "
+                      "in their shader); %u drawn as they were", g_last.glassBatches, g_last.kept, g_last.deferred, g_last.redrawn, g_last.opaque, g_last.passed);
         api->UiText(line);
         std::snprintf(line, sizeof(line), "Faults: %u%s%s; captures failed %u, target changed %u, dropped %u", g_faults, g_faulted ? " (off: " : "",
                       g_faulted ? g_faultWhere : "", g_last.captureFailed, g_last.targetMoved, g_last.dropped);
