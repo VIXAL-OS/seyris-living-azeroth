@@ -3,9 +3,9 @@
 its mist) on AreaClimate rows for the naturally misty zones, keeping every other row and field as it is.
 The shipped table leaves Fogginess unset everywhere, so no zone had any area fog ("add the starter set pls", the user,
 2026-10-13). The scale follows gen_default_climate.py's examples (Swamp of Sorrows 0.6, Duskwood 0.5).
-  0.6   the Plaguelands, Duskwood, Dustwallow Marsh, the Swamp of Sorrows, Felwood, Howling Fjord, Zangarmarsh
+  0.6   the Plaguelands, Duskwood, Dustwallow Marsh, the Swamp of Sorrows, Felwood, Zangarmarsh
   0.4   the Ghostlands (blighted)
-  0.3   Tirisfal Glades, Silverpine Forest, Zul'Drak, Deadwind Pass
+  0.3   Tirisfal Glades, Silverpine Forest, Zul'Drak, Deadwind Pass, Howling Fjord
   0.15  MISTY: ordinary forests and jungles -- Elwynn, Ashenvale, Feralas, Teldrassil, Darkshore, Azshara, Moonglade,
         Un'Goro Crater, the Hinterlands, Terokkar, Crystalsong, Stranglethorn Vale, Grizzly Hills, Sholazar Basin,
         Eversong Woods, Redridge Mountains, and the snowy Winterspring and Dun Morogh. "Normal non-haunted forest zones should feel misty rather than foggy" (the
@@ -37,7 +37,7 @@ ZONES = [
     ("Dustwallow Marsh", 15, STRONG, 313),
     ("Swamp of Sorrows", 8, STRONG, 314),
     ("Felwood", 361, STRONG, 315),
-    ("Howling Fjord", 495, STRONG, 317),
+    ("Howling Fjord", 495, LIGHT, 317),  # "inside of daggercap bay is WAY too smokey" (the user, 2026-10-20): was 0.6
     ("Tirisfal Glades", 85, LIGHT, 318),
     ("Silverpine Forest", 130, LIGHT, 319),
     ("Zul'Drak", 66, LIGHT, 320),
@@ -70,7 +70,7 @@ ZONES = [
 # Zones whose value here wins even over a row of upstream's own: every misty forest (upstream has Elwynn 0.5, Redridge
 # 0.45, Stranglethorn 0.3), and Zangarmarsh, where upstream's row 109 has 1.0, the top of the scale ("very pretty but
 # possibly too foggy lol", the user, 2026-10-14, flying over Umbrafen).
-OVERRIDE = {3521, 28} | {area for _, area, fog, _ in ZONES if fog == MISTY}
+OVERRIDE = {3521, 28, 495} | {area for _, area, fog, _ in ZONES if fog == MISTY}
 FOGGINESS = 9  # column (ID, ScopeType, ScopeID, DayTemp, NightTemp, SeasonAmplitude, SeasonOffset, Humidity, Flags, Fogginess, Comment)
 
 
