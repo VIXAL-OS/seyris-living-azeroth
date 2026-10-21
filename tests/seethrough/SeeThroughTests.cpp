@@ -752,6 +752,27 @@ int main(int argc, char** argv)
         CHECK(!st::DeferrableWhole(b, open2, 3));
     });
 
+    Test("SplitByWindow: the open windows' triangles apart from the rest (shut, unseen, strays), as the batch's own indices", [] {
+        // two windows side by side (x 0 and 4), a triangle in each and a stray between them
+        const st::SeeWindow w[2] = { MakeWindow(0, 0, 2, 0, -1, 0, 1, 1, 1, 1), MakeWindow(4, 0, 2, 0, -1, 0, 1, 1, 1, 2) };
+        const float v[] = { -0.5f, 0, 1.5f, 0.5f, 0, 1.5f, 0, 0, 2.5f,    3.5f, 0, 1.5f, 4.5f, 0, 1.5f, 4, 0, 2.5f,    1.8f, 0, 2, 2.2f, 0, 2, 2, 0, 2.4f };
+        const uint16_t idx[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 };
+        const st::BatchWindows b = st::WindowsOfBatch(idx, 9, v, 9, 0, 9, w, 2);
+        CHECK(b.valid && b.window == std::vector<int16_t>({ 0, 1, -1 }) && b.indices.size() == 9);
+        std::vector<uint16_t> open, rest;
+        const uint8_t firstOpen[2] = { st::kOpened, st::kShut };
+        st::SplitByWindow(b, firstOpen, 2, open, rest);
+        CHECK(open == std::vector<uint16_t>({ 0, 1, 2 }) && rest == std::vector<uint16_t>({ 3, 4, 5, 6, 7, 8 }));
+        const uint8_t bothOpen[2] = { st::kOpened, st::kOpened };
+        st::SplitByWindow(b, bothOpen, 2, open, rest);
+        CHECK(open == std::vector<uint16_t>({ 0, 1, 2, 3, 4, 5 }) && rest == std::vector<uint16_t>({ 6, 7, 8 }));
+        const uint8_t unseen[2] = { st::kUnseen, st::kShut };
+        st::SplitByWindow(b, unseen, 2, open, rest);
+        CHECK(open.empty() && rest.size() == 9);
+        st::SplitByWindow(st::BatchWindows{}, bothOpen, 2, open, rest);
+        CHECK(open.empty() && rest.empty());
+    });
+
     Test("BlendFactor: the whole-glass redraw's opacity as a byte in all four channels, clamped; not finite: opaque", [] {
         CHECK(st::BlendFactor(0.35f) == 0x59595959u);
         CHECK(st::BlendFactor(0.0f) == 0u);

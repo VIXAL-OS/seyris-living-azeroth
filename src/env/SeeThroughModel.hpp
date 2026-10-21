@@ -338,6 +338,8 @@ namespace wxl_livingazeroth::seethrough
         uint32_t triangles = 0, strays = 0;
         float strayArea = 0.0f;
         bool valid = false;              // read: the batch's triangles were all there
+        std::vector<uint16_t> indices;   // its triangles' vertex indices (MOVI's, the batch's range)
+        std::vector<int16_t> window;     // each triangle's window (an index into the group's windows), -1 a stray
     };
     /// From the group's index and vertex arrays (MOVI, MOVT: three floats a vertex) and the batch's range.
     BatchWindows WindowsOfBatch(const uint16_t* indices, uint32_t indexCount, const float* vertices, uint32_t vertexCount,
@@ -351,6 +353,12 @@ namespace wxl_livingazeroth::seethrough
     /// The same for the whole-glass redraw (SeeThroughRedraw 0, as on 2026-10-20): every window it covers open or unseen too
     /// (its glass goes see-through as one, so a shut window would show the void behind it).
     bool DeferrableWhole(const BatchWindows& b, const uint8_t* states, size_t stateCount);
+    /// The per-pixel redraw split by window (SeeThroughDraw): its open windows' triangles (`open`, kOpened) and the rest
+    /// (shut, unseen and strays), as vertex indices (the batch's own, MOVI's), so the open ones are drawn see-through
+    /// whatever the shader's window lookup finds: in game it found none (every pixel the debug view's yellow, 2026-10-21).
+    /// Both empty when `b` isn't valid.
+    void SplitByWindow(const BatchWindows& b, const uint8_t* states, size_t stateCount, std::vector<uint16_t>& open,
+                       std::vector<uint16_t>& rest);
     /// The windows c219.w holds (GlassShader's kReplayBits): 16, so the shader's test of a bit keeps a margin a GPU's
     /// approximate exp can't cross (OpenBit's).
     constexpr uint32_t kOpenBits = 16;
@@ -397,12 +405,16 @@ namespace wxl_livingazeroth::seethrough
             float first = 0.0f;        // its open windows (OpenBits: Captured takes BeginBatch's)
             uint32_t bits = 0;
             uint32_t material = 0;     // its glass material (features/Glass: index + 1; its lead mask), BeginBatch's
+            std::vector<uint16_t> open, rest;   // its triangles split by window (SplitByWindow), BeginBatch's; empty: unsplit
+            std::vector<float> ps, vs;          // the pixel and vertex shaders' float constants at its draw (SeeThroughDraw's)
         };
         enum class Draw { Pass, Defer };
         /// A batch passed the loop's cull test: `deferrable` (Deferrable, a glass batch of an opened group) with its
         /// range (MOBA's first index and count), its open windows (OpenBits) and its glass material, else a batch to draw
         /// as it is. Any earlier pending batch is dropped.
         void BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first = 0.0f, uint32_t bits = 0, uint32_t material = 0);
+        /// The pending batch's triangles split by window (SplitByWindow), after BeginBatch; Captured hands them over.
+        void SplitPending(std::vector<uint16_t> open, std::vector<uint16_t> rest) { m_open = std::move(open); m_rest = std::move(rest); }
         /// The batch loop ended (nothing pending past it).
         void EndLoop() { m_pending = false; }
         /// A device draw: defer it when it's the pending batch's (indexed triangles, the same range), the client draws it
@@ -424,6 +436,7 @@ namespace wxl_livingazeroth::seethrough
         uint32_t m_start = 0, m_count = 0;
         float m_first = 0.0f;
         uint32_t m_bits = 0, m_material = 0;
+        std::vector<uint16_t> m_open, m_rest;
         std::vector<Entry> m_entries;
         unsigned m_failed = 0, m_passed = 0;
     };

@@ -1256,6 +1256,8 @@ namespace wxl_livingazeroth::glass
         return indexPlusOne && indexPlusOne <= g_lead.size() && !g_lead[indexPlusOne - 1].rects.empty() ? &g_lead[indexPlusOne - 1] : nullptr;
     }
 
+    const void* TableTexture() { return g_tableTex; }
+
     const char* TextureOf(uint32_t indexPlusOne)
     {
         return indexPlusOne && indexPlusOne <= g_texturePaths.size() ? g_texturePaths[indexPlusOne - 1].c_str() : nullptr;

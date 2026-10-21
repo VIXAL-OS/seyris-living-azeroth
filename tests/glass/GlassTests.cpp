@@ -76,6 +76,7 @@
 #include "features/GlassShader.hpp"
 #include "features/GlassShaftShaders.hpp"
 #include "features/ModelIce.hpp"
+#include "features/SeeThroughDraw.hpp"
 #include "render/ShaderPatch.hpp"
 #include "RoomHarness.hpp"
 
@@ -3174,6 +3175,8 @@ namespace
             if (noGrid) regs[23] = 0.0f;
             d->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
             d->SetPixelShaderConstantF(gl::kReplayDrawConstant, c28, 1);
+            const float lookupAlone[4] = { -1, 0, 0, 0 };   // c33: the lookup's alone (not split by window)
+            d->SetPixelShaderConstantF(gl::kReplayWindowConstant, lookupAlone, 1);
             rooms.Bind(d);
             float cv[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
             d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
@@ -3899,6 +3902,8 @@ namespace
             d->SetPixelShaderConstantF(gl::kReplayConstant, replay, 1);
             const float c28[4] = { debug, split, 0.999f, leadOn };
             d->SetPixelShaderConstantF(gl::kReplayDrawConstant, c28, 1);
+            const float lookupAlone[4] = { -1, 0, 0, 0 };   // c33: the lookup's alone (not split by window)
+            d->SetPixelShaderConstantF(gl::kReplayWindowConstant, lookupAlone, 1);
             const BOOL on = TRUE, off = FALSE, b11on = b11 && !wholeGlass ? TRUE : FALSE;
             d->SetPixelShaderConstantB(7, &off, 1);
             d->SetPixelShaderConstantB(8, &off, 1);
@@ -4078,6 +4083,434 @@ namespace
         Check(share[1][3] > share[0][3] && share[1][9] > share[0][9] && share[1][14] > share[0][14] && share[1][3] < 0.65 && share[1][9] < 0.65, line);
         if (decl) decl->Release();
         for (IUnknown* u : std::initializer_list<IUnknown*>{ ps, target, readback, glassTex, white, leadTex }) if (u) u->Release();
+    }
+
+    // --- 13. the game's sequence on WARP: the inn's glass batch drawn as the client draws it, captured, the device's state
+    // clobbered and applied again, the redraw (features/SeeThroughDraw) -------------------------------------------------
+    // "every see-through window pixel is solid YELLOW" (the debug view, in game, 2026-10-21): at the redraw the shader's
+    // window lookup found no window. Here what the lookup reads comes the game's way: the inn placed as Goldshire's (turned
+    // -97 degrees, its origin 9,464 yd out), the camera turned (view-space positions and normals, the view's rows c181..c183,
+    // the eye c180), Glass's own RoomRegisters over its window table, the group's own vertex and index buffers (MOVT, MONR,
+    // MOTV, MOVI from the map scan), the batch drawn with the colour writes off and captured (SeeThroughDraw's CaptureState),
+    // the state clobbered (another shader, every constant and sampler cleared, another index buffer), applied
+    // (ApplyCaptured), the redraw (DrawPerPixel). Then: (a) the redraw right after the client's draw: every pixel a window's,
+    // the open windows (3, 9, 14) magenta or green, the shut ones cyan; (b) through the state block alone, as before this
+    // fix: every pixel yellow, the game's screenshot, and the pixel constants it didn't put back (c128 and up: c180..c183
+    // among them); (c) with every constant put back from the capture: every pixel decided as in (a), drawn whole and split
+    // by window; (d) its plain view: the room (blue behind) through the open windows' glass only.
+    struct InnGroup
+    {
+        std::vector<float> pos, nrm, uv;
+        std::vector<uint16_t> idx;
+        uint32_t start = 0, count = 0, minIndex = 0, maxIndex = 0;
+    };
+
+    bool ReadInnGroup(const std::filesystem::path& scan, InnGroup& out)
+    {
+        const std::vector<uint8_t> g = ReadBytes(scan / "world#wmo#azeroth#buildings#goldshireinn#goldshireinn_004.wmo");
+        bool batch = false;
+        for (size_t at = 0; at + 8 <= g.size();)
+        {
+            uint32_t size;
+            std::memcpy(&size, &g[at + 4], 4);
+            const std::string tag = { static_cast<char>(g[at + 3]), static_cast<char>(g[at + 2]), static_cast<char>(g[at + 1]), static_cast<char>(g[at]) };
+            if (at + 8 + size > g.size()) break;
+            if (tag == "MOGP")
+                for (size_t a = at + 8 + 0x44; a + 8 <= at + 8 + size;)
+                {
+                    uint32_t s;
+                    std::memcpy(&s, &g[a + 4], 4);
+                    const std::string t = { static_cast<char>(g[a + 3]), static_cast<char>(g[a + 2]), static_cast<char>(g[a + 1]), static_cast<char>(g[a]) };
+                    const uint8_t* p = &g[a + 8];
+                    if (t == "MOVI") { out.idx.resize(s / 2); std::memcpy(out.idx.data(), p, out.idx.size() * 2); }
+                    else if (t == "MOVT") { out.pos.resize(s / 4); std::memcpy(out.pos.data(), p, out.pos.size() * 4); }
+                    else if (t == "MONR") { out.nrm.resize(s / 4); std::memcpy(out.nrm.data(), p, out.nrm.size() * 4); }
+                    else if (t == "MOTV" && out.uv.empty()) { out.uv.resize(s / 4); std::memcpy(out.uv.data(), p, out.uv.size() * 4); }
+                    else if (t == "MOBA")
+                        for (size_t b = 0; !batch && b + 24 <= s; b += 24)
+                            if (p[b + 23] == 5)   // mm_elwynn_wnd_ext__01
+                            {
+                                uint16_t c, lo, hi;
+                                std::memcpy(&out.start, p + b + 12, 4);
+                                std::memcpy(&c, p + b + 16, 2); std::memcpy(&lo, p + b + 18, 2); std::memcpy(&hi, p + b + 20, 2);
+                                out.count = c; out.minIndex = lo; out.maxIndex = hi;
+                                batch = true;
+                            }
+                    a += 8 + s;
+                }
+            at += 8 + size;
+        }
+        return batch && !out.idx.empty() && out.pos.size() == out.nrm.size() && out.uv.size() / 2 == out.pos.size() / 3 &&
+               out.start + out.count <= out.idx.size();
+    }
+
+    void SequenceTests(const std::filesystem::path& shaders, const std::filesystem::path& data)
+    {
+        namespace mi = wxl_livingazeroth::modelice;
+        namespace sp = wxl_livingazeroth::shaderpatch;
+        namespace st = wxl_livingazeroth::seethrough;
+        const char* scan = std::getenv("GLASS_SCAN");
+        const char* textures = TexturesFolder();
+        if (!scan || !textures) { std::printf("skip  the game's sequence (GLASS_SCAN and GLASS_TEXTURES not both set)\n"); return; }
+        std::string src, why;
+        for (const Blob& b : LoadBlobs(shaders))
+            if (b.name == "ps_MapObjDiffuse_02" && !sp::Disassemble(b.code.data(), b.code.size(), src, why)) src.clear();
+        std::map<int, std::string> usage;
+        static const std::regex dcl(R"(dcl_(color|texcoord\d?|fog) v(\d+))");
+        for (std::sregex_iterator it(src.begin(), src.end(), dcl), end; it != end; ++it)
+            usage[std::stoi((*it)[2].str())] = (*it)[1].str() == "texcoord" ? "texcoord0" : (*it)[1].str();
+        std::smatch mp, mn, mt;
+        static const std::regex position(R"(dp3 r\d+\.\w, v(\d+), c3\b)"), normal(R"(dp3 r\d+\.\w, c4, v(\d+))"), texcoord(R"(texld r\d+, v(\d+), s0\b)");
+        std::vector<uint8_t> code;
+        std::string patched = src;
+        if (src.empty() || !std::regex_search(src, mp, position) || !std::regex_search(src, mn, normal) || !std::regex_search(src, mt, texcoord) ||
+            !mi::EditPixelWmoGlassForTests(patched, why) || !sp::Assemble(patched, "ps_MapObjDiffuse_02 patched", code, why))
+        { Check(false, "the game's sequence: the patched variant: " + why.substr(0, 200)); return; }
+        const int vP = std::stoi(mp[1].str()), vN = std::stoi(mn[1].str()), vT = std::stoi(mt[1].str());
+        InnGroup grp;
+        if (!ReadInnGroup(scan, grp)) { Check(false, "the game's sequence: the inn's group 4 from the scan"); return; }
+        Table mt0, wt, lt;
+        if (!ReadTable(data / "GlassMaterials.cdbc", mt0) || !ReadTable(data / "GlassWindows.cdbc", wt) || !ReadTable(data / "GlassLead.cdbc", lt))
+        { Check(false, "the game's sequence: the tables read"); return; }
+        const std::string texture = "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp";
+        gl::Material m;
+        if (!MaterialRow(mt0, texture, m)) { Check(false, "the game's sequence: the inn's glass row"); return; }
+        std::vector<gl::Window> all;
+        std::vector<gl::Window> innWindows;
+        const uint32_t innPath = gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo");
+        for (const auto& r : wt.rows)
+        {
+            gl::Window w;
+            w.path = gl::PathHash(&wt.strings[r[1]]);
+            w.group = r[2]; w.ordinal = r[3]; w.kind = r[4];
+            for (int k = 0; k < 3; ++k) { w.center[k] = F(r[5 + k]); w.normal[k] = F(r[8 + k]); }
+            w.halfWidth = F(r[11]); w.halfHeight = F(r[12]);
+            w.thickness = wt.fields > 16 ? F(r[16]) : 0.0f;
+            all.push_back(w);
+            if (w.path == innPath && w.group == 4) innWindows.push_back(w);
+        }
+        std::sort(innWindows.begin(), innWindows.end(), [](const gl::Window& a, const gl::Window& b) { return a.ordinal < b.ordinal; });
+        // the see-through model's windows (ordinal order) and their states: 3, 9 and 14 open (the panel's), the rest shut
+        std::vector<st::SeeWindow> see;
+        std::vector<uint8_t> states;
+        for (const gl::Window& w : innWindows)
+        {
+            st::SeeWindow s;
+            s.ordinal = w.ordinal; s.group = w.group; s.kind = w.kind; s.interior = 1;
+            for (int k = 0; k < 3; ++k) { s.center[k] = w.center[k]; s.normal[k] = w.normal[k]; }
+            gl::WindowFrame(s.normal, s.along, s.up);
+            s.halfWidth = w.halfWidth; s.halfHeight = w.halfHeight; s.thickness = w.thickness;
+            see.push_back(s);
+            states.push_back(w.ordinal == 3 || w.ordinal == 9 || w.ordinal == 14 ? st::kOpened : st::kShut);
+        }
+        const uint32_t nverts = static_cast<uint32_t>(grp.pos.size() / 3);
+        const st::BatchWindows bw = st::WindowsOfBatch(grp.idx.data(), static_cast<uint32_t>(grp.idx.size()), grp.pos.data(), nverts, grp.start, grp.count,
+                                                        see.data(), static_cast<uint32_t>(see.size()));
+        std::vector<uint16_t> open, rest;
+        st::SplitByWindow(bw, states.data(), states.size(), open, rest);
+        float first = 0.0f;
+        uint32_t bits = 0;
+        st::OpenBits(bw, see.data(), states.data(), states.size(), first, bits);
+        if (!bw.valid || open.empty() || rest.empty() || innWindows.size() != 17)
+        { Check(false, "the game's sequence: the batch's windows (the model's)"); return; }
+        // the lead mask
+        std::string flat = texture;
+        std::replace(flat.begin(), flat.end(), '\\', '#');
+        const std::vector<uint8_t> blp = ReadBytes(std::filesystem::path(textures) / flat);
+        std::vector<float> texRgb;
+        std::vector<uint8_t> leadMask;
+        uint32_t tw = 0, th = 0;
+        if (!wxl_livingazeroth::blp::DecodeTop(blp.data(), blp.size(), texRgb, tw, th) || !gl::LeadMask(texRgb.data(), tw, th, m, LeadRuleOf(lt, texture), leadMask))
+        { Check(false, "the game's sequence: the lead mask"); return; }
+
+        Warp w;
+        if (!InitWarp(w, why)) { std::printf("skip  the game's sequence: %s\n", why.c_str()); return; }
+        IDirect3DDevice9* d = w.dev;
+        constexpr int kS = 192;
+        IDirect3DPixelShader9 *ps = nullptr, *other = nullptr;
+        IDirect3DSurface9 *target = nullptr, *depth = nullptr, *readback = nullptr;
+        std::string blpError;
+        IDirect3DTexture9* glassTex = wxl_livingazeroth::blp::LoadFromMemory(d, blp.data(), blp.size(), blpError);
+        IDirect3DTexture9* white = rh::Texture(d, std::vector<uint32_t>(16, 0xFFFFFFFFu), 4, 4);
+        std::vector<uint8_t> otherCode;
+        if (!sp::Assemble("ps_3_0\n    def c0, 1, 0, 0, 1\n    mov oC0, c0\n", "another shader", otherCode, why) ||
+            FAILED(d->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps)) ||
+            FAILED(d->CreatePixelShader(reinterpret_cast<const DWORD*>(otherCode.data()), &other)) || !glassTex || !white ||
+            FAILED(d->CreateRenderTarget(kS, kS, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
+            FAILED(d->CreateDepthStencilSurface(kS, kS, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, TRUE, &depth, nullptr)) ||
+            FAILED(d->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
+        { Check(false, "the game's sequence: WARP resources"); return; }
+        IDirect3DTexture9* leadTex = nullptr;
+        {
+            UINT levels = 1;
+            for (uint32_t sz = std::max(tw, th); sz > 1; sz >>= 1) ++levels;
+            std::vector<uint8_t> level = leadMask, next;
+            uint32_t lw = tw, lh = th;
+            if (SUCCEEDED(d->CreateTexture(tw, th, levels, 0, D3DFMT_L8, D3DPOOL_MANAGED, &leadTex, nullptr)) && leadTex)
+                for (UINT k = 0; k < levels; ++k)
+                {
+                    D3DLOCKED_RECT lr{};
+                    if (FAILED(leadTex->LockRect(k, &lr, nullptr, 0))) break;
+                    for (uint32_t y = 0; y < lh; ++y) std::memcpy(static_cast<uint8_t*>(lr.pBits) + static_cast<size_t>(y) * lr.Pitch, &level[static_cast<size_t>(y) * lw], lw);
+                    leadTex->UnlockRect(k);
+                    if (k + 1 < levels) { gl::LeadMip(level, lw, lh, next); level.swap(next); }
+                }
+        }
+        // the placement (Goldshire's inn: its MODF turned -97 degrees, its origin in world yards) and the camera (the user's
+        // spot, looking at the arched window)
+        const double yaw = -97.0 * 3.14159265358979 / 180.0;
+        const float axes[9] = { static_cast<float>(std::cos(yaw)), static_cast<float>(std::sin(yaw)), 0.0f,
+                                static_cast<float>(-std::sin(yaw)), static_cast<float>(std::cos(yaw)), 0.0f, 0.0f, 0.0f, 1.0f };
+        const float origin[3] = { -9464.25f, 24.40f, 56.53f };
+        auto world = [&](const float* l, float* out) { for (int k = 0; k < 3; ++k) out[k] = origin[k] + l[0] * axes[k] + l[1] * axes[3 + k] + l[2] * axes[6 + k]; };
+        auto turn = [&](const float* l, float* out) { for (int k = 0; k < 3; ++k) out[k] = l[0] * axes[k] + l[1] * axes[3 + k] + l[2] * axes[6 + k]; };
+        const float spot[3] = { 24, 7, 2 };
+        float eye[3], target9[3];
+        world(spot, eye);
+        world(innWindows[8].center, target9);   // (ordinal 9)
+        float fwd[3] = { target9[0] - eye[0], target9[1] - eye[1], target9[2] - eye[2] };
+        Norm(fwd);
+        float right[3] = { fwd[1], -fwd[0], 0.0f };
+        Norm(right);
+        const float up[3] = { right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0] };
+        const float focal = 120.0f;
+        // the vertex buffer: every vertex of the group as the client's vertex shader hands it on (view-space position and
+        // normal, the uv); its index buffer: MOVI
+        struct Vtx { float pos[4]; float col[4]; float tc[6][4]; float fog; };
+        D3DVERTEXELEMENT9 el[10] = {
+            { 0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITIONT, 0 }, { 0, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0 },
+            { 0, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 }, { 0, 48, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1 },
+            { 0, 64, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 2 }, { 0, 80, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3 },
+            { 0, 96, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 4 }, { 0, 112, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 5 },
+            { 0, 128, D3DDECLTYPE_FLOAT1, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_FOG, 0 }, D3DDECL_END() };
+        IDirect3DVertexDeclaration9* decl = nullptr;
+        IDirect3DVertexBuffer9* vb = nullptr;
+        IDirect3DIndexBuffer9 *ib = nullptr, *otherIb = nullptr;
+        if (FAILED(d->CreateVertexDeclaration(el, &decl)) || FAILED(d->CreateVertexBuffer(nverts * sizeof(Vtx), 0, 0, D3DPOOL_MANAGED, &vb, nullptr)) ||
+            FAILED(d->CreateIndexBuffer(static_cast<UINT>(grp.idx.size() * 2), 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &ib, nullptr)) ||
+            FAILED(d->CreateIndexBuffer(64, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &otherIb, nullptr)))
+        { Check(false, "the game's sequence: its buffers"); return; }
+        {
+            Vtx* v = nullptr;
+            vb->Lock(0, 0, reinterpret_cast<void**>(&v), 0);
+            for (uint32_t i = 0; i < nverts; ++i)
+            {
+                float p[3], n[3];
+                world(&grp.pos[3 * i], p);
+                turn(&grp.nrm[3 * i], n);
+                const float q[3] = { p[0] - eye[0], p[1] - eye[1], p[2] - eye[2] };
+                const float vx = q[0] * right[0] + q[1] * right[1] + q[2] * right[2], vy = q[0] * up[0] + q[1] * up[1] + q[2] * up[2];
+                const float vz = std::max(0.1f, q[0] * fwd[0] + q[1] * fwd[1] + q[2] * fwd[2]);
+                Vtx& o = v[i];
+                o = Vtx{};
+                o.pos[0] = kS * 0.5f + focal * vx / vz - 0.5f; o.pos[1] = kS * 0.5f - focal * vy / vz - 0.5f; o.pos[2] = 0.5f; o.pos[3] = 1.0f / vz;
+                for (float& c : o.col) c = 1.0f;
+                o.fog = 1.0f;
+                for (const auto& [reg, use] : usage)
+                {
+                    if (use.rfind("texcoord", 0) != 0 || use[8] - '0' > 5) continue;
+                    float* tc = o.tc[use[8] - '0'];
+                    if (reg == vP) { tc[0] = vx; tc[1] = vy; tc[2] = q[0] * fwd[0] + q[1] * fwd[1] + q[2] * fwd[2]; tc[3] = 1.0f; }
+                    else if (reg == vN) { tc[0] = n[0] * right[0] + n[1] * right[1] + n[2] * right[2]; tc[1] = n[0] * up[0] + n[1] * up[1] + n[2] * up[2];
+                                          tc[2] = n[0] * fwd[0] + n[1] * fwd[1] + n[2] * fwd[2]; }
+                    else if (reg == vT) { tc[0] = grp.uv[2 * i]; tc[1] = grp.uv[2 * i + 1]; }
+                    else { tc[0] = tc[1] = 2.0f; tc[2] = 0.5f; tc[3] = 1.0f; }
+                }
+            }
+            vb->Unlock();
+            void* p = nullptr;
+            ib->Lock(0, 0, &p, 0);
+            std::memcpy(p, grp.idx.data(), grp.idx.size() * 2);
+            ib->Unlock();
+        }
+        // Glass's constants for the batch, its own way: the look, the room's registers over its window table (the real
+        // RoomRegisters with the placement and the camera), the view (c180: the eye; c181..c183: the view's rows)
+        rh::Rooms rooms;
+        rooms.Textures(d, textures, 0);
+        rooms.Table(d, all);
+        gl::Settings s;
+        gl::Inputs in;
+        in.sun[0] = -0.4f; in.sun[1] = 0.3f; in.sun[2] = 0.86f; Norm(in.sun);
+        in.daylight = 1; in.night = 0;
+        in.sky[0] = 0.55f; in.sky[1] = 0.65f; in.sky[2] = 0.8f;
+        const gl::Light light = gl::Evaluate(in);
+        float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters], look[4], day[4 * gl::kDayRegisters], regs[4 * gl::kRoomRegisters];
+        gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
+        gl::RoomInputs ri;
+        ri.night = 0; ri.hour = 9.5f; ri.unlit = true; ri.kind = m.kind;
+        const gl::RoomStyle style;
+        gl::RoomBatchConstants(style, nullptr, light, ri, s, c, seed, look);
+        gl::DayConstants(m, light, s, 0, day);
+        gl::RoomRegisters(axes, origin, eye, rooms.table.Find(innPath, 4, false), rooms.table.Height(), style.cls, rooms.scales, rooms.gains, s, regs, m.kind, m.notGlass);
+        const float view[16] = { eye[0], eye[1], eye[2], 0, right[0], up[0], fwd[0], 0, right[1], up[1], fwd[1], 0, right[2], up[2], fwd[2], 0 };
+        st::DrawArgs args;
+        args.primitive = D3DPT_TRIANGLELIST; args.baseVertex = 0; args.minIndex = grp.minIndex; args.vertices = grp.maxIndex - grp.minIndex + 1;
+        args.startIndex = grp.start; args.primitives = grp.count / 3;
+        // One run: the client's draw (colour writes off), then (`through`) the capture, the clobbering and the apply with or
+        // without the constants put back, else right away; the redraw split or whole, debug view or plain; the target's pixels
+        // (BGRA) over the room (blue). `lost`: the pixel constants after the apply unlike at the draw.
+        enum Through { kRightAway, kStateBlockAlone, kWithConstants };
+        st::SplitBuffer buf;
+        std::string lost;
+        auto run = [&](Through through, bool split, bool debug, std::vector<uint32_t>& img) -> bool {
+            d->SetRenderTarget(0, target);
+            d->SetDepthStencilSurface(depth);
+            D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
+            d->SetViewport(&vp);
+            d->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(255, 0, 0, 255), 1.0f, 0);
+            // the client's draw
+            d->SetVertexShader(nullptr); d->SetPixelShader(ps); d->SetVertexDeclaration(decl);
+            d->SetStreamSource(0, vb, 0, sizeof(Vtx)); d->SetIndices(ib);
+            d->SetTexture(0, glassTex);
+            for (DWORD k = 4; k <= 7; ++k) d->SetTexture(k, white);
+            rooms.Bind(d);
+            for (DWORD k : { 0u, 8u, 9u, 10u, 11u, 12u })
+            {
+                d->SetSamplerState(k, D3DSAMP_MINFILTER, D3DTEXF_LINEAR); d->SetSamplerState(k, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+                d->SetSamplerState(k, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+            }
+            d->SetSamplerState(13, D3DSAMP_MINFILTER, D3DTEXF_POINT); d->SetSamplerState(13, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+            d->SetSamplerState(13, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+            d->SetSamplerState(13, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP); d->SetSamplerState(13, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+            float stock[4 * 13];
+            for (float& x : stock) x = 0.5f;
+            stock[8] = stock[9] = stock[10] = stock[11] = 0.0f;
+            d->SetPixelShaderConstantF(0, stock, 13);
+            d->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
+            d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+            d->SetPixelShaderConstantF(gl::kSeedConstant, seed, gl::kSeedRegisters);
+            d->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
+            d->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+            d->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+            const BOOL on = TRUE, off = FALSE;
+            for (UINT b = 0; b < 16; ++b) d->SetPixelShaderConstantB(b, &off, 1);
+            d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
+            d->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE); d->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL); d->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+            d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); d->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+            d->SetRenderState(D3DRS_FOGENABLE, FALSE); d->SetRenderState(D3DRS_COLORWRITEENABLE, 0);
+            if (FAILED(d->BeginScene())) return false;
+            d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, args.minIndex, args.vertices, args.startIndex, args.primitives);
+            // the capture
+            st::Deferral::Entry e;
+            e.args = args; e.first = first; e.bits = bits; e.open = open; e.rest = rest;
+            if (!st::CaptureState(d, e)) { d->EndScene(); return false; }
+            if (through != kRightAway)
+            {
+                // the rest of the frame (the model scene's first pass): another shader, every constant and sampler cleared,
+                // another index buffer
+                std::vector<float> zeros(4 * st::kPixelConstants, 0.0f);
+                d->SetPixelShader(other);
+                d->SetPixelShaderConstantF(0, zeros.data(), st::kPixelConstants);
+                for (UINT b = 0; b < 16; ++b) { d->SetPixelShaderConstantB(b, &off, 1); d->SetTexture(b, nullptr); }
+                d->SetIndices(otherIb);
+                d->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+                // the redraw's: the state applied (with its constants or the state block alone)
+                st::ApplyCaptured(d, e, through == kWithConstants);
+                std::vector<float> now(4 * st::kPixelConstants);
+                d->GetPixelShaderConstantF(0, now.data(), st::kPixelConstants);
+                lost.clear();
+                for (unsigned r = 0; r < st::kPixelConstants; ++r)
+                    if (std::memcmp(&now[4 * r], &e.ps[4 * r], 16) != 0)
+                    {
+                        unsigned last = r;
+                        while (last + 1 < st::kPixelConstants && std::memcmp(&now[4 * (last + 1)], &e.ps[4 * (last + 1)], 16) != 0) ++last;
+                        lost += (lost.empty() ? "c" : ", c") + std::to_string(r) + (last > r ? "..c" + std::to_string(last) : std::string());
+                        r = last;
+                    }
+            }
+            // its writes, its draws
+            d->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+            d->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+            st::PerPixel pp;
+            pp.opacity = 0.35f; pp.debug = debug; pp.lead = leadTex; pp.split = split;
+            const st::PerPixelDrawn drawn = st::DrawPerPixel(d, e, pp, buf);
+            d->EndScene();
+            static_cast<IDirect3DStateBlock9*>(e.state)->Release();
+            D3DLOCKED_RECT lr{};
+            if (!drawn.drawn || drawn.split != split || FAILED(d->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY)))
+                return false;
+            img.resize(static_cast<size_t>(kS) * kS);
+            for (int row = 0; row < kS; ++row) std::memcpy(&img[static_cast<size_t>(row) * kS], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, kS * 4);
+            readback->UnlockRect();
+            return true;
+        };
+        // a debug-view pixel: 0 not drawn (the room's blue), 1 an open window's (magenta by its mask to green), 2 a shut one's
+        // (cyan), 3 no window found (yellow)
+        auto kind = [](uint32_t px) {
+            const int r = (px >> 16) & 0xFF, g = (px >> 8) & 0xFF, b = px & 0xFF;
+            if (r == 0 && g == 0 && b == 255) return 0;
+            if (r > 200 && g > 200 && b < 60) return 3;
+            if (r < 60 && g > 200 && b > 200) return 2;
+            return 1;
+        };
+        std::vector<uint32_t> a, broken, fixed, fixedSplit, aloneSplit, plain;
+        std::string lostAlone, lostFixed;
+        bool ok = run(kRightAway, false, true, a);
+        ok = ok && run(kStateBlockAlone, false, true, broken);
+        lostAlone = lost;
+        ok = ok && run(kWithConstants, false, true, fixed);
+        lostFixed = lost;
+        ok = ok && run(kWithConstants, true, true, fixedSplit) && run(kStateBlockAlone, true, true, aloneSplit) && run(kWithConstants, false, false, plain);
+        int count[5][4] = {}, differ = 0, differSplit = 0, differAlone = 0;
+        for (size_t p = 0; ok && p < a.size(); ++p)
+        {
+            const int ka = kind(a[p]);
+            ++count[0][ka];
+            ++count[1][kind(broken[p])];
+            ++count[2][kind(fixed[p])];
+            ++count[3][kind(fixedSplit[p])];
+            ++count[4][kind(aloneSplit[p])];
+            differ += ka != kind(fixed[p]) ? 1 : 0;
+            // (a stray triangle, in no window: no window found drawn whole, shut drawn split)
+            differSplit += ka != kind(fixedSplit[p]) && !(ka == 3 && kind(fixedSplit[p]) == 2) ? 1 : 0;
+            differAlone += ka != kind(aloneSplit[p]) && !(ka == 3 && kind(aloneSplit[p]) == 2) ? 1 : 0;
+        }
+        char line[700];
+        std::snprintf(line, sizeof(line), "the game's sequence (the inn turned -97 degrees 9,464 yd out, the camera turned, Glass's RoomRegisters): (a) the redraw "
+                      "right after the client's draw: %d open, %d shut, %d no window (pixels; the batch's stray triangles, in no window: %u)", count[0][1],
+                      count[0][2], count[0][3], bw.strays);
+        Check(ok && count[0][1] > 200 && count[0][2] > 200 && count[0][3] <= (bw.strays ? 40 : 0), line);
+        std::snprintf(line, sizeof(line), "the game's sequence: (b) captured, clobbered, applied through the state block alone (as before): %d no window, %d open, %d "
+                      "shut (the game's screenshot: every pixel yellow); the pixel constants it didn't put back: %s", count[1][3], count[1][1], count[1][2],
+                      lostAlone.c_str());
+        Check(ok && count[1][3] > 400 && count[1][1] == 0 && count[1][2] == 0 && lostAlone.find("c180..c183") != std::string::npos, line);
+        std::snprintf(line, sizeof(line), "the game's sequence: (c) with every constant put back from the capture (none unlike: %s): drawn whole %d open, %d shut, %d "
+                      "no window, %d pixels decided otherwise than (a); split by window (%zu triangles open, %zu the rest) %d otherwise; split through the state "
+                      "block alone (the lookup's inputs lost) %d otherwise", lostFixed.empty() ? "yes" : lostFixed.c_str(), count[2][1], count[2][2], count[2][3],
+                      differ, open.size() / 3, rest.size() / 3, differSplit, differAlone);
+        // (split: a pixel at a window's edge goes by its triangle's middle, the lookup by the pixel: a few pixels apart)
+        const int drawnPx = count[0][1] + count[0][2] + count[0][3];
+        Check(ok && lostFixed.empty() && differ == 0 && differSplit * 100 <= drawnPx && differAlone * 100 <= drawnPx, line);
+        // (d) the plain view with the constants put back, drawn whole: the room's blue through the open windows' glass (its
+        // debug tint mostly magenta, over the blue: green under 100; blue over red by 40 in 8 of 10: where it's part glass
+        // the yellow glass keeps more), not their lead and frame (opaque green), not the shut windows (a pixel at a window's
+        // edge aside)
+        int glassBlue = 0, glassPx = 0, leadBlue = 0, leadPx = 0, shutBlue = 0, shutPx = 0;
+        for (size_t p = 0; ok && p < plain.size(); ++p)
+        {
+            const int k = kind(a[p]), red = (a[p] >> 16) & 0xFF, green = (a[p] >> 8) & 0xFF;
+            const bool blue = (plain[p] & 0xFF) > ((plain[p] >> 16) & 0xFF) + 40;
+            if (k == 1 && green < 100) { ++glassPx; glassBlue += blue ? 1 : 0; }
+            if (k == 1 && green == 255 && red == 0) { ++leadPx; leadBlue += blue ? 1 : 0; }
+            if (k == 2) { ++shutPx; shutBlue += blue ? 1 : 0; }
+        }
+        std::snprintf(line, sizeof(line), "the game's sequence: (d) the plain view: the room through %d of %d open windows' glass pixels, %d of %d of their lead "
+                      "and frame, %d of %d shut windows'", glassBlue, glassPx, leadBlue, leadPx, shutBlue, shutPx);
+        Check(ok && glassPx > 100 && glassBlue * 10 >= glassPx * 8 && leadBlue * 100 <= leadPx && shutBlue * 100 <= shutPx, line);
+        if (const char* dump = std::getenv("GLASS_DUMP"))
+        {
+            auto save = [&](const char* name, const std::vector<uint32_t>& im) {
+                std::vector<uint8_t> rgb(im.size() * 3);
+                for (size_t p = 0; p < im.size(); ++p) { rgb[3 * p] = (im[p] >> 16) & 0xFF; rgb[3 * p + 1] = (im[p] >> 8) & 0xFF; rgb[3 * p + 2] = im[p] & 0xFF; }
+                WritePnm(std::filesystem::path(dump) / name, kS, kS, 3, rgb);
+            };
+            save("seq_a_right_away_debug.ppm", a);
+            save("seq_b_state_block_alone_debug.ppm", broken);
+            save("seq_c_with_constants_debug.ppm", fixed);
+            save("seq_d_with_constants_plain.ppm", plain);
+        }
+        buf.Release();
+        for (IUnknown* u : std::initializer_list<IUnknown*>{ ps, other, target, depth, readback, glassTex, white, leadTex, decl, vb, ib, otherIb }) if (u) u->Release();
     }
 
     std::string LitProbeShader(const std::string& probe)
@@ -5221,7 +5654,7 @@ int main(int argc, char** argv)
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
-    // replay, lead, inn)
+    // replay, lead, inn, sequence)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -5246,6 +5679,7 @@ int main(int argc, char** argv)
     if (warp && run("replay")) ReplayTests(args[1]);
     if (run("lead")) LeadTests(args[1]);
     if (warp && run("inn")) InnRedrawTests(args[0], args[1]);
+    if (warp && run("sequence")) SequenceTests(args[0], args[1]);
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

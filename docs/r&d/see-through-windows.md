@@ -226,16 +226,26 @@ would cover it. So it is **deferred**:
   mask), 38% over the arched 9 (23%), 33% over 14 (11%): every pane's glass at the opacity's 65%, the shutters, lattice
   lead and frames (most of window 3's cell) opaque; each lead and frame pixel alpha 1, window 5 shut. Rectangles can't
   follow arched frames (Northrend's `nr_hu_window`) or a sheet's border strips; those textures keep the light's mask
-  until they get rows. With it the per-pixel redraw is the default again. Its debug view (the lights panel's, not saved:
-  c28.x) colours each redrawn pixel by what the shader decided: an open window's glass magenta by its mask, through grey
-  to green at its lead and frame (alpha 1), cyan a shut window, yellow no window found; the alpha is unchanged, so the
-  colours show through the blend as the glass would. The panel also reads the device's state back at the first redrawn
-  batch once a second (b9, b11, c219, c28, the batch's alpha test, the blend, alpha test and depth write as set,
-  D3DRS_ADAPTIVETESS_Y, the drivers' alpha-to-coverage switch, the target's MSAA, the pixel shader). The batch's own
-  alpha test (alpha-keyed glass) moves into the shader (texkill on the stock alpha against c219.y). Colour RGB only,
-  depth test on. A shader without the redraw (`if b11` not in its code: a variant without the glass blocks) is drawn
-  opaque, as the client would have. The device's state is captured before and put back after (the client's cache never
-  sees it). The render target and depth surface must be the ones captured.
+  until they get rows. With it the per-pixel redraw is the default again. **Why the per-pixel redraw never showed the
+  room in game** (2026-10-21, the debug view: "every see-through window pixel is solid YELLOW", no window found): the
+  capture's state block (`CreateStateBlock(D3DSBT_ALL)`) puts back only the pixel shader's c0..c127 (WARP; glass_tests'
+  "sequence" plays the game's order, the inn placed as Goldshire's, the camera turned, Glass's own RoomRegisters, the
+  batch drawn silently, captured, the state clobbered, applied: every pixel yellow, the lost constants c128 and up, the
+  view's rows c181..c183 among them, so the lookup's point was the camera's for every pixel). The capture now keeps
+  every shader constant apart (`features/SeeThroughDraw` CaptureState, ApplyCaptured: the pixel shader's 224, the vertex
+  shader's 256), and the same harness then decides every pixel as a redraw right after the client's draw does. Where the
+  client's index buffer can be read and holds the batch's own indices, the redraw also draws its open windows' triangles
+  apart (c33.x: open whatever the lookup finds). The lights panel reads the lookup's inputs back (c15..c20, c180, s13 at
+  the draw and after the state block) and says whether the redraw was split. Its debug view (the lights panel's, not
+  saved: c28.x) colours each redrawn pixel by what the shader decided: an open window's glass magenta by its mask,
+  through grey to green at its lead and frame (alpha 1), cyan a shut window, yellow no window found; the alpha is
+  unchanged, so the colours show through the blend as the glass would. The panel also reads the device's state back at
+  the first redrawn batch once a second (b9, b11, c219, c28, the batch's alpha test, the blend, alpha test and depth
+  write as set, D3DRS_ADAPTIVETESS_Y, the drivers' alpha-to-coverage switch, the target's MSAA, the pixel shader). The
+  batch's own alpha test (alpha-keyed glass) moves into the shader (texkill on the stock alpha against c219.y). Colour
+  RGB only, depth test on. A shader without the redraw (`if b11` not in its code: a variant without the glass blocks) is
+  drawn opaque, as the client would have. The device's state is captured before and put back after (the client's cache
+  never sees it). The render target and depth surface must be the ones captured.
 - **Sorting**: the glass lands after everything opaque and before everything see-through. Liquids, weather, particles and
   see-through models in front of it are drawn after it: right. Those *behind* it inside the room (a candle's flame, a
   hearth's particles) are drawn after it too, so they sit over the glass, not under it: a small error for additive flames.

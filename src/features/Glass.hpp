@@ -263,6 +263,8 @@ namespace wxl_livingazeroth::glass
     /// none; and its texture's path as GlassMaterials has it (null: no such material).
     const LeadRule* LeadOf(uint32_t indexPlusOne);
     const char* TextureOf(uint32_t indexPlusOne);
+    /// The window table's texture on the device (s13's for every glass batch; null: none yet), for the see-through panel.
+    const void* TableTexture();
     /// What the floor light and the shafts use (for the tests and GlassShafts).
     const PaneIndex& Panes();
 

@@ -79,7 +79,8 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   2026), the painted lead, frame, tracery and shutters stay opaque, and a window opens only where its room is really seen
   through it (not over its ceiling or through its walls); a shut window keeps its glass and fake room (20 October 2026).
   The lights panel has its debug view (each redrawn pixel coloured by what the shader decided) and reads the device's
-  state back at the redraw (21 October 2026).
+  state back at the redraw (21 October 2026). The capture keeps every shader constant apart from its state block, which
+  put back only the pixel shader's c0..c127: in game the per-pixel redraw found no window (21 October 2026).
 - **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's

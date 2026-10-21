@@ -10,7 +10,10 @@
 //  - The glass: features/WmoIce's batch hooks tell this which group of which instance draws (Wmo.RenderGroup) and each
 //    batch that passes the cull test (Wmo.CullBatch). A glass batch of an opened group with at least one of its windows
 //    open is deferred: its device draw (Gx.DeviceDraw) runs with the client's colour and depth writes off (the client's
-//    own state cache: no pixel, no depth), and the device's whole state at it is captured. After the model scene's first
+//    own state cache: no pixel, no depth), and the device's whole state at it is captured, every shader constant apart
+//    (features/SeeThroughDraw: a state block alone puts back the pixel shader's c0..c127 only, and with the glass's view
+//    rows from c180 lost its window lookup found no window: "every see-through window pixel is solid YELLOW", the debug
+//    view, 2026-10-21). After the model scene's first
 //    pass (M2.SceneDraw, World::s_m2Scene, pass 0: the opaque models, the room's furniture among them) each is drawn again
 //    from that state, two ways (SeeThroughRedraw):
 //     1 (the default, per pixel): with the glass's look (LA's b9 block) and its redraw (b11, c219: features/GlassShader):

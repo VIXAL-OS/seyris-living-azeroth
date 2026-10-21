@@ -445,6 +445,8 @@ namespace wxl_livingazeroth::seethrough
         BatchWindows b;
         if (!indices || !vertices || count < 3 || count % 3 || start > indexCount || count > indexCount - start) return b;
         std::vector<bool> seen(windowCount, false);
+        b.indices.assign(indices + start, indices + start + count);
+        b.window.reserve(count / 3);
         for (uint32_t t = start; t < start + count; t += 3)
         {
             const float* v[3];
@@ -457,6 +459,7 @@ namespace wxl_livingazeroth::seethrough
             const float mid[3] = { (v[0][0] + v[1][0] + v[2][0]) / 3.0f, (v[0][1] + v[1][1] + v[2][1]) / 3.0f, (v[0][2] + v[1][2] + v[2][2]) / 3.0f };
             ++b.triangles;
             const int w = WindowOf(mid, windows, windowCount);
+            b.window.push_back(static_cast<int16_t>(w >= 0 ? w : -1));
             if (w >= 0)
             {
                 seen[static_cast<size_t>(w)] = true;
@@ -473,6 +476,20 @@ namespace wxl_livingazeroth::seethrough
             if (seen[i]) b.windows.push_back(static_cast<uint16_t>(i));
         b.valid = true;
         return b;
+    }
+
+    void SplitByWindow(const BatchWindows& b, const uint8_t* states, size_t stateCount, std::vector<uint16_t>& open,
+                       std::vector<uint16_t>& rest)
+    {
+        open.clear();
+        rest.clear();
+        if (!b.valid || !states || b.window.size() * 3 != b.indices.size()) return;
+        for (size_t t = 0; t < b.window.size(); ++t)
+        {
+            const int w = b.window[t];
+            std::vector<uint16_t>& to = w >= 0 && static_cast<size_t>(w) < stateCount && states[w] == kOpened ? open : rest;
+            to.insert(to.end(), b.indices.begin() + 3 * t, b.indices.begin() + 3 * t + 3);
+        }
     }
 
     bool Deferrable(const BatchWindows& b, const uint8_t* states, size_t stateCount)
@@ -567,6 +584,8 @@ namespace wxl_livingazeroth::seethrough
         m_first = first;
         m_bits = bits;
         m_material = material;
+        m_open.clear();
+        m_rest.clear();
     }
 
     Deferral::Draw Deferral::OnDraw(bool indexed, uint32_t primitive, uint32_t start, uint32_t count, uint32_t blendingMode)
@@ -588,6 +607,8 @@ namespace wxl_livingazeroth::seethrough
         m_entries.back().first = m_first;
         m_entries.back().bits = m_bits;
         m_entries.back().material = m_material;
+        m_entries.back().open = std::move(m_open);
+        m_entries.back().rest = std::move(m_rest);
     }
 
     std::vector<Deferral::Entry> Deferral::Take()

@@ -6,6 +6,7 @@
 #include "../render/GxState.hpp"
 #include "Glass.hpp"
 #include "GlassShader.hpp"
+#include "SeeThroughDraw.hpp"
 
 #include "game/Gx.hpp"
 
@@ -248,6 +249,8 @@ namespace wxl_livingazeroth::seethrough
             uint32_t group = 0;
             std::vector<uint8_t> states;   // per window of the group (RootWindows::Group's order)
             unsigned opened = 0;
+            float cam[3] = {}, eye[3] = {};   // the client's camera in the WMO's space (the walk's) and the view's eye (world)
+            bool haveCam = false;
         };
         std::unordered_map<uint64_t, GroupFrame> g_frame;
         unsigned g_budget = kMaxOpenPerFrame;
@@ -443,6 +446,8 @@ namespace wxl_livingazeroth::seethrough
                 f.states.assign(count, kShut);
                 return;
             }
+            for (int k = 0; k < 3; ++k) { f.cam[k] = cam[k]; f.eye[k] = eye[k]; }
+            f.haveCam = true;
             std::vector<WindowPlan> plan;
             PlanWindows(windows, count, cam, r->groups[group].lo, r->groups[group].hi, FromCRect(crect), model, eye, viewProj, g_budget, plan);
             f.states.assign(count, kUnseen);
@@ -567,6 +572,36 @@ namespace wxl_livingazeroth::seethrough
         // --- the deferred draw ---------------------------------------------------------------------------------------
         // The device's state as the batch's draw left it (the client's state flush done), and the draw's arguments as the
         // client's device draw works them out.
+        // The shader's window lookup's inputs (c15..c20: the instance's frame and the group's grid; c180 the camera; s13 the
+        // window table) at the batch's draw (its capture) and at its redraw (after its state is applied): "every see-through
+        // window pixel is solid YELLOW" (the debug view, in game, 2026-10-21: the lookup found no window). Against them the
+        // walk's own camera in the WMO's space (where c15..c17 put the camera: their .w) and the view's eye (c180's), Glass's
+        // table, and whether the client's index buffer holds the batch's own indices (the split redraw draws them). The
+        // panel's, the first deferred batch's, refreshed once a second.
+        struct LookupProbe
+        {
+            bool valid = false, applied = false;
+            float atDraw[7][4] = {}, atRedraw[7][4] = {};   // c15..c20, c180
+            const void* tableAtDraw = nullptr;
+            const void* tableAtRedraw = nullptr;
+            const void* glassTable = nullptr;
+            float cam[3] = {}, eye[3] = {};
+            bool haveCam = false;
+            int indices = -2;                                 // 1 the client's are the batch's, 0 not, -1 unread, -2 not split
+            bool split = false;
+            uint32_t open = 0, rest = 0;
+        };
+        LookupProbe g_lookupNow, g_lookupShown;
+
+        void ReadLookup(IDirect3DDevice9* dev, float regs[7][4], const void*& table)
+        {
+            dev->GetPixelShaderConstantF(glass::kRoomConstant, &regs[0][0], 6);
+            dev->GetPixelShaderConstantF(glass::kViewConstant, &regs[6][0], 1);
+            IDirect3DBaseTexture9* t = nullptr;
+            table = nullptr;
+            if (SUCCEEDED(dev->GetTexture(glass::kTableSampler, &t)) && t) { table = t; t->Release(); }
+        }
+
         bool Capture(void* device, const uint32_t* batch, Deferral::Entry& e)
         {
             const auto* d = static_cast<const uint8_t*>(device);
@@ -582,8 +617,19 @@ namespace wxl_livingazeroth::seethrough
             const uint32_t primitive = reinterpret_cast<const uint32_t*>(client::kPrimConversion)[batch[0]];
             const uint32_t b[4] = { batch[0], batch[1], batch[2], batch[3] };
             if (!DrawArgsOf(b, mode, streamOffset, streamStride, indexOffset, primitive, e.args)) return false;
-            IDirect3DStateBlock9* block = nullptr;
-            if (FAILED(dev->CreateStateBlock(D3DSBT_ALL, &block)) || !block) return false;
+            if (!CaptureState(dev, e)) return false;   // (every pixel shader constant too: a state block keeps c0..c127)
+            if (!g_lookupNow.valid)
+            {
+                g_lookupNow = LookupProbe{};
+                g_lookupNow.valid = true;
+                ReadLookup(dev, g_lookupNow.atDraw, g_lookupNow.tableAtDraw);
+                g_lookupNow.glassTable = glass::TableTexture();
+                if (g_draw.frame && g_draw.frame->haveCam)
+                {
+                    for (int k = 0; k < 3; ++k) { g_lookupNow.cam[k] = g_draw.frame->cam[k]; g_lookupNow.eye[k] = g_draw.frame->eye[k]; }
+                    g_lookupNow.haveCam = true;
+                }
+            }
             IDirect3DSurface9* target = nullptr;
             IDirect3DSurface9* depth = nullptr;
             dev->GetRenderTarget(0, &target);
@@ -592,8 +638,28 @@ namespace wxl_livingazeroth::seethrough
             e.depth = depth;
             if (target) target->Release();
             if (depth) depth->Release();
-            e.state = block;
             return true;
+        }
+
+        // The client's draw with its colour and depth writes off, then the capture; the writes put back whatever happens
+        // (apart from DeferDraw: an entry holds vectors, and __try can't share a function with their unwinding).
+        bool DrawSilently(void* device, void* edx, uint32_t* batch, int indexed, int& drawn, uint32_t colour, uint32_t depth, Deferral::Entry& e)
+        {
+            bool ok = false;
+            __try
+            {
+                gxstate::Force(client::kRsColorWrite, 0);
+                gxstate::Force(client::kRsDepthWrite, 0);
+                drawn = 1;
+                g_origDraw(device, edx, batch, indexed);
+                ok = Capture(device, batch, e);
+            }
+            __finally
+            {
+                gxstate::Force(client::kRsColorWrite, colour);
+                gxstate::Force(client::kRsDepthWrite, depth);
+            }
+            return ok;
         }
 
         // The draw with the client's colour and depth writes off (its own cache, so its flush sends them: no pixel and no
@@ -619,20 +685,7 @@ namespace wxl_livingazeroth::seethrough
                 return;
             }
             Deferral::Entry e{};
-            bool ok = false;
-            __try
-            {
-                gxstate::Force(client::kRsColorWrite, 0);
-                gxstate::Force(client::kRsDepthWrite, 0);
-                drawn = 1;
-                g_origDraw(device, edx, batch, indexed);
-                ok = Capture(device, batch, e);
-            }
-            __finally
-            {
-                gxstate::Force(client::kRsColorWrite, colour);
-                gxstate::Force(client::kRsDepthWrite, depth);
-            }
+            const bool ok = DrawSilently(device, edx, batch, indexed, drawn, colour, depth, e);
             if (ok)
             {
                 g_deferral.Captured(e);
@@ -783,7 +836,7 @@ namespace wxl_livingazeroth::seethrough
             bool valid = false;
             int mode = 0;
             BOOL glassOn = FALSE, hasReplay = FALSE, b11 = FALSE;
-            float c219[4] = {}, c28[4] = {};
+            float c219[4] = {}, c28[4] = {}, c33[4] = {};
             DWORD test = 0, func = 0, ref = 0;             // the batch's own alpha test, as captured
             DWORD atoc = 0, multisample = 0;               // D3DRS_ADAPTIVETESS_Y (a driver's alpha-to-coverage switch), the target's MSAA
             DWORD srcBlend = 0, destBlend = 0, blend = 0, alphaTest = 0, zWrite = 0;   // as set for the see-through draw
@@ -792,7 +845,43 @@ namespace wxl_livingazeroth::seethrough
         ReplayProbe g_probeNow, g_probeShown;
         int g_debugView = 0;                     // the panel's debug view (not saved)
         ULONGLONG g_probeTick = 0;
-        constexpr float kSplitAlpha = 0.999f;    // the redraw's two draws: alpha at least this is the opaque one's
+        SplitBuffer g_split;                     // the split redraw's index buffer
+
+        // Whether the client's index buffer holds the batch's own indices where its draw reads them (the split redraw draws
+        // its open windows' from those): 1 the same (count and sum), 0 not (or not 16-bit), -1 not readable (write-only);
+        // split only on 1. Once per buffer and range.
+        std::unordered_map<uint64_t, int> g_indexVerdict;
+
+        int IndicesAgree(IDirect3DDevice9* dev, const Deferral::Entry& e)
+        {
+            IDirect3DIndexBuffer9* ib = nullptr;
+            if (FAILED(dev->GetIndices(&ib)) || !ib) return -1;
+            const uint64_t key = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(ib)) << 24) ^ e.args.startIndex ^ (static_cast<uint64_t>(e.args.primitives) << 48);
+            int verdict = -1;
+            if (const auto it = g_indexVerdict.find(key); it != g_indexVerdict.end()) verdict = it->second;
+            else
+            {
+                D3DINDEXBUFFER_DESC d{};
+                const UINT n = e.args.primitives * 3;
+                void* p = nullptr;
+                if (FAILED(ib->GetDesc(&d))) verdict = -1;
+                else if (d.Format != D3DFMT_INDEX16 || n != e.open.size() + e.rest.size()) verdict = 0;
+                else if ((d.Usage & D3DUSAGE_WRITEONLY) || (static_cast<size_t>(e.args.startIndex) + n) * 2 > d.Size) verdict = -1;
+                else if (SUCCEEDED(ib->Lock(e.args.startIndex * 2, n * 2, &p, D3DLOCK_READONLY)) && p)
+                {
+                    uint64_t theirs = 0, ours = 0;
+                    for (UINT k = 0; k < n; ++k) theirs += static_cast<const uint16_t*>(p)[k];
+                    ib->Unlock();
+                    for (const uint16_t v : e.open) ours += v;
+                    for (const uint16_t v : e.rest) ours += v;
+                    verdict = theirs == ours ? 1 : 0;
+                }
+                if (g_indexVerdict.size() > 1024) g_indexVerdict.clear();
+                g_indexVerdict[key] = verdict;
+            }
+            ib->Release();
+            return verdict;
+        }
 
         void Probe(IDirect3DDevice9* dev, int mode, BOOL glassOn, BOOL hasReplay, DWORD test, DWORD func, DWORD ref, DWORD multisample)
         {
@@ -805,6 +894,7 @@ namespace wxl_livingazeroth::seethrough
             dev->GetPixelShaderConstantB(glass::kReplaySwitch, &g_probeNow.b11, 1);
             dev->GetPixelShaderConstantF(glass::kReplayConstant, g_probeNow.c219, 1);
             dev->GetPixelShaderConstantF(glass::kReplayDrawConstant, g_probeNow.c28, 1);
+            dev->GetPixelShaderConstantF(glass::kReplayWindowConstant, g_probeNow.c33, 1);
             g_probeNow.test = test; g_probeNow.func = func; g_probeNow.ref = ref;
             dev->GetRenderState(D3DRS_SRCBLEND, &g_probeNow.srcBlend);
             dev->GetRenderState(D3DRS_DESTBLEND, &g_probeNow.destBlend);
@@ -817,13 +907,15 @@ namespace wxl_livingazeroth::seethrough
             if (SUCCEEDED(dev->GetPixelShader(&ps)) && ps) { g_probeNow.shader = ps; ps->Release(); }
         }
 
-        // The glass again, over the room and its furniture: each from its state, the colour only (no alpha written), depth
-        // tested. SeeThroughRedraw 1, with the glass's look and the redraw in its shader (b11, c219, c28: GlassShader): two
-        // draws split in the shader by its alpha (c28.y): what's opaque (the open windows' lead, frame and tracery, every shut
-        // window with its fake room) with its depth, as the client would have drawn it; then the open windows' glass texels
-        // over the room, blended at the opacity (SRCALPHA), no depth. Without the redraw in its shader: opaque, as the client
-        // would have. SeeThroughRedraw 0 (as on 2026-10-20): the whole batch at the opacity (BLENDFACTOR), its fake room off
-        // (c193.z 0), no depth. The device's state put back after.
+        // The glass again, over the room and its furniture: each from its state with every shader constant (SeeThroughDraw's
+        // ApplyCaptured: a state block alone put back c0..c127, the glass's view and look from c180 lost: its window lookup
+        // found no window, the debug view all yellow, 2026-10-21), the colour only (no alpha written), depth tested.
+        // SeeThroughRedraw 1 (SeeThroughDraw's DrawPerPixel), with the glass's look and the redraw in its shader (b11, c219,
+        // c28, c33: GlassShader): two draws split in the shader by its alpha (c28.y): what's opaque (the open windows' lead,
+        // frame and tracery, every shut window with its fake room) with its depth, as the client would have drawn it; then the
+        // open windows' glass texels over the room, blended at the opacity (SRCALPHA), no depth. Without the redraw in its
+        // shader: opaque, as the client would have. SeeThroughRedraw 0 (as on 2026-10-20): the whole batch at the opacity
+        // (BLENDFACTOR), its fake room off (c193.z 0), no depth. The device's state put back after.
         void Replay(Deferral::Entry* entries, size_t n)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
@@ -845,7 +937,15 @@ namespace wxl_livingazeroth::seethrough
                     const Deferral::Entry& e = entries[i];
                     if (!e.state) continue;
                     if (e.target != target || e.depth != depth) { ++g_now.targetMoved; continue; }
-                    static_cast<IDirect3DStateBlock9*>(e.state)->Apply();
+                    // its state, then every pixel shader constant (a state block alone puts back c0..c127: the glass's view,
+                    // look and window lookup are above; the lookup's inputs read in between, for the panel)
+                    ApplyCaptured(dev, e, false);
+                    if (g_lookupNow.valid && !g_lookupNow.applied)
+                    {
+                        ReadLookup(dev, g_lookupNow.atRedraw, g_lookupNow.tableAtRedraw);
+                        g_lookupNow.applied = true;
+                    }
+                    ApplyConstants(dev, e);
                     BOOL glassOn = FALSE;
                     const bool glass = SUCCEEDED(dev->GetPixelShaderConstantB(glass::kSwitch, &glassOn, 1)) && glassOn;
                     // the batch's own alpha test (the stock alpha's: the shader's texkill in the per-pixel redraw)
@@ -883,43 +983,23 @@ namespace wxl_livingazeroth::seethrough
                         if (Draw(dev, e.args)) { ++g_now.redrawn; ++g_now.opaque; }
                         continue;
                     }
-                    float c[4];
-                    ReplayConstants(g_settings.opacity, test != FALSE, func, ref, e.first, e.bits, c);
-                    dev->SetPixelShaderConstantF(glass::kReplayConstant, c, 1);
-                    const BOOL on = TRUE;
-                    dev->SetPixelShaderConstantB(glass::kReplaySwitch, &on, 1);
-                    // the split is the shader's (texkill by c28.y), not the device's alpha test: a driver's alpha-to-coverage or a
-                    // translation layer may make an alpha test something else
-                    dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
-                    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-                    dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
-                    dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
-                    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-                    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-                    // its lead mask (s15; c28.w: whether there is one)
-                    IDirect3DTexture9* lead = LeadTextureOf(dev, e.material);
-                    dev->SetTexture(glass::kLeadSampler, lead);
-                    if (lead)
+                    // split by window (SeeThroughDraw) when the client's index buffer is seen to hold the batch's indices, else whole
+                    PerPixel in;
+                    in.opacity = g_settings.opacity;
+                    in.debug = g_debugView != 0;
+                    in.lead = LeadTextureOf(dev, e.material);
+                    const int agree = e.open.empty() ? -2 : IndicesAgree(dev, e);
+                    in.split = agree == 1;
+                    const PerPixelDrawn drawn = DrawPerPixel(dev, e, in, g_split);
+                    if (g_lookupNow.valid && g_lookupNow.indices == -2)
                     {
-                        const DWORD s = glass::kLeadSampler;
-                        dev->SetSamplerState(s, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-                        dev->SetSamplerState(s, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-                        dev->SetSamplerState(s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-                        dev->SetSamplerState(s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-                        dev->SetSamplerState(s, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-                        dev->SetSamplerState(s, D3DSAMP_MIPMAPLODBIAS, 0);
-                        dev->SetSamplerState(s, D3DSAMP_MAXMIPLEVEL, 0);
-                        dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, FALSE);
+                        g_lookupNow.indices = agree;
+                        g_lookupNow.split = drawn.split;
+                        g_lookupNow.open = drawn.open;
+                        g_lookupNow.rest = drawn.rest;
                     }
-                    float split[4] = { g_debugView ? 1.0f : 0.0f, 1.0f, kSplitAlpha, lead ? 1.0f : 0.0f };
-                    dev->SetPixelShaderConstantF(glass::kReplayDrawConstant, split, 1);
-                    dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
-                    const bool opaque = Draw(dev, e.args);
-                    split[1] = -1.0f;
-                    dev->SetPixelShaderConstantF(glass::kReplayDrawConstant, split, 1);
-                    dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
                     Probe(dev, 1, glassOn, TRUE, test, func, ref, desc.MultiSampleType);
-                    if (Draw(dev, e.args) && opaque) ++g_now.redrawn;
+                    if (drawn.drawn) ++g_now.redrawn;
                 }
             }
             __finally
@@ -1035,9 +1115,11 @@ namespace wxl_livingazeroth::seethrough
         if (g_probeNow.valid && now - g_probeTick >= 1000)
         {
             g_probeShown = g_probeNow;
+            g_lookupShown = g_lookupNow;
             g_probeTick = now;
         }
         g_probeNow = ReplayProbe{};
+        g_lookupNow = LookupProbe{};
         g_draw = DrawCtx{};
     }
 
@@ -1103,6 +1185,12 @@ namespace wxl_livingazeroth::seethrough
             g_now.replayBits = bits;
         }
         g_deferral.BeginBatch(deferrable, start, count, first, bits, glassMaterial);
+        if (deferrable && g_settings.redraw)
+        {
+            std::vector<uint16_t> open, rest;
+            SplitByWindow(*b, g_draw.frame->states.data(), g_draw.frame->states.size(), open, rest);
+            g_deferral.SplitPending(std::move(open), std::move(rest));
+        }
     }
 
     void EndLoop() { g_deferral.EndLoop(); }
@@ -1120,7 +1208,7 @@ namespace wxl_livingazeroth::seethrough
                             "grey to green as it's less glass), green its lead and frame (opaque), cyan a shut window, yellow no window "
                             "found##stdebug", &g_debugView);
         api->UiText(StatusLine());
-        char line[400];
+        char line[800];
         std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget; "
                       "%u of them: the room not seen through it from here), %u rooms added",
                       g_last.groups, g_last.opened, g_last.shut, g_last.blind, g_last.groupsAdded);
@@ -1143,11 +1231,31 @@ namespace wxl_livingazeroth::seethrough
         {
             const ReplayProbe& q = g_probeShown;
             std::snprintf(line, sizeof(line), "The redraw's device state (read back): %s; glass b9 %d, redraw in its shader %d, b11 %d; c219 %.3g %.3g %.0f %.1f; "
-                          "c28 %.0f %.0f %.3f %.0f; the batch's alpha test %lu (func %lu, ref %lu); blend %lu (src %lu, dest %lu), alpha test %lu, depth "
+                          "c28 %.0f %.0f %.3f %.0f, c33 %.0f; the batch's alpha test %lu (func %lu, ref %lu); blend %lu (src %lu, dest %lu), alpha test %lu, depth "
                           "write %lu; alpha-to-coverage switch 0x%08lX, target MSAA %lu; shader %p",
                           q.mode ? "per pixel" : "the whole glass", q.glassOn, q.hasReplay, q.b11, q.c219[0], q.c219[1], q.c219[2], q.c219[3], q.c28[0],
-                          q.c28[1], q.c28[2], q.c28[3], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.atoc, q.multisample,
+                          q.c28[1], q.c28[2], q.c28[3], q.c33[0], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.atoc, q.multisample,
                           q.shader);
+            api->UiText(line);
+        }
+        if (g_lookupShown.valid)
+        {
+            const LookupProbe& q = g_lookupShown;
+            const float (*d)[4] = q.atDraw;
+            bool same = q.applied && q.tableAtRedraw == q.tableAtDraw;
+            for (int r = 0; r < 7 && q.applied; ++r)
+                for (int k = 0; k < 4; ++k) same = same && q.atRedraw[r][k] == d[r][k];
+            std::snprintf(line, sizeof(line), "The lookup's inputs at the glass's draw: the grid c20.w %g (its corner %.1f %.1f %.1f, cell 1/%.2f, last %g %g %g); the camera "
+                          "in the WMO's space by c15..c17 %.2f %.2f %.2f, by the walk %s%.2f %.2f %.2f; c180 the camera %.1f %.1f %.1f, the view's eye %.1f %.1f %.1f; "
+                          "s13 %p (Glass's table %p); at the redraw: %s",
+                          d[5][3], d[3][0], d[3][1], d[3][2], d[4][0] != 0.0f ? 1.0f / d[4][0] : 0.0f, d[5][0], d[5][1], d[5][2], d[0][3], d[1][3], d[2][3],
+                          q.haveCam ? "" : "(none) ", q.cam[0], q.cam[1], q.cam[2], d[6][0], d[6][1], d[6][2], q.eye[0], q.eye[1], q.eye[2], q.tableAtDraw,
+                          q.glassTable, !q.applied ? "not read" : same ? "the state block put them back" : "the state block didn't put them all back (put back from the capture)");
+            api->UiText(line);
+            std::snprintf(line, sizeof(line), "The redraw split by window: %s (%u triangles open, %u the rest); the client's index buffer %s",
+                          q.split ? "yes" : "no: whole, the lookup alone", q.open, q.rest,
+                          q.indices == 1 ? "holds the batch's own indices" : q.indices == 0 ? "differs from the batch's (drawn whole)"
+                          : q.indices == -1 ? "can't be read (write-only: drawn whole)" : "not checked (nothing open to split)");
             api->UiText(line);
         }
         // each window on the screen and facing the camera last frame: open, or why not

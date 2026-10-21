@@ -98,7 +98,8 @@
 //  by day a dark room keeps room::kDarkDay, at night the moon's in dark rooms only); c206, c207, c208, c209, c210, c211,
 //  c214..c217, c220, c221, c83, c84, c87..c100 defined; c27.zw the corner that isn't glass; c219 the redraw's (b11 only:
 //  1 - the opacity, the alpha test's reference, the first ordinal, the open windows' bits; c28 its debug view, its
-//  draw's sign and threshold, whether s15 holds its lead mask; c29..c32 the debug view's tints, defined);
+//  draw's sign and threshold, whether s15 holds its lead mask; c29..c32 the debug view's tints, defined; c33.x the drawn
+//  triangles' window state, the split redraw's);
 //  the floor light's panes c101..c172 (six registers each; the rims' range: a batch has one or the other, features/Glass
 //  re-uploads when the rims took it). ps_3_0 has c0..c223, and an instruction reads at most one constant register.
 #pragma once
@@ -138,6 +139,8 @@ namespace wxl_livingazeroth::glass
     constexpr int kReplayDrawConstant = 28;   // c28, read under b11 only: the debug view (1 on), the draw (+1 the opaque, -1
                                               // the see-through; 0 both), the alpha the two split at, the lead mask (1: s15's)
     constexpr int kLeadSampler = 15;     // s15, read under b11 only: the redraw's lead mask (features/SeeThrough binds it)
+    constexpr int kReplayWindowConstant = 33;   // c33, read under b11 only: .x the drawn triangles' window state at least
+                                                // (1 open, 0 shut, -1 the lookup's alone)
     /// GlassBlock's parts besides the look as it was (the tests build the block without them to hold it to the old one).
     enum BlockPart : int { kPartNotGlass = 1, kPartReplay = 2, kAllParts = 3 };
 
@@ -386,7 +389,9 @@ namespace wxl_livingazeroth::glass
         const std::string replayKeep = !replay ? std::string() : "\n          mul r22.w, r22.w, r29.w";
         // The redraw's own mask (the look above done with the light's): the lead mask at s15 where features/SeeThrough bound
         // one (c28.w 1: GlassLead.cdbc's panes, env/GlassModel LeadMask), else the light's; what the alpha (ReplayAlpha) and
-        // the debug view read. The debug view (c28.x > 0: features/SeeThrough's panel): the pixel the colour of what the
+        // the debug view read. And the window's state at least c33.x: the redraw drawn split by window (SeeThroughDraw) says
+        // it per draw (1 its open windows' triangles, 0 the rest; -1 whole: the lookup's alone), as in game the lookup found
+        // no window (the debug view all yellow, 2026-10-21). The debug view (c28.x > 0: features/SeeThrough's panel): the pixel the colour of what the
         // shader decided (before the fog): an open window's glass magenta (c29) by its mask, through grey to its lead and
         // frame green (c30: mask 0, alpha 1), a shut window cyan (c31), no window found yellow (c32).
         const std::string replayDebug = !replay ? std::string() :
@@ -394,6 +399,7 @@ namespace wxl_livingazeroth::glass
             "\n        texld r13, " + vT + ", s15"
             "\n        add r13.x, r13.x, -r14.w"
             "\n        mad r14.w, c28.w, r13.x, r14.w"
+            "\n        max r31.w, r31.w, c33.x"
             "\n        mov r13.x, c28.x"
             "\n        if_gt r13.x, c175.y"
             "\n          mov r13, c32"
