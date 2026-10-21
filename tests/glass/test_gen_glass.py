@@ -208,6 +208,26 @@ class Panes(unittest.TestCase):
             self.assertEqual(len(g.group_panes(grp, 0, {0: WINDOW}, True)), panes)
             self.assertEqual(len(g.group_panes(grp, 0, {0: CLEAR_TEX}, True)), 1)
 
+    def test_the_lead_masks_panes(self):
+        # "yeah build the lead mask pls :D" (the user, 2026-10-21): GlassLead.cdbc's rectangles, the human window atlases'
+        # panes, each texture's 19 in its uv, none over the forge's corner, none overlapping another.
+        rows = g.lead_table()
+        self.assertEqual(len(rows), 8 * 19)
+        self.assertEqual(set(r[1] for r in rows), set(g.LEAD_TEXTURES))
+        self.assertIn(WINDOW, g.LEAD_TEXTURES)
+        self.assertEqual([r[0] for r in rows], list(range(1, len(rows) + 1)))
+        for texture in g.LEAD_TEXTURES:
+            rects = [r[2:6] for r in rows if r[1] == texture]
+            self.assertEqual(len(rects), 19)
+            for u0, v0, u1, v1 in rects:
+                self.assertTrue(0.0 <= u0 < u1 <= 1.0 and 0.0 <= v0 < v1 <= 1.0)
+                self.assertFalse(u1 > 0.5 and v1 > 0.5, "over the forge's corner")
+            for a in range(len(rects)):
+                for b in range(a + 1, len(rects)):
+                    ra, rb = rects[a], rects[b]
+                    self.assertFalse(ra[0] < rb[2] and rb[0] < ra[2] and ra[1] < rb[3] and rb[1] < ra[3], "rectangles overlap")
+        self.assertTrue(all(r[6] == g.LEAD_DARK and r[7] == g.LEAD_LINE for r in rows))
+
 
 CLEAR_TEX = "dungeons\\textures\\windows\\am_bbay_windows.blp"
 FROST_TEX = "dungeons\\textures\\windows\\mm_irnfg_windows_01.blp"

@@ -3436,6 +3436,206 @@ namespace
         for (IUnknown* u : std::initializer_list<IUnknown*>{ oldPs, newPs, uvPs, target, readback }) if (u) u->Release();
     }
 
+    // --- 12. the see-through redraw's lead mask (env/GlassModel LeadMask, GlassLead.cdbc) ----------------------------------
+    // "yeah build the lead mask pls :D" (the user, 2026-10-21): every pane's inside glass, lit and shaded alike; the lead,
+    // the frames and the shutters opaque. GLASS_DUMP=<folder>: the masks (and the inn's views below) as PGM/PPM files.
+    void WritePnm(const std::filesystem::path& p, uint32_t w, uint32_t h, int channels, const std::vector<uint8_t>& bytes)
+    {
+        std::ofstream f(p, std::ios::binary);
+        f << (channels == 1 ? "P5\n" : "P6\n") << w << " " << h << "\n255\n";
+        f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+
+    // A texture's GlassMaterials row as features/Glass reads it, and its GlassLead rule (the shipped tables).
+    bool MaterialRow(const Table& t, const std::string& texture, gl::Material& m)
+    {
+        for (const auto& r : t.rows)
+            if (r[1] < t.strings.size() && std::string(&t.strings[r[1]]) == texture)
+            {
+                m.kind = r[2]; m.flags = r[3];
+                for (int k = 0; k < 3; ++k) { m.colour[k] = F(r[4 + k]); m.light[k] = F(r[7 + k]); m.mask[k] = F(r[10 + k]); }
+                m.mask[3] = F(r[13]);
+                for (int k = 0; t.fields >= 24 && k < 2; ++k)
+                    m.notGlass[k] = std::isfinite(F(r[22 + k])) && F(r[22 + k]) >= 0.0f && F(r[22 + k]) < 1.0f ? F(r[22 + k]) : 1.0f;
+                if (m.notGlass[0] >= 1.0f || m.notGlass[1] >= 1.0f) m.notGlass[0] = m.notGlass[1] = 1.0f;
+                return true;
+            }
+        return false;
+    }
+
+    gl::LeadRule LeadRuleOf(const Table& t, const std::string& texture)
+    {
+        gl::LeadRule rule;
+        for (const auto& r : t.rows)
+            if (t.fields >= 8 && r[1] < t.strings.size() && std::string(&t.strings[r[1]]) == texture)
+            {
+                rule.rects.push_back({ F(r[2]), F(r[3]), F(r[4]), F(r[5]) });
+                rule.dark = F(r[6]);
+                rule.line = F(r[7]);
+            }
+        return rule;
+    }
+
+    std::vector<uint8_t> ReadBytes(const std::filesystem::path& p)
+    {
+        std::ifstream f(p, std::ios::binary);
+        return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    }
+
+    void LeadTests(const std::filesystem::path& data)
+    {
+        char line[400];
+        // (a) a pane in a 32 x 32 texture: its top lit, its bottom shaded (the light's mask: 0.35), a lead line down its middle,
+        // wood all round; its rectangle (8 .. 24)
+        {
+            constexpr uint32_t S = 32;
+            std::vector<float> rgb(S * S * 3);
+            auto put = [&](uint32_t x, uint32_t y, float r, float g, float b) { float* p = &rgb[(y * S + x) * 3]; p[0] = r; p[1] = g; p[2] = b; };
+            for (uint32_t y = 0; y < S; ++y)
+                for (uint32_t x = 0; x < S; ++x)
+                {
+                    const bool pane = x >= 8 && x < 24 && y >= 8 && y < 24;
+                    if (!pane) put(x, y, 0.35f, 0.25f, 0.15f);
+                    else if (x == 15 || x == 16) put(x, y, 0.05f, 0.04f, 0.03f);
+                    else if (y < 16) put(x, y, 0.9f, 0.85f, 0.4f);
+                    else put(x, y, 0.45f, 0.38f, 0.12f);
+                }
+            gl::Material m;
+            m.mask[0] = 0.726f; m.mask[1] = 2.442f; m.mask[2] = 0.247f; m.mask[3] = -0.944f;   // mm_elwynn_wnd_ext__01's
+            gl::LeadRule rule;
+            rule.rects.push_back({ 8.0f / S, 8.0f / S, 24.0f / S, 24.0f / S });
+            std::vector<uint8_t> mask;
+            const bool ok = gl::LeadMask(rgb.data(), S, S, m, rule, mask);
+            int lit = 0, shaded = 0, litGlass = 0, shadedGlass = 0, lead = 0, leadGlass = 0, wood = 0, woodGlass = 0, shadedLight = 0;
+            for (uint32_t y = 0; ok && y < S; ++y)
+                for (uint32_t x = 0; x < S; ++x)
+                {
+                    const bool g = mask[y * S + x] == 255, pane = x >= 8 && x < 24 && y >= 8 && y < 24;
+                    if (!pane) { ++wood; woodGlass += g ? 1 : 0; }
+                    else if (x == 15 || x == 16) { ++lead; leadGlass += g ? 1 : 0; }
+                    else if (y < 16) { ++lit; litGlass += g ? 1 : 0; }
+                    else
+                    {
+                        ++shaded; shadedGlass += g ? 1 : 0;
+                        const float* p = &rgb[(y * S + x) * 3];
+                        shadedLight += m.mask[0] * p[0] + m.mask[1] * p[1] + m.mask[2] * p[2] + m.mask[3] > 0.5f ? 1 : 0;
+                    }
+                }
+            std::snprintf(line, sizeof(line), "the lead mask: a pane's lit half glass (%d of %d), its shaded half too (%d of %d; the light's mask: %d), its lead "
+                          "line not (%d of %d), the wood round it not (%d of %d)", litGlass, lit, shadedGlass, shaded, shadedLight, leadGlass, lead, woodGlass, wood);
+            Check(ok && litGlass == lit && shadedGlass == shaded && shadedLight == 0 && leadGlass == 0 && woodGlass == 0, line);
+            std::vector<uint8_t> none;
+            uint32_t w = 4, h = 4;
+            std::vector<uint8_t> level = { 0, 255, 255, 255, 0, 0, 255, 255, 0, 0, 0, 0, 255, 255, 0, 0 }, next;
+            gl::LeadMip(level, w, h, next);
+            const bool mipOk = w == 2 && h == 2 && next == std::vector<uint8_t>{ 64, 255, 128, 0 };
+            uint32_t one = 1, oneH = 1;
+            gl::LeadMip(std::vector<uint8_t>{ 200 }, one, oneH, level);
+            Check(!gl::LeadMask(rgb.data(), S, S, m, gl::LeadRule{}, none) && none.empty() && mipOk && one == 1 && oneH == 1 && level == std::vector<uint8_t>{ 200 },
+                  "the lead mask: none without rectangles; its mips the 2 x 2 means (a 1 x 1 stays)");
+        }
+        // (b) the shipped table: the human window atlases' panes, each a glass texture's, in its uv, none in the forge's corner
+        Table lt, mt;
+        if (!ReadTable(data / "GlassLead.cdbc", lt) || !ReadTable(data / "GlassMaterials.cdbc", mt)) { Check(false, "GlassLead.cdbc and GlassMaterials.cdbc read"); return; }
+        std::map<std::string, int> perTexture;
+        int insane = 0, unknown = 0, corner = 0;
+        for (const auto& r : lt.rows)
+        {
+            const std::string t = r[1] < lt.strings.size() ? std::string(&lt.strings[r[1]]) : std::string();
+            gl::Material m;
+            unknown += MaterialRow(mt, t, m) ? 0 : 1;
+            const float u0 = F(r[2]), v0 = F(r[3]), u1 = F(r[4]), v1 = F(r[5]);
+            insane += u0 >= 0 && v0 >= 0 && u1 <= 1 && v1 <= 1 && u0 < u1 && v0 < v1 && Near(F(r[6]), gl::kLeadDark, 1e-6f) && Near(F(r[7]), gl::kLeadLine, 1e-6f) ? 0 : 1;
+            corner += u1 > m.notGlass[0] && v1 > m.notGlass[1] ? 1 : 0;
+            ++perTexture[t];
+        }
+        bool even = perTexture.size() == 8;
+        for (const auto& kv : perTexture) even = even && kv.second == 19;
+        std::snprintf(line, sizeof(line), "GlassLead.cdbc: %zu rectangles over %zu textures (19 each: %s), %d out of range, %d not a glass texture's, %d in the forge's corner",
+                      lt.rows.size(), perTexture.size(), even ? "yes" : "no", insane, unknown, corner);
+        Check(lt.fields == 9 && lt.rows.size() == 152 && even && insane == 0 && unknown == 0 && corner == 0, line);
+        // (c) the textures themselves (GLASS_TEXTURES): decoded as the runtime does, each cell's glass share by the lead mask
+        // against the light's, the shutters and the post opaque; GLASS_DUMP: each mask
+        const char* textures = TexturesFolder();
+        if (!textures) { std::printf("skip  the lead masks of the real textures (GLASS_TEXTURES not set)\n"); return; }
+        const char* dump = std::getenv("GLASS_DUMP");
+        int cells = 0, wrong = 0;
+        std::string worst;
+        for (const auto& kv : perTexture)
+        {
+            const std::string& t = kv.first;
+            std::string flat = t;
+            std::replace(flat.begin(), flat.end(), '\\', '#');
+            const std::vector<uint8_t> file = ReadBytes(std::filesystem::path(textures) / flat);
+            std::vector<float> rgb;
+            uint32_t w = 0, h = 0;
+            gl::Material m;
+            std::vector<uint8_t> mask;
+            float mean[3] = {};
+            if (!wxl_livingazeroth::blp::DecodeTop(file.data(), file.size(), rgb, w, h) || !MaterialRow(mt, t, m) ||
+                !gl::LeadMask(rgb.data(), w, h, m, LeadRuleOf(lt, t), mask) || !wxl_livingazeroth::blp::AverageColour(file.data(), file.size(), mean))
+            { ++wrong; worst += " " + flat + " (unread)"; continue; }
+            double sum[3] = {};
+            for (size_t i = 0; i < rgb.size(); ++i) sum[i % 3] += rgb[i];
+            for (int k = 0; k < 3; ++k)
+                if (!Near(static_cast<float>(sum[k] / (rgb.size() / 3)), mean[k], 0.03f)) { ++wrong; worst += " " + flat + " (its colours)"; break; }
+            auto share = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, bool light) {
+                double n = 0, g = 0;
+                for (uint32_t y = y0 * h / 256; y < y1 * h / 256; ++y)
+                    for (uint32_t x = x0 * w / 256; x < x1 * w / 256; ++x)
+                    {
+                        const float* p = &rgb[(static_cast<size_t>(y) * w + x) * 3];
+                        g += light ? std::clamp(m.mask[0] * p[0] + m.mask[1] * p[1] + m.mask[2] * p[2] + m.mask[3], 0.0f, 1.0f) : mask[static_cast<size_t>(y) * w + x] / 255.0;
+                        n += 1;
+                    }
+                return n ? g / n : 0.0;
+            };
+            // the lattice, the tall panes, the arched window: their glass by the lead mask within these bounds, the forge none,
+            // the shutters (either side of the lattice) and the arched window's post none
+            const double lattice = share(0, 0, 128, 128, false), tall = share(128, 0, 256, 128, false), arched = share(0, 128, 128, 256, false);
+            const double forge = share(128, 128, 256, 256, false), shutters = share(0, 0, 28, 128, false) + share(100, 0, 128, 128, false);
+            const double post = share(58, 190, 71, 248, false);
+            const bool ok = lattice > 0.15 && lattice < 0.35 && tall > 0.4 && tall < 0.65 && arched > 0.45 && arched < 0.7 && forge == 0.0 && shutters == 0.0 && post == 0.0;
+            cells += 3;
+            if (!ok)
+            {
+                ++wrong;
+                char b[200];
+                std::snprintf(b, sizeof(b), " %s (lattice %.2f, tall %.2f, arched %.2f, forge %.2f, shutters %.2f, post %.2f)", flat.c_str(), lattice, tall, arched, forge, shutters, post);
+                worst += b;
+            }
+            if (t == "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp")
+            {
+                std::snprintf(line, sizeof(line), "the inn's texture (mm_elwynn_wnd_ext__01): glass by the lead mask: the lattice cell %.0f%%, the tall panes %.0f%%, the "
+                              "arched one %.0f%% (by the light's mask %.0f%%, %.0f%%, %.0f%%)", 100 * lattice, 100 * tall, 100 * arched, 100 * share(0, 0, 128, 128, true),
+                              100 * share(128, 0, 256, 128, true), 100 * share(0, 128, 128, 256, true));
+                std::printf("info  %s\n", line);
+            }
+            if (dump) WritePnm(std::filesystem::path(dump) / ("lead_" + flat + ".pgm"), w, h, 1, mask);
+        }
+        std::snprintf(line, sizeof(line), "the lead masks of the eight human window atlases (decoded as the runtime does, its colours their files' mean): %d cells as "
+                      "meant, the forge, the shutters and the post opaque; %d not%s", cells, wrong, worst.substr(0, 200).c_str());
+        Check(wrong == 0 && cells == 24, line);
+        // elsewhere (not in the table: the light's mask there): a stained sheet with one rectangle over all of it
+        {
+            const std::string t = "dungeons\\textures\\windows\\mm_redridge_stained_01.blp";
+            const std::vector<uint8_t> file = ReadBytes(std::filesystem::path(textures) / "dungeons#textures#windows#mm_redridge_stained_01.blp");
+            std::vector<float> rgb;
+            uint32_t w = 0, h = 0;
+            gl::Material m;
+            gl::LeadRule whole;
+            whole.rects.push_back({ 0.0f, 0.0f, 1.0f, 1.0f });
+            std::vector<uint8_t> mask;
+            if (wxl_livingazeroth::blp::DecodeTop(file.data(), file.size(), rgb, w, h) && MaterialRow(mt, t, m) && gl::LeadMask(rgb.data(), w, h, m, whole, mask))
+            {
+                double g = 0;
+                for (uint8_t v : mask) g += v / 255.0;
+                std::printf("info  elsewhere (not in GlassLead.cdbc): Redridge's stained glass with one rectangle over it all: %.0f%% glass\n", 100 * g / mask.size());
+                if (dump) WritePnm(std::filesystem::path(dump) / "lead_dungeons#textures#windows#mm_redridge_stained_01.blp.pgm", w, h, 1, mask);
+            }
+        }
+    }
+
     // --- 11. the inn's own glass through the client's own patched WMO shader (WARP) -----------------------------------
     // "see-through windows don't seem to work anymore now" (the user, 2026-10-21, the panel saying windows 3, 4, 6, 9 and 14
     // open and the batch redrawn). Everything real but the GPU: the stock ps_MapObjDiffuse_02 (a shadow variant) patched by
@@ -3444,7 +3644,9 @@ namespace
     // GLASS_TEXTURES), the shipped tables (the data folder: GlassMaterials' row, GlassWindows' every window in the table),
     // seen from where the user stood (the inn's west front, its space's (24, 7, 2)), the redraw's constants as the runtime
     // makes them for the bits the panel showed (from ordinal 3, 0x084B). The debug view says, per pixel, what the shader
-    // decided; the alpha what the blend gets.
+    // decided; the alpha what the blend gets. Each window with the light's mask (as fix3 shipped) and with the lead mask
+    // (section 12; s15, c28.w 1), the room's share of what's seen against the whole glass's 65%. GLASS_DUMP: each window's
+    // views (the debug view; the glass over a stand-in room by day and night, with each mask and as the whole glass).
     struct InnTri { float p[3][3]; float uv[3][2]; };
     bool ReadInnGlass(const std::filesystem::path& scan, std::vector<InnTri>& out)
     {
@@ -3560,6 +3762,14 @@ namespace
         if (!found || inn.size() != 17) { Check(false, "the inn's glass: Elwynn's glass row and the inn's 17 windows in the tables"); return; }
         std::ifstream bf(std::filesystem::path(textures) / "dungeons#textures#windows#mm_elwynn_wnd_ext__01.blp", std::ios::binary);
         const std::vector<uint8_t> blp((std::istreambuf_iterator<char>(bf)), std::istreambuf_iterator<char>());
+        // the lead mask as the runtime builds it: the texture decoded, GlassLead.cdbc's rectangles for it
+        Table lt;
+        std::vector<float> texRgb;
+        std::vector<uint8_t> leadMask;
+        uint32_t tw = 0, th = 0;
+        if (!ReadTable(data / "GlassLead.cdbc", lt) || !wxl_livingazeroth::blp::DecodeTop(blp.data(), blp.size(), texRgb, tw, th) ||
+            !gl::LeadMask(texRgb.data(), tw, th, m, LeadRuleOf(lt, "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp"), leadMask))
+        { Check(false, "the inn's glass: its lead mask (GlassLead.cdbc's rectangles, the texture decoded)"); return; }
 
         Warp w;
         if (!InitWarp(w, why)) { std::printf("skip  the inn's glass: %s\n", why.c_str()); return; }
@@ -3574,6 +3784,24 @@ namespace
             FAILED(d->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
             FAILED(d->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
         { Check(false, "the inn's glass: WARP resources (the texture: " + blpError + ")"); return; }
+        // the lead mask's texture (L8, its mips: as features/SeeThrough uploads it)
+        IDirect3DTexture9* leadTex = nullptr;
+        {
+            UINT levels = 1;
+            for (uint32_t sz = std::max(tw, th); sz > 1; sz >>= 1) ++levels;
+            std::vector<uint8_t> level = leadMask, next;
+            uint32_t lw = tw, lh = th;
+            if (SUCCEEDED(d->CreateTexture(tw, th, levels, 0, D3DFMT_L8, D3DPOOL_MANAGED, &leadTex, nullptr)) && leadTex)
+                for (UINT k = 0; k < levels; ++k)
+                {
+                    D3DLOCKED_RECT lr{};
+                    if (FAILED(leadTex->LockRect(k, &lr, nullptr, 0))) { leadTex->Release(); leadTex = nullptr; break; }
+                    for (uint32_t y = 0; y < lh; ++y) std::memcpy(static_cast<uint8_t*>(lr.pBits) + static_cast<size_t>(y) * lr.Pitch, &level[static_cast<size_t>(y) * lw], lw);
+                    leadTex->UnlockRect(k);
+                    if (k + 1 < levels) { gl::LeadMip(level, lw, lh, next); level.swap(next); }
+                }
+        }
+        if (!leadTex) { Check(false, "the inn's glass: the lead mask's texture"); return; }
         // the vertex: pretransformed, a colour, six texture coordinate sets, the fog
         struct Vtx { float pos[4]; float col[4]; float tc[6][4]; float fog; };
         D3DVERTEXELEMENT9 el[10] = {
@@ -3604,21 +3832,29 @@ namespace
             R[0] = F3[1] / fl; R[1] = -F3[0] / fl; R[2] = 0;
             Uv[0] = R[1] * F3[2] - R[2] * F3[1]; Uv[1] = R[2] * F3[0] - R[0] * F3[2]; Uv[2] = R[0] * F3[1] - R[1] * F3[0];
         };
-        const float kFocal = 70.0f;
-        // the constants: day, overcast (rain), the batch's look as the runtime makes it, the inn's room
-        gl::Inputs in;
-        in.sun[0] = -0.4f; in.sun[1] = 0.3f; in.sun[2] = 0.86f; Norm(in.sun);
-        in.daylight = 1; in.night = 0; in.overcast = 1; in.precipitation = 1;
-        in.sky[0] = 0.5f; in.sky[1] = 0.52f; in.sky[2] = 0.55f;
-        const gl::Light light = gl::Evaluate(in);
+        float focal = 70.0f;   // (the checks' wide view; the dumps' each window filling its frame)
+        // the constants: by day overcast (rain), or at night; the batch's look as the runtime makes it, the inn's room
         gl::Settings s;
         float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters], look[4], day[4 * gl::kDayRegisters], regs[4 * gl::kRoomRegisters];
-        gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
-        gl::RoomInputs ri;
-        ri.night = 0; ri.hour = 13; ri.selfLit = false; ri.unlit = true; ri.kind = m.kind;
         const gl::RoomStyle style;
-        gl::RoomBatchConstants(style, nullptr, light, ri, s, c, seed, look);
-        gl::DayConstants(m, light, s, 0, day);
+        auto setTime = [&](bool night) {
+            gl::Inputs in;
+            if (night) { in.sun[0] = 0.3f; in.sun[1] = -0.2f; in.sun[2] = -0.5f; in.daylight = 0; in.night = 1; in.sky[0] = 0.04f; in.sky[1] = 0.05f; in.sky[2] = 0.09f; }
+            else
+            {
+                in.sun[0] = -0.4f; in.sun[1] = 0.3f; in.sun[2] = 0.86f;
+                in.daylight = 1; in.night = 0; in.overcast = 1; in.precipitation = 1;
+                in.sky[0] = 0.5f; in.sky[1] = 0.52f; in.sky[2] = 0.55f;
+            }
+            Norm(in.sun);
+            const gl::Light light = gl::Evaluate(in);
+            gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
+            gl::RoomInputs ri;
+            ri.night = night ? 1.0f : 0.0f; ri.hour = night ? 23.0f : 13.0f; ri.selfLit = night; ri.unlit = true; ri.kind = m.kind;
+            gl::RoomBatchConstants(style, nullptr, light, ri, s, c, seed, look);
+            gl::DayConstants(m, light, s, 0, day);
+        };
+        setTime(false);
         auto place = [&] {
             rooms.Registers(eye, innPath, 4, style.cls, s, regs, false, m.kind);
             regs[50] = m.notGlass[0] < 1.0f ? 1.0f - m.notGlass[0] : 0.0f;
@@ -3626,6 +3862,8 @@ namespace
         };
         float replay[4];
         st::ReplayConstants(0.35f, false, 0, 0, 3.0f, 0x084Bu, replay);
+        float leadOn = 0.0f;       // c28.w: the lead mask at s15 (1) or the light's (0)
+        bool wholeGlass = false;   // the 2026-10-20 redraw: b11 off, the fake room off (c193.z 0), the whole glass blended
         auto draw = [&](uint32_t ordinal, bool b11, float debug, float split, std::vector<float>& img) -> int {
             d->SetRenderTarget(0, target);
             D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
@@ -3638,6 +3876,10 @@ namespace
             d->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR); d->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
             d->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR); d->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
             for (DWORD k = 4; k <= 7; ++k) d->SetTexture(k, white);
+            d->SetTexture(gl::kLeadSampler, leadTex);
+            d->SetSamplerState(gl::kLeadSampler, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP); d->SetSamplerState(gl::kLeadSampler, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+            d->SetSamplerState(gl::kLeadSampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR); d->SetSamplerState(gl::kLeadSampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            d->SetSamplerState(gl::kLeadSampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR); d->SetSamplerState(gl::kLeadSampler, D3DSAMP_SRGBTEXTURE, FALSE);
             rooms.Bind(d);
             // the stock part's constants (its lights, the shadow's): a middling grey, the fog colour black (the fog factor 1)
             float stock[4 * 13];
@@ -3646,15 +3888,18 @@ namespace
             d->SetPixelShaderConstantF(0, stock, 13);
             float cv[16] = { eye[0], eye[1], eye[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
             d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
-            d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+            float cc[4 * gl::kConstantCount];
+            std::memcpy(cc, c, sizeof(cc));
+            if (wholeGlass) cc[6] = 0.0f;
+            d->SetPixelShaderConstantF(gl::kFirstConstant, cc, gl::kConstantCount);
             d->SetPixelShaderConstantF(gl::kSeedConstant, seed, gl::kSeedRegisters);
             d->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
             d->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
             d->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
             d->SetPixelShaderConstantF(gl::kReplayConstant, replay, 1);
-            const float c28[4] = { debug, split, 0.999f, 0 };
+            const float c28[4] = { debug, split, 0.999f, leadOn };
             d->SetPixelShaderConstantF(gl::kReplayDrawConstant, c28, 1);
-            const BOOL on = TRUE, off = FALSE, b11on = b11 ? TRUE : FALSE;
+            const BOOL on = TRUE, off = FALSE, b11on = b11 && !wholeGlass ? TRUE : FALSE;
             d->SetPixelShaderConstantB(7, &off, 1);
             d->SetPixelShaderConstantB(8, &off, 1);
             d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
@@ -3681,8 +3926,8 @@ namespace
                     const float q[3] = { t.p[k][0] - eye[0], t.p[k][1] - eye[1], t.p[k][2] - eye[2] };
                     const float zf = q[0] * F3[0] + q[1] * F3[1] + q[2] * F3[2];
                     ok = ok && zf > 0.1f;
-                    v[k].pos[0] = kS * 0.5f + kFocal * (q[0] * R[0] + q[1] * R[1] + q[2] * R[2]) / zf - 0.5f;
-                    v[k].pos[1] = kS * 0.5f - kFocal * (q[0] * Uv[0] + q[1] * Uv[1] + q[2] * Uv[2]) / zf - 0.5f;
+                    v[k].pos[0] = kS * 0.5f + focal * (q[0] * R[0] + q[1] * R[1] + q[2] * R[2]) / zf - 0.5f;
+                    v[k].pos[1] = kS * 0.5f - focal * (q[0] * Uv[0] + q[1] * Uv[1] + q[2] * Uv[2]) / zf - 0.5f;
                     v[k].pos[2] = 0.5f; v[k].pos[3] = 1.0f / std::max(zf, 0.1f);
                     for (int j = 0; j < 4; ++j) v[k].col[j] = 1.0f;
                     v[k].fog = 1.0f;
@@ -3713,48 +3958,126 @@ namespace
         auto is = [](const float* px, float r, float g, float b) { return std::fabs(px[0] - r) < 1e-3f && std::fabs(px[1] - g) < 1e-3f && std::fabs(px[2] - b) < 1e-3f; };
         // an open window's glass in the debug view: mask m of the way from green to magenta, m > 0
         auto glassTint = [](const float* px) { return px[0] > 1e-3f && std::fabs(px[0] - px[2]) < 1e-3f && std::fabs(px[0] + px[1] - 1.0f) < 1e-3f; };
-        char line[512];
+        char line[600];
+        const char* dump = std::getenv("GLASS_DUMP");
+        // a stand-in room behind the glass (a dim checker by day, lamp-lit at night), the sky round the window
+        auto composite = [&](const std::vector<float>& img, bool whole, bool night, std::vector<uint8_t>& out) {
+            out.assign(static_cast<size_t>(kS) * kS * 3, 0);
+            for (int y = 0; y < kS; ++y)
+                for (int x = 0; x < kS; ++x)
+                {
+                    const size_t p = static_cast<size_t>(y) * kS + x;
+                    const bool odd = ((x / 10) + (y / 10)) % 2 != 0;
+                    const float roomDay[2][3] = { { 0.16f, 0.12f, 0.08f }, { 0.34f, 0.25f, 0.15f } }, roomNight[2][3] = { { 0.35f, 0.22f, 0.1f }, { 0.6f, 0.42f, 0.2f } };
+                    const float* room = night ? roomNight[odd] : roomDay[odd];
+                    const bool drawn = img[p * 4 + 3] != 0.0f || img[p * 4] != 0.0f || img[p * 4 + 1] != 0.0f || img[p * 4 + 2] != 0.0f;
+                    const float a = whole ? 0.35f : img[p * 4 + 3];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const float v = drawn ? img[p * 4 + k] * a + room[k] * (1.0f - a) : (night ? 0.05f : 0.42f);
+                        out[p * 3 + k] = static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+                    }
+                }
+        };
+        auto save = [&](const std::string& name, const std::vector<uint8_t>& rgb) {
+            if (dump) WritePnm(std::filesystem::path(dump) / name, kS, kS, 3, rgb);
+        };
+        double share[2][18] = {};
         for (const uint32_t ordinal : { 3u, 9u, 14u, 5u })
         {
-            std::vector<float> dbg, alpha, opaque, glassy;
             const gl::Window& win = inn.at(ordinal);
             const float user[3] = { 24, 7, 2 };
             const float out = win.center[0] * win.normal[0] + win.center[1] * win.normal[1] < 0.0f ? -8.0f : 8.0f;   // (outside the inn)
             for (int k = 0; k < 3; ++k) eye[k] = ordinal == 5 ? win.center[k] + win.normal[k] * out : user[k];
             aim(win);
             place();
-            const int t1 = draw(ordinal, true, 1.0f, 0.0f, dbg), t2 = draw(ordinal, true, 0.0f, 0.0f, alpha),
-                      t3 = draw(ordinal, true, 0.0f, 1.0f, opaque), t4 = draw(ordinal, true, 0.0f, -1.0f, glassy);
-            int px = 0, magenta = 0, green = 0, cyan = 0, yellow = 0, other = 0, seeThrough = 0, both = 0, neither = 0, disagree = 0;
-            float least = 1.0f;
-            double room = 0.0;
-            for (size_t p = 0; p < dbg.size() / 4; ++p)
-            {
-                if (!drawnPx(alpha, p)) continue;
-                ++px;
-                const float* q = &dbg[p * 4];
-                (glassTint(q) ? magenta : is(q, 0, 1, 0) ? green : is(q, 0, 1, 1) ? cyan : is(q, 1, 1, 0) ? yellow : other) += 1;
-                const float a = alpha[p * 4 + 3];
-                least = std::min(least, a);
-                seeThrough += a < 0.999f ? 1 : 0;
-                room += 1.0 - a;
-                // the tint's mask and the alpha's: alpha = 1 - mask x 0.65
-                if (glassTint(q) || is(q, 0, 1, 0)) disagree += std::fabs(a - (1.0f - q[0] * 0.65f)) < 2e-3f ? 0 : 1;
-                const bool inOpaque = drawnPx(opaque, p), inGlass = drawnPx(glassy, p);
-                both += inOpaque && inGlass ? 1 : 0;
-                neither += !inOpaque && !inGlass ? 1 : 0;
-            }
             const bool open = ordinal != 5;
-            std::snprintf(line, sizeof(line), "the inn's window %u through the client's patched shader (%d triangles): %d pixels; the debug view: %d open glass, %d lead, "
-                          "%d shut, %d no window, %d else (%d unlike the alpha); see-through at %d (least alpha %.2f), the room's share over the window %.0f%%; the two "
-                          "draws: %d in both, %d in neither", ordinal, t1, px, magenta, green, cyan, yellow, other, disagree, seeThrough, least,
-                          px ? 100.0 * room / px : 0.0, both, neither);
-            const bool ok = t1 > 0 && t1 == t2 && t2 == t3 && t3 == t4 && px > 50 && yellow == 0 && other == 0 && both == 0 && neither == 0 && disagree == 0 &&
-                            (open ? cyan == 0 && magenta > 0 && seeThrough > 0 : cyan == px && seeThrough == 0);
-            Check(ok, line);
+            for (const float mask : { 0.0f, 1.0f })
+            {
+                leadOn = mask;
+                setTime(false);
+                std::vector<float> dbg, alpha, opaque, glassy;
+                const int t1 = draw(ordinal, true, 1.0f, 0.0f, dbg), t2 = draw(ordinal, true, 0.0f, 0.0f, alpha),
+                          t3 = draw(ordinal, true, 0.0f, 1.0f, opaque), t4 = draw(ordinal, true, 0.0f, -1.0f, glassy);
+                int px = 0, magenta = 0, green = 0, cyan = 0, yellow = 0, other = 0, seeThrough = 0, both = 0, neither = 0, disagree = 0;
+                float least = 1.0f;
+                double room = 0.0;
+                for (size_t p = 0; p < dbg.size() / 4; ++p)
+                {
+                    if (!drawnPx(alpha, p)) continue;
+                    ++px;
+                    const float* q = &dbg[p * 4];
+                    (glassTint(q) ? magenta : is(q, 0, 1, 0) ? green : is(q, 0, 1, 1) ? cyan : is(q, 1, 1, 0) ? yellow : other) += 1;
+                    const float a = alpha[p * 4 + 3];
+                    least = std::min(least, a);
+                    seeThrough += a < 0.999f ? 1 : 0;
+                    room += 1.0 - a;
+                    // the tint's mask and the alpha's: alpha = 1 - mask x 0.65 (the lead and the frame, green: alpha 1)
+                    if (glassTint(q) || is(q, 0, 1, 0)) disagree += std::fabs(a - (1.0f - q[0] * 0.65f)) < 2e-3f ? 0 : 1;
+                    const bool inOpaque = drawnPx(opaque, p), inGlass = drawnPx(glassy, p);
+                    both += inOpaque && inGlass ? 1 : 0;
+                    neither += !inOpaque && !inGlass ? 1 : 0;
+                }
+                share[mask > 0.0f][ordinal] = px ? room / px : 0.0;
+                std::snprintf(line, sizeof(line), "the inn's window %u through the client's patched shader, %s (%d triangles): %d pixels; the debug view: %d open "
+                              "glass, %d lead and frame, %d shut, %d no window, %d else (%d unlike the alpha); see-through at %d (least alpha %.2f), the room's share "
+                              "of what's seen %.0f%%; the two draws: %d in both, %d in neither", ordinal, mask > 0.0f ? "the lead mask" : "the light's mask", t1, px,
+                              magenta, green, cyan, yellow, other, disagree, seeThrough, least, px ? 100.0 * room / px : 0.0, both, neither);
+                const bool ok = t1 > 0 && t1 == t2 && t2 == t3 && t3 == t4 && px > 50 && yellow == 0 && other == 0 && both == 0 && neither == 0 && disagree == 0 &&
+                                (open ? cyan == 0 && magenta > 0 && seeThrough > 0 && (px < 200 || green > 0) : cyan == px && seeThrough == 0);
+                Check(ok, line);
+                if (!dump) continue;
+                // the dumps: the same window from the same eye, filling the frame
+                const float wide = focal;
+                const float dist = std::sqrt((win.center[0] - eye[0]) * (win.center[0] - eye[0]) + (win.center[1] - eye[1]) * (win.center[1] - eye[1]) +
+                                             (win.center[2] - eye[2]) * (win.center[2] - eye[2]));
+                focal = 0.42f * kS * dist / std::max(win.halfWidth, win.halfHeight);
+                std::vector<float> zDbg, zDay;
+                draw(ordinal, true, 1.0f, 0.0f, zDbg);
+                draw(ordinal, true, 0.0f, 0.0f, zDay);
+                std::vector<uint8_t> rgb;
+                const std::string tag = "inn_w" + std::to_string(ordinal) + (mask > 0.0f ? "_lead" : "_light");
+                if (mask > 0.0f)
+                {
+                    rgb.assign(static_cast<size_t>(kS) * kS * 3, 0);
+                    for (size_t p = 0; p < zDbg.size() / 4; ++p)
+                        for (int k = 0; k < 3; ++k)
+                            rgb[p * 3 + k] = drawnPx(zDay, p) ? static_cast<uint8_t>(std::lround(std::clamp(zDbg[p * 4 + k], 0.0f, 1.0f) * 255.0f)) : 0;
+                    save(tag + "_debug.ppm", rgb);
+                }
+                composite(zDay, false, false, rgb);
+                save(tag + "_day.ppm", rgb);
+                setTime(true);
+                std::vector<float> night;
+                draw(ordinal, true, 0.0f, 0.0f, night);
+                composite(night, false, true, rgb);
+                save(tag + "_night.ppm", rgb);
+                if (mask > 0.0f)
+                {
+                    wholeGlass = true;
+                    std::vector<float> wd, wn;
+                    setTime(false);
+                    draw(ordinal, true, 0.0f, 0.0f, wd);
+                    setTime(true);
+                    draw(ordinal, true, 0.0f, 0.0f, wn);
+                    wholeGlass = false;
+                    composite(wd, true, false, rgb);
+                    save("inn_w" + std::to_string(ordinal) + "_whole_day.ppm", rgb);
+                    composite(wn, true, true, rgb);
+                    save("inn_w" + std::to_string(ordinal) + "_whole_night.ppm", rgb);
+                }
+                focal = wide;
+            }
         }
+        setTime(false);
+        leadOn = 0.0f;
+        // the lead mask against the light's: more of the room through every open window, the lead and frame still opaque
+        std::snprintf(line, sizeof(line), "the inn's open windows' room share with the lead mask against the light's (the whole glass: 65%%): window 3 %.0f%% (%.0f%%), "
+                      "9 %.0f%% (%.0f%%), 14 %.0f%% (%.0f%%)", 100 * share[1][3], 100 * share[0][3], 100 * share[1][9], 100 * share[0][9], 100 * share[1][14],
+                      100 * share[0][14]);
+        Check(share[1][3] > share[0][3] && share[1][9] > share[0][9] && share[1][14] > share[0][14] && share[1][3] < 0.65 && share[1][9] < 0.65, line);
         if (decl) decl->Release();
-        for (IUnknown* u : std::initializer_list<IUnknown*>{ ps, target, readback, glassTex, white }) if (u) u->Release();
+        for (IUnknown* u : std::initializer_list<IUnknown*>{ ps, target, readback, glassTex, white, leadTex }) if (u) u->Release();
     }
 
     std::string LitProbeShader(const std::string& probe)
@@ -4898,7 +5221,7 @@ int main(int argc, char** argv)
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
-    // replay, inn)
+    // replay, lead, inn)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -4921,6 +5244,7 @@ int main(int argc, char** argv)
     if (run("titan")) { BacklitRulesTests(); BacklitTableTests(args[1]); }
     if (warp && run("titan")) BacklitWarpTests();
     if (warp && run("replay")) ReplayTests(args[1]);
+    if (run("lead")) LeadTests(args[1]);
     if (warp && run("inn")) InnRedrawTests(args[0], args[1]);
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");

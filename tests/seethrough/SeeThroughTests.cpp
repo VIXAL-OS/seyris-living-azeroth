@@ -868,7 +868,7 @@ int main(int argc, char** argv)
         // nothing pending: drawn
         CHECK(d.OnDraw(true, 3, 0, 3, 0) == D::Pass && d.Passed() == 0);
         // a deferrable batch: its draw deferred, once, its open windows with it
-        d.BeginBatch(true, 120, 186, 1.0f, 0x603u);
+        d.BeginBatch(true, 120, 186, 1.0f, 0x603u, 7);
         CHECK(d.Pending() && d.OnDraw(true, 3, 120, 186, 0) == D::Defer && !d.Pending());
         st::Deferral::Entry e;
         e.args.primitives = 62;
@@ -902,7 +902,7 @@ int main(int argc, char** argv)
         // taken in order, the list emptied
         const auto all = d.Take();
         CHECK(all.size() == st::kMaxDeferred && all[0].args.primitives == 62 && d.Count() == 0);
-        CHECK(all[0].first == 1.0f && all[0].bits == 0x603u && all[1].bits == 0);   // each its own batch's open windows
+        CHECK(all[0].first == 1.0f && all[0].bits == 0x603u && all[0].material == 7 && all[1].bits == 0 && all[1].material == 0);   // each its own batch's
         d.ResetCounts();
         CHECK(d.Passed() == 0 && d.Failed() == 0);
     });
@@ -927,6 +927,16 @@ int main(int argc, char** argv)
         bool copied = !ec;
         for (const char* name : { "GlassMaterials.cdbc", "GlassPanes.cdbc", "RoomStyles.cdbc", "GlassBuildings.cdbc", "GlassWindows.cdbc" })
             copied = copied && fs::copy_file(fs::path(data) / name, db / name, fs::copy_options::overwrite_existing, ec);
+        // GlassLead.cdbc (2026-10-21: glass::Load reads it too, and a table not copied here falls back to the client's file
+        // layer, which a test can't call): the data folder's, else the repo's beside the build (the game's before its stage)
+        {
+            char exe[MAX_PATH] = {};
+            GetModuleFileNameA(nullptr, exe, MAX_PATH);
+            const fs::path lead = fs::exists(fs::path(data) / "GlassLead.cdbc") ? fs::path(data) / "GlassLead.cdbc"
+                                                                               : fs::path(exe).parent_path() / ".." / ".." / "repo" / "data" / "GlassLead.cdbc";
+            std::printf("  GlassLead.cdbc from %s\n", lead.string().c_str());
+            copied = copied && fs::copy_file(lead, db / "GlassLead.cdbc", fs::copy_options::overwrite_existing, ec);
+        }
         const fs::path cwd = fs::current_path();
         if (copied) fs::current_path(root);
         st::RootWindows inn;

@@ -74,11 +74,12 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   drawn again after the room, blended at a constant opacity (`env/SeeThroughModel`, `features/SeeThrough`,
   `[LivingAzeroth.Glass]` `SeeThroughWindows`, `SeeThroughOpacity`; the research in `docs/r&d/see-through-windows.md`,
   the count in `tools/see_through_survey.py`). Only Goldshire's Lion's Pride Inn for now. With `SeeThroughRedraw` 1
-  (experimental; 0, the default, is the constant blend above) only the glass texels go see-through, the painted lead,
-  frame and tracery stay opaque, and a window opens only where its room is really seen through it (not over its ceiling
-  or through its walls); a shut window keeps its glass and fake room (20 October 2026). The lights panel has its debug
-  view (each redrawn pixel coloured by what the shader decided) and reads the device's state back at the redraw
-  (21 October 2026).
+  (the default; 0 is the constant blend above) only the glass goes see-through, every pane's inside, lit and shaded
+  alike (the texture's lead mask: `GlassLead.cdbc`'s panes, the mask built at run time from the texture; 21 October
+  2026), the painted lead, frame, tracery and shutters stay opaque, and a window opens only where its room is really seen
+  through it (not over its ceiling or through its walls); a shut window keeps its glass and fake room (20 October 2026).
+  The lights panel has its debug view (each redrawn pixel coloured by what the shader decided) and reads the device's
+  state back at the redraw (21 October 2026).
 - **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's

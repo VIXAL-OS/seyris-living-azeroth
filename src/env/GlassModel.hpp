@@ -70,6 +70,29 @@ namespace wxl_livingazeroth::glass
     };
     const char* KindName(uint32_t kind);
 
+    // The see-through redraw's own mask (features/SeeThrough; "yeah build the lead mask pls :D", the user, 2026-10-21).
+    // The light's mask above counts the lit glass only: the shaded lower half of a pane, painted darker, reads as frame,
+    // and through the inn's windows the per-pixel redraw showed ~4% of the room. This one is glass for every pane's
+    // inside, lit and shaded alike, and opaque for the lead, the frame with its mullions and tracery, and the shutters:
+    // where the texture's panes are (GlassLead.cdbc: rectangles in its uv, by hand from its layout; tools/gen_glass.py
+    // LEAD_LAYOUTS), its texels in them that aren't lead: not dark (luminance under `dark` x the median luminance of the
+    // lit glass in them: the mask above over half) and not on a thin dark line (the luminance closed over kLeadClose x
+    // kLeadClose texels, minus it, under `line` x that median). Built at run time from the client's texture, never stored.
+    struct LeadRect { float u0 = 0.0f, v0 = 0.0f, u1 = 0.0f, v1 = 0.0f; };   // in the texture's uv (0..1), half-open
+    constexpr float kLeadDark = 0.18f, kLeadLine = 0.15f;
+    constexpr int kLeadClose = 5;
+    struct LeadRule
+    {
+        std::vector<LeadRect> rects;
+        float dark = kLeadDark, line = kLeadLine;
+    };
+    /// The lead mask of a texture's level (`rgb`: w x h texels, three floats each, 0..1 as stored, rows top down) by
+    /// its material's light mask (the lit glass) and its rule: w x h bytes, 255 glass, 0 not. False (and `out` empty)
+    /// when no texel is in its rectangles.
+    bool LeadMask(const float* rgb, uint32_t w, uint32_t h, const Material& m, const LeadRule& rule, std::vector<uint8_t>& out);
+    /// A mask's next mip level: each texel the mean of its 2 x 2 (a size of 1 stays 1); w and h become the new size.
+    void LeadMip(const std::vector<uint8_t>& level, uint32_t& w, uint32_t& h, std::vector<uint8_t>& out);
+
     enum PaneFlag : uint32_t
     {
         kPaneNoSky = 0x1,     // GlassPanes.Flags: no sky behind it (underground): no floor light, no shafts

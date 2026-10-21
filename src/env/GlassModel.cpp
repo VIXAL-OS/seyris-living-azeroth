@@ -25,6 +25,78 @@ namespace wxl_livingazeroth::glass
         }
     }
 
+    bool LeadMask(const float* rgb, uint32_t w, uint32_t h, const Material& m, const LeadRule& rule, std::vector<uint8_t>& out)
+    {
+        out.clear();
+        if (!rgb || !w || !h || rule.rects.empty()) return false;
+        const size_t n = static_cast<size_t>(w) * h;
+        std::vector<float> lum(n);
+        std::vector<uint8_t> inside(n, 0);
+        for (size_t i = 0; i < n; ++i) lum[i] = 0.2126f * rgb[3 * i] + 0.7152f * rgb[3 * i + 1] + 0.0722f * rgb[3 * i + 2];
+        auto texel = [](float u, uint32_t size) { return static_cast<long>(std::lround(std::clamp(u, 0.0f, 1.0f) * static_cast<float>(size))); };
+        for (const LeadRect& r : rule.rects)
+            for (long y = texel(r.v0, h); y < texel(r.v1, h); ++y)
+                for (long x = texel(r.u0, w); x < texel(r.u1, w); ++x) inside[static_cast<size_t>(y) * w + x] = 1;
+        // the lit glass's median luminance in them (else all of theirs)
+        std::vector<float> lit, all;
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (!inside[i]) continue;
+            all.push_back(lum[i]);
+            const float g = m.mask[0] * rgb[3 * i] + m.mask[1] * rgb[3 * i + 1] + m.mask[2] * rgb[3 * i + 2] + m.mask[3];
+            if (g > 0.5f) lit.push_back(lum[i]);
+        }
+        if (all.empty()) return false;
+        std::vector<float>& from = lit.empty() ? all : lit;
+        std::nth_element(from.begin(), from.begin() + from.size() / 2, from.end());
+        const float ref = from[from.size() / 2];
+        // a thin dark line: the luminance closed (the largest over a square, then the smallest of those; the edges
+        // clamped) over kLeadClose texels, minus it
+        const long half = kLeadClose / 2;
+        auto pass = [&](const std::vector<float>& src, std::vector<float>& dst, bool largest, bool across) {
+            dst.resize(n);
+            for (long y = 0; y < static_cast<long>(h); ++y)
+                for (long x = 0; x < static_cast<long>(w); ++x)
+                {
+                    float v = largest ? -1e30f : 1e30f;
+                    for (long d = -half; d <= half; ++d)
+                    {
+                        const long xx = across ? std::clamp(x + d, 0L, static_cast<long>(w) - 1) : x;
+                        const long yy = across ? y : std::clamp(y + d, 0L, static_cast<long>(h) - 1);
+                        const float s = src[static_cast<size_t>(yy) * w + xx];
+                        v = largest ? std::max(v, s) : std::min(v, s);
+                    }
+                    dst[static_cast<size_t>(y) * w + x] = v;
+                }
+        };
+        std::vector<float> a, b;
+        pass(lum, a, true, true);
+        pass(a, b, true, false);
+        pass(b, a, false, true);
+        pass(a, b, false, false);
+        out.assign(n, 0);
+        for (size_t i = 0; i < n; ++i)
+            if (inside[i] && lum[i] >= rule.dark * ref && b[i] - lum[i] < rule.line * ref) out[i] = 255;
+        return true;
+    }
+
+    void LeadMip(const std::vector<uint8_t>& level, uint32_t& w, uint32_t& h, std::vector<uint8_t>& out)
+    {
+        const uint32_t nw = std::max(w / 2, 1u), nh = std::max(h / 2, 1u);
+        out.assign(static_cast<size_t>(nw) * nh, 0);
+        for (uint32_t y = 0; y < nh; ++y)
+            for (uint32_t x = 0; x < nw; ++x)
+            {
+                unsigned sum = 0;
+                for (uint32_t dy = 0; dy < 2; ++dy)
+                    for (uint32_t dx = 0; dx < 2; ++dx)
+                        sum += level[static_cast<size_t>(std::min(2 * y + dy, h - 1)) * w + std::min(2 * x + dx, w - 1)];
+                out[static_cast<size_t>(y) * nw + x] = static_cast<uint8_t>((sum + 2) / 4);
+            }
+        w = nw;
+        h = nh;
+    }
+
     uint64_t PaneIndex::Key(uint32_t map, int tx, int ty)
     {
         return (static_cast<uint64_t>(map & 0xFFFF) << 48) | (static_cast<uint64_t>(static_cast<uint32_t>(tx + 0x800000) & 0xFFFFFF) << 24) |

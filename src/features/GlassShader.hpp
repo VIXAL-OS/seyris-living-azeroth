@@ -69,13 +69,16 @@
 //  the opacity, its lead, frame and tracery and every shut window opaque ("the tracery also becomes more transparent",
 //  the user, 2026-10-20). The batch's own alpha test (c219.y, -1 none) on the stock alpha is a texkill there, and so is
 //  the redraw's split into its two draws (c28.y: +1 keeps alpha >= c28.z, the opaque; -1 the rest), not the device's alpha
-//  test. Its debug view (c28.x > 0) colours each pixel by what was decided: an open window's glass magenta, its lead and
-//  frame green, a shut window cyan, no window found yellow (c29..c32 defined); r31.w -1 no window, 0 shut, 1 open.
+//  test. The mask the alpha goes by is the redraw's own where it has one (c28.w 1: the lead mask at s15, every pane's
+//  inside glass, lit and shaded alike; "yeah build the lead mask pls :D", the user, 2026-10-21), else the light's. Its
+//  debug view (c28.x > 0) colours each pixel by what was decided: an open window's glass magenta, its lead and frame
+//  green, a shut window cyan, no window found yellow (c29..c32 defined); r31.w -1 no window, 0 shut, 1 open.
 //
 // Registers (WMO pixel shaders; the stock ones use r0..r11, c0..c14, s0..s7 and no b/i registers):
 //  b9 glass, b10 floor light, b11 the redraw; r12..r31 (shared with the ice and the rims, see ModelIce.hpp; r12.w the stock
 //  alpha with the glass blocks, r29.w and r31.w the redraw's); i1 (defined: the window
-//  loop's bound); s8..s13 (the room: floor, walls, ceiling, wood, the furniture atlas, the window table);
+//  loop's bound); s8..s13 (the room: floor, walls, ceiling, wood, the furniture atlas, the window table), s15 (the redraw's
+//  lead mask);
 //  c180..c183 the camera and the view's rows (terrainice::FillModelConstants, as the ice); c175, c176 (the ice's defs);
 //  c192 mask plane; c193 (inside weight, strength, the room's share, thickness yd); c194 (the sky through the glass
 //  rgb, the sun's gain); c195 (toward the sun, world xyz, in a floor batch toward its panes' lights; saturation inside); c196 (the reflected sky rgb, Fresnel
@@ -95,7 +98,7 @@
 //  by day a dark room keeps room::kDarkDay, at night the moon's in dark rooms only); c206, c207, c208, c209, c210, c211,
 //  c214..c217, c220, c221, c83, c84, c87..c100 defined; c27.zw the corner that isn't glass; c219 the redraw's (b11 only:
 //  1 - the opacity, the alpha test's reference, the first ordinal, the open windows' bits; c28 its debug view, its
-//  draw's sign and threshold; c29..c32 the debug view's tints, defined);
+//  draw's sign and threshold, whether s15 holds its lead mask; c29..c32 the debug view's tints, defined);
 //  the floor light's panes c101..c172 (six registers each; the rims' range: a batch has one or the other, features/Glass
 //  re-uploads when the rims took it). ps_3_0 has c0..c223, and an instruction reads at most one constant register.
 #pragma once
@@ -133,7 +136,8 @@ namespace wxl_livingazeroth::glass
                                          // none), the first ordinal of .w's bits, the open windows' bits
     constexpr int kReplayBits = 16;      // windows c219.w holds (bits + 0.5: a margin no approximate exp crosses)
     constexpr int kReplayDrawConstant = 28;   // c28, read under b11 only: the debug view (1 on), the draw (+1 the opaque, -1
-                                              // the see-through; 0 both), the alpha the two split at
+                                              // the see-through; 0 both), the alpha the two split at, the lead mask (1: s15's)
+    constexpr int kLeadSampler = 15;     // s15, read under b11 only: the redraw's lead mask (features/SeeThrough binds it)
     /// GlassBlock's parts besides the look as it was (the tests build the block without them to hold it to the old one).
     enum BlockPart : int { kPartNotGlass = 1, kPartReplay = 2, kAllParts = 3 };
 
@@ -178,7 +182,7 @@ namespace wxl_livingazeroth::glass
                // the redraw's debug view's tints (kReplayDebug): an open window's glass, its lead and frame, a shut window, no window
                def(29, 1.0f, 0.0f, 1.0f, 0.0f) + def(30, 0.0f, 1.0f, 0.0f, 0.0f) + def(31, 0.0f, 1.0f, 1.0f, 0.0f) + def(32, 1.0f, 1.0f, 0.0f, 0.0f) +
                "    defi i1, " + std::to_string(kMaxPerCell) + ", 0, 0, 0\n"
-               "    dcl_2d s8\n    dcl_2d s9\n    dcl_2d s10\n    dcl_2d s11\n    dcl_2d s12\n    dcl_2d s13\n";
+               "    dcl_2d s8\n    dcl_2d s9\n    dcl_2d s10\n    dcl_2d s11\n    dcl_2d s12\n    dcl_2d s13\n    dcl_2d s15\n";
     }
 
     /// The window table's texel `index` (a whole number, in `idx`) as point-sampling coordinates in `o` (.xy, .zw 0):
@@ -380,11 +384,16 @@ namespace wxl_livingazeroth::glass
             "\n            mul r29.w, r29.w, r19.x"
             "\n          endif";
         const std::string replayKeep = !replay ? std::string() : "\n          mul r22.w, r22.w, r29.w";
-        // The redraw's debug view (c28.x > 0: features/SeeThrough's panel): the pixel the colour of what the shader decided
-        // (before the fog): an open window's glass magenta (c29) by its mask, through grey to its lead and frame green (c30:
-        // mask 0, alpha 1), a shut window cyan (c31), no window found yellow (c32).
+        // The redraw's own mask (the look above done with the light's): the lead mask at s15 where features/SeeThrough bound
+        // one (c28.w 1: GlassLead.cdbc's panes, env/GlassModel LeadMask), else the light's; what the alpha (ReplayAlpha) and
+        // the debug view read. The debug view (c28.x > 0: features/SeeThrough's panel): the pixel the colour of what the
+        // shader decided (before the fog): an open window's glass magenta (c29) by its mask, through grey to its lead and
+        // frame green (c30: mask 0, alpha 1), a shut window cyan (c31), no window found yellow (c32).
         const std::string replayDebug = !replay ? std::string() :
             "\n      if b11"
+            "\n        texld r13, " + vT + ", s15"
+            "\n        add r13.x, r13.x, -r14.w"
+            "\n        mad r14.w, c28.w, r13.x, r14.w"
             "\n        mov r13.x, c28.x"
             "\n        if_gt r13.x, c175.y"
             "\n          mov r13, c32"

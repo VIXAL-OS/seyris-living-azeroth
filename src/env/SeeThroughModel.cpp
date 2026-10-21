@@ -559,13 +559,14 @@ namespace wxl_livingazeroth::seethrough
         return k >= 0.0f && v - std::floor(v) - 0.5f >= 0.0f;
     }
 
-    void Deferral::BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first, uint32_t bits)
+    void Deferral::BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first, uint32_t bits, uint32_t material)
     {
         m_pending = deferrable;
         m_start = start;
         m_count = count;
         m_first = first;
         m_bits = bits;
+        m_material = material;
     }
 
     Deferral::Draw Deferral::OnDraw(bool indexed, uint32_t primitive, uint32_t start, uint32_t count, uint32_t blendingMode)
@@ -586,6 +587,7 @@ namespace wxl_livingazeroth::seethrough
         m_entries.push_back(entry);
         m_entries.back().first = m_first;
         m_entries.back().bits = m_bits;
+        m_entries.back().material = m_material;
     }
 
     std::vector<Deferral::Entry> Deferral::Take()

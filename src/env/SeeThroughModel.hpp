@@ -396,12 +396,13 @@ namespace wxl_livingazeroth::seethrough
             const void* depth = nullptr;
             float first = 0.0f;        // its open windows (OpenBits: Captured takes BeginBatch's)
             uint32_t bits = 0;
+            uint32_t material = 0;     // its glass material (features/Glass: index + 1; its lead mask), BeginBatch's
         };
         enum class Draw { Pass, Defer };
         /// A batch passed the loop's cull test: `deferrable` (Deferrable, a glass batch of an opened group) with its
-        /// range (MOBA's first index and count) and its open windows (OpenBits), else a batch to draw as it is. Any
-        /// earlier pending batch is dropped.
-        void BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first = 0.0f, uint32_t bits = 0);
+        /// range (MOBA's first index and count), its open windows (OpenBits) and its glass material, else a batch to draw
+        /// as it is. Any earlier pending batch is dropped.
+        void BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first = 0.0f, uint32_t bits = 0, uint32_t material = 0);
         /// The batch loop ended (nothing pending past it).
         void EndLoop() { m_pending = false; }
         /// A device draw: defer it when it's the pending batch's (indexed triangles, the same range), the client draws it
@@ -422,7 +423,7 @@ namespace wxl_livingazeroth::seethrough
         bool m_pending = false;
         uint32_t m_start = 0, m_count = 0;
         float m_first = 0.0f;
-        uint32_t m_bits = 0;
+        uint32_t m_bits = 0, m_material = 0;
         std::vector<Entry> m_entries;
         unsigned m_failed = 0, m_passed = 0;
     };

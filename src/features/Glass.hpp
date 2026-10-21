@@ -259,6 +259,10 @@ namespace wxl_livingazeroth::glass
     const Material* MaterialAt(uint32_t indexPlusOne);
     /// The material with this GlassMaterials ID (a pane's Material), null: none.
     const Material* MaterialById(uint32_t id);
+    /// A material's lead rule (GlassLead.cdbc: where its texture's panes are, for the see-through redraw's mask), null:
+    /// none; and its texture's path as GlassMaterials has it (null: no such material).
+    const LeadRule* LeadOf(uint32_t indexPlusOne);
+    const char* TextureOf(uint32_t indexPlusOne);
     /// What the floor light and the shafts use (for the tests and GlassShafts).
     const PaneIndex& Panes();
 

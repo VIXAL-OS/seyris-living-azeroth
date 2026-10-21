@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Window glass: which WMO textures are glass and what kind, where the panes stand and which panes make one window, as
-data (data/GlassMaterials.cdbc, GlassPanes.cdbc and GlassWindows.cdbc, read by features/Glass; docs/cdbc-tables.md).
+data (data/GlassMaterials.cdbc, GlassPanes.cdbc, GlassWindows.cdbc and GlassLead.cdbc, read by features/Glass;
+docs/cdbc-tables.md).
 
 Why: "make the window glass look like real glass ... every glass window, not only stained glass" (the user,
 2026-10-17). Nearly every window material is opaque (MOMT blend 0: 2 of ~1,100 are not), so the glass is a look the
@@ -24,6 +25,10 @@ candidate texture):
 - A corner of a glass texture that isn't glass (NOT_GLASS: the human window atlases' fourth quadrant, four glowing fire
   slots, a smithy's forge mouth): NotGlassU, NotGlassV (1: none). Its triangles (all three corners in it) are no pane's and
   no window's, and the shader leaves its texels as the client draws them.
+
+GlassLead (one row per rectangle): where a texture's panes are, for the see-through redraw's own mask (LEAD_LAYOUTS: every
+pane's inside glass, lit and shaded alike; the lead, frames and shutters opaque). The mask itself is built at run time
+from the texture; a texture with no rows keeps the light's mask (MaskRGB) in the redraw.
 
 GlassPanes (one row per window pane of every placed WMO with glass, all maps the scan has, no lived-in filter):
 - The pane: the connected, coplanar glass triangles of one group (a curved band of glass is cut where it turns, and a
@@ -118,6 +123,7 @@ Usage:
         (--sheets: contact sheets of each texture and its mask)
   python gen_glass.py <scan> --rooms [data dir]             only RoomStyles.cdbc and GlassBuildings.cdbc
   python gen_glass.py <scan> --windows [data dir]           only GlassWindows.cdbc (no textures needed)
+  python gen_glass.py --lead [data dir]                     only GlassLead.cdbc (LEAD_LAYOUTS: no scan, no textures)
 """
 import collections
 import csv
@@ -294,6 +300,29 @@ NOT_GLASS = {b: (0.5, 0.5) for b in ("mm_elwynn_wnd_ext__01", "mm_elwynn_wnd_int
                                        "mm_duskwood_wnd_int__01", "mm_rr_wnd_ext__01", "mm_rr_wnd_int__01",
                                        "mm_westfall_wnd_ext__01", "mm_westfall_wnd_int__01")}
 NOT_GLASS_SLACK = 0.02
+
+# Where a glass texture's panes are, for the see-through redraw's lead mask (GlassLead.cdbc; features/SeeThrough and
+# env/GlassModel LeadMask): "yeah build the lead mask pls :D" (the user, 2026-10-21). The light's glass mask (MaskRGB)
+# counts only the lit glass, so the shaded lower half of a pane, painted darker, read as frame and the room hardly showed
+# through the inn's windows. The runtime builds the redraw's mask from the texture itself (the client's file, never
+# stored): glass the texels inside these rectangles that aren't lead (not dark, not a thin dark line: LEAD_DARK, LEAD_LINE
+# x the lit glass's median luminance in them); the lead, the frames, mullions and tracery, the shutters and the post
+# opaque. Rectangles in texels of a 256 x 256 texture (x0, y0, x1, y1, half-open), measured by eye on mm_elwynn_wnd_ext__01
+# and checked on its seven recolours (the same layout: the dark lines agree on 90 .. 99% of the texels).
+LEAD_LAYOUTS = {
+    "human": [
+        # the lattice window (top left): its four lights, not the shutters, the transom or the post between them
+        (32, 8, 61, 57), (66, 8, 95, 57), (32, 70, 61, 121), (66, 70, 95, 121),
+        # the tall panes (top right): two rows of six, not the mullions or the transom
+        (131, 6, 147, 58), (152, 6, 168, 58), (176, 6, 191, 58), (195, 6, 211, 58), (219, 6, 232, 58), (237, 6, 251, 58),
+        (131, 70, 147, 121), (152, 70, 168, 121), (176, 70, 191, 121), (195, 70, 211, 121), (219, 70, 232, 121), (237, 70, 251, 121),
+        # the arched window (bottom left): the fanlight, and the lower lights either side of the post (bottom right: the forge)
+        (6, 130, 120, 173), (12, 188, 56, 250), (73, 188, 122, 250),
+    ],
+}
+LEAD_TEXTURES = {"dungeons\\textures\\windows\\%s.blp" % b: "human" for b in NOT_GLASS}
+LEAD_DARK = 0.18
+LEAD_LINE = 0.15
 
 # Titan glass lit from behind (see the docstring): the maps, and per texture (the glow's strength x the texel, its pulse's
 # amplitude, its period in seconds, the colour the pulse adds or None for white). Strengths by eye from the textures'
@@ -1746,6 +1775,26 @@ GLASS_BUILDINGS = ["u", "u", "u", "f", "f", "f", "u", "u", "u", "u", "u", "s", "
 GLASS_WINDOWS = ["u", "s", "u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "u", "u", "s", "f"]
 #  ID Wmo Group Ordinal Kind CenterX CenterY CenterZ NormalX NormalY NormalZ HalfWidth HalfHeight Flags Panes Comment
 #  Thickness
+GLASS_LEAD = ["u", "s", "f", "f", "f", "f", "f", "f", "s"]
+#  ID Texture U0 V0 U1 V1 Dark Line Comment (2026-10-21: the see-through redraw's panes, one row per rectangle)
+
+
+def lead_table():
+    """GlassLead.cdbc's rows: each LEAD_TEXTURES texture's layout's rectangles in its uv (0..1, half-open)."""
+    rows = []
+    for texture in sorted(LEAD_TEXTURES):
+        layout = LEAD_TEXTURES[texture]
+        for k, (x0, y0, x1, y1) in enumerate(LEAD_LAYOUTS[layout]):
+            rows.append([len(rows) + 1, texture, x0 / 256.0, y0 / 256.0, x1 / 256.0, y1 / 256.0, LEAD_DARK, LEAD_LINE,
+                         "%s %d" % (layout, k + 1)])
+    return rows
+
+
+def write_lead(folder):
+    """GlassLead.cdbc, with a report."""
+    rows = lead_table()
+    print(f"{len(rows)} lead-mask rectangles over {len(LEAD_TEXTURES)} textures ({', '.join(sorted(set(LEAD_TEXTURES.values())))})")
+    write(folder / "GlassLead.cdbc", io.build(GLASS_LEAD, [tuple(r) for r in rows]))
 
 
 def flat(scan, name):
@@ -2024,10 +2073,13 @@ def main():
         a = rest.pop(0)
         if a in ("--group-list", "--texture-list", "--sheets"):
             options[a] = rest.pop(0) if rest else sys.exit(f"{a} needs a path")
-        elif a in ("--rooms", "--windows"):
+        elif a in ("--rooms", "--windows", "--lead"):
             options[a] = True
         else:
             argv.append(a)
+    if "--lead" in options:
+        write_lead(Path(argv[0]) if argv else Path(__file__).resolve().parent.parent / "data")
+        return
     if not argv:
         sys.exit(__doc__)
     scan = Path(argv[0])
@@ -2072,6 +2124,7 @@ def main():
     write(folder / "GlassPanes.cdbc", io.build(GLASS_PANES, [tuple(r) for r in prows]))
     write_windows(scan, folder)
     write_rooms(scan, folder)
+    write_lead(folder)
 
 
 if __name__ == "__main__":

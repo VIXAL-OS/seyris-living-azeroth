@@ -1,12 +1,13 @@
 // A BLP2 texture's average colour, from its bytes and without a device: what the surface cover needs to look like
-// the ground beside it (features/SurfaceCoverFill, blend::MatchGround). Header-only, so it can be checked offline
-// (tests/cover).
+// the ground beside it (features/SurfaceCoverFill, blend::MatchGround); and its top level's colours (the see-through
+// redraw's lead mask). Header-only, so it can be checked offline (tests/cover, tests/glass).
 #pragma once
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 namespace wxl_livingazeroth::blp
 {
@@ -114,6 +115,58 @@ namespace wxl_livingazeroth::blp
             return false;
         if (count <= 0.0) return false;
         for (int k = 0; k < 3; ++k) out[k] = static_cast<float>(sum[k] / count);
+        return true;
+    }
+
+    /// A BLP2 file's top level as RGB (0..1, as stored: three floats a texel, rows top down; alpha left out), its size
+    /// in w and h: what the see-through redraw's lead mask is built from (env/GlassModel LeadMask). The same formats as
+    /// AverageColour; false if the bytes aren't such a file or the level is cut short.
+    inline bool DecodeTop(const uint8_t* file, size_t size, std::vector<float>& rgb, uint32_t& w, uint32_t& h)
+    {
+        constexpr size_t kHeader = 148 + 1024;
+        rgb.clear();
+        if (!file || size < kHeader || std::memcmp(file, "BLP2", 4) != 0) return false;
+        auto u32 = [&](size_t at) { uint32_t v; std::memcpy(&v, file + at, 4); return v; };
+        const uint8_t compression = file[8], alphaType = file[10];
+        w = u32(12);
+        h = u32(16);
+        if (!w || !h || w > 4096 || h > 4096) return false;
+        const uint32_t offset = u32(20), length = u32(84);
+        if (!length || offset + static_cast<size_t>(length) > size) return false;
+        const uint8_t* src = file + offset;
+        rgb.assign(static_cast<size_t>(w) * h * 3, 0.0f);
+        if (compression == 2)
+        {
+            const bool dxt1 = alphaType != 1 && alphaType != 7;
+            const uint32_t block = dxt1 ? 8 : 16, across = (w + 3) / 4, down = (h + 3) / 4;
+            if (static_cast<size_t>(across) * down * block > length) { rgb.clear(); return false; }
+            for (uint32_t by = 0; by < down; ++by)
+                for (uint32_t bx = 0; bx < across; ++bx)
+                {
+                    float c[16][3];
+                    bool opaque[16];
+                    DecodeColourBlock(src + (static_cast<size_t>(by) * across + bx) * block + (dxt1 ? 0 : 8), dxt1, c, opaque);
+                    for (int t = 0; t < 16; ++t)
+                    {
+                        const uint32_t x = bx * 4 + t % 4, y = by * 4 + t / 4;
+                        if (x < w && y < h)
+                            for (int k = 0; k < 3; ++k) rgb[(static_cast<size_t>(y) * w + x) * 3 + k] = c[t][k];
+                    }
+                }
+            return true;
+        }
+        if (compression != 1 && compression != 3) { rgb.clear(); return false; }
+        const size_t texels = static_cast<size_t>(w) * h;
+        if ((compression == 3 ? texels * 4 : texels) > length) { rgb.clear(); return false; }
+        for (size_t i = 0; i < texels; ++i)
+        {
+            uint32_t c;
+            if (compression == 3) std::memcpy(&c, src + i * 4, 4);
+            else c = u32(148 + 4 * static_cast<size_t>(src[i]));
+            rgb[i * 3] = ((c >> 16) & 0xFF) / 255.0f;
+            rgb[i * 3 + 1] = ((c >> 8) & 0xFF) / 255.0f;
+            rgb[i * 3 + 2] = (c & 0xFF) / 255.0f;
+        }
         return true;
     }
 }

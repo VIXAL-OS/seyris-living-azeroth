@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include <string>
+#include <vector>
 
 namespace wxl_livingazeroth::blp
 {
@@ -20,4 +21,6 @@ namespace wxl_livingazeroth::blp
 
     /// The file's average colour (RGB 0..1, as stored), no device needed (BlpColour.hpp); false if it can't be read.
     bool AverageColour(const char* path, float rgb[3]);
+    /// The file's bytes as the client sees it (its archives or a loose file); false if it can't be read.
+    bool ReadBytes(const char* path, std::vector<uint8_t>& out);
 }

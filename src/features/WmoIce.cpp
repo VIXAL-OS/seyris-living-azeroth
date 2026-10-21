@@ -461,7 +461,7 @@ namespace wxl_livingazeroth::wmoice
             }
             else SwitchOff();
             // See-through windows (features/SeeThrough): a glass batch of an opened group may be drawn later, over the room.
-            seethrough::Batch(g_group, record, glassRow != 0);
+            seethrough::Batch(g_group, record, glassRow);
             // The window glass and the floor light (features/Glass): its material, and whether the rims hold c101..
             if (r && r->anyGlass) glass::Batch(glassRow, g_ringsOn, selfLit, unlit);
             return culled;

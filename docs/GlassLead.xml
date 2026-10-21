@@ -1,0 +1,11 @@
+  <Table Name="GlassLead" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="Texture" Type="string" />
+    <Field Name="U0" Type="float" />
+    <Field Name="V0" Type="float" />
+    <Field Name="U1" Type="float" />
+    <Field Name="V1" Type="float" />
+    <Field Name="Dark" Type="float" />
+    <Field Name="Line" Type="float" />
+    <Field Name="Comment" Type="string" />
+  </Table>

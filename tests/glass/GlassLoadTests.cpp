@@ -9,8 +9,9 @@
 //     in its group's stained grid, and never in the other); every whole placement (a unique ID, group -1) is a placement
 //     and is found at its own origin (placed, not by WMO); a city group under its placement; every style's class is the
 //     file's; GlassMaterials' corner that isn't glass (NotGlassU, NotGlassV) on the eight human window atlases (the
-//     forge's fire slots) and on nothing else, and Goldshire's smithy left its four real windows. The lines the lights
-//     panel shows say so, and LogLoad's one line to the log (info).
+//     forge's fire slots) and on nothing else, and Goldshire's smithy left its four real windows; GlassLead.cdbc's panes
+//     (the see-through redraw's lead mask) on those eight textures, 19 rectangles each. The lines the lights panel shows
+//     say so, and LogLoad's one line to the log (info).
 //  2b. The window lights' cells (features/Windows: WindowLights.cdbc, WindowRooms.cdbc through the same reader): each
 //     light's share lit as its cells say, with stained glass's rooms (its stained cells, not the ones read only without
 //     them) and without (StainedRooms off: the cells as they were before), against the rules worked here from the raw rows;
@@ -222,7 +223,7 @@ namespace
     }
 
     const char* const kTables[] = { "GlassMaterials.cdbc", "GlassPanes.cdbc", "RoomStyles.cdbc", "GlassBuildings.cdbc", "GlassWindows.cdbc",
-                                    "WindowLights.cdbc", "WindowRooms.cdbc" };
+                                    "WindowLights.cdbc", "WindowRooms.cdbc", "GlassLead.cdbc" };
 
     // What the files say Load should keep (tools/gen_glass.py's columns).
     struct Expected
@@ -383,6 +384,22 @@ namespace
                       smithyWindows);
         Check(cornered == 8 && quadrants == 8 && elwynn && elwynn->notGlass[0] == 0.5f && elwynn->notGlass[1] == 0.5f && smithyWindows == 4 &&
               status.find("8 with a corner that isn't glass") != std::string::npos, line);
+
+        // GlassLead.cdbc (2026-10-21): the see-through redraw's panes as the reader gives them, on the eight human window
+        // atlases (the inn's among them, by any case), on nothing else; their texture's path as GlassMaterials has it.
+        size_t ruled = 0, rects = 0;
+        for (uint32_t i = 1; gl::MaterialAt(i); ++i)
+            if (const gl::LeadRule* r = gl::LeadOf(i)) { ++ruled; rects += r->rects.size(); }
+        const uint32_t innMaterial = gl::MaterialOf("Dungeons\\Textures\\Windows\\MM_Elwynn_Wnd_Ext__01.blp");
+        const gl::LeadRule* inn = gl::LeadOf(innMaterial);
+        const char* innTexture = gl::TextureOf(innMaterial);
+        std::snprintf(line, sizeof(line), "%s: GlassLead.cdbc: %zu textures with panes, %zu rectangles; the inn's texture %zu (its first %.4f %.4f .. %.4f %.4f, "
+                      "dark %.2f, line %.2f; its path %s)", via, ruled, rects, inn ? inn->rects.size() : 0, inn ? inn->rects[0].u0 : -1.0f, inn ? inn->rects[0].v0 : -1.0f,
+                      inn ? inn->rects[0].u1 : -1.0f, inn ? inn->rects[0].v1 : -1.0f, inn ? inn->dark : -1.0f, inn ? inn->line : -1.0f, innTexture ? innTexture : "none");
+        Check(ruled == 8 && rects == 152 && inn && inn->rects.size() == 19 && inn->rects[0].u0 == 32.0f / 256 && inn->rects[0].v0 == 8.0f / 256 &&
+              inn->rects[0].u1 == 61.0f / 256 && inn->rects[0].v1 == 57.0f / 256 && inn->dark == gl::kLeadDark && inn->line == gl::kLeadLine && innTexture &&
+              std::string(innTexture) == "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp" &&
+              status.find("GlassLead.cdbc: 152 rectangles over 8 textures;") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).
         const std::string rooms = gl::RoomLine(), windows = gl::WindowLine();

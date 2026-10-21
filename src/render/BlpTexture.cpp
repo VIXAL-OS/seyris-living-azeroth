@@ -69,6 +69,8 @@ namespace wxl_livingazeroth::blp
         }
     }
 
+    bool ReadBytes(const char* path, std::vector<uint8_t>& out) { return ReadFile(path, out); }
+
     bool AverageColour(const char* path, float rgb[3])
     {
         std::vector<uint8_t> file;

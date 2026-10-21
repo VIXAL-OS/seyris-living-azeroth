@@ -100,6 +100,15 @@ namespace wxl_livingazeroth::glass
             {"Panes", 14, WXL_CDBC_FIELD_VALUE},     {"Comment", 15, WXL_CDBC_FIELD_STRING},  {"Thickness", 16, WXL_CDBC_FIELD_VALUE},
         };
         constexpr WXL_SeyrisCdbcDefinition kWindowDef = { "GlassWindows", kWindowsFile, kWindowFields, 17 };
+        // Where a glass texture's panes are, for the see-through redraw's lead mask (tools/gen_glass.py GLASS_LEAD,
+        // LEAD_LAYOUTS; 2026-10-21): one row per rectangle. Optional: without it the redraw keeps the light's mask.
+        constexpr const char* kLeadFile = "DBFilesClient\\GlassLead.cdbc";
+        constexpr WXL_SeyrisCdbcField kLeadFields[] = {
+            {"ID", 0, WXL_CDBC_FIELD_VALUE}, {"Texture", 1, WXL_CDBC_FIELD_STRING}, {"U0", 2, WXL_CDBC_FIELD_VALUE},
+            {"V0", 3, WXL_CDBC_FIELD_VALUE}, {"U1", 4, WXL_CDBC_FIELD_VALUE},       {"V1", 5, WXL_CDBC_FIELD_VALUE},
+            {"Dark", 6, WXL_CDBC_FIELD_VALUE}, {"Line", 7, WXL_CDBC_FIELD_VALUE},   {"Comment", 8, WXL_CDBC_FIELD_STRING},
+        };
+        constexpr WXL_SeyrisCdbcDefinition kLeadDef = { "GlassLead", kLeadFile, kLeadFields, 9 };
 
         // Each kind's look (features/GlassShader's constants): the room behind it (x the settings' shares by day and
         // night), the glass's thickness (yd), saturation seen from inside, the reflection at grazing (Fresnel's
@@ -138,6 +147,8 @@ namespace wxl_livingazeroth::glass
 
         Settings g_settings;
         std::vector<Material> g_materials;
+        std::vector<std::string> g_texturePaths;   // each material's texture, as GlassMaterials has it
+        std::vector<LeadRule> g_lead;              // each material's lead rule (GlassLead.cdbc; no rectangles: none)
         std::unordered_map<std::string, uint32_t> g_byTexture;
         std::unordered_map<uint32_t, uint32_t> g_materialById;   // GlassMaterials ID -> index + 1
         PaneIndex g_panes;
@@ -921,6 +932,8 @@ namespace wxl_livingazeroth::glass
     {
         ++g_generation;
         g_materials.clear();
+        g_texturePaths.clear();
+        g_lead.clear();
         g_byTexture.clear();
         g_materialById.clear();
         g_styles.clear();
@@ -968,6 +981,7 @@ namespace wxl_livingazeroth::glass
                 for (int k = 0; k < 2; ++k) m.notGlass[k] = std::isfinite(ng[k]) && ng[k] >= 0.0f && ng[k] < 1.0f ? ng[k] : 1.0f;
                 if (m.notGlass[0] >= 1.0f || m.notGlass[1] >= 1.0f) m.notGlass[0] = m.notGlass[1] = 1.0f;
                 g_materials.push_back(m);
+                g_texturePaths.push_back(texture);
                 g_byTexture[Key(texture)] = static_cast<uint32_t>(g_materials.size());
                 g_materialById[cdbc->Value(t, row, "ID", 0)] = static_cast<uint32_t>(g_materials.size());
             }
@@ -984,6 +998,39 @@ namespace wxl_livingazeroth::glass
             status = line;
         }
         else { status = std::string("GlassMaterials.cdbc: ") + (err[0] ? err : "not found") + " (no glass)"; g_loadProblem = true; }
+
+        // The see-through redraw's lead mask: where each texture's panes are (optional: its light mask without them).
+        g_lead.assign(g_materials.size(), LeadRule{});
+        err[0] = 0;
+        if (void* t = g_materials.empty() ? nullptr : cdbcload::LoadAppendOnly(cdbc, kLeadDef, err, sizeof(err)))
+        {
+            auto F = [&](const void* row, const char* f, float missing) { return cdbcload::Float(cdbc, t, row, f, missing); };
+            unsigned rects = 0, unknown = 0, textures = 0;
+            for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
+            {
+                const void* row = cdbc->RowAt(t, i);
+                if (!row) continue;
+                const uint32_t m = MaterialOf(cdbc->GetString(t, row, "Texture"));
+                LeadRect r;
+                r.u0 = F(row, "U0", 0.0f); r.v0 = F(row, "V0", 0.0f); r.u1 = F(row, "U1", 0.0f); r.v1 = F(row, "V1", 0.0f);
+                const bool sane = std::isfinite(r.u0) && std::isfinite(r.v0) && std::isfinite(r.u1) && std::isfinite(r.v1) &&
+                                  r.u0 >= 0.0f && r.v0 >= 0.0f && r.u1 <= 1.0f && r.v1 <= 1.0f && r.u0 < r.u1 && r.v0 < r.v1;
+                if (!m || !sane) { ++unknown; continue; }
+                LeadRule& rule = g_lead[m - 1];
+                textures += rule.rects.empty() ? 1 : 0;
+                rule.rects.push_back(r);
+                const float dark = F(row, "Dark", kLeadDark), line = F(row, "Line", kLeadLine);
+                rule.dark = std::isfinite(dark) && dark >= 0.0f && dark < 1.0f ? dark : kLeadDark;
+                rule.line = std::isfinite(line) && line > 0.0f ? line : kLeadLine;
+                ++rects;
+            }
+            cdbc->Release(t);
+            char line[160];
+            std::snprintf(line, sizeof(line), "; GlassLead.cdbc: %u rectangles over %u textures%s", rects, textures,
+                          unknown ? " (some rows left out: no glass texture, or out of 0 .. 1)" : "");
+            status += line;
+        }
+        else if (!g_materials.empty()) status += std::string("; GlassLead.cdbc: ") + (err[0] ? err : "not found") + " (the see-through redraw keeps the glass mask)";
 
         std::vector<Pane> panes;
         err[0] = 0;
@@ -1202,6 +1249,16 @@ namespace wxl_livingazeroth::glass
     const Material* MaterialAt(uint32_t indexPlusOne)
     {
         return indexPlusOne && indexPlusOne <= g_materials.size() ? &g_materials[indexPlusOne - 1] : nullptr;
+    }
+
+    const LeadRule* LeadOf(uint32_t indexPlusOne)
+    {
+        return indexPlusOne && indexPlusOne <= g_lead.size() && !g_lead[indexPlusOne - 1].rects.empty() ? &g_lead[indexPlusOne - 1] : nullptr;
+    }
+
+    const char* TextureOf(uint32_t indexPlusOne)
+    {
+        return indexPlusOne && indexPlusOne <= g_texturePaths.size() ? g_texturePaths[indexPlusOne - 1].c_str() : nullptr;
     }
 
     const Material* MaterialById(uint32_t id)

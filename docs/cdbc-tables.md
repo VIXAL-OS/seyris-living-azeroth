@@ -421,16 +421,17 @@ dragged holds them until it stops). The shader's rooms fade the same way. Withou
 `LightsFollowRooms` 0, the lights stay as WindowLights has them. If GlassBuildings or GlassWindows
 changes, rerun gen_window_lights.py (the building IDs and the windows' ordinals come from them).
 
-## Window glass: five tables
+## Window glass: six tables
 
 Window glass that looks like glass (features/Glass, `[LivingAzeroth.Glass]` in config.md): seen from
 inside, the day coming through it (stained glass glowing in its own colours, brightest with the sun
 beyond it); seen from outside by day, the client's painted glass a little darker with the sky in it and, behind clear panes, a hint of a room;
 at night the client's own lit windows, or a lamp-lit room behind them. Sunlit panes also cast their
-light on the room's floor and walls and through its air (coloured shafts). All five tables come from
+light on the room's floor and walls and through its air (coloured shafts). All six tables come from
 `tools/gen_glass.py` (its header says how glass is found and how buildings are classed) and can be
 edited by hand. Without GlassMaterials and GlassPanes there's no glass look, floor light or shafts;
-without RoomStyles and GlassBuildings every room is the same plain warm one (and lamp-lit at night).
+without RoomStyles and GlassBuildings every room is the same plain warm one (and lamp-lit at night);
+without GlassLead the see-through windows' per-pixel redraw keeps the glass mask (GlassMaterials').
 After editing, press "Reload light tables from disk" in the lights panel.
 
 ### GlassMaterials.cdbc — `GlassMaterials.xml`
@@ -623,6 +624,29 @@ WMO is the same, then its group's row if it has one, else the WMO's default, els
 | AreaID | AreaTable ID at its origin (a city group's: at its middle), for the editor |
 | Wmo | the WMO's path (case and slashes don't matter): the instance must be of this WMO |
 | Comment | the WMO, its class and palette, the area; never read |
+
+### GlassLead.cdbc — `GlassLead.xml`
+
+Where a glass texture's panes are, for the see-through windows' per-pixel redraw (`SeeThroughRedraw`
+1): its own mask, glass for every pane's inside, lit and shaded alike, opaque for the lead, the frame
+with its mullions and tracery, and the shutters. GlassMaterials' mask is the light's: it counts only
+the lit glass, so a pane's shaded lower half read as frame and the room hardly showed through the
+inn's windows ("yeah build the lead mask pls :D", the user, 2026-10-21). One row per rectangle, by hand
+from the texture's layout (gen_glass.py LEAD_LAYOUTS: the eight human window atlases share one, 19
+rectangles). The mask itself is built at run time from the texture as the client reads it (never
+stored): the texels inside the rectangles that aren't lead, i.e. not darker than Dark x the median
+luminance of the lit glass in them (GlassMaterials' mask over a half) and not on a thin dark line (the
+luminance closed over 5 x 5 texels, minus it, under Line x that median). A texture with no rows keeps
+GlassMaterials' mask in the redraw.
+
+| Field | Meaning |
+|---|---|
+| ID | row id |
+| Texture | the texture's path as GlassMaterials names it (case and slashes don't matter); it must be a GlassMaterials texture |
+| U0, V0, U1, V1 | a rectangle of panes in the texture's uv (0..1; half-open; v down, as the texture's rows) |
+| Dark | lead: darker than this x the lit glass's median luminance (0.18) |
+| Line | lead: a thin dark line deeper than this x that median (0.15) |
+| Comment | the layout and the rectangle's number; never read |
 
 ## CrystalMaterials.cdbc — `CrystalMaterials.xml`
 

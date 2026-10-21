@@ -1,6 +1,8 @@
 #include "SeeThrough.hpp"
 
 #include "../env/SeeThroughModel.hpp"
+#include "../render/BlpColour.hpp"
+#include "../render/BlpTexture.hpp"
 #include "../render/GxState.hpp"
 #include "Glass.hpp"
 #include "GlassShader.hpp"
@@ -10,6 +12,7 @@
 #include <windows.h>
 #include <d3d9.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -693,6 +696,85 @@ namespace wxl_livingazeroth::seethrough
                                                        a.vertices, a.startIndex, a.primitives));
         }
 
+        // The per-pixel redraw's lead masks ("yeah build the lead mask pls :D", the user, 2026-10-21; env/GlassModel
+        // LeadMask): one texture a glass material with GlassLead.cdbc rectangles, built from its texture (the client's own
+        // file, read and decoded here: nothing stored) the first time a batch of it is redrawn, at most one a frame, with
+        // its mip chain; null where it has none or the file couldn't be read (the shader keeps the light's mask: c28.w 0).
+        // Built again when the glass tables reload.
+        struct LeadTexture { IDirect3DTexture9* tex = nullptr; bool tried = false; };
+        std::unordered_map<uint32_t, LeadTexture> g_leadTextures;
+        uint32_t g_leadGeneration = 0;
+        unsigned g_leadBuilt = 0, g_leadFailed = 0;
+        bool g_leadThisFrame = false;
+        char g_leadWhy[200] = "";
+
+        void ReleaseLead()
+        {
+            for (auto& kv : g_leadTextures)
+                if (kv.second.tex) kv.second.tex->Release();
+            g_leadTextures.clear();
+            g_leadBuilt = g_leadFailed = 0;
+            g_leadWhy[0] = 0;
+        }
+
+        // The mask's levels into a managed texture (L8, else A8R8G8B8 grey), null on failure.
+        IDirect3DTexture9* LeadUpload(IDirect3DDevice9* dev, std::vector<uint8_t> level, uint32_t w, uint32_t h)
+        {
+            UINT levels = 1;
+            for (uint32_t s = std::max(w, h); s > 1; s >>= 1) ++levels;
+            IDirect3DTexture9* tex = nullptr;
+            bool l8 = SUCCEEDED(dev->CreateTexture(w, h, levels, 0, D3DFMT_L8, D3DPOOL_MANAGED, &tex, nullptr)) && tex;
+            if (!l8 && (FAILED(dev->CreateTexture(w, h, levels, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex)) return nullptr;
+            std::vector<uint8_t> next;
+            for (UINT k = 0; k < levels; ++k)
+            {
+                D3DLOCKED_RECT lr{};
+                if (FAILED(tex->LockRect(k, &lr, nullptr, 0))) { tex->Release(); return nullptr; }
+                for (uint32_t y = 0; y < h; ++y)
+                {
+                    uint8_t* row = static_cast<uint8_t*>(lr.pBits) + static_cast<size_t>(y) * lr.Pitch;
+                    for (uint32_t x = 0; x < w; ++x)
+                    {
+                        const uint8_t v = level[static_cast<size_t>(y) * w + x];
+                        if (l8) row[x] = v;
+                        else { row[4 * x] = row[4 * x + 1] = row[4 * x + 2] = v; row[4 * x + 3] = 255; }
+                    }
+                }
+                tex->UnlockRect(k);
+                if (k + 1 < levels) { glass::LeadMip(level, w, h, next); level.swap(next); }
+            }
+            return tex;
+        }
+
+        IDirect3DTexture9* LeadTextureOf(IDirect3DDevice9* dev, uint32_t material)
+        {
+            if (!material) return nullptr;
+            if (g_leadGeneration != glass::Generation()) { ReleaseLead(); g_leadGeneration = glass::Generation(); }
+            LeadTexture& lt = g_leadTextures[material];
+            if (lt.tried || g_leadThisFrame) return lt.tex;
+            lt.tried = true;
+            const glass::LeadRule* rule = glass::LeadOf(material);
+            const glass::Material* m = glass::MaterialAt(material);
+            const char* path = glass::TextureOf(material);
+            if (!rule || !m || !path) return nullptr;   // no rectangles: the light's mask
+            g_leadThisFrame = true;
+            std::vector<uint8_t> file, mask;
+            std::vector<float> rgb;
+            uint32_t w = 0, h = 0;
+            const char* why = !blp::ReadBytes(path, file) ? "can't read the file"
+                            : !blp::DecodeTop(file.data(), file.size(), rgb, w, h) ? "can't decode it"
+                            : !glass::LeadMask(rgb.data(), w, h, *m, *rule, mask) ? "no texel in its rectangles" : nullptr;
+            if (!why && !(lt.tex = LeadUpload(dev, std::move(mask), w, h))) why = "can't make the texture";
+            if (why)
+            {
+                ++g_leadFailed;
+                std::snprintf(g_leadWhy, sizeof(g_leadWhy), "%s: %s", path, why);
+                return nullptr;
+            }
+            ++g_leadBuilt;
+            return lt.tex;
+        }
+
         // What the redraw set and read back at its first batch (the panel's, refreshed once a second): so an in-game check
         // says whether the device got what the redraw meant ("see-through windows don't seem to work anymore now", the user,
         // 2026-10-21, with every count saying it was drawn).
@@ -814,7 +896,22 @@ namespace wxl_livingazeroth::seethrough
                     dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
                     dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
                     dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-                    float split[4] = { g_debugView ? 1.0f : 0.0f, 1.0f, kSplitAlpha, 0.0f };
+                    // its lead mask (s15; c28.w: whether there is one)
+                    IDirect3DTexture9* lead = LeadTextureOf(dev, e.material);
+                    dev->SetTexture(glass::kLeadSampler, lead);
+                    if (lead)
+                    {
+                        const DWORD s = glass::kLeadSampler;
+                        dev->SetSamplerState(s, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                        dev->SetSamplerState(s, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+                        dev->SetSamplerState(s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+                        dev->SetSamplerState(s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+                        dev->SetSamplerState(s, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+                        dev->SetSamplerState(s, D3DSAMP_MIPMAPLODBIAS, 0);
+                        dev->SetSamplerState(s, D3DSAMP_MAXMIPLEVEL, 0);
+                        dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, FALSE);
+                    }
+                    float split[4] = { g_debugView ? 1.0f : 0.0f, 1.0f, kSplitAlpha, lead ? 1.0f : 0.0f };
                     dev->SetPixelShaderConstantF(glass::kReplayDrawConstant, split, 1);
                     dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
                     const bool opaque = Draw(dev, e.args);
@@ -932,6 +1029,7 @@ namespace wxl_livingazeroth::seethrough
         if (g_roots.size() > 2048) g_roots.clear();   // only here: nothing of this frame points at them now
         g_budget = kMaxOpenPerFrame;
         g_meshBuilds = 0;
+        g_leadThisFrame = false;
         // the redraw's read-back, shown for a second at a time
         const ULONGLONG now = GetTickCount64();
         if (g_probeNow.valid && now - g_probeTick >= 1000)
@@ -973,8 +1071,9 @@ namespace wxl_livingazeroth::seethrough
         g_deferral.EndLoop();
     }
 
-    void Batch(const void* group, const void* record, bool glass)
+    void Batch(const void* group, const void* record, uint32_t glassMaterial)
     {
+        const bool glass = glassMaterial != 0;
         if (!g_draw.frame)
         {
             if (g_deferral.Pending()) g_deferral.EndLoop();
@@ -1003,7 +1102,7 @@ namespace wxl_livingazeroth::seethrough
             g_now.replayFirst = first;
             g_now.replayBits = bits;
         }
-        g_deferral.BeginBatch(deferrable, start, count, first, bits);
+        g_deferral.BeginBatch(deferrable, start, count, first, bits, glassMaterial);
     }
 
     void EndLoop() { g_deferral.EndLoop(); }
@@ -1013,8 +1112,9 @@ namespace wxl_livingazeroth::seethrough
         if (!api->UiCollapsingHeader("See-through windows (experimental): the real room behind the glass##seethrough")) return;
         api->UiCheckbox("see-through windows (the Lion's Pride Inn in Goldshire only, for now)##ston", &g_settings.enabled);
         api->UiSliderFloat("the glass's opacity over the room##stop", &g_settings.opacity, 0.0f, 1.0f);
-        api->UiCheckbox("per-pixel redraw: the lead and frame opaque, only where the room is seen (SeeThroughRedraw 1; off: the whole glass "
-                        "at the opacity, every window with a room open, as on 2026-10-20)##stredraw", &g_settings.redraw);
+        api->UiCheckbox("per-pixel redraw: the panes see-through, the lead, frame and shutters opaque, only where the room is seen "
+                        "(SeeThroughRedraw 1; off: the whole glass at the opacity, every window with a room open, as on 2026-10-20)##stredraw",
+                        &g_settings.redraw);
         if (g_settings.redraw)
             api->UiCheckbox("debug view (not saved): the redraw's pixels by what the shader decided: magenta an open window's glass (through "
                             "grey to green as it's less glass), green its lead and frame (opaque), cyan a shut window, yellow no window "
@@ -1032,15 +1132,21 @@ namespace wxl_livingazeroth::seethrough
                       g_faulted ? g_faultWhere : "", g_last.captureFailed, g_last.targetMoved, g_last.dropped);
         if (g_faulted) std::strncat(line, ")", sizeof(line) - std::strlen(line) - 1);
         api->UiText(line);
+        if (g_settings.redraw)
+        {
+            std::snprintf(line, sizeof(line), "Lead masks (the per-pixel redraw's, from GlassLead.cdbc's panes): %u built, %u not%s%s", g_leadBuilt,
+                          g_leadFailed, g_leadFailed ? ": " : "", g_leadWhy);
+            api->UiText(line);
+        }
         // what the redraw set and read back (once a second)
         if (g_probeShown.valid)
         {
             const ReplayProbe& q = g_probeShown;
             std::snprintf(line, sizeof(line), "The redraw's device state (read back): %s; glass b9 %d, redraw in its shader %d, b11 %d; c219 %.3g %.3g %.0f %.1f; "
-                          "c28 %.0f %.0f %.3f; the batch's alpha test %lu (func %lu, ref %lu); blend %lu (src %lu, dest %lu), alpha test %lu, depth "
+                          "c28 %.0f %.0f %.3f %.0f; the batch's alpha test %lu (func %lu, ref %lu); blend %lu (src %lu, dest %lu), alpha test %lu, depth "
                           "write %lu; alpha-to-coverage switch 0x%08lX, target MSAA %lu; shader %p",
                           q.mode ? "per pixel" : "the whole glass", q.glassOn, q.hasReplay, q.b11, q.c219[0], q.c219[1], q.c219[2], q.c219[3], q.c28[0],
-                          q.c28[1], q.c28[2], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.atoc, q.multisample,
+                          q.c28[1], q.c28[2], q.c28[3], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.atoc, q.multisample,
                           q.shader);
             api->UiText(line);
         }
