@@ -254,6 +254,24 @@ int main(int argc, char** argv)
             for (const uintptr_t hooked : { 0x007AC060u, 0x006A3620u, 0x00823CB0u, 0x007A7630u, 0x007ABF50u, 0x007AC6A0u, 0x007AC9F0u })
                 for (const st::Guard& g : st::kGuards)
                     CHECK(!(g.address < hooked + 6 && g.address + g.size > hooked));
+            // Nor a call's target that Modern Water redirects (wxl-modern-water engine.h, the *Site constants): with
+            // those calls pointed elsewhere, as in the game, the guards still hold.
+            const uintptr_t redirected[] = { 0x004FB03Du, 0x004F911Du, 0x004F9170u, 0x007E5818u, 0x004F9281u,
+                                             0x0081FD15u, 0x004F9213u, 0x00790AA2u, 0x00780810u, 0x00781444u };
+            for (const uintptr_t site : redirected)
+                for (const st::Guard& g : st::kGuards)
+                    CHECK(!(g.address < site + 5 && g.address + g.size > site + 1));
+            std::vector<uint8_t> patched;
+            const st::Guard* badPatched = st::FirstMismatch(st::kGuards, [&](uintptr_t va, uint32_t size) -> const void* {
+                const auto* at = static_cast<const uint8_t*>(im.At(va, size));
+                if (!at) return nullptr;
+                patched.assign(at, at + size);
+                for (const uintptr_t site : redirected)
+                    for (uintptr_t b = site + 1; b < site + 5; ++b)
+                        if (b >= va && b < va + size) patched[b - va] ^= 0x5A;
+                return patched.data();
+            });
+            if (badPatched) throw std::runtime_error(std::string("differs with Modern Water's calls redirected: ") + badPatched->what);
             // The statics the guards name are the ones the runtime reads.
             uint32_t v = 0;
             std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x007AC0B4, 11)) + 2, 4);
