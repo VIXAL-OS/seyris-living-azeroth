@@ -52,7 +52,30 @@ namespace wxl_livingazeroth::seethrough
             unsigned passed = 0, captureFailed = 0, targetMoved = 0, dropped = 0;
             unsigned blind = 0;      // shut: the room not seen through the window from here (SeesRoom)
             unsigned opaque = 0;     // redrawn opaque: the batch's shader without the redraw (or its glass off)
+            // Each window on the screen and facing the camera: open, or why it's shut (the panel's list, so an in-game check
+            // says what happened: "see-through windows don't seem to work anymore now", the user, 2026-10-21).
+            enum Why : uint8_t { kOpen, kFake, kFar, kBudget, kUnloaded, kNoMesh, kBlind, kNotReached };
+            struct Note
+            {
+                uint32_t ordinal = 0;
+                Why why = kOpen;
+                Sight sight;
+            };
+            static constexpr unsigned kNotes = 24;
+            Note notes[kNotes];
+            unsigned noteCount = 0;
+            float replayFirst = -1.0f;   // the last deferred batch's open windows: from this ordinal, these bits
+            uint32_t replayBits = 0;
         };
+
+        void NoteWindow(Counts& c, uint32_t ordinal, Counts::Why why, const Sight* sight = nullptr)
+        {
+            if (c.noteCount >= Counts::kNotes) return;
+            Counts::Note& n = c.notes[c.noteCount++];
+            n.ordinal = ordinal;
+            n.why = why;
+            n.sight = sight ? *sight : Sight{};
+        }
         Counts g_now, g_last;
         unsigned g_everOpened = 0, g_everRedrawn = 0;
 
@@ -424,23 +447,34 @@ namespace wxl_livingazeroth::seethrough
             {
                 const WindowPlan& p = plan[i];
                 f.states[i] = p.state;
-                if (p.state == kShut && !p.candidate) ++g_now.shut;
+                if (p.state == kShut && !p.candidate)
+                {
+                    ++g_now.shut;
+                    NoteWindow(g_now, windows[i].ordinal, windows[i].interior < 0 ? Counts::kFake
+                                                         : DistanceToBox(cam, r->groups[group].lo, r->groups[group].hi) > kRange ? Counts::kFar
+                                                         : Counts::kBudget);
+                }
                 if (!p.candidate) continue;
                 const uint32_t room = static_cast<uint32_t>(windows[i].interior);
                 bool opened = false;
+                Sight sight;
+                Counts::Why why = Counts::kUnloaded;
                 if (Enterable(static_cast<const uint8_t*>(root), static_cast<const uint8_t*>(instance), room, r->groupCount))
                 {
                     // only where the room is seen through it from here: not over its ceiling, nor through its walls
                     const RoomMesh* mesh = MeshOf(*r, root, room);
-                    if (mesh && !SeesRoom(windows[i], cam, *mesh)) ++g_now.blind;
-                    else if (mesh)
+                    if (!mesh) why = Counts::kNoMesh;
+                    else if (!SeesRoom(windows[i], cam, *mesh, &sight)) { ++g_now.blind; why = Counts::kBlind; }
+                    else
                     {
                         float clip[4], frustum[4];
                         ToCRect(p.clip, clip);
                         FrustumRect(p.clip, frustum);
                         opened = OpenWindow(root, room, group, clip, frustum);
+                        why = opened ? Counts::kOpen : Counts::kNotReached;
                     }
                 }
+                NoteWindow(g_now, windows[i].ordinal, why, &sight);
                 f.states[i] = opened ? kOpened : kShut;
                 ++(opened ? g_now.opened : g_now.shut);
                 f.opened += opened ? 1 : 0;
@@ -880,7 +914,12 @@ namespace wxl_livingazeroth::seethrough
         if (!deferrable) ++g_now.kept;
         float first = 0.0f;
         uint32_t bits = 0;
-        if (deferrable) OpenBits(*b, g_draw.windows, g_draw.frame->states.data(), g_draw.frame->states.size(), first, bits);
+        if (deferrable)
+        {
+            OpenBits(*b, g_draw.windows, g_draw.frame->states.data(), g_draw.frame->states.size(), first, bits);
+            g_now.replayFirst = first;
+            g_now.replayBits = bits;
+        }
         g_deferral.BeginBatch(deferrable, start, count, first, bits);
     }
 
@@ -892,7 +931,7 @@ namespace wxl_livingazeroth::seethrough
         api->UiCheckbox("see-through windows (the Lion's Pride Inn in Goldshire only, for now)##ston", &g_settings.enabled);
         api->UiSliderFloat("the glass's opacity over the room (its lead and frame stay opaque)##stop", &g_settings.opacity, 0.0f, 1.0f);
         api->UiText(StatusLine());
-        char line[320];
+        char line[400];
         std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget; "
                       "%u of them: the room not seen through it from here), %u rooms added",
                       g_last.groups, g_last.opened, g_last.shut, g_last.blind, g_last.groupsAdded);
@@ -904,6 +943,42 @@ namespace wxl_livingazeroth::seethrough
                       g_faulted ? g_faultWhere : "", g_last.captureFailed, g_last.targetMoved, g_last.dropped);
         if (g_faulted) std::strncat(line, ")", sizeof(line) - std::strlen(line) - 1);
         api->UiText(line);
+        // each window on the screen and facing the camera last frame: open, or why not
+        if (g_last.replayFirst >= 0.0f)
+        {
+            std::snprintf(line, sizeof(line), "The redraw: open windows from ordinal %.0f, bits 0x%04X (a shut window's glass and fake room as the client draws them)",
+                          g_last.replayFirst, g_last.replayBits);
+            api->UiText(line);
+        }
+        for (unsigned i = 0; i < g_last.noteCount; ++i)
+        {
+            const Counts::Note& n = g_last.notes[i];
+            const Sight& s = n.sight;
+            static const char* const kHit[3] = { "nothing of the room (past it, or out through a doorway)", "its inside", "a wall or ceiling from outside" };
+            char rays[300] = "";
+            if (n.why == Counts::kOpen || n.why == Counts::kBlind || n.why == Counts::kNotReached)
+            {
+                std::snprintf(rays, sizeof(rays), "; %d of 9 rays meet the room from inside (%d of %d needed, the middle one: %s)", s.front, kSightFront, 9,
+                              kHit[s.middle]);
+                if (s.firstMiss >= 0)
+                {
+                    char miss[120];
+                    std::snprintf(miss, sizeof(miss), "; ray %d (%+.1f, %+.1f) meets %s", s.firstMiss, kSight[s.firstMiss][0], kSight[s.firstMiss][1],
+                                  kHit[s.missHit]);
+                    std::strncat(rays, miss, sizeof(rays) - std::strlen(rays) - 1);
+                    if (s.missHit == RoomMesh::kBack)
+                    {
+                        std::snprintf(miss, sizeof(miss), " %.1f yd past the glass", s.missDepth);
+                        std::strncat(rays, miss, sizeof(rays) - std::strlen(rays) - 1);
+                    }
+                }
+            }
+            static const char* const kWhy[] = { "open", "shut: fake (nothing modelled behind it)", "shut: too far", "shut: over the frame's budget",
+                                                "shut: its room's group not loaded", "shut: its room's surfaces not read yet (one room a frame)",
+                                                "shut: its room isn't seen through it from here", "shut: the walk didn't reach its room" };
+            std::snprintf(line, sizeof(line), "  window %u: %s%s", n.ordinal, kWhy[n.why], rays);
+            api->UiText(line);
+        }
     }
 
     const char* StatusLine()

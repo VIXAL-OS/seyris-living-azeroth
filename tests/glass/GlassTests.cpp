@@ -3252,7 +3252,7 @@ namespace
         // (b) the redraw: window 40 open (bit 0 from 40), 41 shut. The open one: no fake room and no glow hidden (the block as it
         // was with no room and no lookup), its alpha 1 - mask x (1 - 0.35); the shut one: exactly as it was, alpha 1.
         {
-            const float replay[4] = { 0.65f, -1.0f, 40.0f, 1.0f };
+            const float replay[4] = { 0.65f, -1.0f, 40.0f, 1.5f };   // (c219.w: the bits + 0.5)
             int checked = 0, openRgb = 0, openAlpha = 0, shutRgb = 0, shutAlpha = 0;
             float worstAlpha = 0;
             bool ok = true;
@@ -3301,7 +3301,7 @@ namespace
             std::snprintf(line, sizeof(line), "the redraw: the open window's lead and frame (mask 0) opaque: %d of %d pixels not", notOpaque, px);
             Check(ok && px > 100 && notOpaque == 0, line);
             // which windows: the bits from the first ordinal (41 alone open: from 41, bit 0; 40 then shut); none open
-            const float only41[4] = { 0.65f, -1.0f, 41.0f, 1.0f }, noneOpen[4] = { 0.65f, -1.0f, 40.0f, 0.0f }, both[4] = { 0.65f, -1.0f, 40.0f, 3.0f };
+            const float only41[4] = { 0.65f, -1.0f, 41.0f, 1.5f }, noneOpen[4] = { 0.65f, -1.0f, 40.0f, 0.5f }, both[4] = { 0.65f, -1.0f, 40.0f, 3.5f };
             const Look l = constants(13, false, 1.0f);
             std::vector<float> a40, a41, n40, b41;
             ok = draw(newPs, 0, l, true, only41, noCorner, 1.0f, false, true, a40) && draw(newPs, 1, l, true, only41, noCorner, 1.0f, false, true, a41) &&
@@ -3317,7 +3317,7 @@ namespace
         // (c) the batch's own alpha test on the stock alpha (c219.y): below it nothing drawn, at or above it drawn
         {
             const Look l = constants(13, false, 1.0f);
-            const float keyed[4] = { 0.65f, 0.878f, 40.0f, 1.0f };
+            const float keyed[4] = { 0.65f, 0.878f, 40.0f, 1.5f };
             std::vector<float> below, above;
             const bool ok = draw(newPs, 0, l, true, keyed, noCorner, 0.5f, false, true, below) && draw(newPs, 0, l, true, keyed, noCorner, 0.95f, false, true, above);
             int belowDrawn = 0, aboveDrawn = 0;

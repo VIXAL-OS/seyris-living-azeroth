@@ -227,8 +227,11 @@ namespace wxl_livingazeroth::seethrough
     // nothing of where the room's walls and ceiling are. A dormer's line of sight from the street goes over the room's
     // ceiling or meets it from above, where the client culls its faces (they face into the room): opened, the room showed
     // through the roof. A window opens only where the line of sight through it meets the room's own surfaces from inside
-    // first: every one of kSight's rays from the eye through the window meets a face of the room facing it (its winding's
-    // front: the walls', the ceiling's and the floor's inner side), not a back face and not nothing.
+    // first: its middle ray and most of kSight's rays (kSightFront of 9) from the eye through the window meet a face of the
+    // room facing them (its winding's front: the walls', the ceiling's and the floor's inner side). The rest may meet the
+    // wall round a smaller or arched opening from outside, or leave the room through a doorway: with every one of the nine
+    // required, the inn's west upstairs window (its arch's corner on the wall, two rays through the stair's opening) never
+    // opened ("see-through windows don't seem to work anymore now", the user, 2026-10-21).
     /// One room group's surfaces, apart from the client (the runtime copies them out of the group): its rendered triangles
     /// but its glass (a window's inner face is the same window, its back to the street), in a grid of cells (WMO space).
     class RoomMesh
@@ -263,9 +266,22 @@ namespace wxl_livingazeroth::seethrough
                                      { 0.5f, 0 }, { -0.5f, 0.5f }, { 0, 0.5f }, { 0.5f, 0.5f } };
     /// How far past the glass (yd) a ray looks for the room.
     constexpr float kSightReach = 120.0f;
-    /// Whether the room is seen through the window from `eye` (WMO space): every kSight ray, from the glass on, meets
-    /// `room`'s surfaces first from inside (kFront).
-    bool SeesRoom(const SeeWindow& w, const float eye[3], const RoomMesh& room);
+    /// The rays that must meet the room from inside: the middle one and this many of the nine in all. Over the inn's 17
+    /// windows from 30 street views each, this agrees best with how much of each window's glass (by its texture's mask)
+    /// shows the room from inside: no view where 60% of it does is shut; the dormers over the ceiling never open.
+    constexpr int kSightFront = 6;
+    /// What the rays through a window met (the panel's: why a window is shut).
+    struct Sight
+    {
+        int front = 0, back = 0, none = 0;
+        RoomMesh::Hit middle = RoomMesh::kNone;
+        int firstMiss = -1;                       // the first ray (kSight's index) that didn't meet a front face
+        RoomMesh::Hit missHit = RoomMesh::kNone;  // ... what it met (kBack) or nothing
+        float missDepth = 0.0f;                   // ... how far past the glass (yd)
+    };
+    /// Whether the room is seen through the window from `eye` (WMO space): the middle kSight ray and kSightFront of them in
+    /// all, from the glass on, meet `room`'s surfaces first from inside (kFront). What they met in `out`.
+    bool SeesRoom(const SeeWindow& w, const float eye[3], const RoomMesh& room, Sight* out = nullptr);
 
     // --- a window on the screen --------------------------------------------------------------------------------------
     /// The quad (WMO space), grown by `grow` yd along and up: corners counter-clockwise from (-along, -up).
@@ -332,8 +348,9 @@ namespace wxl_livingazeroth::seethrough
     /// one of its windows opened (else there's nothing to see through). Its shut and unseen windows stay as the client
     /// draws them, opaque with their fake room: the redraw tells the windows apart per pixel (OpenBits, GlassShader's b11).
     bool Deferrable(const BatchWindows& b, const uint8_t* states, size_t stateCount);
-    /// The windows c219.w holds (GlassShader's kReplayBits).
-    constexpr uint32_t kOpenBits = 24;
+    /// The windows c219.w holds (GlassShader's kReplayBits): 16, so the shader's test of a bit keeps a margin a GPU's
+    /// approximate exp can't cross (OpenBit's).
+    constexpr uint32_t kOpenBits = 16;
     /// A deferred batch's open windows for the redraw (c219.zw): the lowest open ordinal (`windows`: the group's, `states`
     /// theirs), and a bit for each open window within kOpenBits of it (its ordinal - first). An open window past them is
     /// redrawn opaque, as a shut one.
@@ -351,9 +368,15 @@ namespace wxl_livingazeroth::seethrough
                     uint32_t d3dPrimitive, DrawArgs& out);
     /// The redraw's c219 (GlassShader's kReplayConstant) for a glass opacity (0..1; not finite: opaque), the batch's own
     /// alpha test as the device had it (D3DRS_ALPHATESTENABLE, ALPHAFUNC, ALPHAREF: greater-or-equal its reference / 255,
-    /// greater half a step more; off, or any other test, -1: none) and its open windows (OpenBits).
+    /// greater half a step more; off, or any other test, -1: none) and its open windows (OpenBits: c219.z the first
+    /// ordinal, c219.w the bits + 0.5).
     void ReplayConstants(float opacity, bool alphaTest, uint32_t alphaFunc, uint32_t alphaRef, float first, uint32_t bits, float out[4]);
     constexpr uint32_t kD3dCmpGreater = 5, kD3dCmpGreaterEqual = 7;   // D3DCMPFUNC
+    /// The shader's test of a window's bit (GlassShader's replayOpen, op for op, its exp's result scaled by `expError`):
+    /// k = ordinal - first; open when k >= 0 and frac(c219.w x 2^-(k + 1)) >= 0.5, c219.w = bits + 0.5. With the half the
+    /// first open window's value is 0.75, not 0.5: before it the test sat on its boundary, and a GPU's exp a hair short of
+    /// 2^-1 shut the first open window ("see-through windows don't seem to work anymore now", the user, 2026-10-21).
+    bool OpenBit(float ordinal, const float c219[4], float expError = 1.0f);
 
     /// The deferral's bookkeeping between the batch loop's cull test (BeginBatch), the device draw (OnDraw, Captured) and
     /// the model scene's first pass (Take), apart from the device (`state` is the runtime's captured device state).

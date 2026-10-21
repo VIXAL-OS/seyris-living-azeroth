@@ -143,10 +143,18 @@ the survey's `interior_behind` are twins; the tests check the Lion's Pride Inn's
 nothing of where the room's walls and ceiling are: a dormer's probe lands in the upstairs room's box, but from the street
 the line of sight through it passes over the room's ceiling (nothing behind the glass: the void) or meets the ceiling from
 above, where the client culls it (its faces face into the room): opened, the room showed through the roof. So a candidate
-opens only where **every one of nine rays from the eye through the window** (its middle and a ring at half its half sizes:
-inside the frame; an outer window's glass reaches past the room's opening, and its edge is mostly lead and frame) **meets
-the room's own surfaces from inside first**: a triangle whose winding's front faces the eye (`cross(b - a, c - a) . d < 0`,
-the walls', the floor's and the ceiling's inner side), not a back face and not nothing (`SeesRoom`). The room's surfaces are
+opens only where **its middle ray and six of nine rays from the eye through the window** (its middle and a ring at half
+its half sizes: inside the frame; an outer window's glass reaches past the room's opening, and its edge is mostly lead and
+frame) **meet the room's own surfaces from inside first**: a triangle whose winding's front faces the eye
+(`cross(b - a, c - a) . d < 0`, the walls', the floor's and the ceiling's inner side), not a back face and not nothing
+(`SeesRoom`). The other three may meet the wall round a smaller or arched opening from outside, or leave the room by a
+doorway or a stair's opening: the first build asked all nine, and the inn's west upstairs window (9, its arch's corner on
+the wall, two rays out by the stair) never opened ("see-through windows don't seem to work anymore now", the user,
+2026-10-21). Six of nine agrees best, over 30 street views of each of the 17 windows, with how much of each window's glass
+(weighted by its texture's mask) shows the room from inside: no view where 60% of it does is shut, the dormers never open.
+The lights panel lists each window on the screen last frame: open, or why it's shut (fake, far, the budget, not loaded,
+its surfaces not read yet, not seen: how many rays met the room from inside, the middle one's, and the first that didn't
+and what it met). The room's surfaces are
 its group's rendered triangles (its MOBA batches; the collision-only ones after them are left out) but its glass (the
 window's own inner face, `mm_elwynn_wnd_int__01` in the inn: its back is to the street), copied out of the group the first
 time a window of it is a candidate (MOVT at +0xE8, MOVI at +0xE0, MOBA at +0xF8 and their counts, guarded at the group
@@ -158,8 +166,7 @@ With the map scan's files, from street viewpoints in front of each window (8, 15
 degrees aside, the eye 2 and 6 yd up; `seethrough_tests` prints them): the ground floor's windows open from most of them,
 the back dormers (z 15.5) from none. Weighting rays by the glass mask of the texels they cross (offline, 2026-10-20), the
 windows under the back eaves (5, 6) show about a third of their glass through the room's walls from outside, and the upper
-floor's (7..11) a rim of about a fifth where the outer glass is wider than the room's opening; the nine rays keep the
-first mostly shut and the second mostly open.
+floor's (7..11) a rim of about a fifth where the outer glass is wider than the room's opening.
 
 ## 4. Drawing the glass see-through
 
@@ -185,7 +192,9 @@ would cover it. So it is **deferred**:
   again with LA's glass look (b9: reflection, darkening, coolness) and its redraw switched on (b11, c219:
   `features/GlassShader`; the WMO edit moves the stock alpha write to r12.w and writes oC0.w last). Each pixel looks up
   its window (the window table the fake rooms use; the lookup forced even where the batch wouldn't look) and reads
-  whether it's open from c219.w's bits (one a window from the lowest open ordinal c219.z, 24 of them): an open window has
+  whether it's open from c219.w's bits (one a window from the lowest open ordinal c219.z, 16 of them, plus a half: frac
+  of c219.w / 2^(k + 1) >= 0.5; without the half the first open window's value sat exactly on 0.5, and a GPU's exp a hair
+  short of 2^-1 shut it, 2026-10-21): an open window has
   no fake room and hides none of its glow, and its alpha is 1 - the glass mask x (1 - `SeeThroughOpacity`), so the
   painted lead, frame and tracery stay opaque ("the tracery also becomes more transparent", the user, 2026-10-20); a shut
   or unseen one is exactly as the client draws it, alpha 1. Two draws, split by that alpha with the device's alpha test

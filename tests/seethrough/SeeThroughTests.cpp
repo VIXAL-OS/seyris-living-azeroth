@@ -652,7 +652,8 @@ int main(int argc, char** argv)
         CHECK(bad.Build(v.data(), 3, idx.data(), 3, {}) && bad.Empty() && bad.First(in, up, 0, 10) == st::RoomMesh::kNone);
     });
 
-    Test("SeesRoom: a window onto its room opens; a dormer over the ceiling, a window on a blind wall, no room: shut", [] {
+    Test("SeesRoom: a window onto its room opens, one whose outer rays meet the wall round its opening too; a dormer over the "
+         "ceiling, a window on a blind wall or mostly over it, no room: shut; what the rays met", [] {
         const st::RoomMesh room = TestRoom();
         // the window in the front wall's hole (its outer glass a little in front of the wall), facing out (-y)
         const st::SeeWindow w = MakeWindow(0, -0.2f, 2, 0, -1, 0, 1, 1, 0);
@@ -671,9 +672,18 @@ int main(int argc, char** argv)
         const st::SeeWindow blind = MakeWindow(-5.2f, 4, 2, -1, 0, 0, 1, 1, 0);
         const float west[3] = { -20, 4, 2 };
         CHECK(!st::SeesRoom(blind, west, room));
-        // a window half over the hole: some of its rays meet the front wall from outside
-        const st::SeeWindow half = MakeWindow(1.0f, -0.2f, 2, 0, -1, 0, 1, 1, 0);
-        CHECK(!st::SeesRoom(half, street, room));
+        // a window mostly over the wall beside the hole: its rays meet the front wall from outside
+        const st::SeeWindow over = MakeWindow(1.6f, -0.2f, 2, 0, -1, 0, 1, 1, 0);
+        st::Sight sight;
+        CHECK(!st::SeesRoom(over, street, room, &sight) && sight.middle == st::RoomMesh::kBack && sight.back >= 6 && sight.firstMiss == 0);
+        // one whose outer column of rays meets the wall round the opening (a wider outer pane, an arch's corner): the middle and
+        // six of nine see the room, so it opens; what the three met is said
+        const st::SeeWindow wider = MakeWindow(0.6f, -0.2f, 2, 0, -1, 0, 1.2f, 1, 0);
+        CHECK(st::SeesRoom(wider, street, room, &sight) && sight.front == 6 && sight.back == 3 && sight.middle == st::RoomMesh::kFront &&
+              sight.missHit == st::RoomMesh::kBack && sight.firstMiss == 3 && Close(sight.missDepth, 0.2f, 0.05f));
+        // the middle seeing the room but most of the rays the wall round the opening: shut
+        const st::SeeWindow most = MakeWindow(0.7f, -0.2f, 2, 0, -1, 0, 1.0f, 2.2f, 0);
+        CHECK(!st::SeesRoom(most, street, room, &sight) && sight.middle == st::RoomMesh::kFront && sight.front == 2 && sight.back == 7);
         // nothing to look into, or no eye
         CHECK(!st::SeesRoom(w, street, st::RoomMesh{}));
         const float nan[3] = { NAN, 0, 0 };
@@ -724,7 +734,7 @@ int main(int argc, char** argv)
         CHECK(!st::Deferrable(b, open2, 3));
     });
 
-    Test("OpenBits: the lowest open ordinal and a bit for each open window within 24 of it; shut, unseen and other batches' none", [] {
+    Test("OpenBits: the lowest open ordinal and a bit for each open window within 16 of it; shut, unseen and other batches' none", [] {
         std::vector<st::SeeWindow> w;
         for (uint32_t o : { 7u, 3u, 5u, 40u, 9u, 31u }) w.push_back(MakeWindow(0, 0, 0, 0, -1, 0, 1, 1, 1, o));
         st::BatchWindows b;
@@ -734,7 +744,7 @@ int main(int argc, char** argv)
         float first = -1;
         uint32_t bits = 0;
         st::OpenBits(b, w.data(), states, w.size(), first, bits);
-        // open: 7, 5, 40, 31 (3 shut, 9 not the batch's); from 5: 7 -> bit 2, 5 -> bit 0, 31 -> bit 26 (past 24: opaque), 40 past
+        // open: 7, 5, 40, 31 (3 shut, 9 not the batch's); from 5: 7 -> bit 2, 5 -> bit 0, 31 -> bit 26 (past 16: opaque), 40 past
         CHECK(first == 5.0f && bits == ((1u << 0) | (1u << 2)));
         const uint8_t noneOpen[6] = { st::kShut, st::kShut, st::kUnseen, st::kShut, st::kOpened, st::kShut };
         st::OpenBits(b, w.data(), noneOpen, w.size(), first, bits);
@@ -773,7 +783,7 @@ int main(int argc, char** argv)
     Test("ReplayConstants: 1 - the opacity, the batch's alpha test as the stock alpha's threshold (or none), the open windows", [] {
         float c[4];
         st::ReplayConstants(0.35f, false, 0, 0, 1.0f, 0x603u, c);
-        CHECK(Close(c[0], 0.65f, 1e-6f) && c[1] == -1.0f && c[2] == 1.0f && c[3] == 1539.0f);
+        CHECK(Close(c[0], 0.65f, 1e-6f) && c[1] == -1.0f && c[2] == 1.0f && c[3] == 1539.5f);   // the bits + 0.5
         st::ReplayConstants(0.35f, true, st::kD3dCmpGreaterEqual, 224, 3.0f, 1u, c);      // alpha-keyed: >= 224
         CHECK(Close(c[1], 224.0f / 255.0f, 1e-6f));
         st::ReplayConstants(0.35f, true, st::kD3dCmpGreater, 128, 3.0f, 1u, c);
@@ -785,7 +795,43 @@ int main(int argc, char** argv)
         st::ReplayConstants(-1.0f, false, 0, 0, 0, 0, c);
         CHECK(c[0] == 1.0f);                                                            // clear
         st::ReplayConstants(NAN, false, 0, 0, NAN, 0xFFFFFFFFu, c);
-        CHECK(c[0] == 0.0f && c[2] == 0.0f && c[3] == 16777215.0f);                     // 24 bits, exactly
+        CHECK(c[0] == 0.0f && c[2] == 0.0f && c[3] == 65535.5f);                        // 16 bits
+    });
+
+    Test("OpenBit: the shader's test of a window's bit holds with its exp 2^-20 off either way; the old one shut the first open window", [] {
+        // every 16-bit pattern's every bit (a sample of patterns: all ones, single bits, the inn's, random), from 3 below the
+        // first ordinal to 4 past the last, with exp exact and a hair off
+        std::vector<uint32_t> patterns = { 0xFFFFu, 0x0603u, 0x0001u, 0x8000u, 0x0801u, 0x5555u, 0xAAAAu };
+        uint32_t seed = 99;
+        for (int i = 0; i < 300; ++i) { seed = seed * 1664525u + 1013904223u; patterns.push_back((seed >> 9) & 0xFFFFu); }
+        int wrong = 0, checked = 0;
+        for (const uint32_t bits : patterns)
+            for (const float first : { 1.0f, 40.0f, 5000.0f })
+            {
+                float c[4];
+                st::ReplayConstants(0.35f, false, 0, 0, first, bits, c);
+                for (int k = -3; k < static_cast<int>(st::kOpenBits) + 4; ++k)
+                    for (const float err : { 1.0f, 1.0f - 1.0f / 1048576.0f, 1.0f + 1.0f / 1048576.0f })
+                    {
+                        const bool want = k >= 0 && k < static_cast<int>(st::kOpenBits) && ((bits >> k) & 1u);
+                        wrong += st::OpenBit(first + static_cast<float>(k), c, err) != want ? 1 : 0;
+                        ++checked;
+                    }
+            }
+        std::printf("  %d of %d bit tests wrong\n", wrong, checked);
+        CHECK(checked > 50000 && wrong == 0);
+        // the old encoding (c219.w the bits, no half): the first open window's value sat on 0.5, and an exp a hair short of
+        // 2^-1 shut it
+        const float old[4] = { 0.65f, -1.0f, 3.0f, 2049.0f };   // windows 3 and 14 open, as the inn's west front in game
+        auto oldBit = [&](float ordinal, float err) {
+            const float k = ordinal - old[2];
+            const float v = std::exp2(-(std::max(k, -1.0f) + 1.0f)) * err * old[3];
+            return v - std::floor(v) - 0.5f >= 0.0f;
+        };
+        CHECK(oldBit(3.0f, 1.0f) && !oldBit(3.0f, 1.0f - 1.0f / 1048576.0f) && oldBit(14.0f, 1.0f - 1.0f / 1048576.0f));
+        float now[4];
+        st::ReplayConstants(0.35f, false, 0, 0, 3.0f, 2049u, now);
+        CHECK(st::OpenBit(3.0f, now, 1.0f - 1.0f / 1048576.0f) && st::OpenBit(14.0f, now, 1.0f - 1.0f / 1048576.0f) && !st::OpenBit(9.0f, now));
     });
 
     Test("Deferral: the pending batch's one draw is deferred (its range, opaque or alpha-keyed); everything else drawn", [] {
@@ -1036,10 +1082,31 @@ int main(int argc, char** argv)
                     std::printf("  window %2u (z %4.1f, facing %+.2f %+.2f %+.2f, room %d): opens from %2d of %2d street views%s\n", w[i].ordinal,
                                 w[i].center[2], w[i].normal[0], w[i].normal[1], w[i].normal[2], w[i].interior, opens[i], views[i],
                                 headOn[i] > 0 ? ", head on from 15 yd" : headOn[i] < 0 ? ", shut head on from 15 yd" : "");
-                // the ground floor's front windows (south: the street) open head on; the back dormers (z 15.5) never from the
-                // street; the inn's batch still goes see-through with them shut (Deferrable)
+                // the ground floor's front windows (the inn's -y side: north, the road) open head on; the back dormers (z 15.5)
+                // never from the street; the inn's batch still goes see-through with them shut (Deferrable)
                 CHECK(headOn[0] > 0 && headOn[1] > 0);
                 CHECK(opens[14] == 0 && opens[15] == 0 && opens[16] == 0);
+                // The west front as the user stood before it in game (2026-10-21: Elwynn 42.9, 66.0, about 21 yd west of the
+                // inn's origin: its +x side; the camera 8-10 yd out, low, looking up at the arched upstairs window, 9): the
+                // ground floor's (3), the arched one (9) and the small one over it (14) all open. With every one of the nine
+                // rays required, 9 never opened (its arch's corner meets the wall from outside, two rays leave the room by
+                // the stair's opening).
+                const float eyes[4][3] = { { 24, 7, 2 }, { 23, 9, 1.5f }, { 25, 6, 4 }, { 30, 9, 6 } };
+                for (const auto& eye : eyes)
+                {
+                    std::string seen;
+                    for (const uint32_t ordinal : { 3u, 9u, 14u })
+                    {
+                        st::Sight s;
+                        const bool open = st::SeesRoom(w[ordinal - 1], eye, rooms.at(w[ordinal - 1].interior), &s);
+                        char one[96];
+                        std::snprintf(one, sizeof(one), " %u %s (%d front, %d back, %d none)", ordinal, open ? "open" : "SHUT", s.front, s.back, s.none);
+                        seen += one;
+                        CHECK(open);
+                    }
+                    std::printf("  from (%.0f, %.0f, %.1f):%s\n", eye[0], eye[1], eye[2], seen.c_str());
+                }
+                CHECK(headOn[8] > 0 && opens[8] >= 20);
                 std::vector<uint8_t> states(n, st::kShut);
                 states[0] = states[1] = st::kOpened;
                 st::BatchWindows b;

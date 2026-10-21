@@ -62,8 +62,8 @@
 //  (the glass mask 0 there): the human window atlases' fourth quadrant is a forge's fire slots ("blacksmith windows look
 //  very weird lol", the user, 2026-10-20).
 // The redraw (b11: features/SeeThrough draws a deferred glass batch again over the real room behind it, and only then):
-//  every pixel looks up its window (r31.w: whether it's open, its bit in c219.w from the ordinal c219.z); an open window
-//  has no fake room and hides none of its glow (r29.w: 0 for it and for a window the batch wouldn't have looked up, 1
+//  every pixel looks up its window (r31.w: whether it's open, its bit in c219.w, the bits + 0.5, from the ordinal c219.z);
+//  an open window has no fake room and hides none of its glow (r29.w: 0 for it and for a window the batch wouldn't have looked up, 1
 //  otherwise and outside the redraw), and the alpha (ReplayAlpha, the edit's last lines: the stock alpha in r12.w) is
 //  1 - the mask x (1 - the opacity, c219.x) where it's open, 1 elsewhere: an open window's glass texels see-through at
 //  the opacity, its lead, frame and tracery and every shut window opaque ("the tracery also becomes more transparent",
@@ -127,7 +127,7 @@ namespace wxl_livingazeroth::glass
     constexpr int kReplaySwitch = 11;    // PS b11: features/SeeThrough's redraw of a deferred glass batch (never on otherwise)
     constexpr int kReplayConstant = 219; // c219, read under b11 only: 1 - the opacity, the batch's alpha-test reference (-1:
                                          // none), the first ordinal of .w's bits, the open windows' bits
-    constexpr int kReplayBits = 24;      // windows c219.w holds (the whole numbers a float keeps exactly)
+    constexpr int kReplayBits = 16;      // windows c219.w holds (bits + 0.5: a margin no approximate exp crosses)
     /// GlassBlock's parts besides the look as it was (the tests build the block without them to hold it to the old one).
     enum BlockPart : int { kPartNotGlass = 1, kPartReplay = 2, kAllParts = 3 };
 
@@ -351,19 +351,22 @@ namespace wxl_livingazeroth::glass
             "\n        mov r29.w, r19.x"
             "\n        max r19.x, r19.x, c175.x"
             "\n      endif";
-        // ... and found: open when its bit is in c219.w (from ordinal c219.z: frac(bits / 2^(k + 1)) >= 0.5, k at least -1,
-        // so none below the first and none past kReplayBits); r29.w its share of the fake room and of the glow hidden: none
-        // for an open window (the real room behind it) or one the batch wouldn't have looked up, all for any other.
+        // ... and found: open when its bit is in c219.w (bits + 0.5, from ordinal c219.z: k = ordinal - first >= 0 and
+        // frac(c219.w / 2^(k + 1)) >= 0.5; the half keeps a set bit's value a quarter or more from the boundary for k = 0,
+        // so a GPU's approximate exp can't flip it: env/SeeThroughModel's OpenBit is the twin; none past kReplayBits); r29.w
+        // its share of the fake room and of the glow hidden: none for an open window (the real room behind it) or one the
+        // batch wouldn't have looked up, all for any other.
         const std::string replayOpen = !replay ? std::string() :
             "\n          if b11"
             "\n            add r19.x, r13.w, -c219.z"
-            "\n            max r19.x, r19.x, -c175.x"
-            "\n            add r19.x, r19.x, c175.x"
-            "\n            exp r19.x, -r19.x"
-            "\n            mul r19.x, r19.x, c219.w"
-            "\n            frc r19.x, r19.x"
-            "\n            add r19.x, r19.x, -c175.z"
-            "\n            cmp r31.w, r19.x, c175.x, c175.y"
+            "\n            max r19.y, r19.x, -c175.x"
+            "\n            add r19.y, r19.y, c175.x"
+            "\n            exp r19.y, -r19.y"
+            "\n            mul r19.y, r19.y, c219.w"
+            "\n            frc r19.y, r19.y"
+            "\n            add r19.y, r19.y, -c175.z"
+            "\n            cmp r31.w, r19.y, c175.x, c175.y"
+            "\n            cmp r31.w, r19.x, r31.w, c175.y"
             "\n            cmp r29.w, -r29.w, c175.y, c175.x"
             "\n            add r19.x, c175.x, -r31.w"
             "\n            mul r29.w, r29.w, r19.x"

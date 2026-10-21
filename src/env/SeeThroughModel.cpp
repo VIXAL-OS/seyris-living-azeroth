@@ -281,19 +281,38 @@ namespace wxl_livingazeroth::seethrough
         return bestDet > 0.0f ? kFront : kBack;
     }
 
-    bool SeesRoom(const SeeWindow& w, const float eye[3], const RoomMesh& room)
+    bool SeesRoom(const SeeWindow& w, const float eye[3], const RoomMesh& room, Sight* out)
     {
-        if (room.Empty() || !Finite3(eye)) return false;
-        for (const auto& s : kSight)
+        Sight sight;
+        if (room.Empty() || !Finite3(eye))
+        {
+            if (out) *out = sight;
+            return false;
+        }
+        for (int i = 0; i < static_cast<int>(sizeof(kSight) / sizeof(kSight[0])); ++i)
         {
             float d[3];
-            for (int k = 0; k < 3; ++k) d[k] = w.center[k] + w.along[k] * s[0] * w.halfWidth + w.up[k] * s[1] * w.halfHeight - eye[k];
+            for (int k = 0; k < 3; ++k) d[k] = w.center[k] + w.along[k] * kSight[i][0] * w.halfWidth + w.up[k] * kSight[i][1] * w.halfHeight - eye[k];
             const float len = std::sqrt(Dot(d, d));
-            if (!(len > 1e-3f) || !std::isfinite(len)) return false;
-            for (float& v : d) v /= len;
-            if (room.First(eye, d, len, len + kSightReach) != RoomMesh::kFront) return false;
+            float t = 0.0f;
+            RoomMesh::Hit hit = RoomMesh::kNone;
+            if (len > 1e-3f && std::isfinite(len))
+            {
+                for (float& v : d) v /= len;
+                hit = room.First(eye, d, len, len + kSightReach, &t);
+            }
+            if (i == 0) sight.middle = hit;
+            if (hit == RoomMesh::kFront) { ++sight.front; continue; }
+            ++(hit == RoomMesh::kBack ? sight.back : sight.none);
+            if (sight.firstMiss < 0)
+            {
+                sight.firstMiss = i;
+                sight.missHit = hit;
+                sight.missDepth = hit == RoomMesh::kBack ? t - len : 0.0f;
+            }
         }
-        return true;
+        if (out) *out = sight;
+        return sight.middle == RoomMesh::kFront && sight.front >= kSightFront;
     }
 
     void Corners(const SeeWindow& w, float grow, float out[4][3])
@@ -514,7 +533,15 @@ namespace wxl_livingazeroth::seethrough
                : alphaFunc == kD3dCmpGreater ? (ref + 0.5f) / 255.0f
                : -1.0f;
         out[2] = std::isfinite(first) ? first : 0.0f;
-        out[3] = static_cast<float>(bits & ((1u << kOpenBits) - 1u));
+        out[3] = static_cast<float>(bits & ((1u << kOpenBits) - 1u)) + 0.5f;
+    }
+
+    bool OpenBit(float ordinal, const float c219[4], float expError)
+    {
+        const float k = ordinal - c219[2];
+        const float e = std::exp2(-(std::max(k, -1.0f) + 1.0f)) * expError;
+        const float v = e * c219[3];
+        return k >= 0.0f && v - std::floor(v) - 0.5f >= 0.0f;
     }
 
     void Deferral::BeginBatch(bool deferrable, uint32_t start, uint32_t count, float first, uint32_t bits)
