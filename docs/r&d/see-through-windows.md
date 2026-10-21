@@ -150,17 +150,35 @@ frame) **meet the room's own surfaces from inside first**: a triangle whose wind
 (`SeesRoom`). The other three may meet the wall round a smaller or arched opening from outside, or leave the room by a
 doorway or a stair's opening: the first build asked all nine, and the inn's west upstairs window (9, its arch's corner on
 the wall, two rays out by the stair) never opened ("see-through windows don't seem to work anymore now", the user,
-2026-10-21). Six of nine agrees best, over 30 street views of each of the 17 windows, with how much of each window's glass
+2026-10-21). Six of nine agreed best, over 30 street views of each of the 17 windows, with how much of each window's glass
 (weighted by its texture's mask) shows the room from inside: no view where 60% of it does is shut, the dormers never open.
-The lights panel lists each window on the screen last frame: open, or why it's shut (fake, far, the budget, not loaded,
-its surfaces not read yet, not seen: how many rays met the room from inside, the middle one's, and the first that didn't
-and what it met). The room's surfaces are
-its group's rendered triangles (its MOBA batches; the collision-only ones after them are left out) but its glass (the
-window's own inner face, `mm_elwynn_wnd_int__01` in the inn: its back is to the street), copied out of the group the first
-time a window of it is a candidate (MOVT at +0xE8, MOVI at +0xE0, MOBA at +0xF8 and their counts, guarded at the group
-walker 0x7D7F50; the root's MOMT and MOTX for which materials are glass, guarded at the root walker 0x7D7470) into a grid
-of cells (`RoomMesh`: about 32 along its longest side), one build a frame (the inn's kitchen: 10,847 triangles). Each
-frame the rays run against the actual camera, so the answer follows the viewing angle.
+
+**The gate** (2026-10-21): "Ok interestingly it works at some angles and goes back to the fake room at others lol" (the
+user, before the west front: window 9 open, then a step aside shut, "4 of 9 rays meet ..."). Its rectangle's corner rays
+met the wall round the arch from outside, and rays that crossed the room and left it by the stair's opening counted
+against it. Now (`LookThrough`, `SightOpen`, `Hold`): the rays go through nine points **on the window's own glass**
+(`GlassSightPoints`: inside its glass triangles, from the group's glass batches; within the middle 60% of its rectangle,
+off the frame; the middle's nearest first, then each the farthest from those before), not its rectangle's corners; a ray
+meeting the room's surface **from outside** (a wall or the ceiling from outside: the dormer over the ceiling) counts
+against, one meeting it from inside for, one meeting **nothing** of it (on through a doorway, the stair's opening, past
+it) neither, but it mustn't outnumber them: to open four see the room and more than meet it from outside (at most two)
+or nothing; to stay open three, more than from outside (at most three), at most two fewer than meet nothing. A dormer's
+rays mostly go over the room (nothing) and see it with at most four. And the verdict holds: a change stands after 0.35 s
+(`kGateHold`), so a window at the edge doesn't flicker. Over the inn's windows from 252 street views each (5 to 30 yd
+out, 60 degrees aside either way, the eye 2 to 8 yd up and a mounted camera's 11): window 9 opens from 244 (it was 230),
+3 from 227 (221), the north front's 1, 2, 10 and 11 from 241 to 252, the dormers 15 to 17 from none; walking past the
+west and north fronts to 60 degrees aside (8 and 14 yd out, on foot and mounted, a frame each 1/60 s), 9, 14 and the
+north front's windows never change their verdict (the old rule: 9 four times, 1 nine), 3 three times (the old rule
+twenty): it shuts past about 50 degrees on its one side, where its deep reveal hides the room (its rays meet the wall
+round it from outside). The lights panel lists each window on the screen last frame: open, or why it's shut (fake, far,
+the budget, not loaded, its surfaces not read yet, not seen: how many of its rays saw the room from inside, met it from
+outside, met nothing, and whether the verdict is held). The room's surfaces are its group's rendered triangles (its MOBA
+batches; the collision-only ones after them are left out) but its glass (the window's own inner face,
+`mm_elwynn_wnd_int__01` in the inn: its back is to the street), copied out of the group the first time a window of it is
+a candidate (MOVT at +0xE8, MOVI at +0xE0, MOBA at +0xF8 and their counts, guarded at the group walker 0x7D7F50; the
+root's MOMT and MOTX for which materials are glass, guarded at the root walker 0x7D7470) into a grid of cells
+(`RoomMesh`: about 32 along its longest side), one build a frame (the inn's kitchen: 10,847 triangles). Each frame the
+rays run against the actual camera, so the answer follows the viewing angle.
 
 With the map scan's files, from street viewpoints in front of each window (8, 15 and 30 yd out, straight and 30 / 60
 degrees aside, the eye 2 and 6 yd up; `seethrough_tests` prints them): the ground floor's windows open from most of them,

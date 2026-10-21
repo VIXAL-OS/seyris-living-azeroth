@@ -64,6 +64,7 @@ namespace wxl_livingazeroth::seethrough
                 uint32_t ordinal = 0;
                 Why why = kOpen;
                 Sight sight;
+                bool held = false;   // the verdict that stands isn't this frame's rays' (Hold: not yet kGateHold seconds)
             };
             static constexpr unsigned kNotes = 24;
             Note notes[kNotes];
@@ -72,13 +73,14 @@ namespace wxl_livingazeroth::seethrough
             uint32_t replayBits = 0;
         };
 
-        void NoteWindow(Counts& c, uint32_t ordinal, Counts::Why why, const Sight* sight = nullptr)
+        void NoteWindow(Counts& c, uint32_t ordinal, Counts::Why why, const Sight* sight = nullptr, bool held = false)
         {
             if (c.noteCount >= Counts::kNotes) return;
             Counts::Note& n = c.notes[c.noteCount++];
             n.ordinal = ordinal;
             n.why = why;
             n.sight = sight ? *sight : Sight{};
+            n.held = held;
         }
         Counts g_now, g_last;
         unsigned g_everOpened = 0, g_everRedrawn = 0;
@@ -371,6 +373,84 @@ namespace wxl_livingazeroth::seethrough
             return e.ok ? &e.mesh : nullptr;
         }
 
+        // --- where the rays cross each window: points on its own glass (SightPoints), from the group's glass batches ------
+        struct PointsEntry
+        {
+            GroupArrays arrays;
+            uint32_t generation = 0, count = 0;
+            std::vector<SightPoints> points;   // per window of the group (RootWindows::Group's order); empty: none
+        };
+        std::unordered_map<const void*, PointsEntry> g_points;   // by the exterior group's object
+
+        // Its windows' sight points, built the first time the walk reaches the group and again whenever its arrays move;
+        // null when its arrays can't be read (the rays then cross the windows' rectangles, kSight's points).
+        const std::vector<SightPoints>* PointsOf(const RootEntry& r, const void* root, uint32_t group, const SeeWindow* windows, uint32_t count)
+        {
+            const uint8_t* g = nullptr;
+            GroupArrays a;
+            if (!ReadGroupArrays(static_cast<const uint8_t*>(root), group, g, a)) return nullptr;
+            if (a.vertexCount == 0 || a.vertexCount > 65536 || a.indexCount == 0 || a.indexCount > (3u << 20) || a.batchCount == 0 || a.batchCount > 4096)
+                return nullptr;
+            if (const auto it = g_points.find(g); it != g_points.end())
+            {
+                const PointsEntry& e = it->second;
+                if (e.arrays.vertices == a.vertices && e.arrays.indices == a.indices && e.arrays.batches == a.batches &&
+                    e.arrays.vertexCount == a.vertexCount && e.arrays.indexCount == a.indexCount && e.arrays.batchCount == a.batchCount &&
+                    e.generation == glass::Generation() && e.count == count)
+                    return e.points.empty() ? nullptr : &e.points;
+            }
+            if (g_points.size() > 64) g_points.clear();
+            PointsEntry& e = g_points[g];
+            e = PointsEntry{};
+            e.arrays = a;
+            e.generation = glass::Generation();
+            e.count = count;
+            std::vector<float> vertices(3 * static_cast<size_t>(a.vertexCount));
+            std::vector<uint16_t> indices(a.indexCount);
+            std::vector<uint8_t> batches(client::kMobaStride * static_cast<size_t>(a.batchCount));
+            if (!CopyOut(a.vertices, vertices.data(), vertices.size() * sizeof(float)) || !CopyOut(a.indices, indices.data(), indices.size() * 2) ||
+                !CopyOut(a.batches, batches.data(), batches.size()))
+                return nullptr;
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            for (uint32_t b = 0; b < a.batchCount; ++b)
+            {
+                const uint8_t* m = batches.data() + client::kMobaStride * b;
+                uint32_t start = 0;
+                uint16_t n = 0;
+                std::memcpy(&start, m + client::kMobaStart, 4);
+                std::memcpy(&n, m + client::kMobaCount, 2);
+                const uint8_t material = m[client::kMobaMaterial];
+                if (material < r.glassMaterial.size() && r.glassMaterial[material]) ranges.emplace_back(start, n);
+            }
+            GlassSightPoints(vertices.data(), a.vertexCount, indices.data(), a.indexCount, ranges, windows, count, e.points);
+            bool any = false;
+            for (const SightPoints& sp : e.points) any = any || sp.n > 0;
+            if (!any) e.points.clear();
+            return e.points.empty() ? nullptr : &e.points;
+        }
+
+        // Each window's verdict held across frames (Hold): by its instance, group and index; one not looked at for a second
+        // starts afresh (its first verdict stands at once).
+        struct GateEntry { Gate gate; ULONGLONG tick = 0; };
+        std::unordered_map<uint64_t, GateEntry> g_gates;
+        float g_frameSeconds = 0.0f;   // the last frame's length (Update)
+        ULONGLONG g_frameTick = 0;
+
+        bool SeenThrough(const void* instance, uint32_t group, uint32_t index, const SeeWindow& w, const float eye[3], const RoomMesh& room,
+                         const std::vector<SightPoints>* points, Sight& sight, bool& held)
+        {
+            LookThrough(w, eye, room, points && index < points->size() ? &(*points)[index] : nullptr, sight);
+            const ULONGLONG now = GetTickCount64();
+            if (g_gates.size() > 4096) g_gates.clear();
+            GateEntry& e = g_gates[(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 20) ^ (static_cast<uint64_t>(group) << 8) ^ index];
+            if (e.tick && now - e.tick > 1000) e.gate = Gate{};
+            e.tick = now;
+            const bool want = SightOpen(sight, e.gate.seen && e.gate.open);
+            const bool open = Hold(e.gate, want, g_frameSeconds);
+            held = open != want;
+            return open;
+        }
+
         // The group render callback while our walk runs: notes the room reached, then the client's (the sort table's).
         RenderCallbackFn g_savedCallback = nullptr;
         uint32_t g_target = 0xFFFFFFFFu;
@@ -466,6 +546,7 @@ namespace wxl_livingazeroth::seethrough
                 const uint32_t room = static_cast<uint32_t>(windows[i].interior);
                 bool opened = false;
                 Sight sight;
+                bool held = false;
                 Counts::Why why = Counts::kUnloaded;
                 if (Enterable(static_cast<const uint8_t*>(root), static_cast<const uint8_t*>(instance), room, r->groupCount))
                 {
@@ -473,8 +554,9 @@ namespace wxl_livingazeroth::seethrough
                     // redraw's; the whole-glass one opens every window with a room, as on 2026-10-20)
                     const bool lineOfSight = g_settings.redraw != 0;
                     const RoomMesh* mesh = lineOfSight ? MeshOf(*r, root, room) : nullptr;
+                    const std::vector<SightPoints>* points = lineOfSight ? PointsOf(*r, root, group, windows, count) : nullptr;
                     if (lineOfSight && !mesh) why = Counts::kNoMesh;
-                    else if (lineOfSight && !SeesRoom(windows[i], cam, *mesh, &sight)) { ++g_now.blind; why = Counts::kBlind; }
+                    else if (lineOfSight && !SeenThrough(instance, group, i, windows[i], cam, *mesh, points, sight, held)) { ++g_now.blind; why = Counts::kBlind; }
                     else
                     {
                         float clip[4], frustum[4];
@@ -484,7 +566,7 @@ namespace wxl_livingazeroth::seethrough
                         why = opened ? Counts::kOpen : Counts::kNotReached;
                     }
                 }
-                NoteWindow(g_now, windows[i].ordinal, why, &sight);
+                NoteWindow(g_now, windows[i].ordinal, why, &sight, held);
                 f.states[i] = opened ? kOpened : kShut;
                 ++(opened ? g_now.opened : g_now.shut);
                 f.opened += opened ? 1 : 0;
@@ -1109,6 +1191,11 @@ namespace wxl_livingazeroth::seethrough
         if (g_roots.size() > 2048) g_roots.clear();   // only here: nothing of this frame points at them now
         g_budget = kMaxOpenPerFrame;
         g_meshBuilds = 0;
+        {
+            const ULONGLONG tick = GetTickCount64();
+            g_frameSeconds = g_frameTick ? std::min(0.25f, static_cast<float>(tick - g_frameTick) / 1000.0f) : 0.0f;
+            g_frameTick = tick;
+        }
         g_leadThisFrame = false;
         // the redraw's read-back, shown for a second at a time
         const ULONGLONG now = GetTickCount64();
@@ -1269,23 +1356,17 @@ namespace wxl_livingazeroth::seethrough
         {
             const Counts::Note& n = g_last.notes[i];
             const Sight& s = n.sight;
-            static const char* const kHit[3] = { "nothing of the room (past it, or out through a doorway)", "its inside", "a wall or ceiling from outside" };
-            char rays[300] = "";
-            if (n.why == Counts::kOpen || n.why == Counts::kBlind || n.why == Counts::kNotReached)
+            char rays[320] = "";
+            if ((n.why == Counts::kOpen || n.why == Counts::kBlind || n.why == Counts::kNotReached) && s.rays)
             {
-                std::snprintf(rays, sizeof(rays), "; %d of 9 rays meet the room from inside (%d of %d needed, the middle one: %s)", s.front, kSightFront, 9,
-                              kHit[s.middle]);
-                if (s.firstMiss >= 0)
+                std::snprintf(rays, sizeof(rays), "; of %d rays through its %s: %d see the room from inside, %d meet it from outside, %d nothing of it "
+                              "(to open %d seeing it, more than either; to stay %d)%s", s.rays, s.onGlass ? "glass" : "rectangle", s.front, s.back, s.none,
+                              kOpenFront, kStayFront, n.held ? "; held, not yet this frame's" : "");
+                if (s.missHit == RoomMesh::kBack)
                 {
-                    char miss[120];
-                    std::snprintf(miss, sizeof(miss), "; ray %d (%+.1f, %+.1f) meets %s", s.firstMiss, kSight[s.firstMiss][0], kSight[s.firstMiss][1],
-                                  kHit[s.missHit]);
+                    char miss[80];
+                    std::snprintf(miss, sizeof(miss), "; the first from outside %.1f yd past the glass", s.missDepth);
                     std::strncat(rays, miss, sizeof(rays) - std::strlen(rays) - 1);
-                    if (s.missHit == RoomMesh::kBack)
-                    {
-                        std::snprintf(miss, sizeof(miss), " %.1f yd past the glass", s.missDepth);
-                        std::strncat(rays, miss, sizeof(rays) - std::strlen(rays) - 1);
-                    }
                 }
             }
             static const char* const kWhy[] = { "open", "shut: fake (nothing modelled behind it)", "shut: too far", "shut: over the frame's budget",

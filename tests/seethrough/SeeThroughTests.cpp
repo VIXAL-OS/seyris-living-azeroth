@@ -773,6 +773,53 @@ int main(int argc, char** argv)
         CHECK(open.empty() && rest.empty());
     });
 
+    Test("SightOpen, Hold: to open four rays seeing the room and more than meet it from outside or nothing; to stay three; a "
+         "change stands after kGateHold seconds", [] {
+        auto sight = [](int f, int b, int n) { st::Sight s; s.front = f; s.back = b; s.none = n; s.rays = f + b + n; return s; };
+        CHECK(st::SightOpen(sight(9, 0, 0), false) && st::SightOpen(sight(4, 1, 3), false) && st::SightOpen(sight(5, 2, 2), false));
+        CHECK(!st::SightOpen(sight(3, 0, 6), false));    // a dormer's: mostly over the room
+        CHECK(!st::SightOpen(sight(4, 1, 4), false));    // ... no more seeing it than meeting nothing
+        CHECK(!st::SightOpen(sight(5, 3, 1), false));    // three meet it from outside
+        CHECK(!st::SightOpen(sight(4, 5, 0), false) && !st::SightOpen(sight(4, 5, 0), true));   // more from outside than in
+        CHECK(st::SightOpen(sight(3, 1, 5), true) && !st::SightOpen(sight(3, 1, 5), false));    // stays open, wouldn't open
+        CHECK(st::SightOpen(sight(4, 3, 2), true) && !st::SightOpen(sight(2, 0, 7), true) && !st::SightOpen(sight(3, 0, 6), true));
+        st::Gate g;
+        CHECK(st::Hold(g, true, 0.016f));                // the first verdict stands at once
+        CHECK(st::Hold(g, false, 0.1f) && st::Hold(g, false, 0.1f) && st::Hold(g, false, 0.1f));   // 0.3 s: still open
+        CHECK(!st::Hold(g, false, 0.1f));                // 0.4 s: shut
+        CHECK(!st::Hold(g, true, 0.2f) && !st::Hold(g, false, 0.016f) && !st::Hold(g, true, 0.2f));   // a blip starts it again
+        CHECK(st::Hold(g, true, 0.2f));                  // 0.4 s since: open
+    });
+
+    Test("GlassSightPoints: an arched window's points on its glass, off its edge, the middle's first; none without glass", [] {
+        // a window 2 yd wide, 3 tall about (0, 0, 2) facing -y; its glass a square below and a fan of triangles over it (the arch)
+        const st::SeeWindow w[2] = { MakeWindow(0, 0, 2, 0, -1, 0, 1.0f, 1.5f, 1, 1), MakeWindow(10, 0, 2, 0, -1, 0, 1, 1, 1, 2) };
+        std::vector<float> v = { -1, 0, 0.5f, 1, 0, 0.5f, 1, 0, 2.5f, -1, 0, 2.5f };   // the square (z 0.5 .. 2.5)
+        std::vector<uint16_t> idx = { 0, 1, 2, 0, 2, 3 };
+        const int fan = 6;
+        v.insert(v.end(), { 0, 0, 2.5f });                                              // the fan's hub
+        for (int k = 0; k <= fan; ++k)
+        {
+            const float a = 3.14159265f * k / fan;
+            v.insert(v.end(), { std::cos(a), 0, 2.5f + std::sin(a) });
+        }
+        for (int k = 0; k < fan; ++k) idx.insert(idx.end(), { 4, static_cast<uint16_t>(5 + k), static_cast<uint16_t>(6 + k) });
+        std::vector<st::SightPoints> pts;
+        st::GlassSightPoints(v.data(), static_cast<uint32_t>(v.size() / 3), idx.data(), static_cast<uint32_t>(idx.size()),
+                             { { 0u, static_cast<uint32_t>(idx.size()) } }, w, 2, pts);
+        CHECK(pts.size() == 2 && pts[0].n == st::kSightPoints && pts[1].n == 0);
+        bool inside = true, offEdge = true;
+        for (int k = 0; k < pts[0].n; ++k)
+        {
+            const float* p = pts[0].p[k];
+            const float x = p[0], z = p[2];
+            inside = inside && (z <= 2.5f ? std::fabs(x) <= 1.0f : x * x + (z - 2.5f) * (z - 2.5f) <= 1.0f);   // on the glass
+            offEdge = offEdge && std::fabs(x) <= 0.6f + 1e-4f && std::fabs(z - 2.0f) <= 0.9f + 1e-4f;           // its middle 60%
+        }
+        const float* first = pts[0].p[0];
+        CHECK(inside && offEdge && std::fabs(first[0]) < 0.2f && std::fabs(first[2] - 2.0f) < 0.25f);
+    });
+
     Test("BlendFactor: the whole-glass redraw's opacity as a byte in all four channels, clamped; not finite: opaque", [] {
         CHECK(st::BlendFactor(0.35f) == 0x59595959u);
         CHECK(st::BlendFactor(0.0f) == 0u);
@@ -1065,7 +1112,7 @@ int main(int argc, char** argv)
                 CHECK(glassBatches == 1);
             });
         if (!scan.empty())
-            Test("the scan's inn from the street: which windows show their room (SeesRoom over its real groups, the glass aside)", [&] {
+            Test("the scan's inn from the street, the rule before the gate (SeesRoom over its real groups, the glass aside)", [&] {
                 CHECK(inn.windows.size() == 17);
                 const std::string base = (fs::path(scan) / "world#wmo#azeroth#buildings#goldshireinn#goldshireinn").string();
                 const std::vector<std::string> textures = ReadRootTextures(base + ".wmo");
@@ -1172,6 +1219,143 @@ int main(int argc, char** argv)
                 b.valid = true;
                 for (uint16_t k = 0; k < n; ++k) b.windows.push_back(k);
                 CHECK(st::Deferrable(b, states.data(), states.size()));
+            });
+        if (!scan.empty())
+            Test("the scan's inn, the gate (2026-10-21): rays through its glass, only the room met from outside against, the verdict held; "
+                 "a sweep of street views and a walk past the fronts", [&] {
+                const std::string base = (fs::path(scan) / "world#wmo#azeroth#buildings#goldshireinn#goldshireinn").string();
+                const std::vector<std::string> textures = ReadRootTextures(base + ".wmo");
+                std::vector<bool> glass(textures.size());
+                for (size_t i = 0; i < textures.size(); ++i) glass[i] = gl::MaterialOf(textures[i].c_str()) != 0;
+                std::map<int, st::RoomMesh> rooms;
+                for (const st::SeeWindow& w : inn.windows)
+                    if (!rooms.count(w.interior))
+                    {
+                        char name[16];
+                        std::snprintf(name, sizeof(name), "_%03d.wmo", w.interior);
+                        CHECK(BuildMesh(ReadScanGroup(base + name), glass, rooms[w.interior]));
+                    }
+                uint32_t n = 0;
+                const st::SeeWindow* w = inn.Group(4, n);
+                CHECK(w && n == 17);
+                // each window's sight points from group 4's glass (as the runtime takes them from the client's copy)
+                const ScanGroup g4 = ReadScanGroup(base + "_004.wmo");
+                std::vector<std::pair<uint32_t, uint32_t>> glassRanges;
+                for (const ScanGroup::Moba& m : g4.batches)
+                    if (m.material < glass.size() && glass[m.material]) glassRanges.emplace_back(m.start, m.count);
+                std::vector<st::SightPoints> points;
+                st::GlassSightPoints(g4.vertices.data(), static_cast<uint32_t>(g4.vertices.size() / 3), g4.indices.data(),
+                                     static_cast<uint32_t>(g4.indices.size()), glassRanges, w, n, points);
+                int withPoints = 0, fewest = st::kSightPoints;
+                bool onGlass = true;
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    withPoints += points[i].n == st::kSightPoints ? 1 : 0;
+                    fewest = std::min(fewest, points[i].n);
+                    for (int k = 0; k < points[i].n; ++k) onGlass = onGlass && st::WindowOf(points[i].p[k], w, n) == static_cast<int>(i);
+                }
+                std::printf("  sight points: %d of %u windows with %d on their glass (the fewest %d), every one in its own window: %s\n", withPoints, n,
+                            st::kSightPoints, fewest, onGlass ? "yes" : "no");
+                CHECK(withPoints >= 12 && fewest >= 4 && onGlass);
+                // the sweep: in front of each window 5 .. 30 yd out, straight and up to 60 degrees aside, the eye 2 .. 8 yd up
+                // and a mounted camera's 11
+                const float dists[] = { 5, 8, 12, 18, 24, 30 }, degs[] = { -60, -40, -20, 0, 20, 40, 60 }, zs[] = { 2, 3.5f, 5, 6.5f, 8, 11 };
+                std::vector<int> views(n), before(n), after(n);
+                std::vector<std::map<std::string, int>> combos(n);
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    const float nx = w[i].normal[0], ny = w[i].normal[1], l = std::sqrt(nx * nx + ny * ny);
+                    if (l < 0.5f) continue;
+                    for (const float r : dists)
+                        for (const float deg : degs)
+                            for (const float z : zs)
+                            {
+                                const float a = deg * 3.14159265f / 180.0f;
+                                const float dx = (nx * std::cos(a) - ny * std::sin(a)) / l, dy = (ny * std::cos(a) + nx * std::sin(a)) / l;
+                                const float eye[3] = { w[i].center[0] + r * dx, w[i].center[1] + r * dy, z };
+                                if (!st::Facing(w[i], eye)) continue;
+                                ++views[i];
+                                const st::RoomMesh& room = rooms.at(w[i].interior);
+                                before[i] += st::SeesRoom(w[i], eye, room) ? 1 : 0;
+                                st::Sight s;
+                                st::LookThrough(w[i], eye, room, &points[i], s);
+                                after[i] += st::SightOpen(s, false) ? 1 : 0;
+                                ++combos[i][std::to_string(s.front) + "/" + std::to_string(s.back) + "/" + std::to_string(s.none) + (st::SightOpen(s, false) ? "+" : "")];
+                            }
+                }
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    std::printf("  window %2u (z %4.1f, room %d): open from %3d of %3d views before, %3d now\n", w[i].ordinal, w[i].center[2], w[i].interior,
+                                before[i], views[i], after[i], views[i]);
+                    std::string top;
+                    for (const auto& kv : combos[i]) top += " " + kv.first + ":" + std::to_string(kv.second);
+                    std::printf("     f/b/n:%s\n", top.c_str());
+                }
+                // the west front's (3, 9, 14) and the north front's (1, 2, 10, 11) open across them (3 and 9 from nine in ten
+                // views, the rest from seven); the south dormers (15 .. 17) never
+                for (const uint32_t o : { 3u, 9u })
+                    CHECK(after[o - 1] * 10 >= views[o - 1] * 9);
+                for (const uint32_t o : { 1u, 2u, 10u, 11u, 14u })
+                    CHECK(after[o - 1] * 10 >= views[o - 1] * 7);
+                CHECK(after[14] == 0 && after[15] == 0 && after[16] == 0);
+                // a slow walk past the west front and the north front (a camera 3 yd up on foot, 7 mounted; 8 and 14 yd out; 7 yd
+                // a second, a frame each 1/60 s): the verdict's changes, held and not, and the old rule's
+                struct Walk { const char* name; float out, z; std::vector<uint32_t> windows; };
+                const Walk walks[] = { { "the west front 8 yd out", 8, 3, { 3, 9, 14 } }, { "the west front 14 yd out", 14, 3, { 3, 9, 14 } },
+                                       { "the west front 8 yd out, mounted", 8, 7, { 3, 9, 14 } }, { "the west front 14 yd out, mounted", 14, 7, { 3, 9, 14 } },
+                                       { "the north front 8 yd out", 8, 3, { 1, 2, 10, 11 } }, { "the north front 14 yd out", 14, 3, { 1, 2, 10, 11 } },
+                                       { "the north front 14 yd out, mounted", 14, 7, { 1, 2, 10, 11 } } };
+                int flipsHeld[18] = {}, flipsRaw[18] = {}, flipsOld[18] = {}, openFrames[18] = {}, frames[18] = {};
+                for (const Walk& walk : walks)
+                {
+                    // the front's line: its first window's normal out, along it to 60 degrees aside either way of the windows' middle
+                    const st::SeeWindow& f = w[walk.windows[0] - 1];
+                    float c[2] = { 0, 0 };
+                    for (const uint32_t o : walk.windows) { c[0] += w[o - 1].center[0]; c[1] += w[o - 1].center[1]; }
+                    c[0] /= walk.windows.size(); c[1] /= walk.windows.size();
+                    const float nx = f.normal[0], ny = f.normal[1], l = std::sqrt(nx * nx + ny * ny);
+                    const float ox = nx / l, oy = ny / l, ax = -oy, ay = ox;
+                    for (const uint32_t o : walk.windows)
+                    {
+                        st::Gate gate;
+                        bool raw = false, old = false, last = false, first = true;
+                        const float step = 7.0f / 60.0f;
+                        const float span = walk.out * 1.7320508f;   // (tan 60 degrees)
+                        for (float s = -span; s <= span; s += step)
+                        {
+                            const float eye[3] = { c[0] + ox * walk.out + ax * s, c[1] + oy * walk.out + ay * s, walk.z };
+                            const st::SeeWindow& win = w[o - 1];
+                            if (!st::Facing(win, eye)) { first = true; gate = st::Gate{}; continue; }
+                            const st::RoomMesh& room = rooms.at(win.interior);
+                            st::Sight sight;
+                            st::LookThrough(win, eye, room, &points[o - 1], sight);
+                            const bool want = st::SightOpen(sight, gate.seen && gate.open);
+                            const bool held = st::Hold(gate, want, 1.0f / 60.0f);
+                            const bool was = st::SeesRoom(win, eye, room);
+                            if (!first)
+                            {
+                                flipsRaw[o] += want != raw ? 1 : 0;
+                                flipsOld[o] += was != old ? 1 : 0;
+                                flipsHeld[o] += held != last ? 1 : 0;
+                            }
+                            raw = want;
+                            old = was;
+                            last = held;
+                            first = false;
+                            ++frames[o];
+                            openFrames[o] += held ? 1 : 0;
+                        }
+                    }
+                }
+                for (const uint32_t o : { 3u, 9u, 14u, 1u, 2u, 10u, 11u })
+                    std::printf("  walking past window %2u: open %d of %d frames; its verdict changed %d times held, %d unheld, %d by the old rule\n", o,
+                                openFrames[o], frames[o], flipsHeld[o], flipsRaw[o], flipsOld[o]);
+                // 9, 14 and the north front's windows open all the way (none changes its verdict); 3, the shuttered ground-floor
+                // window, shuts past about 50 degrees on its one side, where its deep reveal hides the room (its rays meet the
+                // wall round it from outside), once a walk (the old rule: twenty times)
+                for (const uint32_t o : { 9u, 14u, 1u, 2u, 10u, 11u })
+                    CHECK(flipsHeld[o] == 0 && openFrames[o] == frames[o]);
+                CHECK(flipsHeld[3] <= 4 && flipsHeld[3] < flipsOld[3] && openFrames[3] * 10 >= frames[3] * 9);
             });
         else std::printf("SKIP the scan's inn (no wmo-windows folder given)\n");
     }

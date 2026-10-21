@@ -278,10 +278,54 @@ namespace wxl_livingazeroth::seethrough
         int firstMiss = -1;                       // the first ray (kSight's index) that didn't meet a front face
         RoomMesh::Hit missHit = RoomMesh::kNone;  // ... what it met (kBack) or nothing
         float missDepth = 0.0f;                   // ... how far past the glass (yd)
+        int rays = 0;
+        bool onGlass = false;                     // through its glass's own points (SightPoints), not its rectangle's
     };
-    /// Whether the room is seen through the window from `eye` (WMO space): the middle kSight ray and kSightFront of them in
-    /// all, from the glass on, meet `room`'s surfaces first from inside (kFront). What they met in `out`.
+    /// Whether the room is seen through the window from `eye` (WMO space), as before 2026-10-21: the middle kSight ray and
+    /// kSightFront of them in all, from the glass on, meet `room`'s surfaces first from inside (kFront). What they met in
+    /// `out`.
     bool SeesRoom(const SeeWindow& w, const float eye[3], const RoomMesh& room, Sight* out = nullptr);
+
+    // "Ok interestingly it works at some angles and goes back to the fake room at others lol" (the user, 2026-10-21, before
+    // the inn's west front: its arched window 9 open, then a step aside shut, "4 of 9 rays meet ..."). Its rectangle's
+    // corner rays met the wall round the arch from outside, and rays through the room on out by the stair's opening counted
+    // against it. So: the rays go through points on the window's own glass; only a ray meeting the room's surface from
+    // outside (a wall or the ceiling from outside: the dormer over the ceiling) counts against it, one meeting nothing of
+    // the room (on through a doorway, the stair's opening, past it) for neither, the portal walk draws what's there; and the
+    // verdict holds: opening and shutting have their own thresholds, and a change stands only after kGateHold seconds.
+    /// Where the rays cross a window: points on its own glass (inside its glass triangles, the group's glass batches),
+    /// the one nearest its middle first, then each the farthest from those before; none (n 0): kSight's on its rectangle.
+    constexpr int kSightPoints = 9;
+    constexpr float kSightInner = 0.6f;   // the points within this share of the half sizes (the glass's edge: its frame)
+    struct SightPoints { float p[kSightPoints][3] = {}; int n = 0; };
+    /// Each of the group's windows' (`windows`) sight points from its vertices (MOVT), indices (MOVI) and glass batches'
+    /// ranges (first index, count): a triangle belongs to the window its middle is in (WindowOf); it's cut in sixteen and
+    /// the middles of the pieces are the candidates (inside the glass, off its edges).
+    void GlassSightPoints(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
+                          const std::vector<std::pair<uint32_t, uint32_t>>& glassRanges, const SeeWindow* windows, uint32_t count,
+                          std::vector<SightPoints>& out);
+    /// The rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) past the glass: what
+    /// each met first in `out` (front: the room from inside; back: its surface from outside; none: nothing of it).
+    void LookThrough(const SeeWindow& w, const float eye[3], const RoomMesh& room, const SightPoints* points, Sight& out);
+    /// The verdict on what the rays met, `wasOpen` its last. To open: at least kOpenFront rays see the room from inside,
+    /// more than meet it from outside (at most kOpenBack of those) and more than meet nothing. To stay open: kStayFront,
+    /// more than from outside (at most kStayBack), and at most kStayNone fewer than meet nothing. Over the inn's 17 windows
+    /// from 252 street views each (5 .. 30 yd, 60 degrees aside, the eye 2 .. 11 yd up): the dormers over the ceiling
+    /// meet nothing with most rays (they go over the room) and see it with at most four; the arched window 9 sees it with
+    /// at least three, and opens from every view (it was 230 of 252).
+    constexpr int kOpenFront = 4, kStayFront = 3, kOpenBack = 2, kStayBack = 3, kStayNone = 2;
+    bool SightOpen(const Sight& s, bool wasOpen);
+    /// A window's held verdict across frames: a new one stands once it has held kGateHold seconds.
+    constexpr float kGateHold = 0.35f;
+    struct Gate
+    {
+        bool open = false, seen = false;   // the verdict that stands; whether there is one yet
+        bool pending = false;              // the other verdict, held for `held` seconds so far
+        float held = 0.0f;
+    };
+    /// The frame's verdict `want` after `dt` seconds: the first stands at once, a change after kGateHold. The verdict that
+    /// stands.
+    bool Hold(Gate& g, bool want, float dt);
 
     // --- a window on the screen --------------------------------------------------------------------------------------
     /// The quad (WMO space), grown by `grow` yd along and up: corners counter-clockwise from (-along, -up).

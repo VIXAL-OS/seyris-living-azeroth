@@ -3,6 +3,7 @@
 #include "GlassModel.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -313,6 +314,130 @@ namespace wxl_livingazeroth::seethrough
         }
         if (out) *out = sight;
         return sight.middle == RoomMesh::kFront && sight.front >= kSightFront;
+    }
+
+    void GlassSightPoints(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
+                          const std::vector<std::pair<uint32_t, uint32_t>>& glassRanges, const SeeWindow* windows, uint32_t count,
+                          std::vector<SightPoints>& out)
+    {
+        out.assign(count, SightPoints{});
+        if (!vertices || !indices || !windows || !count) return;
+        std::vector<std::vector<std::array<float, 3>>> candidates(count);
+        for (const auto& [start, n] : glassRanges)
+        {
+            if (start > indexCount || n > indexCount - start) continue;
+            for (uint32_t t = start; t + 2 < start + n; t += 3)
+            {
+                const float* v[3];
+                bool ok = true;
+                for (int k = 0; k < 3; ++k)
+                {
+                    ok = ok && indices[t + k] < vertexCount;
+                    v[k] = ok ? vertices + 3 * static_cast<size_t>(indices[t + k]) : vertices;
+                }
+                if (!ok) continue;
+                const float mid[3] = { (v[0][0] + v[1][0] + v[2][0]) / 3.0f, (v[0][1] + v[1][1] + v[2][1]) / 3.0f, (v[0][2] + v[1][2] + v[2][2]) / 3.0f };
+                const int w = WindowOf(mid, windows, count);
+                if (w < 0) continue;
+                // the triangle cut in sixteen (each side in four): the pieces' middles in quarter steps along a -> b (u) and
+                // a -> c (v): the ten upright pieces' at (i + 1/3, j + 1/3) / 4, the six upside down's at (i + 2/3, j + 2/3) / 4
+                for (int i = 0; i < 4; ++i)
+                    for (int j = 0; i + j < 4; ++j)
+                        for (int down = 0; down < 2; ++down)
+                        {
+                            if (down && i + j > 2) continue;
+                            const float third = down ? 2.0f / 3.0f : 1.0f / 3.0f;
+                            const float u = (i + third) / 4.0f, vv = (j + third) / 4.0f;
+                            std::array<float, 3> p;
+                            for (int k = 0; k < 3; ++k) p[k] = v[0][k] + (v[1][k] - v[0][k]) * u + (v[2][k] - v[0][k]) * vv;
+                            candidates[static_cast<size_t>(w)].push_back(p);
+                        }
+            }
+        }
+        for (uint32_t w = 0; w < count; ++w)
+        {
+            // the glass inside the window's middle kSightInner of its rectangle (an outer window's glass reaches past the
+            // room's opening behind it: its edge is mostly lead and frame, and behind it the wall); all of it if none is
+            std::vector<std::array<float, 3>> c;
+            for (const auto& p : candidates[w])
+            {
+                const float d[3] = { p[0] - windows[w].center[0], p[1] - windows[w].center[1], p[2] - windows[w].center[2] };
+                if (std::fabs(Dot(d, windows[w].along)) <= kSightInner * windows[w].halfWidth && std::fabs(Dot(d, windows[w].up)) <= kSightInner * windows[w].halfHeight)
+                    c.push_back(p);
+            }
+            if (c.empty()) c = candidates[w];
+            if (c.empty()) continue;
+            SightPoints& s = out[w];
+            std::vector<float> nearest(c.size(), 1e30f);
+            auto d2 = [](const std::array<float, 3>& a, const float* b) { const float d[3] = { a[0] - b[0], a[1] - b[1], a[2] - b[2] }; return Dot(d, d); };
+            // the middle's nearest first, then the farthest from those taken, until kSightPoints or none left apart
+            size_t pick = 0;
+            for (size_t i = 1; i < c.size(); ++i)
+                if (d2(c[i], windows[w].center) < d2(c[pick], windows[w].center)) pick = i;
+            while (s.n < kSightPoints)
+            {
+                for (int k = 0; k < 3; ++k) s.p[s.n][k] = c[pick][k];
+                ++s.n;
+                size_t far = 0;
+                float best = -1.0f;
+                for (size_t i = 0; i < c.size(); ++i)
+                {
+                    nearest[i] = std::min(nearest[i], d2(c[i], s.p[s.n - 1]));
+                    if (nearest[i] > best) { best = nearest[i]; far = i; }
+                }
+                if (best < 1e-4f) break;   // (every candidate taken or on one already)
+                pick = far;
+            }
+        }
+    }
+
+    void LookThrough(const SeeWindow& w, const float eye[3], const RoomMesh& room, const SightPoints* points, Sight& out)
+    {
+        out = Sight{};
+        if (room.Empty() || !Finite3(eye)) return;
+        out.onGlass = points && points->n > 0;
+        const int rays = out.onGlass ? points->n : static_cast<int>(sizeof(kSight) / sizeof(kSight[0]));
+        for (int i = 0; i < rays; ++i)
+        {
+            float d[3];
+            for (int k = 0; k < 3; ++k)
+                d[k] = (out.onGlass ? points->p[i][k] : w.center[k] + w.along[k] * kSight[i][0] * w.halfWidth + w.up[k] * kSight[i][1] * w.halfHeight) - eye[k];
+            const float len = std::sqrt(Dot(d, d));
+            float t = 0.0f;
+            RoomMesh::Hit hit = RoomMesh::kNone;
+            if (len > 1e-3f && std::isfinite(len))
+            {
+                for (float& v : d) v /= len;
+                hit = room.First(eye, d, len, len + kSightReach, &t);
+            }
+            ++out.rays;
+            if (i == 0) out.middle = hit;
+            if (hit == RoomMesh::kFront) { ++out.front; continue; }
+            ++(hit == RoomMesh::kBack ? out.back : out.none);
+            if (out.firstMiss < 0)
+            {
+                out.firstMiss = i;
+                out.missHit = hit;
+                out.missDepth = hit == RoomMesh::kBack ? t - len : 0.0f;
+            }
+        }
+    }
+
+    bool SightOpen(const Sight& s, bool wasOpen)
+    {
+        if (!(s.front > s.back)) return false;
+        if (wasOpen) return s.front >= kStayFront && s.back <= kStayBack && s.front + kStayNone >= s.none;
+        return s.front >= kOpenFront && s.back <= kOpenBack && s.front > s.none;
+    }
+
+    bool Hold(Gate& g, bool want, float dt)
+    {
+        if (!g.seen) { g = Gate{}; g.seen = true; g.open = want; return g.open; }
+        if (want == g.open) { g.pending = false; g.held = 0.0f; return g.open; }
+        if (!g.pending) { g.pending = true; g.held = 0.0f; }
+        g.held += std::isfinite(dt) && dt > 0.0f ? std::min(dt, 1.0f) : 0.0f;
+        if (g.held >= kGateHold) { g.open = want; g.pending = false; g.held = 0.0f; }
+        return g.open;
     }
 
     void Corners(const SeeWindow& w, float grow, float out[4][3])

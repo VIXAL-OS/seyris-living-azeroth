@@ -32,9 +32,12 @@
 //     0 (as on 2026-10-20): the whole batch at SeeThroughOpacity (BLENDFACTOR), its look kept but its fake room off, no
 //       depth; a batch goes see-through only with none of its windows shut.
 //  - With SeeThroughRedraw 1 the room is opened only where it's seen through the window (env/SeeThroughModel's
-//    SeesRoom: rays from the eye through the window meet the room's own surfaces from inside first, its glass aside),
-//    its rendered triangles copied out of its group once (MOVT, MOVI, MOBA: RoomMesh): "certain attic windows shouldn't
-//    be able to see through the roof" (the user, 2026-10-20).
+//    LookThrough, SightOpen, Hold: rays from the eye through points on the window's own glass meet the room's own surfaces,
+//    its glass aside, from inside rather than from outside; meeting nothing of it, on through a doorway, neither), its
+//    rendered triangles copied out of its group once (MOVT, MOVI, MOBA: RoomMesh) and the windows' glass points out of the
+//    walked group's glass batches (GlassSightPoints); the verdict held per window (its own thresholds to open and to stay,
+//    a change after 0.35 s): "certain attic windows shouldn't be able to see through the roof" (the user, 2026-10-20);
+//    "it works at some angles and goes back to the fake room at others lol" (2026-10-21).
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
