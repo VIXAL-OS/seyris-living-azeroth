@@ -487,6 +487,14 @@ namespace wxl_livingazeroth::seethrough
         return opened;
     }
 
+    bool DeferrableWhole(const BatchWindows& b, const uint8_t* states, size_t stateCount)
+    {
+        if (!Deferrable(b, states, stateCount)) return false;
+        for (const uint16_t w : b.windows)
+            if (states[w] == kShut) return false;
+        return true;
+    }
+
     void OpenBits(const BatchWindows& b, const SeeWindow* windows, const uint8_t* states, size_t count, float& first, uint32_t& bits)
     {
         first = 0.0f;
@@ -521,6 +529,13 @@ namespace wxl_livingazeroth::seethrough
         out.startIndex = start + (indexOffset >> 1);
         out.primitives = count / 3;
         return true;
+    }
+
+    uint32_t BlendFactor(float opacity)
+    {
+        const float o = std::isfinite(opacity) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
+        const uint32_t a = static_cast<uint32_t>(std::lround(o * 255.0f));
+        return (a << 24) | (a << 16) | (a << 8) | a;
     }
 
     void ReplayConstants(float opacity, bool alphaTest, uint32_t alphaFunc, uint32_t alphaRef, float first, uint32_t bits, float out[4])

@@ -67,7 +67,10 @@
 //  otherwise and outside the redraw), and the alpha (ReplayAlpha, the edit's last lines: the stock alpha in r12.w) is
 //  1 - the mask x (1 - the opacity, c219.x) where it's open, 1 elsewhere: an open window's glass texels see-through at
 //  the opacity, its lead, frame and tracery and every shut window opaque ("the tracery also becomes more transparent",
-//  the user, 2026-10-20). The batch's own alpha test (c219.y, -1 none) on the stock alpha is a texkill there.
+//  the user, 2026-10-20). The batch's own alpha test (c219.y, -1 none) on the stock alpha is a texkill there, and so is
+//  the redraw's split into its two draws (c28.y: +1 keeps alpha >= c28.z, the opaque; -1 the rest), not the device's alpha
+//  test. Its debug view (c28.x > 0) colours each pixel by what was decided: an open window's glass magenta, its lead and
+//  frame green, a shut window cyan, no window found yellow (c29..c32 defined); r31.w -1 no window, 0 shut, 1 open.
 //
 // Registers (WMO pixel shaders; the stock ones use r0..r11, c0..c14, s0..s7 and no b/i registers):
 //  b9 glass, b10 floor light, b11 the redraw; r12..r31 (shared with the ice and the rims, see ModelIce.hpp; r12.w the stock
@@ -91,7 +94,8 @@
 //  shades' flattening and their mean), c27 (1 - the stained tint, the tint); c218.zw (the room's light by lit x .z + .w:
 //  by day a dark room keeps room::kDarkDay, at night the moon's in dark rooms only); c206, c207, c208, c209, c210, c211,
 //  c214..c217, c220, c221, c83, c84, c87..c100 defined; c27.zw the corner that isn't glass; c219 the redraw's (b11 only:
-//  1 - the opacity, the alpha test's reference, the first ordinal, the open windows' bits);
+//  1 - the opacity, the alpha test's reference, the first ordinal, the open windows' bits; c28 its debug view, its
+//  draw's sign and threshold; c29..c32 the debug view's tints, defined);
 //  the floor light's panes c101..c172 (six registers each; the rims' range: a batch has one or the other, features/Glass
 //  re-uploads when the rims took it). ps_3_0 has c0..c223, and an instruction reads at most one constant register.
 #pragma once
@@ -128,6 +132,8 @@ namespace wxl_livingazeroth::glass
     constexpr int kReplayConstant = 219; // c219, read under b11 only: 1 - the opacity, the batch's alpha-test reference (-1:
                                          // none), the first ordinal of .w's bits, the open windows' bits
     constexpr int kReplayBits = 16;      // windows c219.w holds (bits + 0.5: a margin no approximate exp crosses)
+    constexpr int kReplayDrawConstant = 28;   // c28, read under b11 only: the debug view (1 on), the draw (+1 the opaque, -1
+                                              // the see-through; 0 both), the alpha the two split at
     /// GlassBlock's parts besides the look as it was (the tests build the block without them to hold it to the old one).
     enum BlockPart : int { kPartNotGlass = 1, kPartReplay = 2, kAllParts = 3 };
 
@@ -169,6 +175,8 @@ namespace wxl_livingazeroth::glass
                def(217, 1.0f / kLampK, kLampGain / kLampK, kLampBase, kTextureTexels) +
                def(220, hearth::kRate[0], hearth::kRate[1], hearth::kRate[2], 0.0f) +
                def(221, hearth::kWeight[0], hearth::kWeight[1], hearth::kWeight[2], hearth::kSpread) +
+               // the redraw's debug view's tints (kReplayDebug): an open window's glass, its lead and frame, a shut window, no window
+               def(29, 1.0f, 0.0f, 1.0f, 0.0f) + def(30, 0.0f, 1.0f, 0.0f, 0.0f) + def(31, 0.0f, 1.0f, 1.0f, 0.0f) + def(32, 1.0f, 1.0f, 0.0f, 0.0f) +
                "    defi i1, " + std::to_string(kMaxPerCell) + ", 0, 0, 0\n"
                "    dcl_2d s8\n    dcl_2d s9\n    dcl_2d s10\n    dcl_2d s11\n    dcl_2d s12\n    dcl_2d s13\n";
     }
@@ -347,7 +355,7 @@ namespace wxl_livingazeroth::glass
         const std::string replayLook = !replay ? std::string() :
             "\n      mov r29.w, c175.x"
             "\n      if b11"
-            "\n        mov r31.w, c175.y"
+            "\n        mov r31.w, -c175.x"
             "\n        mov r29.w, r19.x"
             "\n        max r19.x, r19.x, c175.x"
             "\n      endif";
@@ -372,6 +380,25 @@ namespace wxl_livingazeroth::glass
             "\n            mul r29.w, r29.w, r19.x"
             "\n          endif";
         const std::string replayKeep = !replay ? std::string() : "\n          mul r22.w, r22.w, r29.w";
+        // The redraw's debug view (c28.x > 0: features/SeeThrough's panel): the pixel the colour of what the shader decided
+        // (before the fog): an open window's glass magenta (c29) by its mask, through grey to its lead and frame green (c30:
+        // mask 0, alpha 1), a shut window cyan (c31), no window found yellow (c32).
+        const std::string replayDebug = !replay ? std::string() :
+            "\n      if b11"
+            "\n        mov r13.x, c28.x"
+            "\n        if_gt r13.x, c175.y"
+            "\n          mov r13, c32"
+            "\n          if_ge r31.w, c175.y"
+            "\n            mov r13, c31"
+            "\n            if_gt r31.w, c175.y"
+            "\n              mov r13, c29"
+            "\n              add r13, r13, -c30"
+            "\n              mad r13, r13, r14.w, c30"
+            "\n            endif"
+            "\n          endif"
+            "\n          add r31.xyz, r13, -r12"
+            "\n        endif"
+            "\n      endif";
         // Mod 289 of r22.x (a whole number below 2^22) in place, exactly: v - floor((v + 0.5) / 289) 289.
         const std::string mod =
             "\n          add r22.z, r22.x, c214.z"
@@ -901,7 +928,7 @@ namespace wxl_livingazeroth::glass
             "\n      add r27.xyz, r27, -r12"
             "\n      mad r27.xyz, r12, r14.y, r27"
             "\n      mad r31.xyz, r27, r14.w, r31"
-            "\n      mad r31.xyz, r12, -r14.y, r31"
+            "\n      mad r31.xyz, r12, -r14.y, r31" + replayDebug +
             "\n    endif";
     }
 
@@ -928,9 +955,15 @@ namespace wxl_livingazeroth::glass
         return "\n    if b11"
                "\n      add r13, r12.w, -c219.y"
                "\n      texkill r13"
-               "\n      mul r13.x, r14.w, r31.w"
+               "\n      max r13.y, r31.w, c175.y"
+               "\n      mul r13.x, r14.w, r13.y"
                "\n      mul r13.x, r13.x, c219.x"
                "\n      add r12.w, -r13.x, c175.x"
+               // the redraw's two draws (c28.y: +1 the opaque, -1 the see-through), split here, not by the device's alpha test
+               // (a driver's alpha-to-coverage or a translation layer may treat that otherwise): keep alpha >= c28.z, or below
+               "\n      add r13, r12.w, -c28.z"
+               "\n      mul r13, r13, c28.y"
+               "\n      texkill r13"
                "\n    endif";
     }
 

@@ -348,6 +348,9 @@ namespace wxl_livingazeroth::seethrough
     /// one of its windows opened (else there's nothing to see through). Its shut and unseen windows stay as the client
     /// draws them, opaque with their fake room: the redraw tells the windows apart per pixel (OpenBits, GlassShader's b11).
     bool Deferrable(const BatchWindows& b, const uint8_t* states, size_t stateCount);
+    /// The same for the whole-glass redraw (SeeThroughRedraw 0, as on 2026-10-20): every window it covers open or unseen too
+    /// (its glass goes see-through as one, so a shut window would show the void behind it).
+    bool DeferrableWhole(const BatchWindows& b, const uint8_t* states, size_t stateCount);
     /// The windows c219.w holds (GlassShader's kReplayBits): 16, so the shader's test of a bit keeps a margin a GPU's
     /// approximate exp can't cross (OpenBit's).
     constexpr uint32_t kOpenBits = 16;
@@ -366,6 +369,8 @@ namespace wxl_livingazeroth::seethrough
     };
     bool DrawArgsOf(const uint32_t batch[4], uint32_t baseVertexMode, uint32_t streamOffset, uint32_t streamStride, uint32_t indexOffset,
                     uint32_t d3dPrimitive, DrawArgs& out);
+    /// D3DRS_BLENDFACTOR for a glass opacity (0..1): its byte in all four channels (the whole-glass redraw's).
+    uint32_t BlendFactor(float opacity);
     /// The redraw's c219 (GlassShader's kReplayConstant) for a glass opacity (0..1; not finite: opaque), the batch's own
     /// alpha test as the device had it (D3DRS_ALPHATESTENABLE, ALPHAFUNC, ALPHAREF: greater-or-equal its reference / 255,
     /// greater half a step more; off, or any other test, -1: none) and its open windows (OpenBits: c219.z the first

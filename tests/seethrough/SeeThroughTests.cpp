@@ -37,6 +37,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -732,6 +733,33 @@ int main(int argc, char** argv)
         b.strayArea = 0;
         b.valid = false;
         CHECK(!st::Deferrable(b, open2, 3));
+    });
+
+    Test("DeferrableWhole (SeeThroughRedraw 0): as Deferrable, and none of its windows shut (its glass goes see-through as one)", [] {
+        st::BatchWindows b;
+        b.valid = true;
+        b.windows = { 0, 2 };
+        const uint8_t open2[3] = { st::kOpened, st::kShut, st::kOpened };
+        const uint8_t oneUnseen[3] = { st::kOpened, st::kShut, st::kUnseen };
+        const uint8_t oneShut[3] = { st::kOpened, st::kOpened, st::kShut };
+        const uint8_t none[3] = { st::kUnseen, st::kOpened, st::kUnseen };
+        CHECK(st::DeferrableWhole(b, open2, 3));       // window 1 isn't the batch's
+        CHECK(st::DeferrableWhole(b, oneUnseen, 3));
+        CHECK(!st::DeferrableWhole(b, oneShut, 3));    // the whole glass would show the void behind its shut window
+        CHECK(!st::DeferrableWhole(b, none, 3));
+        CHECK(!st::DeferrableWhole(b, open2, 2));
+        b.strayArea = st::kTrimArea * 2.0f;
+        CHECK(!st::DeferrableWhole(b, open2, 3));
+    });
+
+    Test("BlendFactor: the whole-glass redraw's opacity as a byte in all four channels, clamped; not finite: opaque", [] {
+        CHECK(st::BlendFactor(0.35f) == 0x59595959u);
+        CHECK(st::BlendFactor(0.0f) == 0u);
+        CHECK(st::BlendFactor(1.0f) == 0xFFFFFFFFu);
+        CHECK(st::BlendFactor(-2.0f) == 0u);
+        CHECK(st::BlendFactor(7.0f) == 0xFFFFFFFFu);
+        CHECK(st::BlendFactor(std::numeric_limits<float>::quiet_NaN()) == 0xFFFFFFFFu);
+        CHECK(st::BlendFactor(0.5f) == 0x80808080u);
     });
 
     Test("OpenBits: the lowest open ordinal and a bit for each open window within 16 of it; shut, unseen and other batches' none", [] {

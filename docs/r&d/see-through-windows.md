@@ -189,20 +189,40 @@ would cover it. So it is **deferred**:
   0; first index + the index buffer's offset / 2; min, max; count / 3). The writes go back for the next draw.
 - **The redraw**: after `CM2Scene::Draw` pass 0 of `World::s_m2Scene` (the opaque models: the room's furniture is in),
   before detail doodads, liquids, weather and see-through models, each captured state is applied and the batch drawn
-  again with LA's glass look (b9: reflection, darkening, coolness) and its redraw switched on (b11, c219:
-  `features/GlassShader`; the WMO edit moves the stock alpha write to r12.w and writes oC0.w last). Each pixel looks up
-  its window (the window table the fake rooms use; the lookup forced even where the batch wouldn't look) and reads
-  whether it's open from c219.w's bits (one a window from the lowest open ordinal c219.z, 16 of them, plus a half: frac
-  of c219.w / 2^(k + 1) >= 0.5; without the half the first open window's value sat exactly on 0.5, and a GPU's exp a hair
-  short of 2^-1 shut it, 2026-10-21): an open window has
-  no fake room and hides none of its glow, and its alpha is 1 - the glass mask x (1 - `SeeThroughOpacity`), so the
-  painted lead, frame and tracery stay opaque ("the tracery also becomes more transparent", the user, 2026-10-20); a shut
-  or unseen one is exactly as the client draws it, alpha 1. Two draws, split by that alpha with the device's alpha test
-  (>= 255, then < 255): the opaque with its depth written, then the open windows' glass over the room, `SRCALPHA` /
-  `INVSRCALPHA`, no depth. The batch's own alpha test (alpha-keyed glass) moves into the shader (texkill on the stock
-  alpha against c219.y). Colour RGB only, depth test on. A shader without the redraw (`if b11` not in its code: a variant
-  without the glass blocks) is drawn opaque, as the client would have. The device's state is captured before and put back
-  after (the client's cache never sees it). The render target and depth surface must be the ones captured.
+  again, one of two ways (`SeeThroughRedraw`). **0, the default** (the 2026-10-20 redraw, the one seen working in game):
+  the whole batch blended at the opacity (`BLENDFACTOR` / `INVBLENDFACTOR`), its glass look kept and its fake room off
+  (c193.z 0), no depth; a batch is deferred only with none of its windows shut, and every window with a room behind it
+  in range opens (no line of sight). **1, per pixel**: with LA's glass look (b9: reflection, darkening, coolness) and
+  its redraw switched on (b11, c219: `features/GlassShader`; the WMO edit moves the stock alpha write to r12.w and
+  writes oC0.w last). Each pixel looks up its window (the window table the fake rooms use; the lookup forced even where
+  the batch wouldn't look) and reads whether it's open from c219.w's bits (one a window from the lowest open ordinal
+  c219.z, 16 of them, plus a half: frac of c219.w / 2^(k + 1) >= 0.5; without the half the first open window's value sat
+  exactly on 0.5, and a GPU's exp a hair short of 2^-1 shut it, 2026-10-21): an open window has no fake room and hides
+  none of its glow, and its alpha is 1 - the glass mask x (1 - `SeeThroughOpacity`), so the painted lead, frame and
+  tracery stay opaque ("the tracery also becomes more transparent", the user, 2026-10-20); a shut or unseen one is
+  exactly as the client draws it, alpha 1. Two draws, split by that alpha in the shader (c28.y: +1 keeps alpha >= c28.z,
+  0.999, -1 the rest, by texkill; the device's alpha test is off): the opaque with its depth written, then the open
+  windows' glass over the room, `SRCALPHA` / `INVSRCALPHA`, no depth. (The first per-pixel build split with the device's
+  alpha test, >= 255 then < 255; a driver's alpha-to-coverage or transparency antialiasing, or a translation layer, can
+  make an alpha test something else, so the split moved into the shader.) In game, 2026-10-21 (by day, in rain, at the
+  inn's west front), the panel said windows 3, 4, 6, 9 and 14 open and the batch drawn over the room, yet nothing of the
+  room showed. On WARP the inn's own exterior glass through the patched stock `ps_MapObjDiffuse_02`, with the shipped
+  tables and its texture, from where the user stood (glass_tests' "inn"), does what the redraw means, pixel for pixel;
+  but `mm_elwynn_wnd_ext__01`'s glass mask (GlassMaterials' row: 0.73 R + 2.44 G + 0.25 B - 0.94) counts little of its
+  windows as glass: the shutters, the thick lead, the frame and the shaded lower half of each pane are under it. Over
+  the ground-floor window (3: the shuttered diamond quadrant, mask mean 0.11, over 0.5 on 9% of its texels) the room is
+  about 4% of what's seen from there, over the arched one (9: mean 0.30) about 23%, against 65% everywhere with the
+  whole glass. The per-pixel redraw is right but shows little of the room, least of all by day when the room is dark
+  against the lit glass; so it went behind `SeeThroughRedraw`, the 2026-10-20 redraw the default. Its debug view (the
+  lights panel's, not saved: c28.x) colours each redrawn pixel by what the shader decided: an open window's glass
+  magenta by its mask, through grey to green at its lead and frame (alpha 1), cyan a shut window, yellow no window
+  found; the alpha is unchanged, so the colours show through the blend as the glass would. The panel also reads the
+  device's state back at the first redrawn batch once a second (b9, b11, c219, c28, the batch's alpha test, the blend,
+  alpha test and depth write as set, D3DRS_ADAPTIVETESS_Y, the drivers' alpha-to-coverage switch, the target's MSAA, the
+  pixel shader). The batch's own alpha test (alpha-keyed glass) moves into the shader (texkill on the stock alpha
+  against c219.y). Colour RGB only, depth test on. A shader without the redraw (`if b11` not in its code: a variant
+  without the glass blocks) is drawn opaque, as the client would have. The device's state is captured before and put
+  back after (the client's cache never sees it). The render target and depth surface must be the ones captured.
 - **Sorting**: the glass lands after everything opaque and before everything see-through. Liquids, weather, particles and
   see-through models in front of it are drawn after it: right. Those *behind* it inside the room (a candle's flame, a
   hearth's particles) are drawn after it too, so they sit over the glass, not under it: a small error for additive flames.
@@ -262,12 +282,14 @@ tuskarr huts, the human houses, and the Lion's Pride Inn (17 of 17, one batch).
 
 ## 7. The prototype and what's next
 
-`SeeThroughWindows` 0 by default, `SeeThroughOpacity` 0.35, in `[LivingAzeroth.Glass]` and the lights panel (under the
-glass) with last frame's counts: exterior groups walked, windows opened and shut, rooms added, glass batches in opened
-groups, kept opaque, deferred and redrawn, faults. Whitelist: `goldshireinn.wmo` only. It needs the glass feature on
-(its batch hooks name the glass batches).
+`SeeThroughWindows` 0 by default, `SeeThroughOpacity` 0.35, `SeeThroughRedraw` 0 (the whole glass; 1 per pixel), in
+`[LivingAzeroth.Glass]` and the lights panel (under the glass; the per-pixel redraw's debug view there, not saved) with
+last frame's counts: exterior groups walked, windows opened and shut, rooms added, glass batches in opened groups, kept
+opaque, deferred and redrawn, faults. Whitelist: `goldshireinn.wmo` only. It needs the glass feature on (its batch hooks
+name the glass batches).
 
 Next, in order: try it in game at the inn; widen the whitelist to the 109 all-real WMOs; the same windows as portals
-*outward* from inside (the street through the window), which wants the interior pass's exterior portal views and the glass
-deferred from inside too. Done 2026-10-20: the lead and frames opaque (the glass mask in the redraw), a shut window no
-longer keeping its batch opaque, and windows opened only where the room is seen through them.
+*outward* from inside (the street through the window), which wants the interior pass's exterior portal views and the
+glass deferred from inside too. Done 2026-10-20: the lead and frames opaque (the glass mask in the redraw), a shut
+window no longer keeping its batch opaque, and windows opened only where the room is seen through them; 2026-10-21 those
+behind `SeeThroughRedraw` 1 until the game shows them working (its debug view and read-back say why not).

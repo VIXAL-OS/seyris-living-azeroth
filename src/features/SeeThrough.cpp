@@ -461,10 +461,12 @@ namespace wxl_livingazeroth::seethrough
                 Counts::Why why = Counts::kUnloaded;
                 if (Enterable(static_cast<const uint8_t*>(root), static_cast<const uint8_t*>(instance), room, r->groupCount))
                 {
-                    // only where the room is seen through it from here: not over its ceiling, nor through its walls
-                    const RoomMesh* mesh = MeshOf(*r, root, room);
-                    if (!mesh) why = Counts::kNoMesh;
-                    else if (!SeesRoom(windows[i], cam, *mesh, &sight)) { ++g_now.blind; why = Counts::kBlind; }
+                    // only where the room is seen through it from here: not over its ceiling, nor through its walls (the per-pixel
+                    // redraw's; the whole-glass one opens every window with a room, as on 2026-10-20)
+                    const bool lineOfSight = g_settings.redraw != 0;
+                    const RoomMesh* mesh = lineOfSight ? MeshOf(*r, root, room) : nullptr;
+                    if (lineOfSight && !mesh) why = Counts::kNoMesh;
+                    else if (lineOfSight && !SeesRoom(windows[i], cam, *mesh, &sight)) { ++g_now.blind; why = Counts::kBlind; }
                     else
                     {
                         float clip[4], frustum[4];
@@ -691,12 +693,55 @@ namespace wxl_livingazeroth::seethrough
                                                        a.vertices, a.startIndex, a.primitives));
         }
 
+        // What the redraw set and read back at its first batch (the panel's, refreshed once a second): so an in-game check
+        // says whether the device got what the redraw meant ("see-through windows don't seem to work anymore now", the user,
+        // 2026-10-21, with every count saying it was drawn).
+        struct ReplayProbe
+        {
+            bool valid = false;
+            int mode = 0;
+            BOOL glassOn = FALSE, hasReplay = FALSE, b11 = FALSE;
+            float c219[4] = {}, c28[4] = {};
+            DWORD test = 0, func = 0, ref = 0;             // the batch's own alpha test, as captured
+            DWORD atoc = 0, multisample = 0;               // D3DRS_ADAPTIVETESS_Y (a driver's alpha-to-coverage switch), the target's MSAA
+            DWORD srcBlend = 0, destBlend = 0, blend = 0, alphaTest = 0, zWrite = 0;   // as set for the see-through draw
+            const void* shader = nullptr;
+        };
+        ReplayProbe g_probeNow, g_probeShown;
+        int g_debugView = 0;                     // the panel's debug view (not saved)
+        ULONGLONG g_probeTick = 0;
+        constexpr float kSplitAlpha = 0.999f;    // the redraw's two draws: alpha at least this is the opaque one's
+
+        void Probe(IDirect3DDevice9* dev, int mode, BOOL glassOn, BOOL hasReplay, DWORD test, DWORD func, DWORD ref, DWORD multisample)
+        {
+            if (g_probeNow.valid) return;
+            g_probeNow = ReplayProbe{};
+            g_probeNow.valid = true;
+            g_probeNow.mode = mode;
+            g_probeNow.glassOn = glassOn;
+            g_probeNow.hasReplay = hasReplay;
+            dev->GetPixelShaderConstantB(glass::kReplaySwitch, &g_probeNow.b11, 1);
+            dev->GetPixelShaderConstantF(glass::kReplayConstant, g_probeNow.c219, 1);
+            dev->GetPixelShaderConstantF(glass::kReplayDrawConstant, g_probeNow.c28, 1);
+            g_probeNow.test = test; g_probeNow.func = func; g_probeNow.ref = ref;
+            dev->GetRenderState(D3DRS_SRCBLEND, &g_probeNow.srcBlend);
+            dev->GetRenderState(D3DRS_DESTBLEND, &g_probeNow.destBlend);
+            dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &g_probeNow.blend);
+            dev->GetRenderState(D3DRS_ALPHATESTENABLE, &g_probeNow.alphaTest);
+            dev->GetRenderState(D3DRS_ZWRITEENABLE, &g_probeNow.zWrite);
+            dev->GetRenderState(D3DRS_ADAPTIVETESS_Y, &g_probeNow.atoc);
+            g_probeNow.multisample = multisample;
+            IDirect3DPixelShader9* ps = nullptr;
+            if (SUCCEEDED(dev->GetPixelShader(&ps)) && ps) { g_probeNow.shader = ps; ps->Release(); }
+        }
+
         // The glass again, over the room and its furniture: each from its state, the colour only (no alpha written), depth
-        // tested. With the glass's look and the redraw in its shader (b11, c219: GlassShader) in two draws split by the
-        // shader's alpha: what's opaque (the open windows' lead, frame and tracery, every shut window with its fake room)
-        // with its depth, as the client would have drawn it; then the open windows' glass texels over the room, blended at
-        // the opacity (SRCALPHA), no depth. Without (the glass off, a variant without the blocks): as the client would
-        // have, opaque. The device's state put back after.
+        // tested. SeeThroughRedraw 1, with the glass's look and the redraw in its shader (b11, c219, c28: GlassShader): two
+        // draws split in the shader by its alpha (c28.y): what's opaque (the open windows' lead, frame and tracery, every shut
+        // window with its fake room) with its depth, as the client would have drawn it; then the open windows' glass texels
+        // over the room, blended at the opacity (SRCALPHA), no depth. Without the redraw in its shader: opaque, as the client
+        // would have. SeeThroughRedraw 0 (as on 2026-10-20): the whole batch at the opacity (BLENDFACTOR), its fake room off
+        // (c193.z 0), no depth. The device's state put back after.
         void Replay(Deferral::Entry* entries, size_t n)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
@@ -707,8 +752,10 @@ namespace wxl_livingazeroth::seethrough
             IDirect3DSurface9* depth = nullptr;
             dev->GetRenderTarget(0, &target);
             dev->GetDepthStencilSurface(&depth);
-            if (target) target->Release();
+            D3DSURFACE_DESC desc{};
+            if (target) { target->GetDesc(&desc); target->Release(); }
             if (depth) depth->Release();
+            const bool perPixel = g_settings.redraw != 0;
             __try
             {
                 for (size_t i = 0; i < n; ++i)
@@ -718,18 +765,39 @@ namespace wxl_livingazeroth::seethrough
                     if (e.target != target || e.depth != depth) { ++g_now.targetMoved; continue; }
                     static_cast<IDirect3DStateBlock9*>(e.state)->Apply();
                     BOOL glassOn = FALSE;
-                    const bool redraw = SUCCEEDED(dev->GetPixelShaderConstantB(glass::kSwitch, &glassOn, 1)) && glassOn && HasReplay(dev);
-                    // the batch's own alpha test (the stock alpha's: the shader's texkill in the redraw)
+                    const bool glass = SUCCEEDED(dev->GetPixelShaderConstantB(glass::kSwitch, &glassOn, 1)) && glassOn;
+                    // the batch's own alpha test (the stock alpha's: the shader's texkill in the per-pixel redraw)
                     DWORD test = FALSE, func = D3DCMP_ALWAYS, ref = 0;
                     dev->GetRenderState(D3DRS_ALPHATESTENABLE, &test);
                     dev->GetRenderState(D3DRS_ALPHAFUNC, &func);
                     dev->GetRenderState(D3DRS_ALPHAREF, &ref);
                     dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
                     dev->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
-                    if (!redraw)
+                    if (!perPixel)
+                    {
+                        dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+                        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+                        dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+                        dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+                        dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_BLENDFACTOR);
+                        dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVBLENDFACTOR);
+                        dev->SetRenderState(D3DRS_BLENDFACTOR, BlendFactor(g_settings.opacity));
+                        // the glass's own look stays; its fake room goes (the real one is behind it)
+                        float c193[4];
+                        if (glass && SUCCEEDED(dev->GetPixelShaderConstantF(glass::kFirstConstant + 1, c193, 1)))
+                        {
+                            c193[2] = 0.0f;
+                            dev->SetPixelShaderConstantF(glass::kFirstConstant + 1, c193, 1);
+                        }
+                        Probe(dev, 0, glassOn, FALSE, test, func, ref, desc.MultiSampleType);
+                        if (Draw(dev, e.args)) ++g_now.redrawn;
+                        continue;
+                    }
+                    if (!glass || !HasReplay(dev))
                     {
                         dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
                         dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+                        Probe(dev, 1, glassOn, FALSE, test, func, ref, desc.MultiSampleType);
                         if (Draw(dev, e.args)) { ++g_now.redrawn; ++g_now.opaque; }
                         continue;
                     }
@@ -738,18 +806,22 @@ namespace wxl_livingazeroth::seethrough
                     dev->SetPixelShaderConstantF(glass::kReplayConstant, c, 1);
                     const BOOL on = TRUE;
                     dev->SetPixelShaderConstantB(glass::kReplaySwitch, &on, 1);
+                    // the split is the shader's (texkill by c28.y), not the device's alpha test: a driver's alpha-to-coverage or a
+                    // translation layer may make an alpha test something else
+                    dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
                     dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
                     dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
                     dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
                     dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
                     dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-                    dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
-                    dev->SetRenderState(D3DRS_ALPHAREF, 255);
-                    dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL);
+                    float split[4] = { g_debugView ? 1.0f : 0.0f, 1.0f, kSplitAlpha, 0.0f };
+                    dev->SetPixelShaderConstantF(glass::kReplayDrawConstant, split, 1);
                     dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
                     const bool opaque = Draw(dev, e.args);
-                    dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_LESS);
+                    split[1] = -1.0f;
+                    dev->SetPixelShaderConstantF(glass::kReplayDrawConstant, split, 1);
                     dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+                    Probe(dev, 1, glassOn, TRUE, test, func, ref, desc.MultiSampleType);
                     if (Draw(dev, e.args) && opaque) ++g_now.redrawn;
                 }
             }
@@ -860,6 +932,14 @@ namespace wxl_livingazeroth::seethrough
         if (g_roots.size() > 2048) g_roots.clear();   // only here: nothing of this frame points at them now
         g_budget = kMaxOpenPerFrame;
         g_meshBuilds = 0;
+        // the redraw's read-back, shown for a second at a time
+        const ULONGLONG now = GetTickCount64();
+        if (g_probeNow.valid && now - g_probeTick >= 1000)
+        {
+            g_probeShown = g_probeNow;
+            g_probeTick = now;
+        }
+        g_probeNow = ReplayProbe{};
         g_draw = DrawCtx{};
     }
 
@@ -910,11 +990,14 @@ namespace wxl_livingazeroth::seethrough
         const BatchWindows* b = WindowsOf(group, record, start, count);
         // (without the glass's look there's no mask to keep the lead opaque, nor a way to tell its windows apart: opaque)
         const bool glassLook = glass::Config().enabled && glass::PatchedVariants() > 0;
-        const bool deferrable = glassLook && b && Deferrable(*b, g_draw.frame->states.data(), g_draw.frame->states.size());
+        // (the whole-glass redraw: every window of the batch open or unseen; the per-pixel one tells them apart)
+        const bool deferrable = glassLook && b &&
+                                (g_settings.redraw ? Deferrable(*b, g_draw.frame->states.data(), g_draw.frame->states.size())
+                                                   : DeferrableWhole(*b, g_draw.frame->states.data(), g_draw.frame->states.size()));
         if (!deferrable) ++g_now.kept;
         float first = 0.0f;
         uint32_t bits = 0;
-        if (deferrable)
+        if (deferrable && g_settings.redraw)
         {
             OpenBits(*b, g_draw.windows, g_draw.frame->states.data(), g_draw.frame->states.size(), first, bits);
             g_now.replayFirst = first;
@@ -929,7 +1012,13 @@ namespace wxl_livingazeroth::seethrough
     {
         if (!api->UiCollapsingHeader("See-through windows (experimental): the real room behind the glass##seethrough")) return;
         api->UiCheckbox("see-through windows (the Lion's Pride Inn in Goldshire only, for now)##ston", &g_settings.enabled);
-        api->UiSliderFloat("the glass's opacity over the room (its lead and frame stay opaque)##stop", &g_settings.opacity, 0.0f, 1.0f);
+        api->UiSliderFloat("the glass's opacity over the room##stop", &g_settings.opacity, 0.0f, 1.0f);
+        api->UiCheckbox("per-pixel redraw: the lead and frame opaque, only where the room is seen (SeeThroughRedraw 1; off: the whole glass "
+                        "at the opacity, every window with a room open, as on 2026-10-20)##stredraw", &g_settings.redraw);
+        if (g_settings.redraw)
+            api->UiCheckbox("debug view (not saved): the redraw's pixels by what the shader decided: magenta an open window's glass (through "
+                            "grey to green as it's less glass), green its lead and frame (opaque), cyan a shut window, yellow no window "
+                            "found##stdebug", &g_debugView);
         api->UiText(StatusLine());
         char line[400];
         std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget; "
@@ -943,6 +1032,18 @@ namespace wxl_livingazeroth::seethrough
                       g_faulted ? g_faultWhere : "", g_last.captureFailed, g_last.targetMoved, g_last.dropped);
         if (g_faulted) std::strncat(line, ")", sizeof(line) - std::strlen(line) - 1);
         api->UiText(line);
+        // what the redraw set and read back (once a second)
+        if (g_probeShown.valid)
+        {
+            const ReplayProbe& q = g_probeShown;
+            std::snprintf(line, sizeof(line), "The redraw's device state (read back): %s; glass b9 %d, redraw in its shader %d, b11 %d; c219 %.3g %.3g %.0f %.1f; "
+                          "c28 %.0f %.0f %.3f; the batch's alpha test %lu (func %lu, ref %lu); blend %lu (src %lu, dest %lu), alpha test %lu, depth "
+                          "write %lu; alpha-to-coverage switch 0x%08lX, target MSAA %lu; shader %p",
+                          q.mode ? "per pixel" : "the whole glass", q.glassOn, q.hasReplay, q.b11, q.c219[0], q.c219[1], q.c219[2], q.c219[3], q.c28[0],
+                          q.c28[1], q.c28[2], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.atoc, q.multisample,
+                          q.shader);
+            api->UiText(line);
+        }
         // each window on the screen and facing the camera last frame: open, or why not
         if (g_last.replayFirst >= 0.0f)
         {

@@ -71,6 +71,7 @@
 #include "env/Flame.hpp"
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
+#include "env/SeeThroughModel.hpp"
 #include "features/Glass.hpp"
 #include "features/GlassShader.hpp"
 #include "features/GlassShaftShaders.hpp"
@@ -3159,7 +3160,10 @@ namespace
             return l;
         };
         // One draw of one window (0, 1; or both: -1) with a shader, the constants, b11 and c219, c27.zw, the stock alpha, the
-        // uv across the quad (0..1) or 0.5 everywhere, b9; the pixels (rgba), the target cleared to 0 first.
+        // uv across the quad (0..1) or 0.5 everywhere, b9; the pixels (rgba), the target cleared to 0 first. c28 (the redraw's
+        // debug view and split) and whether the batch has no grid are the next two.
+        float c28[4] = { 0, 0, 0.999f, 0 };
+        bool noGrid = false;
         auto draw = [&](IDirect3DPixelShader9* ps, int which, const Look& l, bool b11, const float c219[4], const float corner[2], float stockAlpha,
                         bool uvAcross, bool glassOn, std::vector<float>& img) -> bool
         {
@@ -3167,7 +3171,9 @@ namespace
             float regs[4 * gl::kRoomRegisters];
             rooms.Registers(cam, kFacadePath, 0, style.cls, gl::Settings{}, regs, false, gl::kLeaded);
             regs[50] = corner[0]; regs[51] = corner[1];
+            if (noGrid) regs[23] = 0.0f;
             d->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+            d->SetPixelShaderConstantF(gl::kReplayDrawConstant, c28, 1);
             rooms.Bind(d);
             float cv[16] = { cam[0], cam[1], cam[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
             d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
@@ -3354,7 +3360,401 @@ namespace
                           "(u >= 0.5 at %d, v >= 0.5 at %d)", inCorner, rest, glassy, wrong, uHigh, vHigh);
             Check(ok && inCorner > 200 && rest > 600 && glassy > rest / 2 && wrong == 0, line);
         }
+
+        // (e) the redraw's two draws, split in the shader (c28.y +1: what's opaque, alpha at least c28.z; -1: the rest), and
+        // its debug view (c28.x): an open window's glass magenta, its lead and frame green, part glass between them by its mask,
+        // a shut window cyan, a batch with no window found (no grid) yellow; the alpha as without it
+        {
+            const float replay[4] = { 0.65f, -1.0f, 40.0f, 1.5f };
+            const Look glassy = constants(13, false, 1.0f), lead = constants(13, false, 0.0f);
+            struct Case { const char* what; const Look* l; int which; float split; bool grid; int drawn; };   // drawn: 1 all, 0 none
+            const Case cases[] = { { "the open glass, the opaque draw", &glassy, 0, 1.0f, true, 0 }, { "the open glass, the see-through draw", &glassy, 0, -1.0f, true, 1 },
+                                   { "the lead, the opaque draw", &lead, 0, 1.0f, true, 1 }, { "the lead, the see-through draw", &lead, 0, -1.0f, true, 0 },
+                                   { "the shut window, the opaque draw", &glassy, 1, 1.0f, true, 1 }, { "the shut window, the see-through draw", &glassy, 1, -1.0f, true, 0 } };
+            int wrong = 0, px = 0;
+            std::string which;
+            for (const Case& k : cases)
+            {
+                std::vector<float> all, part;
+                c28[1] = 0.0f;
+                bool ok = draw(newPs, k.which, *k.l, true, replay, noCorner, 1.0f, false, true, all);
+                c28[1] = k.split;
+                ok = ok && draw(newPs, k.which, *k.l, true, replay, noCorner, 1.0f, false, true, part);
+                c28[1] = 0.0f;
+                int n = 0, kept = 0;
+                for (size_t p = 0; ok && p < all.size() / 4; ++p)
+                    if (drawn(all, p)) { ++n; kept += drawn(part, p) ? 1 : 0; }
+                px += n;
+                const bool right = ok && n > 100 && kept == (k.drawn ? n : 0);
+                if (!right) { ++wrong; which += std::string(" ") + k.what; }
+            }
+            std::snprintf(line, sizeof(line), "the redraw's split in the shader (c28.y): %d pixels over 6 cases, %d wrong%s", px, wrong, which.c_str());
+            Check(wrong == 0 && px > 600, line);
+            // the debug view
+            const Look half = constants(13, false, 0.3f);
+            struct Tint { const char* what; const Look* l; int which; bool grid; float rgb[3]; };
+            const Tint tints[] = { { "magenta", &glassy, 0, true, { 1, 0, 1 } }, { "green", &lead, 0, true, { 0, 1, 0 } },
+                                   { "cyan", &glassy, 1, true, { 0, 1, 1 } }, { "yellow", &glassy, 0, false, { 1, 1, 0 } } };
+            int tinted = 0, off = 0, alphaOff = 0, partOff = 0, partPx = 0;
+            for (const Tint& t : tints)
+            {
+                std::vector<float> plain, dbg;
+                noGrid = !t.grid;
+                bool ok = draw(newPs, t.which, *t.l, true, replay, noCorner, 1.0f, false, true, plain);
+                c28[0] = 1.0f;
+                ok = ok && draw(newPs, t.which, *t.l, true, replay, noCorner, 1.0f, false, true, dbg);
+                c28[0] = 0.0f;
+                noGrid = false;
+                for (size_t p = 0; ok && p < dbg.size() / 4; ++p)
+                {
+                    if (!drawn(plain, p)) continue;
+                    ++tinted;
+                    bool same = true;
+                    for (int k = 0; k < 3; ++k) same = same && std::fabs(dbg[p * 4 + k] - t.rgb[k]) < 1e-5f;
+                    off += same ? 0 : 1;
+                    alphaOff += Bits(dbg[p * 4 + 3]) != Bits(plain[p * 4 + 3]) ? 1 : 0;
+                }
+                if (!ok) ++off;
+            }
+            // a texel part glass (mask 0.3): 0.3 of the way from green to magenta
+            {
+                std::vector<float> dbg;
+                c28[0] = 1.0f;
+                const bool ok = draw(newPs, 0, half, true, replay, noCorner, 1.0f, false, true, dbg);
+                c28[0] = 0.0f;
+                for (size_t p = 0; ok && p < dbg.size() / 4; ++p)
+                    if (drawn(dbg, p))
+                    {
+                        ++partPx;
+                        partOff += std::fabs(dbg[p * 4] - 0.3f) < 1e-5f && std::fabs(dbg[p * 4 + 1] - 0.7f) < 1e-5f && std::fabs(dbg[p * 4 + 2] - 0.3f) < 1e-5f ? 0 : 1;
+                    }
+            }
+            std::snprintf(line, sizeof(line), "the redraw's debug view (c28.x): %d pixels magenta, green, cyan and yellow as meant (%d not), the alpha as without it (%d "
+                          "differ); a glass mask of 0.3 between green and magenta by it (%d of %d not)", tinted, off, alphaOff, partOff, partPx);
+            Check(off == 0 && alphaOff == 0 && tinted > 400 && partOff == 0 && partPx > 100, line);
+        }
         for (IUnknown* u : std::initializer_list<IUnknown*>{ oldPs, newPs, uvPs, target, readback }) if (u) u->Release();
+    }
+
+    // --- 11. the inn's own glass through the client's own patched WMO shader (WARP) -----------------------------------
+    // "see-through windows don't seem to work anymore now" (the user, 2026-10-21, the panel saying windows 3, 4, 6, 9 and 14
+    // open and the batch redrawn). Everything real but the GPU: the stock ps_MapObjDiffuse_02 (a shadow variant) patched by
+    // the WMO edit, the Lion's Pride Inn's exterior glass triangles (its group 4's glass batch from the map scan:
+    // GLASS_SCAN, the wmo-windows folder) with their own texture coordinates, its texture (mm_elwynn_wnd_ext__01 from
+    // GLASS_TEXTURES), the shipped tables (the data folder: GlassMaterials' row, GlassWindows' every window in the table),
+    // seen from where the user stood (the inn's west front, its space's (24, 7, 2)), the redraw's constants as the runtime
+    // makes them for the bits the panel showed (from ordinal 3, 0x084B). The debug view says, per pixel, what the shader
+    // decided; the alpha what the blend gets.
+    struct InnTri { float p[3][3]; float uv[3][2]; };
+    bool ReadInnGlass(const std::filesystem::path& scan, std::vector<InnTri>& out)
+    {
+        std::ifstream f(scan / "world#wmo#azeroth#buildings#goldshireinn#goldshireinn_004.wmo", std::ios::binary);
+        const std::vector<uint8_t> g((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (g.size() < 0x60) return false;
+        auto chunks = [&](size_t start, size_t end, auto fn) {
+            for (size_t at = start; at + 8 <= end;)
+            {
+                const std::string tag = { static_cast<char>(g[at + 3]), static_cast<char>(g[at + 2]), static_cast<char>(g[at + 1]), static_cast<char>(g[at]) };
+                uint32_t size;
+                std::memcpy(&size, &g[at + 4], 4);
+                if (at + 8 + size > end) break;
+                fn(tag, at + 8, static_cast<size_t>(size));
+                at += 8 + size;
+            }
+        };
+        std::vector<uint16_t> idx;
+        std::vector<float> v, uv;
+        std::vector<std::pair<uint32_t, uint32_t>> glass;
+        chunks(0, g.size(), [&](const std::string& tag, size_t at, size_t size) {
+            if (tag != "MOGP") return;
+            chunks(at + 0x44, at + size, [&](const std::string& t, size_t a, size_t s) {
+                if (t == "MOVI") { idx.resize(s / 2); std::memcpy(idx.data(), &g[a], idx.size() * 2); }
+                else if (t == "MOVT") { v.resize(s / 4); std::memcpy(v.data(), &g[a], v.size() * 4); }
+                else if (t == "MOTV" && uv.empty()) { uv.resize(s / 4); std::memcpy(uv.data(), &g[a], uv.size() * 4); }
+                else if (t == "MOBA")
+                    for (size_t b = a; b + 24 <= a + s; b += 24)
+                    {
+                        uint32_t start;
+                        uint16_t count;
+                        std::memcpy(&start, &g[b + 12], 4);
+                        std::memcpy(&count, &g[b + 16], 2);
+                        if (g[b + 23] == 5) glass.emplace_back(start, count);   // mm_elwynn_wnd_ext__01
+                    }
+            });
+        });
+        for (const auto& [start, count] : glass)
+            for (uint32_t k = start; k + 2 < start + count; k += 3)
+            {
+                InnTri t;
+                for (int c = 0; c < 3; ++c)
+                {
+                    const uint16_t i = idx.at(k + c);
+                    for (int j = 0; j < 3; ++j) t.p[c][j] = v.at(3 * i + j);
+                    for (int j = 0; j < 2; ++j) t.uv[c][j] = uv.at(2 * i + j);
+                }
+                out.push_back(t);
+            }
+        return !out.empty();
+    }
+
+    void InnRedrawTests(const std::filesystem::path& shaders, const std::filesystem::path& data)
+    {
+        namespace mi = wxl_livingazeroth::modelice;
+        namespace sp = wxl_livingazeroth::shaderpatch;
+        namespace st = wxl_livingazeroth::seethrough;
+        const char* scan = std::getenv("GLASS_SCAN");
+        const char* textures = TexturesFolder();
+        if (!scan || !textures) { std::printf("skip  the inn's glass through the client's patched shader (GLASS_SCAN and GLASS_TEXTURES not both set)\n"); return; }
+        // the stock variant, patched as the client gets it; its inputs
+        std::string src, why;
+        for (const Blob& b : LoadBlobs(shaders))
+            if (b.name == "ps_MapObjDiffuse_02" && !sp::Disassemble(b.code.data(), b.code.size(), src, why)) src.clear();
+        if (src.empty()) { Check(false, "the inn's glass: ps_MapObjDiffuse_02 from " + shaders.string()); return; }
+        std::map<int, std::string> usage;   // v register -> "color", "texcoordN", "fog"
+        static const std::regex dcl(R"(dcl_(color|texcoord\d?|fog) v(\d+))");
+        for (std::sregex_iterator it(src.begin(), src.end(), dcl), end; it != end; ++it)
+            usage[std::stoi((*it)[2].str())] = (*it)[1].str() == "texcoord" ? "texcoord0" : (*it)[1].str();
+        std::smatch mp, mn, mt;
+        static const std::regex position(R"(dp3 r\d+\.\w, v(\d+), c3\b)"), normal(R"(dp3 r\d+\.\w, c4, v(\d+))"), texcoord(R"(texld r\d+, v(\d+), s0\b)");
+        if (!std::regex_search(src, mp, position) || !std::regex_search(src, mn, normal) || !std::regex_search(src, mt, texcoord))
+        { Check(false, "the inn's glass: the variant's position, normal and uv"); return; }
+        const int vP = std::stoi(mp[1].str()), vN = std::stoi(mn[1].str()), vT = std::stoi(mt[1].str());
+        std::string patched = src;
+        std::vector<uint8_t> code;
+        if (!mi::EditPixelWmoGlassForTests(patched, why) || !sp::Assemble(patched, "ps_MapObjDiffuse_02 patched", code, why))
+        { Check(false, "the inn's glass: the variant patched and assembled: " + why.substr(0, 200)); return; }
+        // the inn's glass, its texture, the tables
+        std::vector<InnTri> tris;
+        if (!ReadInnGlass(scan, tris)) { Check(false, std::string("the inn's glass batch from ") + scan); return; }
+        Table mt0, wt;
+        if (!ReadTable(data / "GlassMaterials.cdbc", mt0) || !ReadTable(data / "GlassWindows.cdbc", wt)) { Check(false, "the inn's glass: the tables read"); return; }
+        auto text = [](const Table& t, uint32_t at) { return at < t.strings.size() ? std::string(&t.strings[at]) : std::string(); };
+        gl::Material m;
+        bool found = false;
+        for (const auto& r : mt0.rows)
+            if (text(mt0, r[1]) == "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp")
+            {
+                found = true;
+                m.kind = r[2]; m.flags = r[3];
+                for (int k = 0; k < 3; ++k) { m.colour[k] = F(r[4 + k]); m.light[k] = F(r[7 + k]); m.mask[k] = F(r[10 + k]); }
+                m.mask[3] = F(r[13]);
+                // (the corner as features/Glass reads it: anything but 0 .. 1 none)
+                for (int k = 0; mt0.fields >= 24 && k < 2; ++k)
+                    m.notGlass[k] = std::isfinite(F(r[22 + k])) && F(r[22 + k]) >= 0.0f && F(r[22 + k]) < 1.0f ? F(r[22 + k]) : 1.0f;
+                if (m.notGlass[0] >= 1.0f || m.notGlass[1] >= 1.0f) m.notGlass[0] = m.notGlass[1] = 1.0f;
+            }
+        std::vector<gl::Window> all;
+        const uint32_t innPath = gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo");
+        std::map<uint32_t, gl::Window> inn;
+        for (const auto& r : wt.rows)
+        {
+            gl::Window w;
+            w.path = gl::PathHash(text(wt, r[1]).c_str());
+            w.group = r[2]; w.ordinal = r[3]; w.kind = r[4];
+            for (int k = 0; k < 3; ++k) { w.center[k] = F(r[5 + k]); w.normal[k] = F(r[8 + k]); }
+            w.halfWidth = F(r[11]); w.halfHeight = F(r[12]);
+            w.thickness = wt.fields > 16 ? F(r[16]) : 0.0f;
+            all.push_back(w);
+            if (w.path == innPath && w.group == 4) inn[w.ordinal] = w;
+        }
+        if (!found || inn.size() != 17) { Check(false, "the inn's glass: Elwynn's glass row and the inn's 17 windows in the tables"); return; }
+        std::ifstream bf(std::filesystem::path(textures) / "dungeons#textures#windows#mm_elwynn_wnd_ext__01.blp", std::ios::binary);
+        const std::vector<uint8_t> blp((std::istreambuf_iterator<char>(bf)), std::istreambuf_iterator<char>());
+
+        Warp w;
+        if (!InitWarp(w, why)) { std::printf("skip  the inn's glass: %s\n", why.c_str()); return; }
+        IDirect3DDevice9* d = w.dev;
+        IDirect3DPixelShader9* ps = nullptr;
+        constexpr int kS = 160;
+        IDirect3DSurface9 *target = nullptr, *readback = nullptr;
+        std::string blpError;
+        IDirect3DTexture9* glassTex = blp.empty() ? nullptr : wxl_livingazeroth::blp::LoadFromMemory(d, blp.data(), blp.size(), blpError);
+        IDirect3DTexture9* white = rh::Texture(d, std::vector<uint32_t>(16, 0xFFFFFFFFu), 4, 4);
+        if (FAILED(d->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps)) || !glassTex || !white ||
+            FAILED(d->CreateRenderTarget(kS, kS, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
+            FAILED(d->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
+        { Check(false, "the inn's glass: WARP resources (the texture: " + blpError + ")"); return; }
+        // the vertex: pretransformed, a colour, six texture coordinate sets, the fog
+        struct Vtx { float pos[4]; float col[4]; float tc[6][4]; float fog; };
+        D3DVERTEXELEMENT9 el[10] = {
+            { 0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITIONT, 0 },
+            { 0, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0 },
+            { 0, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 },
+            { 0, 48, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1 },
+            { 0, 64, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 2 },
+            { 0, 80, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3 },
+            { 0, 96, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 4 },
+            { 0, 112, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 5 },
+            { 0, 128, D3DDECLTYPE_FLOAT1, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_FOG, 0 },
+            D3DDECL_END() };
+        IDirect3DVertexDeclaration9* decl = nullptr;
+        if (FAILED(d->CreateVertexDeclaration(el, &decl))) { Check(false, "the inn's glass: the vertex declaration"); return; }
+        // the room's: the table of every window, the textures (synthetic unless the folder has the set)
+        rh::Rooms rooms;
+        rooms.Textures(d, textures, 0);
+        rooms.Table(d, all);
+        // the camera where the user stood (the shut window 5, a dormer edge-on from there: 8 yd in front of it), looking at
+        // the window drawn (aim, before its room's registers: place); the inn's space as the world's
+        float eye[3] = { 24, 7, 2 };
+        float F3[3], R[3], Uv[3];
+        auto aim = [&](const gl::Window& at) {
+            for (int k = 0; k < 3; ++k) F3[k] = at.center[k] - eye[k];
+            Norm(F3);
+            const float fl = std::sqrt(F3[0] * F3[0] + F3[1] * F3[1]);
+            R[0] = F3[1] / fl; R[1] = -F3[0] / fl; R[2] = 0;
+            Uv[0] = R[1] * F3[2] - R[2] * F3[1]; Uv[1] = R[2] * F3[0] - R[0] * F3[2]; Uv[2] = R[0] * F3[1] - R[1] * F3[0];
+        };
+        const float kFocal = 70.0f;
+        // the constants: day, overcast (rain), the batch's look as the runtime makes it, the inn's room
+        gl::Inputs in;
+        in.sun[0] = -0.4f; in.sun[1] = 0.3f; in.sun[2] = 0.86f; Norm(in.sun);
+        in.daylight = 1; in.night = 0; in.overcast = 1; in.precipitation = 1;
+        in.sky[0] = 0.5f; in.sky[1] = 0.52f; in.sky[2] = 0.55f;
+        const gl::Light light = gl::Evaluate(in);
+        gl::Settings s;
+        float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters], look[4], day[4 * gl::kDayRegisters], regs[4 * gl::kRoomRegisters];
+        gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
+        gl::RoomInputs ri;
+        ri.night = 0; ri.hour = 13; ri.selfLit = false; ri.unlit = true; ri.kind = m.kind;
+        const gl::RoomStyle style;
+        gl::RoomBatchConstants(style, nullptr, light, ri, s, c, seed, look);
+        gl::DayConstants(m, light, s, 0, day);
+        auto place = [&] {
+            rooms.Registers(eye, innPath, 4, style.cls, s, regs, false, m.kind);
+            regs[50] = m.notGlass[0] < 1.0f ? 1.0f - m.notGlass[0] : 0.0f;
+            regs[51] = m.notGlass[1] < 1.0f ? 1.0f - m.notGlass[1] : 0.0f;
+        };
+        float replay[4];
+        st::ReplayConstants(0.35f, false, 0, 0, 3.0f, 0x084Bu, replay);
+        auto draw = [&](uint32_t ordinal, bool b11, float debug, float split, std::vector<float>& img) -> int {
+            d->SetRenderTarget(0, target);
+            D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
+            d->SetViewport(&vp);
+            d->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            d->SetRenderState(D3DRS_ZENABLE, FALSE); d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); d->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+            d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE); d->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF); d->SetRenderState(D3DRS_FOGENABLE, FALSE);
+            d->SetVertexShader(nullptr); d->SetPixelShader(ps); d->SetVertexDeclaration(decl);
+            d->SetTexture(0, glassTex);
+            d->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR); d->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            d->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR); d->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+            for (DWORD k = 4; k <= 7; ++k) d->SetTexture(k, white);
+            rooms.Bind(d);
+            // the stock part's constants (its lights, the shadow's): a middling grey, the fog colour black (the fog factor 1)
+            float stock[4 * 13];
+            for (float& x : stock) x = 0.5f;
+            stock[8] = stock[9] = stock[10] = stock[11] = 0.0f;   // c2: the fog colour
+            d->SetPixelShaderConstantF(0, stock, 13);
+            float cv[16] = { eye[0], eye[1], eye[2], 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+            d->SetPixelShaderConstantF(gl::kViewConstant, cv, 4);
+            d->SetPixelShaderConstantF(gl::kFirstConstant, c, gl::kConstantCount);
+            d->SetPixelShaderConstantF(gl::kSeedConstant, seed, gl::kSeedRegisters);
+            d->SetPixelShaderConstantF(gl::kLookConstant, look, gl::kLookRegisters);
+            d->SetPixelShaderConstantF(gl::kDayConstant, day, gl::kDayRegisters);
+            d->SetPixelShaderConstantF(gl::kRoomConstant, regs, gl::kRoomRegisters);
+            d->SetPixelShaderConstantF(gl::kReplayConstant, replay, 1);
+            const float c28[4] = { debug, split, 0.999f, 0 };
+            d->SetPixelShaderConstantF(gl::kReplayDrawConstant, c28, 1);
+            const BOOL on = TRUE, off = FALSE, b11on = b11 ? TRUE : FALSE;
+            d->SetPixelShaderConstantB(7, &off, 1);
+            d->SetPixelShaderConstantB(8, &off, 1);
+            d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
+            d->SetPixelShaderConstantB(gl::kFloorSwitch, &off, 1);
+            d->SetPixelShaderConstantB(gl::kReplaySwitch, &b11on, 1);
+            if (FAILED(d->BeginScene())) return -1;
+            const gl::Window& win = inn.at(ordinal);
+            int drawnTris = 0;
+            for (const InnTri& t : tris)
+            {
+                float mid[3];
+                for (int j = 0; j < 3; ++j) mid[j] = (t.p[0][j] + t.p[1][j] + t.p[2][j]) / 3.0f;
+                float a[3], u[3];
+                gl::WindowFrame(win.normal, a, u);
+                const float dd[3] = { mid[0] - win.center[0], mid[1] - win.center[1], mid[2] - win.center[2] };
+                if (std::fabs(dd[0] * a[0] + dd[1] * a[1] + dd[2] * a[2]) > win.halfWidth + 0.05f ||
+                    std::fabs(dd[0] * u[0] + dd[1] * u[1] + dd[2] * u[2]) > win.halfHeight + 0.05f ||
+                    std::fabs(dd[0] * win.normal[0] + dd[1] * win.normal[1] + dd[2] * win.normal[2]) > 0.4f)
+                    continue;
+                Vtx v[3] = {};
+                bool ok = true;
+                for (int k = 0; k < 3; ++k)
+                {
+                    const float q[3] = { t.p[k][0] - eye[0], t.p[k][1] - eye[1], t.p[k][2] - eye[2] };
+                    const float zf = q[0] * F3[0] + q[1] * F3[1] + q[2] * F3[2];
+                    ok = ok && zf > 0.1f;
+                    v[k].pos[0] = kS * 0.5f + kFocal * (q[0] * R[0] + q[1] * R[1] + q[2] * R[2]) / zf - 0.5f;
+                    v[k].pos[1] = kS * 0.5f - kFocal * (q[0] * Uv[0] + q[1] * Uv[1] + q[2] * Uv[2]) / zf - 0.5f;
+                    v[k].pos[2] = 0.5f; v[k].pos[3] = 1.0f / std::max(zf, 0.1f);
+                    for (int j = 0; j < 4; ++j) v[k].col[j] = 1.0f;
+                    v[k].fog = 1.0f;
+                    for (const auto& [reg, use] : usage)
+                    {
+                        if (use.rfind("texcoord", 0) != 0 || use[8] - '0' > 5) continue;
+                        float* tc = v[k].tc[use[8] - '0'];
+                        if (reg == vP) { for (int j = 0; j < 3; ++j) tc[j] = q[j]; tc[3] = 1; }
+                        else if (reg == vN) { for (int j = 0; j < 3; ++j) tc[j] = win.normal[j]; tc[3] = 0; }
+                        else if (reg == vT) { tc[0] = t.uv[k][0]; tc[1] = t.uv[k][1]; }
+                        else { tc[0] = tc[1] = 2.0f; tc[2] = 0.5f; tc[3] = 1.0f; }   // the shadow map's: outside it
+                    }
+                }
+                if (!ok) continue;
+                d->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 1, v, sizeof(Vtx));
+                ++drawnTris;
+            }
+            d->EndScene();
+            D3DLOCKED_RECT lr{};
+            if (FAILED(d->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY))) return -1;
+            img.resize(static_cast<size_t>(kS) * kS * 4);
+            for (int row = 0; row < kS; ++row)
+                std::memcpy(&img[static_cast<size_t>(row) * kS * 4], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, sizeof(float) * kS * 4);
+            readback->UnlockRect();
+            return drawnTris;
+        };
+        auto drawnPx = [](const std::vector<float>& im, size_t p) { return im[p * 4 + 3] != 0.0f || im[p * 4] != 0.0f || im[p * 4 + 1] != 0.0f || im[p * 4 + 2] != 0.0f; };
+        auto is = [](const float* px, float r, float g, float b) { return std::fabs(px[0] - r) < 1e-3f && std::fabs(px[1] - g) < 1e-3f && std::fabs(px[2] - b) < 1e-3f; };
+        // an open window's glass in the debug view: mask m of the way from green to magenta, m > 0
+        auto glassTint = [](const float* px) { return px[0] > 1e-3f && std::fabs(px[0] - px[2]) < 1e-3f && std::fabs(px[0] + px[1] - 1.0f) < 1e-3f; };
+        char line[512];
+        for (const uint32_t ordinal : { 3u, 9u, 14u, 5u })
+        {
+            std::vector<float> dbg, alpha, opaque, glassy;
+            const gl::Window& win = inn.at(ordinal);
+            const float user[3] = { 24, 7, 2 };
+            const float out = win.center[0] * win.normal[0] + win.center[1] * win.normal[1] < 0.0f ? -8.0f : 8.0f;   // (outside the inn)
+            for (int k = 0; k < 3; ++k) eye[k] = ordinal == 5 ? win.center[k] + win.normal[k] * out : user[k];
+            aim(win);
+            place();
+            const int t1 = draw(ordinal, true, 1.0f, 0.0f, dbg), t2 = draw(ordinal, true, 0.0f, 0.0f, alpha),
+                      t3 = draw(ordinal, true, 0.0f, 1.0f, opaque), t4 = draw(ordinal, true, 0.0f, -1.0f, glassy);
+            int px = 0, magenta = 0, green = 0, cyan = 0, yellow = 0, other = 0, seeThrough = 0, both = 0, neither = 0, disagree = 0;
+            float least = 1.0f;
+            double room = 0.0;
+            for (size_t p = 0; p < dbg.size() / 4; ++p)
+            {
+                if (!drawnPx(alpha, p)) continue;
+                ++px;
+                const float* q = &dbg[p * 4];
+                (glassTint(q) ? magenta : is(q, 0, 1, 0) ? green : is(q, 0, 1, 1) ? cyan : is(q, 1, 1, 0) ? yellow : other) += 1;
+                const float a = alpha[p * 4 + 3];
+                least = std::min(least, a);
+                seeThrough += a < 0.999f ? 1 : 0;
+                room += 1.0 - a;
+                // the tint's mask and the alpha's: alpha = 1 - mask x 0.65
+                if (glassTint(q) || is(q, 0, 1, 0)) disagree += std::fabs(a - (1.0f - q[0] * 0.65f)) < 2e-3f ? 0 : 1;
+                const bool inOpaque = drawnPx(opaque, p), inGlass = drawnPx(glassy, p);
+                both += inOpaque && inGlass ? 1 : 0;
+                neither += !inOpaque && !inGlass ? 1 : 0;
+            }
+            const bool open = ordinal != 5;
+            std::snprintf(line, sizeof(line), "the inn's window %u through the client's patched shader (%d triangles): %d pixels; the debug view: %d open glass, %d lead, "
+                          "%d shut, %d no window, %d else (%d unlike the alpha); see-through at %d (least alpha %.2f), the room's share over the window %.0f%%; the two "
+                          "draws: %d in both, %d in neither", ordinal, t1, px, magenta, green, cyan, yellow, other, disagree, seeThrough, least,
+                          px ? 100.0 * room / px : 0.0, both, neither);
+            const bool ok = t1 > 0 && t1 == t2 && t2 == t3 && t3 == t4 && px > 50 && yellow == 0 && other == 0 && both == 0 && neither == 0 && disagree == 0 &&
+                            (open ? cyan == 0 && magenta > 0 && seeThrough > 0 : cyan == px && seeThrough == 0);
+            Check(ok, line);
+        }
+        if (decl) decl->Release();
+        for (IUnknown* u : std::initializer_list<IUnknown*>{ ps, target, readback, glassTex, white }) if (u) u->Release();
     }
 
     std::string LitProbeShader(const std::string& probe)
@@ -4498,7 +4898,7 @@ int main(int argc, char** argv)
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
-    // replay)
+    // replay, inn)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -4521,6 +4921,7 @@ int main(int argc, char** argv)
     if (run("titan")) { BacklitRulesTests(); BacklitTableTests(args[1]); }
     if (warp && run("titan")) BacklitWarpTests();
     if (warp && run("replay")) ReplayTests(args[1]);
+    if (warp && run("inn")) InnRedrawTests(args[0], args[1]);
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;
