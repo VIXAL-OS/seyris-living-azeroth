@@ -20,6 +20,12 @@
 //    surfaces from its group file (its glass aside, by GlassMaterials.cdbc), the grid against the brute force on the
 //    kitchen, and which of the 17 windows show their room from 30 street viewpoints each (printed; the ground floor's
 //    front two head on, the back dormers never).
+//  - From inside (SeeThroughFromInside, 2026-10-21): FacingIn, PlanInside, the view the client would push (ViewOf: its
+//    CPortalView layout, CRect's order, (x + 1) / 2, the depth), LookOut on a test room with a glazed, a blind and no
+//    outside; the inn's rooms' own 17 windows through the real reader (BuildInside); with the scan, each room's windows
+//    from eyes all over it against its surfaces and the shell's walls and glass (printed; the ground floor's four open
+//    from nearly everywhere), and from the GPU test's spot the open windows' views and the street behind them inside
+//    their union (the rectangle the client culls the outdoors through).
 // Usage:  seethrough_tests <Wow.exe> <repo data folder> [<map scan's wmo-windows folder>]
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
@@ -363,8 +369,11 @@ int main(int argc, char** argv)
             const st::Guard* bad = st::FirstMismatch(st::kGuards, [&](uintptr_t va, uint32_t size) { return im.At(va, size); });
             if (bad) throw std::runtime_error(std::string("differs: ") + bad->what);
             // Wmo.RenderThroughPortals, Gx.DeviceDraw, M2.SceneDraw, Wmo.CullBatch, Wmo.RenderGroup, Wmo.ExtRender, Wmo.IntRender:
-            // a detour may hold their first bytes.
-            for (const uintptr_t hooked : { 0x007AC060u, 0x006A3620u, 0x00823CB0u, 0x007A7630u, 0x007ABF50u, 0x007AC6A0u, 0x007AC9F0u })
+            // a detour may hold their first bytes. And (from inside) wxl-core's other hook points on the way: Wmo.PortalRectAccum
+            // (AddExteriorPortalView), Wmo.PortalTraverse (RenderWithCallback), CullSortTable, the scene render; and the
+            // functions called (PushExteriorPortalView, the two merges).
+            for (const uintptr_t hooked : { 0x007AC060u, 0x006A3620u, 0x00823CB0u, 0x007A7630u, 0x007ABF50u, 0x007AC6A0u, 0x007AC9F0u,
+                                            0x007A8F20u, 0x007B3B20u, 0x0079A790u, 0x0079A870u, 0x00795D00u, 0x00790AB0u, 0x00790AD0u })
                 for (const st::Guard& g : st::kGuards)
                     CHECK(!(g.address < hooked + 6 && g.address + g.size > hooked));
             // Nor a call's target that Modern Water redirects (wxl-modern-water engine.h, the *Site constants): with
@@ -428,6 +437,32 @@ int main(int argc, char** argv)
             CHECK(static_cast<const uint8_t*>(im.At(0x007D7FE2, 1))[1] == 0xAB && static_cast<const uint8_t*>(im.At(0x007D7FF5, 3))[2] == 4 &&
                   st::client::kMobaStride == 24);
             CHECK(static_cast<const uint8_t*>(im.At(0x007D74B9, 3))[2] == 6 && st::client::kMomtStride == 64);
+            // From inside: AddExteriorPortalView's view (at ebp-34h, its depth stored at ebp-24h: +0x10) goes to the functions
+            // the runtime calls, which take the arrays and views it reads; the scene render reads the frustum view's depth
+            // and the exterior views' count where the constants say.
+            const auto* add = static_cast<const uint8_t*>(im.At(0x007A904C, 26));
+            CHECK(static_cast<int8_t>(add[10]) - static_cast<int8_t>(add[7]) == static_cast<int>(st::client::kViewDepth));
+            std::memcpy(&rel, add + 13, 4);
+            CHECK(static_cast<uintptr_t>(0x007A9058 + 5 + rel) == st::client::kPushExteriorPortalView);
+            std::memcpy(&rel, add + 22, 4);
+            CHECK(static_cast<uintptr_t>(0x007A9061 + 5 + rel) == st::client::kMergeIntoWorldRect);
+            std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x00795D06, 13)) + 4, 4);
+            CHECK(v == st::client::kExteriorPortalViews);
+            std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x00790AB6, 11)) + 2, 4);
+            CHECK(v == st::client::kWorldView);
+            std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x00790AD6, 11)) + 2, 4);
+            CHECK(v == st::client::kFrustumView);
+            std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x0079AA33, 6)) + 2, 4);
+            CHECK(v == st::client::kFrustumView + st::client::kViewDepth);
+            std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x0079AA4B, 16)) + 1, 4);
+            CHECK(v == st::client::kFrustumView);
+            std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x0079AC41, 19)) + 2, 4);
+            CHECK(v == st::client::kWorldView + st::client::kViewDepth);
+            std::memcpy(&v, static_cast<const uint8_t*>(im.At(0x0079AC41, 19)) + 15, 4);
+            CHECK(v == st::client::kExteriorPortalViews + st::client::kArrayCount);
+            // (the walk from inside: the call at 0x7AC3D8 is AddExteriorPortalView)
+            std::memcpy(&rel, static_cast<const uint8_t*>(im.At(0x007AC3D8, 5)) + 1, 4);
+            CHECK(static_cast<uintptr_t>(0x007AC3D8 + 5 + rel) == 0x007A8F20u);
             std::printf("  %zu guards\n", sizeof(st::kGuards) / sizeof(st::kGuards[0]));
         });
     else std::printf("SKIP guards (no Wow.exe given)\n");
@@ -689,6 +724,106 @@ int main(int argc, char** argv)
         CHECK(!st::SeesRoom(w, street, st::RoomMesh{}));
         const float nan[3] = { NAN, 0, 0 };
         CHECK(!st::SeesRoom(w, nan, room));
+    });
+
+    // --- from inside: the street through the room's own windows ----------------------------------------------------------
+    Test("from inside: FacingIn, PlanInside (on the screen within the walk's rectangle, range, budget), the view the client "
+         "would make of it (ViewOf: CRect's order, (x + 1) / 2, its farthest depth)", [] {
+        // the room's own glass in the front wall's hole (TestRoom), its normal out of the building (-y); the eye in the room
+        const st::SeeWindow w = MakeWindow(0, 0.05f, 2, 0, -1, 0, 1, 1, -1, 18);
+        const float eye[3] = { 0, 5, 2 }, at[3] = { 0, 0, 2 }, street[3] = { 0, -5, 2 };
+        CHECK(st::FacingIn(w, eye) && !st::FacingIn(w, street) && !st::Facing(w, eye) && st::Facing(w, street));
+        const float onPlane[3] = { 0, 0.08f, 2 };   // (within kFacing of its plane: neither)
+        CHECK(!st::FacingIn(w, onPlane) && !st::Facing(w, onPlane));
+        float vp[16];
+        Camera(eye, at, 1.0f, 16.0f / 9.0f, vp);
+        std::vector<st::WindowPlan> plan;
+        unsigned budget = st::kMaxInsidePerFrame;
+        st::PlanInside(&w, 1, eye, { -1, -1, 1, 1 }, kIdentity, eye, vp, budget, plan);
+        CHECK(plan.size() == 1 && plan[0].state == st::kShut && plan[0].candidate && budget == st::kMaxInsidePerFrame - 1);
+        const st::Rect s = plan[0].screen;
+        CHECK(Close(s.minX, -s.maxX, 1e-4f) && Close(s.minY, -s.maxY, 1e-4f) && s.maxX > 0.1f && s.maxX < 0.5f);
+        CHECK(Close(plan[0].depth, 4.95f, 1e-3f));   // (the quad's plane, 4.95 yd ahead along the view)
+        const st::PortalView view = st::ViewOf(s, plan[0].depth);
+        CHECK(Close(view.rect[0], (s.minY + 1) * 0.5f, 1e-6f) && Close(view.rect[1], (s.minX + 1) * 0.5f, 1e-6f) &&
+              Close(view.rect[2], (s.maxY + 1) * 0.5f, 1e-6f) && Close(view.rect[3], (s.maxX + 1) * 0.5f, 1e-6f));
+        CHECK(Close(view.maxViewDepth, 4.95f, 1e-3f) && view.verts == 0 && view.vertCount == 0);
+        CHECK(st::ViewOf(s, -3.0f).maxViewDepth == 0.0f && st::ViewOf(s, NAN).maxViewDepth == 0.0f);
+        // the layout the client reads: its rectangle at +0, its depth at +0x10, a null vertex pointer and count
+        CHECK(offsetof(st::PortalView, maxViewDepth) == st::client::kViewDepth && offsetof(st::PortalView, verts) == 0x14 &&
+              offsetof(st::PortalView, vertCount) == 0x18);
+        // the budget spent, too far, off the walk's rectangle, from outside
+        budget = 0;
+        st::PlanInside(&w, 1, eye, { -1, -1, 1, 1 }, kIdentity, eye, vp, budget, plan);
+        CHECK(plan[0].state == st::kShut && !plan[0].candidate);
+        budget = 4;
+        const float distant[3] = { 0, 45, 2 };
+        Camera(distant, at, 1.0f, 16.0f / 9.0f, vp);
+        st::PlanInside(&w, 1, distant, { -1, -1, 1, 1 }, kIdentity, distant, vp, budget, plan);
+        CHECK(plan[0].state == st::kShut && !plan[0].candidate && budget == 4);
+        Camera(eye, at, 1.0f, 16.0f / 9.0f, vp);
+        st::PlanInside(&w, 1, eye, { 0.6f, 0.6f, 1, 1 }, kIdentity, eye, vp, budget, plan);
+        CHECK(plan[0].state == st::kUnseen && !plan[0].candidate);
+        const float back[3] = { 0, -5, 2 };
+        Camera(back, at, 1.0f, 16.0f / 9.0f, vp);
+        st::PlanInside(&w, 1, back, { -1, -1, 1, 1 }, kIdentity, back, vp, budget, plan);
+        CHECK(plan[0].state == st::kUnseen && budget == 4);
+        float depth = 0;
+        float quad[4][3];
+        st::Corners(w, 0.0f, quad);
+        Camera(eye, at, 1.0f, 16.0f / 9.0f, vp);
+        CHECK(st::FarthestDepth(quad, 4, kIdentity, eye, vp, depth) && Close(depth, 4.95f, 1e-3f));
+        CHECK(!st::FarthestDepth(quad, 0, kIdentity, eye, vp, depth));
+    });
+
+    Test("LookOut: out by the building's own glass (open), into the open (open), through a blind wall from inside (shut: what "
+         "it met and how far), at the room's own wall from the front (shut)", [] {
+        const st::RoomMesh room = TestRoom();
+        const st::SeeWindow w = MakeWindow(0, 0.05f, 2, 0, -1, 0, 1, 1, -1, 18);
+        // the building's outside 0.4 yd out: a wall facing the street with the same opening, its outer pane in it
+        std::vector<float> v, gv;
+        std::vector<uint16_t> idx, gidx;
+        AddRect(v, idx, 1, -0.4f, -1, 5, -6, -1, -1);
+        AddRect(v, idx, 1, -0.4f, -1, 5, 1, 6, -1);
+        AddRect(v, idx, 1, -0.4f, -1, 1, -1, 1, -1);
+        AddRect(v, idx, 1, -0.4f, 3, 5, -1, 1, -1);
+        AddRect(gv, gidx, 1, -0.4f, 1, 3, -1, 1, -1);
+        st::RoomMesh walls, pane, blind;
+        CHECK(walls.Build(v.data(), static_cast<uint32_t>(v.size() / 3), idx.data(), static_cast<uint32_t>(idx.size()), { { 0u, static_cast<uint32_t>(idx.size()) } }));
+        CHECK(pane.Build(gv.data(), static_cast<uint32_t>(gv.size() / 3), gidx.data(), static_cast<uint32_t>(gidx.size()), { { 0u, static_cast<uint32_t>(gidx.size()) } }));
+        std::vector<float> bv;
+        std::vector<uint16_t> bidx;
+        AddRect(bv, bidx, 1, -0.4f, -1, 5, -6, 6, -1);
+        CHECK(blind.Build(bv.data(), static_cast<uint32_t>(bv.size() / 3), bidx.data(), static_cast<uint32_t>(bidx.size()), { { 0u, static_cast<uint32_t>(bidx.size()) } }));
+        const float eye[3] = { 0, 5, 2 }, aside[3] = { -3, 6, 3 }, low[3] = { 1, 3, 1 };
+        const st::Shell glazed[1] = { { &walls, &pane } };
+        st::Sight s;
+        for (const auto* e : { eye, aside, low })
+        {
+            st::LookOut(w, e, room, glazed, 1, nullptr, s);
+            CHECK(s.rays == 9 && s.front == 9 && s.back == 0 && s.none == 0 && st::SightOpen(s, false));
+        }
+        st::LookOut(w, eye, room, nullptr, 0, nullptr, s);   // no outside modelled: into the open
+        CHECK(s.front == 9 && st::SightOpen(s, false));
+        const st::Shell walled[1] = { { &blind, nullptr } };   // a blind wall behind the room's glass: its back
+        st::LookOut(w, eye, room, walled, 1, nullptr, s);
+        CHECK(s.back == 9 && s.front == 0 && !st::SightOpen(s, false) && s.firstMiss == 0 && s.missHit == st::RoomMesh::kBack &&
+              Close(s.missDepth, 0.45f, 0.03f));
+        // the room's own front wall (solid at x 3): a window painted on it sees the wall from the front, nothing of the street
+        const st::SeeWindow painted = MakeWindow(3, 0.05f, 2, 0, -1, 0, 0.8f, 0.8f, -1, 19);
+        const float there[3] = { 3, 5, 2 };
+        st::LookOut(painted, there, room, glazed, 1, nullptr, s);
+        CHECK(s.none == 9 && s.front == 0 && !st::SightOpen(s, false));
+        // its own glass points when given (the first, the middle's nearest)
+        st::SightPoints p;
+        p.n = 3;
+        const float pts[3][3] = { { 0, 0.05f, 2 }, { 0.5f, 0.05f, 2.4f }, { -0.5f, 0.05f, 1.6f } };
+        std::memcpy(p.p, pts, sizeof(pts));
+        st::LookOut(w, eye, room, glazed, 1, &p, s);
+        CHECK(s.onGlass && s.rays == 3 && s.front == 3 && s.middle == st::RoomMesh::kFront);
+        const float nan[3] = { NAN, 0, 0 };
+        st::LookOut(w, nan, room, glazed, 1, nullptr, s);
+        CHECK(s.rays == 0 && !st::SightOpen(s, false));
     });
 
     // --- which windows a batch is in -----------------------------------------------------------------------------------
@@ -1007,7 +1142,7 @@ int main(int argc, char** argv)
         }
         const fs::path cwd = fs::current_path();
         if (copied) fs::current_path(root);
-        st::RootWindows inn;
+        st::RootWindows inn, innInside;
         Test("the real tables through the real reader: glass::Load keeps the windows; the inn's 17 open onto the survey's rooms", [&] {
             CHECK(copied);
             const WXL_SeyrisCdbcApi linked = LinkedApi();
@@ -1041,6 +1176,23 @@ int main(int argc, char** argv)
             for (uint32_t i = 0; i < n; ++i)
                 if (plan[i].candidate) open.push_back(w[i].ordinal);
             CHECK(open == std::vector<uint32_t>({ 1, 2, 10, 11 }));
+            // from inside (SeeThroughFromInside): its rooms' own windows, the same table's rows of interior groups: the
+            // kitchen's eight (the ground floor's four and the stair hall's four), exterior02's four, the hall's, the common
+            // room's, room01's two and room02's; none in the shell
+            innInside = st::BuildInside(path, all, 12);
+            std::printf("  the inn from inside: %zu windows in its rooms\n", innInside.windows.size());
+            CHECK(innInside.windows.size() == 17 && innInside.real == 0 && innInside.fake == 0);
+            const uint32_t expect[12] = { 0, 0, 1, 0, 0, 8, 4, 1, 2, 1, 0, 0 };
+            for (uint32_t g = 0; g < 12; ++g)
+            {
+                uint32_t k = 0;
+                const st::SeeWindow* in = innInside.Group(g, k);
+                CHECK(k == expect[g] && (k == 0) == (in == nullptr));
+                for (uint32_t i = 0; i < k; ++i) CHECK(in[i].interior == -1 && in[i].group == g && (i == 0 || in[i].ordinal > in[i - 1].ordinal));
+            }
+            uint32_t k = 0;
+            const st::SeeWindow* kitchen = innInside.Group(5, k);
+            CHECK(kitchen[0].ordinal == 18 && kitchen[7].ordinal == 25);
         });
         fs::current_path(cwd);
         fs::remove_all(root, ec);
@@ -1356,6 +1508,145 @@ int main(int argc, char** argv)
                 for (const uint32_t o : { 9u, 14u, 1u, 2u, 10u, 11u })
                     CHECK(flipsHeld[o] == 0 && openFrames[o] == frames[o]);
                 CHECK(flipsHeld[3] <= 4 && flipsHeld[3] < flipsOld[3] && openFrames[3] * 10 >= frames[3] * 9);
+            });
+        if (!scan.empty())
+            Test("the scan's inn from inside (2026-10-21): its rooms' windows open as ways out where the street is seen through them (LookOut "
+                 "over each room's surfaces and the shell's walls and glass); the views the client would push; the street behind them inside "
+                 "the rectangle the outdoors is culled through", [&] {
+                CHECK(innInside.windows.size() == 17);
+                const std::string base = (fs::path(scan) / "world#wmo#azeroth#buildings#goldshireinn#goldshireinn").string();
+                const std::vector<std::string> textures = ReadRootTextures(base + ".wmo");
+                std::vector<bool> glass(textures.size());
+                for (size_t i = 0; i < textures.size(); ++i) glass[i] = gl::MaterialOf(textures[i].c_str()) != 0;
+                // the meshes as the runtime builds them (MeshOf): a room's surfaces but its glass; the shell's (the exterior groups
+                // 4 and 11) walls and glass apart
+                auto build = [&](int group, bool glassOnly, st::RoomMesh& m) {
+                    char name[16];
+                    std::snprintf(name, sizeof(name), "_%03d.wmo", group);
+                    const ScanGroup g = ReadScanGroup(base + name);
+                    std::vector<std::pair<uint32_t, uint32_t>> ranges;
+                    for (const ScanGroup::Moba& b : g.batches)
+                        if ((b.material < glass.size() && glass[b.material]) == glassOnly) ranges.emplace_back(b.start, b.count);
+                    CHECK(m.Build(g.vertices.data(), static_cast<uint32_t>(g.vertices.size() / 3), g.indices.data(), static_cast<uint32_t>(g.indices.size()), ranges));
+                    return g;
+                };
+                st::RoomMesh walls4, glass4, walls11, glass11;
+                build(4, false, walls4);
+                build(4, true, glass4);
+                build(11, false, walls11);
+                build(11, true, glass11);
+                std::printf("  the shell: group 4 %zu triangles and %zu of glass, group 11 %zu and %zu\n", walls4.Triangles(), glass4.Triangles(),
+                            walls11.Triangles(), glass11.Triangles());
+                CHECK(glass4.Triangles() == 62 && walls4.Triangles() > 1000);
+                const st::Shell shells[2] = { { &walls4, &glass4 }, { &walls11, &glass11 } };
+                // each room with windows of its own: its surfaces, its windows' sight points (from its glass batches)
+                struct Room { st::RoomMesh mesh; std::vector<st::SightPoints> points; const st::SeeWindow* w = nullptr; uint32_t n = 0; };
+                std::map<int, Room> rooms;
+                for (const int g : { 2, 5, 6, 7, 8, 9 })
+                {
+                    Room& r = rooms[g];
+                    r.w = innInside.Group(static_cast<uint32_t>(g), r.n);
+                    CHECK(r.w && r.n > 0);
+                    const ScanGroup sg = build(g, false, r.mesh);
+                    std::vector<std::pair<uint32_t, uint32_t>> glassRanges;
+                    for (const ScanGroup::Moba& b : sg.batches)
+                        if (b.material < glass.size() && glass[b.material]) glassRanges.emplace_back(b.start, b.count);
+                    st::GlassSightPoints(sg.vertices.data(), static_cast<uint32_t>(sg.vertices.size() / 3), sg.indices.data(),
+                                         static_cast<uint32_t>(sg.indices.size()), glassRanges, r.w, r.n, r.points);
+                    int fewest = st::kSightPoints;
+                    for (const st::SightPoints& p : r.points) fewest = std::min(fewest, p.n);
+                    std::printf("  room %d: %zu triangles (its glass aside), %u windows, the fewest sight points %d\n", g, r.mesh.Triangles(), r.n, fewest);
+                    CHECK(fewest >= 4);
+                }
+                // eyes all over each room's box (1.5 yd apart, half a yard in from its sides; 1.8, 3 and 4.5 yd over its floor: on
+                // foot to a raised camera), each window from those inside its plane within 20 yd
+                std::map<uint32_t, std::pair<int, int>> tally;   // ordinal: (open, views)
+                std::map<uint32_t, std::map<std::string, int>> combos;
+                for (auto& [g, r] : rooms)
+                {
+                    const st::GroupInfo& box = kInnGroups[g];
+                    for (float z0 : { 1.8f, 3.0f, 4.5f })
+                        for (float x = box.lo[0] + 0.5f; x <= box.hi[0] - 0.5f; x += 1.5f)
+                            for (float y = box.lo[1] + 0.5f; y <= box.hi[1] - 0.5f; y += 1.5f)
+                            {
+                                const float floorZ = g == 5 ? 0.4f : 7.3f;
+                                const float eye[3] = { x, y, floorZ + z0 };
+                                for (uint32_t i = 0; i < r.n; ++i)
+                                {
+                                    const st::SeeWindow& w = r.w[i];
+                                    const float d[3] = { eye[0] - w.center[0], eye[1] - w.center[1], eye[2] - w.center[2] };
+                                    if (!st::FacingIn(w, eye) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 400.0f) continue;
+                                    st::Sight s;
+                                    st::LookOut(w, eye, r.mesh, shells, 2, &r.points[i], s);
+                                    const bool open = st::SightOpen(s, false);
+                                    tally[w.ordinal].first += open ? 1 : 0;
+                                    ++tally[w.ordinal].second;
+                                    ++combos[w.ordinal][std::to_string(s.front) + "/" + std::to_string(s.back) + "/" + std::to_string(s.none) + (open ? "+" : "")];
+                                }
+                            }
+                    for (uint32_t i = 0; i < r.n; ++i)
+                    {
+                        const st::SeeWindow& w = r.w[i];
+                        std::string top;
+                        int shown = 0;
+                        for (const auto& kv : combos[w.ordinal])
+                            if (shown++ < 8) top += " " + kv.first + ":" + std::to_string(kv.second);
+                        std::printf("  window %2u (room %d, z %4.1f, facing %+.2f %+.2f %+.2f): opens from %3d of %3d eyes inside; f/b/n:%s\n", w.ordinal, g,
+                                    w.center[2], w.normal[0], w.normal[1], w.normal[2], tally[w.ordinal].first, tally[w.ordinal].second, top.c_str());
+                    }
+                }
+                // The ground floor's four windows (18 .. 21: out by the shell's panes 1 .. 4) open from nearly everywhere in it;
+                // the sloped inner panes under the back dormers (0, 25, 29: up into the dormer, its roof and cheeks from inside)
+                // from few places.
+                for (const uint32_t o : { 18u, 19u, 20u, 21u })
+                    CHECK(tally[o].second > 20 && tally[o].first * 10 >= tally[o].second * 8);
+                // From where the GPU test stands (glass_tests' "inside": the kitchen, looking at its south wall): the south windows
+                // 18 and 19 open; the views the client would push for them; each one's street (20 yd past its glass points)
+                // within the rectangle round the ways out, so the outdoors there is culled in, not out.
+                const Room& kitchen = rooms.at(5);
+                const float spot[3] = { 0, 6, 3 }, look[3] = { 0, -8.8f, 2.8f };
+                float vp[16];
+                Camera(spot, look, 2.0f * std::atan(96.0f / 120.0f), 1.0f, vp);
+                std::vector<st::WindowPlan> plan;
+                unsigned budget = st::kMaxInsidePerFrame;
+                st::PlanInside(kitchen.w, kitchen.n, spot, { -1, -1, 1, 1 }, kIdentity, spot, vp, budget, plan);
+                float merged[4] = { 1e30f, 1e30f, -1e30f, -1e30f };
+                std::vector<uint32_t> opened;
+                for (uint32_t i = 0; i < kitchen.n; ++i)
+                {
+                    if (!plan[i].candidate) continue;
+                    st::Sight s;
+                    st::LookOut(kitchen.w[i], spot, kitchen.mesh, shells, 2, &kitchen.points[i], s);
+                    if (!st::SightOpen(s, false)) continue;
+                    opened.push_back(kitchen.w[i].ordinal);
+                    const st::PortalView v = st::ViewOf(plan[i].screen, plan[i].depth);
+                    std::printf("  from (0, 6, 3): window %u opens (%d of %d rays see the street), its view %.3f %.3f %.3f %.3f (minY minX maxY maxX), "
+                                "depth %.1f\n", kitchen.w[i].ordinal, s.front, s.rays, v.rect[0], v.rect[1], v.rect[2], v.rect[3], v.maxViewDepth);
+                    // (CPortalView::Merge: the rectangles' union)
+                    merged[0] = std::min(merged[0], v.rect[0]); merged[1] = std::min(merged[1], v.rect[1]);
+                    merged[2] = std::max(merged[2], v.rect[2]); merged[3] = std::max(merged[3], v.rect[3]);
+                }
+                CHECK(std::find(opened.begin(), opened.end(), 18u) != opened.end() && std::find(opened.begin(), opened.end(), 19u) != opened.end());
+                int inside = 0, beyond = 0;
+                for (uint32_t i = 0; i < kitchen.n; ++i)
+                {
+                    if (std::find(opened.begin(), opened.end(), kitchen.w[i].ordinal) == opened.end()) continue;
+                    const st::SightPoints& p = kitchen.points[i];
+                    for (int k = 0; k < p.n; ++k)
+                    {
+                        float d[3] = { p.p[k][0] - spot[0], p.p[k][1] - spot[1], p.p[k][2] - spot[2] };
+                        const float l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                        const float q[3] = { d[0] / l * (l + 20.0f), d[1] / l * (l + 20.0f), d[2] / l * (l + 20.0f) };
+                        float c[4];
+                        for (int j = 0; j < 4; ++j) c[j] = q[0] * vp[j] + q[1] * vp[4 + j] + q[2] * vp[8 + j] + vp[12 + j];
+                        const float x = (c[0] / c[3] + 1) * 0.5f, y = (c[1] / c[3] + 1) * 0.5f;
+                        ++beyond;
+                        inside += x >= merged[1] && x <= merged[3] && y >= merged[0] && y <= merged[2] ? 1 : 0;
+                    }
+                }
+                std::printf("  the rectangle round them %.3f %.3f %.3f %.3f: %d of %d points of the street behind them in it\n", merged[0], merged[1],
+                            merged[2], merged[3], inside, beyond);
+                CHECK(beyond > 0 && inside == beyond);
             });
         else std::printf("SKIP the scan's inn (no wmo-windows folder given)\n");
     }

@@ -2,9 +2,10 @@
 
 "Windows you can actually see through into a building's modelled interior" (the user and Simon, 2026-10-20). Research
 on how the 3.3.5a client (build 12340) decides which WMO groups it draws, two ways to show the room behind a window,
-how to draw the glass over it, the risks, and how many windows have a room behind them at all. The prototype is
-`features/SeeThrough` (`SeeThroughWindows`, off by default), its rules `env/SeeThroughModel`, its tests
-`tests/seethrough`, the count `tools/see_through_survey.py`.
+how to draw the glass over it, the risks, and how many windows have a room behind them at all; and (section 8) how the
+client draws the outdoors from inside, and the street through the room's own windows. The prototype is
+`features/SeeThrough` (`SeeThroughWindows` and `SeeThroughFromInside`, off by default), its rules `env/SeeThroughModel`,
+its tests `tests/seethrough`, the count `tools/see_through_survey.py`.
 
 Sources: wowdecomp (SatyPardus/wowdecomp b1c71b8, `WoW/Source/WorldClient/MapObj.cpp`, `World.cpp`,
 `CWorldSceneRender.cpp`, `WorldScene.cpp`, `Engine/Source/Gx/CGxDeviceD3d`), its `OFFSET`/`STATIC` comments checked
@@ -281,7 +282,8 @@ would cover it. So it is **deferred**:
   entry; a batch draws once whatever the frusta); its doodads are culled against its first frustum only.
 - **Back faces**: the room's inside faces of the windows (an interior group's glass, `mm_elwynn_wnd_int__01` in the inn)
   are one-sided and face in, so from outside they're culled. A two-sided inside face would stand opaque behind the
-  deferred pane (the window stays dark); interior groups' glass isn't deferred in the prototype.
+  deferred pane (the window stays dark); interior groups' glass isn't deferred from outside (from inside it is: section
+  8, where the outer pane is the one culled).
 - **LOD**: WMO groups have none in 3.3.5a; doodads fade by distance as through a door.
 - **Group-visibility caching**: `s_portalExt` rectangles are per stamp and portal index, untouched; the batch "drawn"
   bits (0xF0) are per frame. Our state is per frame (cleared on OnUpdate) and per instance and group.
@@ -331,6 +333,174 @@ name the glass batches).
 
 Next, in order: try it in game at the inn; widen the whitelist to the 109 all-real WMOs; the same windows as portals
 *outward* from inside (the street through the window), which wants the interior pass's exterior portal views and the
-glass deferred from inside too. Done 2026-10-20: the lead and frames opaque (the glass mask in the redraw), a shut
-window no longer keeping its batch opaque, and windows opened only where the room is seen through them; 2026-10-21 the
-lead mask (GlassLead.cdbc), every pane's glass see-through and the frames opaque, the per-pixel redraw the default again.
+glass deferred from inside too (section 8: `SeeThroughFromInside`). Done 2026-10-20: the lead and frames opaque (the
+glass mask in the redraw), a shut window no longer keeping its batch opaque, and windows opened only where the room is
+seen through them; 2026-10-21 the lead mask (GlassLead.cdbc), every pane's glass see-through and the frames opaque, the
+per-pixel redraw the default again.
+
+## 8. From inside: the street through the windows
+
+"windows should be see-through from the inside as well" (the user, 2026-10-21, standing in the inn's ground floor). From
+inside, the windows are the room's own glass (an interior group's batch, `mm_elwynn_wnd_int__01` in the inn: GlassWindows'
+rows without Flags 0x1, 7,524 of them in all, 17 in the inn: the kitchen's 18..25, exterior02's 26..29, the hall's 0, the
+common room's 30, room01's 31 and 32, room02's 33), drawn opaque with nothing behind them: from inside the client draws the
+outdoors only through its ways out, and windows aren't ways out.
+
+### What the client draws of the outdoors from inside
+
+Every frame `CWorldScene::Update` (0x00795400) resets two views (CPortalView, 0x1C: a CRect in 0..1 in CRect's order
+{minY, minX, maxY, maxX}, a depth, vertices, a count) to empty with depth -1: the **world view** `s_unk_ADF570`
+(0x00ADF570, depth at 0x00ADF580) and the **frustum view** `frustumPortalView` (0x00ADF58C, depth 0x00ADF59C), and empties
+`s_exteriorPortalViews` (0x00CDD0E8, a TSGrowableArray: count at +4) and `s_portalViews` (0x00CDD0F8). `LocateViewer3`
+(0x00795D40) finds the camera's building and groups; a camera group with 0x40140 (exterior-lit, exterior sky, skybox) gets
+a full-screen world view at once (an open courtyard's sky).
+
+- **The walk from inside** (`CWorldScene::Render` 0x0079A870: `s_viewerMapObjDef` set -> `CMapObjDef::RenderWithCallback`
+  0x007B3B20 -> `CMapObj::RenderInterior` 0x007AD1F0: `SetupMapObjDefCull`, `s_interiorPass` 1, `FrustumPush`, then
+  `RenderThruPortals` 0x007AC060 (`Wmo.RenderThroughPortals`) from each of the camera's groups at depth 0 with the whole
+  screen). The walk is the same function as from outside: the render callback for each group reached (it joins the sort
+  table with the frustum it was reached through), each portal on the camera's side whose screen rectangle overlaps the
+  walk's, `FrustumPush` / `FrustumSet(s_frustumCorners, (clip + 1) / 2)` / recurse / `FrustumPop`, to depth 10. Its one
+  difference from inside (0x007AC3C0): a portal into a group with 0x50148 (exterior 0x8, 0x10000, exterior-lit 0x40,
+  exterior sky 0x100, skybox 0x40000) gets **`CMapObj::AddExteriorPortalView`** (0x007A8F20, wxl-core's `Wmo.PortalRectAccum`):
+  once a frame per portal (its `s_portalExt` flag 0x4), the portal's vertices through `TransformAndClipVerts` (0x007A85E0,
+  nudged 0.01 yd along its normal), their screen rectangle (`CalcScreenRectFromVerts`, NDC) as (x + 1) / 2, its depth
+  `CalcPortalFarthestDistance` (0x007A70D0: its farthest vertex's distance from the camera's plane, at least 0), pushed
+  with `PushExteriorPortalView` (0x00795D00, `__cdecl(CPortalView*)`: the array's Add), merged into the world view
+  (`MergeIntoWorldRect` 0x00790AB0: the rectangles' union, the larger depth) and, into an exterior group (0x10008), into the
+  frustum view (`MergeIntoFrustumRect` 0x00790AD0); the walk doesn't go on into an exterior group (the outdoor cull does
+  it), but goes on into a 0x40/0x100/0x40000 one. The portal's own rectangle is pushed, not its overlap with the walk's.
+  A walked group with 0x40000 sets `s_interiorSkybox` (0x00CD861C).
+- **The outdoors' gate** (0x0079AA33): the frustum view's depth < 0 (no way out reached): `sortTable.Clear()`, nothing of
+  the outdoors at all. Else `s_occlusionNearDepth` (0x00CD8780) = its depth + 33 1/3 yd and `CullSortTable(frustumPortalView)`
+  (0x0079A790): one `FrustumPush`, `FrustumSet(rect)` (0x00790AF0: the camera's frustum corners narrowed to the union
+  rectangle), then over the 64 distance buckets the terrain chunks (`CullChunks`, their M2 doodads with
+  `CullDoodadsExterior`), the other buildings' exterior groups (`CullMapObjDefGroups` -> `CullMapObjDefGroupFromExterior`
+  0x007B3A10: their own walks from outside, `s_interiorPass` 0, the camera's building's shell among them), the liquids, the
+  entities, the doodads, the horizon (`CullHorizon`), against that one frustum; terrain occluders only past the near depth
+  (and `CWorldOcclusion::AddVolume` clips its volumes at the frustum view's depth). Then `CullThroughPortal` (0x00799F80) the
+  pending exterior groups with the full screen, `CullMapObjDefGroup` (0x0079A260) the listed interior groups' furniture
+  against their first frustum.
+- **The sky and the fill** (0x0079AC41): the world view's depth < 0: the screen cleared to the interior fog's colour, no
+  sky. Else cleared to black; after the terrain, the buildings and the horizon, `CreateInversePortalList` (0x007968D0: the
+  screen less every exterior view's rectangle, as at most about 60 rectangles; past that it stops with the ones so far)
+  and `RenderPortalList(s_exteriorPortalViews, 1)` (0x00796C10) fill them at the far plane in the interior fog's colour
+  (depth tested: only where nothing was drawn), the interior skybox if any, and `DayNight::RenderSky` (0x007F09B0) with the
+  scissor on the world view's rectangle, its depth range 0.99902 .. 1 (behind everything drawn). The weather (`Rain::Render`
+  0x0078AE20, Snow 0x0078BA60, Sand 0x0078C3E0, after model pass 0) draws only with the world view's depth >= 0; its drops
+  start above the weather grid's height (`CMap::QueryHeight` from the drop: a roof), so none fall under a roof.
+- **Fog and light**: a WMO group's batches take fog mode 2 - interior (`SetShaderFogFromDayNight` 0x007A8440: interior
+  groups `m_fogInterior`, exterior ones `m_fog`); the terrain and the outdoors `m_fog` (`ApplyFogState` 0x00781610). With
+  the camera in one of the WMO's fog volumes (`QueryCameraFog`: a WMO with more than one MFOG), DayNight moves `m_fog`'s
+  start, end and density toward the WMO's fog by how far in (full at 25 yd), its colour kept: the inn has two MFOG entries,
+  the second's end 83 yd, so from inside the street through any way out is fogged by about 83 yd, the same through a door
+  or a window. The far clip (`World::s_farClip` 0x00CD7748) doesn't change indoors. Interior groups keep their baked vertex
+  colours and the indoor ambient; the outdoors its own light. Models within 25 yd of an exterior portal blend indoor and
+  outdoor light (`DistFromClosestExtPortal` 0x007D77C0): windows aren't portals, so the furniture by a window stays
+  indoor-lit, as before.
+- **The frustum stack**: `frustumStack[32]` (0x00CDB168), `frustumIndex` (0x00CD8798); `FrustumPush` copies the top,
+  `FrustumSet(corners, rect)` narrows it, `FrustumPop` drops it. The walk pushes one per portal (at most 10 deep); the
+  outdoor cull pushes one (`CullSortTable`, `CullThroughPortal`), each building's exterior group one more
+  (`CullMapObjDefGroupFromExterior`). `s_cullStateValid` (0x00CFBEBC) says `SetupMapObjDefCull` ran (the WMO's camera and
+  matrices), from inside as from outside.
+
+So a way out from inside costs what an open door costs: the outdoors culled through the union of the ways out's
+rectangles (one frustum: two windows at the screen's sides cull through the rectangle spanning both, as two doors would),
+drawn whole and then overdrawn by the room's walls where they're nearer, the sky in that rectangle, the weather turned on.
+Nothing in the walk needs to change for a window to be a way out: only one more exterior portal view.
+
+### A window as a way out
+
+In the walk from inside (`s_interiorPass` 1, the render callback the sort table's, its instance the camera's building,
+in the whitelist), after the client's own `RenderThruPortals` for a group returns (any depth: our hook sees every call,
+the recursion too), each of the group's own windows (GlassWindows' rows of that interior group) that faces the camera from
+inside (`FacingIn`: the camera inside its plane by 0.05 yd; GlassWindows' normal points out of the building), whose quad
+(grown 0.1 yd) is on the screen and overlaps the walk's rectangle for the group, within 40 yd (`kInsideRange`), at most 16
+a frame, and decided once a frame (at the first reach that sees it), becomes a way out where the street is really seen
+through it (below): the view `AddExteriorPortalView` would make of a portal there (`ViewOf`: the quad's screen rectangle
+as (x + 1) / 2, its farthest clip w as the depth), pushed and merged through the client's own `PushExteriorPortalView`,
+`MergeIntoWorldRect` and `MergeIntoFrustumRect`, as for a portal into an exterior group. The client then culls and draws
+the outdoors through it, its sky and its weather, as through a door; nothing else changes (no frustum pushed, no callback
+swapped, no array of the WMO's touched). The room's glass batch (one in the kitchen: windows 18..25, no strays) is deferred
+and drawn again after model pass 0 exactly as from outside (`SeeThroughRedraw`, `SeeThroughOpacity`: its open windows'
+panes see-through by the lead mask, which GlassLead.cdbc has for `mm_elwynn_wnd_int__01`, their lead and frame opaque, a
+shut one as the client draws it), the shader's window lookup over the kitchen's own window grid (Glass's table has every
+group's windows), Glass's inside look kept.
+
+**Is the street seen through it from here** (`LookOut`): from inside a ray that leaves the room's glass can meet the
+building's own outside from behind (a wall, the roof, a dormer's cheeks: their faces face out, so the client culls them
+from inside and the street would show through them) or leave by the building's own outer pane (`mm_elwynn_wnd_ext__01`,
+0.4 yd out in the inn, one-sided, MOMT 0x11, so from inside it's culled too and doesn't hide the street). The rays go from
+the eye through the window's own glass points (`GlassSightPoints` over the room's glass batch) on past it, against the
+room's surfaces (its glass aside) and each exterior group's (the shell: its walls, and its glass apart). Leaving by the
+building's glass, or meeting nothing at all, sees the street; meeting a surface from behind (the shell's or the room's own)
+is against; meeting one from the front (the window's reveal behind its glass, the building's outside past an opening)
+neither: it's drawn as it is. `SightOpen` and `Hold` decide as from outside (four see the street, more than either other
+kind, at most two from behind; held 0.35 s). The dormers' sloped inner panes (0, 25, 29: up into the dormer, its roof and
+cheeks from inside) are the windows it shuts; see the tests below. Another interior group beyond the window (none in the
+inn) isn't in the test.
+
+### Risks
+
+- **Cost**: as a door's. A window in view adds the outdoors culled through its rectangle (and widens the union with any
+  door's), its sky and weather; with no window or door in view nothing changes. At most 16 windows a frame; the rays (nine
+  a window) against the room's and the shell's grids. The meshes are built one a frame (the kitchen, the shell's walls and
+  glass, group 11's: five frames before the first window can open).
+- **Two-sided outer panes**: the inn's outer glass is one-sided; a WMO whose exterior glass has MOMT 0x4 would stand opaque
+  between the room's glass and the street (the gate counts it as a way out). A wider whitelist must check that, or defer
+  the outer pane from inside too.
+- **Sorting**: the weather's drops, the liquids, the detail doodads (grass), the particles and the see-through models outside
+  are drawn after the redraw: over the glass, not under it (the same as from outside for a candle's flame).
+- **The fill's 60 rectangles**: many ways out at once can stop `CreateInversePortalList` early; the fill then covers some
+  ways out's background, and the sky drawn after it over the union rectangle shows there anyway (its depth range is in
+  front of the fill's).
+- **Modern Water**: its thunk round model pass 0 (our redraw runs inside it, before its fog composite) sees what it sees
+  through a door: the outdoors' depth behind a see-through pane (no depth written there), so its fog lands on the glass by
+  the street's distance. Its code isn't here to read; every state it can see is one the client makes itself with a door in
+  view.
+- **LA's own**: the ground fog, the sun shafts and the window glow switch off indoors (the client's interior blend >=
+  0.999), so the street through a window has none of them, as through a door; near the door, where the blend is partial,
+  they draw as before. The storm's flashes follow the same blend. The coloured shafts and floor light are the room's own.
+- **Video Cinema**: its screen is drawn at the scene's clear (its depth tested by what comes after): outside, through a
+  way out, it shows as any outdoor object.
+- **Interior lighting**: unchanged (the room's vertex colours and ambient; the street its own light; the furniture by a
+  window indoor-lit).
+- **Guards**: the walk's statics and the frustum stack's were guarded already; added: the walk's exterior-view call from
+  inside (0x007AC3C0), AddExteriorPortalView's view and its depth at +0x10 with its push and merge (0x007A904C), the push's
+  array (0x00795D06), the merges' views (0x00790AB6, 0x00790AD6), the scene render's gate on the frustum view and its cull
+  through it (0x0079AA33, 0x0079AA4B), and its sky gate and the exterior views' count (0x0079AC41); none in a hooked
+  function's first bytes (wxl-core's `Wmo.PortalRectAccum`, `Wmo.PortalTraverse`, `CullSortTable` and the scene render
+  among them). Any fault in the walk from inside switches the feature off for the session.
+
+### The prototype
+
+`SeeThroughFromInside` (`[LivingAzeroth.Glass]`, 0 by default; its own box in the lights panel's see-through section; it
+doesn't need `SeeThroughWindows`). With it off nothing of this runs. The panel says, last frame: the rooms walked with
+windows of their own, the windows opened as ways out, shut (not seen through, far, the budget), the ways out in all and
+the client's own (its doors and openings), whether the outdoors is drawn, and each window's verdict with its rays.
+
+**Offline** (2026-10-21). `seethrough_tests`: the new guards against `Wow.exe` (none in a hooked function's first bytes,
+the statics and calls they name the runtime's); `PlanInside`, `ViewOf` (the CPortalView layout, (x + 1) / 2, the depth)
+and `LookOut` on a test room (glazed outside: open from three eyes; no outside: open; a blind wall: shut, met from behind
+0.45 yd past the glass; a window painted on the wall: shut); the inn's rooms' 17 windows through the real reader
+(`BuildInside` over `glass::Load` on the shipped tables); with the map scan's files, each room's windows from eyes all over
+it (1.5 yd apart, 1.8 to 4.5 yd over its floor) against its surfaces and the shell's walls and glass: the ground floor's
+18, 19, 20 and 21 open from 90, 93, 96 and 99.6% of them; the upper ones 22, 23, 24 from 78, 85 and 68%; the rooms
+upstairs' 26..28 and 30..33 from 92 to 100%; the dormers' sloped inner panes 25 and 29 from 0.2 and 3% (their rays meet
+the dormer's roof and cheeks from inside) and the hall's 0 from 21% (where its rays leave by the dormer's upright pane).
+From the kitchen at (0, 6, 3) looking at its south wall, 18 and 19 open with nine of nine rays each; their views
+(0.442..0.561 tall, 0.744..0.985 and 0.023..0.262 wide) merge into one rectangle across the screen, and the street 20 yd
+past each of their 18 glass points lies inside it, so the outdoor cull takes it in. `glass_tests` "inside": the game's
+sequence on WARP for the kitchen's own glass (group 5's batch, `mm_elwynn_wnd_int__01`, the inn as Goldshire's, Glass's
+constants as indoors over the kitchen's window grid): right after the client's draw 911 pixels of the open window 19 and
+924 of the shut 18, none without a window; through the state block alone all yellow, as before the capture fix; with every
+constant put back the same 911 / 924, whole and split by window; the plain view over two backdrops: what's behind shows
+through all 242 of 19's glass pixels and none of its 328 lead and frame pixels or of 18's 924 (the old "blue" test counted
+154 of 18's: the inside look of the glass is sky-blue by day; both cases now test what changes with the backdrop).
+
+**Only the game can confirm**: that the client draws the street, the sky and the weather through a window as through the
+door (the panel: ways out in all against the client's own, and "the outdoors drawn through them" with no door on the
+screen); the frame rate with the street drawn from inside; the outer panes' culling from inside (MOMT 0x11: one-sided) and
+nothing of the shell left standing in the view; the street's fog (the inn's MFOG, about 83 yd) and light; rain seen outside
+and none falling in the room; Modern Water's fog over the glass; that Glass's inside look and the lead mask hold on the
+real device; the dormers' sloped panes shut and their outside's back faces not seen through.

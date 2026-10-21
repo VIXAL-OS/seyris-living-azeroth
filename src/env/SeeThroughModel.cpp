@@ -87,38 +87,52 @@ namespace wxl_livingazeroth::seethrough
         return windows.data() + byGroup[group].first;
     }
 
+    namespace
+    {
+        // A WMO's exterior windows (each with the room behind it) or its interior groups' (`inside`: none behind them).
+        RootWindows Build(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count, bool inside)
+        {
+            RootWindows r;
+            r.path = path;
+            r.byGroup.assign(count, { 0u, 0u });
+            for (const glass::Window& w : all)
+            {
+                if (w.path != path || ((w.flags & kWindowExterior) != 0) == inside || w.group >= count) continue;
+                if (!Finite3(w.center) || !Finite3(w.normal) || !(w.halfWidth > 0.0f) || !(w.halfHeight > 0.0f)) continue;
+                SeeWindow s;
+                s.ordinal = w.ordinal;
+                s.group = w.group;
+                s.kind = w.kind;
+                for (int k = 0; k < 3; ++k) { s.center[k] = w.center[k]; s.normal[k] = w.normal[k]; }
+                glass::WindowFrame(s.normal, s.along, s.up);
+                s.halfWidth = w.halfWidth;
+                s.halfHeight = w.halfHeight;
+                s.thickness = w.thickness;
+                s.interior = inside ? -1 : InteriorBehind(s.center, s.normal, groups, count);
+                r.windows.push_back(s);
+            }
+            std::stable_sort(r.windows.begin(), r.windows.end(), [](const SeeWindow& a, const SeeWindow& b) {
+                return a.group != b.group ? a.group < b.group : a.ordinal < b.ordinal;
+            });
+            for (uint32_t i = 0; i < r.windows.size(); ++i)
+            {
+                auto& slot = r.byGroup[r.windows[i].group];
+                if (!slot.second) slot.first = i;
+                ++slot.second;
+                if (!inside) (r.windows[i].interior >= 0 ? r.real : r.fake) += 1;
+            }
+            return r;
+        }
+    }
+
     RootWindows BuildRoot(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count)
     {
-        RootWindows r;
-        r.path = path;
-        r.byGroup.assign(count, { 0u, 0u });
-        for (const glass::Window& w : all)
-        {
-            if (w.path != path || !(w.flags & kWindowExterior) || w.group >= count) continue;
-            if (!Finite3(w.center) || !Finite3(w.normal) || !(w.halfWidth > 0.0f) || !(w.halfHeight > 0.0f)) continue;
-            SeeWindow s;
-            s.ordinal = w.ordinal;
-            s.group = w.group;
-            s.kind = w.kind;
-            for (int k = 0; k < 3; ++k) { s.center[k] = w.center[k]; s.normal[k] = w.normal[k]; }
-            glass::WindowFrame(s.normal, s.along, s.up);
-            s.halfWidth = w.halfWidth;
-            s.halfHeight = w.halfHeight;
-            s.thickness = w.thickness;
-            s.interior = InteriorBehind(s.center, s.normal, groups, count);
-            r.windows.push_back(s);
-        }
-        std::stable_sort(r.windows.begin(), r.windows.end(), [](const SeeWindow& a, const SeeWindow& b) {
-            return a.group != b.group ? a.group < b.group : a.ordinal < b.ordinal;
-        });
-        for (uint32_t i = 0; i < r.windows.size(); ++i)
-        {
-            auto& slot = r.byGroup[r.windows[i].group];
-            if (!slot.second) slot.first = i;
-            ++slot.second;
-            (r.windows[i].interior >= 0 ? r.real : r.fake) += 1;
-        }
-        return r;
+        return Build(path, all, groups, count, false);
+    }
+
+    RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, size_t groupCount)
+    {
+        return Build(path, all, nullptr, groupCount, true);
     }
 
     namespace
@@ -548,6 +562,114 @@ namespace wxl_livingazeroth::seethrough
     void ToCRect(const Rect& r, float out[4])
     {
         out[0] = r.minY; out[1] = r.minX; out[2] = r.maxY; out[3] = r.maxX;
+    }
+
+    bool FacingIn(const SeeWindow& w, const float camLocal[3])
+    {
+        const float d[3] = { camLocal[0] - w.center[0], camLocal[1] - w.center[1], camLocal[2] - w.center[2] };
+        return Dot(d, w.normal) < -kFacing;
+    }
+
+    PortalView ViewOf(const Rect& screen, float depth)
+    {
+        PortalView v;
+        FrustumRect(screen, v.rect);
+        v.maxViewDepth = std::isfinite(depth) && depth > 0.0f ? depth : 0.0f;
+        return v;
+    }
+
+    bool FarthestDepth(const float (*corners)[3], int count, const float model[16], const float eye[3], const float viewProj[16], float& out)
+    {
+        bool any = false;
+        out = 0.0f;
+        for (int i = 0; corners && i < count; ++i)
+        {
+            float world[4], clip[4];
+            Transform(corners[i], 1.0f, model, world);
+            const float rel[3] = { world[0] - eye[0], world[1] - eye[1], world[2] - eye[2] };
+            Transform(rel, 1.0f, viewProj, clip);
+            if (!std::isfinite(clip[3])) continue;
+            out = any ? std::max(out, clip[3]) : clip[3];
+            any = true;
+        }
+        return any;
+    }
+
+    void PlanInside(const SeeWindow* windows, uint32_t count, const float camLocal[3], const Rect& walk, const float model[16],
+                    const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out)
+    {
+        out.assign(count, WindowPlan{});
+        if (!windows || !Finite3(camLocal)) return;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const SeeWindow& w = windows[i];
+            WindowPlan& p = out[i];
+            if (!FacingIn(w, camLocal)) continue;
+            float quad[4][3];
+            Corners(w, kQuadGrow, quad);
+            Rect screen, clip;
+            if (!ScreenRect(quad, 4, model, eye, viewProj, screen) || !Overlap(screen, walk, clip)) continue;
+            p.state = kShut;
+            p.clip = clip;
+            p.screen = screen;
+            FarthestDepth(quad, 4, model, eye, viewProj, p.depth);
+            const float d[3] = { camLocal[0] - w.center[0], camLocal[1] - w.center[1], camLocal[2] - w.center[2] };
+            if (std::sqrt(Dot(d, d)) <= kInsideRange && budget > 0)
+            {
+                p.candidate = true;
+                --budget;
+            }
+        }
+    }
+
+    void LookOut(const SeeWindow& w, const float eye[3], const RoomMesh& room, const Shell* shells, size_t shellCount,
+                 const SightPoints* points, Sight& out)
+    {
+        out = Sight{};
+        if (!Finite3(eye)) return;
+        out.onGlass = points && points->n > 0;
+        const int rays = out.onGlass ? points->n : static_cast<int>(sizeof(kSight) / sizeof(kSight[0]));
+        for (int i = 0; i < rays; ++i)
+        {
+            float d[3];
+            for (int k = 0; k < 3; ++k)
+                d[k] = (out.onGlass ? points->p[i][k] : w.center[k] + w.along[k] * kSight[i][0] * w.halfWidth + w.up[k] * kSight[i][1] * w.halfHeight) - eye[k];
+            const float len = std::sqrt(Dot(d, d));
+            ++out.rays;
+            // what's met first past the glass (from a hair before it: an outer pane in the same plane is its own way out)
+            enum { kNothing, kGlass, kSurfaceFront, kSurfaceBack } met = kSurfaceFront;   // (no ray: neither)
+            float best = len + kSightReach;
+            if (len > 1e-3f && std::isfinite(len))
+            {
+                met = kNothing;
+                for (float& v : d) v /= len;
+                const float from = len - 0.02f;
+                auto take = [&](const RoomMesh* m, bool glass) {
+                    if (!m || m->Empty()) return;
+                    float t = 0.0f;
+                    const RoomMesh::Hit h = m->First(eye, d, from, best, &t);
+                    if (h == RoomMesh::kNone || !(t < best)) return;
+                    best = t;
+                    met = glass ? kGlass : h == RoomMesh::kFront ? kSurfaceFront : kSurfaceBack;
+                };
+                take(&room, false);
+                for (size_t s = 0; shells && s < shellCount; ++s)
+                {
+                    take(shells[s].walls, false);
+                    take(shells[s].glass, true);
+                }
+            }
+            const RoomMesh::Hit as = met == kGlass || met == kNothing ? RoomMesh::kFront : met == kSurfaceBack ? RoomMesh::kBack : RoomMesh::kNone;
+            if (i == 0) out.middle = as;
+            if (as == RoomMesh::kFront) { ++out.front; continue; }
+            ++(as == RoomMesh::kBack ? out.back : out.none);
+            if (out.firstMiss < 0)
+            {
+                out.firstMiss = i;
+                out.missHit = as;
+                out.missDepth = std::isfinite(best - len) ? best - len : 0.0f;
+            }
+        }
     }
 
     int WindowOf(const float p[3], const SeeWindow* windows, uint32_t count)

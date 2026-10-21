@@ -38,6 +38,18 @@
 //    walked group's glass batches (GlassSightPoints); the verdict held per window (its own thresholds to open and to stay,
 //    a change after 0.35 s): "certain attic windows shouldn't be able to see through the roof" (the user, 2026-10-20);
 //    "it works at some angles and goes back to the fake room at others lol" (2026-10-21).
+//  - From inside (SeeThroughFromInside, off by default; "windows should be see-through from the inside as well", the user,
+//    2026-10-21, in the inn's ground floor): the client draws the outdoors from inside only through its ways out, the
+//    exterior portal views its walk from the camera's groups records for each portal into an exterior group (the outdoors
+//    culled through the rectangle round them, the sky drawn in it), so the street never shows behind a window. In that walk
+//    (s_interiorPass 1, the camera's building in the whitelist), each window of a room it reaches (GlassWindows' rows of
+//    interior groups) that faces the camera from inside, lies on the screen within the walk's rectangle and within 40 yd
+//    becomes a way out of its own: the view the client would make of a portal there (its screen rectangle, its farthest
+//    depth) pushed and merged through the client's own PushExteriorPortalView, MergeIntoWorldRect and
+//    MergeIntoFrustumRect, where the street is really seen through it (LookOut: rays through its glass leave by the
+//    building's own window glass, not through a wall or the roof from inside, whose faces are culled). The room's glass
+//    batch is then deferred and drawn again over the street as from outside (SeeThroughRedraw, SeeThroughOpacity). Nothing
+//    else of the walk changes; the outdoors, the sky and the weather come as through an open door.
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
@@ -54,6 +66,8 @@ namespace wxl_livingazeroth::seethrough
         float opacity = 0.35f;      // SeeThroughOpacity: the glass's share over the room behind it (0..1)
         int   redraw = 1;           // SeeThroughRedraw: 1 per pixel (the lead mask: the panes see-through, the lead, frame and
                                     // shutters opaque; only where the room is seen); 0 the whole glass at the opacity (2026-10-20)
+        int   fromInside = 0;       // SeeThroughFromInside: from inside, the street through the room's own windows (a way out
+                                    // each, as a door is); off by default, not tied to `enabled`
     };
     Settings& Config();
 

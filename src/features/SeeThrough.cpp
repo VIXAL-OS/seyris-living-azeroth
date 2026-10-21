@@ -56,6 +56,12 @@ namespace wxl_livingazeroth::seethrough
             unsigned passed = 0, captureFailed = 0, targetMoved = 0, dropped = 0;
             unsigned blind = 0;      // shut: the room not seen through the window from here (SeesRoom)
             unsigned opaque = 0;     // redrawn opaque: the batch's shader without the redraw (or its glass off)
+            // From inside (SeeThroughFromInside): the rooms walked with windows of their own, the ways out added (windows
+            // opened), shut (`insideBlind` of them: the street not seen through it), far or over the budget; after the
+            // walk, the exterior portal views in all (the client's own and ours) and whether the outdoors is drawn.
+            unsigned insideGroups = 0, insideOpened = 0, insideShut = 0, insideBlind = 0, insideFar = 0;
+            unsigned ways = 0;
+            int outdoors = -1;       // -1 no walk from inside seen, 0 no outdoors (the frustum view's depth < 0), 1 drawn
             // Each window on the screen and facing the camera: open, or why it's shut (the panel's list, so an in-game check
             // says what happened: "see-through windows don't seem to work anymore now", the user, 2026-10-21).
             enum Why : uint8_t { kOpen, kFake, kFar, kBudget, kUnloaded, kNoMesh, kBlind, kNotReached };
@@ -65,6 +71,7 @@ namespace wxl_livingazeroth::seethrough
                 Why why = kOpen;
                 Sight sight;
                 bool held = false;   // the verdict that stands isn't this frame's rays' (Hold: not yet kGateHold seconds)
+                bool inside = false; // a room's own window from inside (SeeThroughFromInside)
             };
             static constexpr unsigned kNotes = 24;
             Note notes[kNotes];
@@ -73,7 +80,7 @@ namespace wxl_livingazeroth::seethrough
             uint32_t replayBits = 0;
         };
 
-        void NoteWindow(Counts& c, uint32_t ordinal, Counts::Why why, const Sight* sight = nullptr, bool held = false)
+        void NoteWindow(Counts& c, uint32_t ordinal, Counts::Why why, const Sight* sight = nullptr, bool held = false, bool inside = false)
         {
             if (c.noteCount >= Counts::kNotes) return;
             Counts::Note& n = c.notes[c.noteCount++];
@@ -81,6 +88,7 @@ namespace wxl_livingazeroth::seethrough
             n.why = why;
             n.sight = sight ? *sight : Sight{};
             n.held = held;
+            n.inside = inside;
         }
         Counts g_now, g_last;
         unsigned g_everOpened = 0, g_everRedrawn = 0;
@@ -192,7 +200,7 @@ namespace wxl_livingazeroth::seethrough
 
         bool Active()
         {
-            return g_settings.enabled && g_guards == 1 && !g_faulted && g_hookedWalk && g_hookedDraw && g_hookedScene;
+            return (g_settings.enabled || g_settings.fromInside) && g_guards == 1 && !g_faulted && g_hookedWalk && g_hookedDraw && g_hookedScene;
         }
 
         // --- the buildings: per root, its windows and the rooms behind them ----------------------------------------
@@ -203,6 +211,8 @@ namespace wxl_livingazeroth::seethrough
             bool whitelisted = false;
             std::vector<GroupInfo> groups;
             RootWindows windows;
+            RootWindows inside;                   // its interior groups' own windows (from inside)
+            std::vector<uint32_t> exteriorGroups; // its exterior groups (from inside: the building's outside, LookOut's shells)
             std::vector<uint8_t> glassMaterial;   // per material: 1 glass (the room's surfaces leave it out)
         };
         std::unordered_map<const void*, RootEntry> g_roots;
@@ -232,14 +242,19 @@ namespace wxl_livingazeroth::seethrough
                 return &e;
             }
             e.windows = BuildRoot(e.path, glass::Windows().All(), e.groups.data(), e.groups.size());
+            e.inside = BuildInside(e.path, glass::Windows().All(), e.groups.size());
+            for (uint32_t g = 0; g < count; ++g)
+                if (e.groups[g].flags & client::kExteriorGroup) e.exteriorGroups.push_back(g);
             e.glassMaterial = GlassMaterials(r);
             if (g_api && !g_logged[e.path])
             {
                 g_logged[e.path] = true;
                 char path[260];
                 ReadPath(r, path);
-                g_api->Log(WXL_LOG_INFO, kTag, "see-through windows: %s: %u windows in its exterior groups, %u with a room behind, %u fake",
-                           path, static_cast<unsigned>(e.windows.windows.size()), e.windows.real, e.windows.fake);
+                g_api->Log(WXL_LOG_INFO, kTag, "see-through windows: %s: %u windows in its exterior groups, %u with a room behind, %u fake; "
+                           "%u in its rooms (from inside), %u exterior groups",
+                           path, static_cast<unsigned>(e.windows.windows.size()), e.windows.real, e.windows.fake,
+                           static_cast<unsigned>(e.inside.windows.size()), static_cast<unsigned>(e.exteriorGroups.size()));
             }
             return &e;
         }
@@ -253,6 +268,12 @@ namespace wxl_livingazeroth::seethrough
             unsigned opened = 0;
             float cam[3] = {}, eye[3] = {};   // the client's camera in the WMO's space (the walk's) and the view's eye (world)
             bool haveCam = false;
+            bool inside = false;           // an interior group walked from inside: its own windows (RootEntry::inside)
+            const SeeWindow* Windows(uint32_t& count) const
+            {
+                count = 0;
+                return root ? (inside ? root->inside : root->windows).Group(group, count) : nullptr;
+            }
         };
         std::unordered_map<uint64_t, GroupFrame> g_frame;
         unsigned g_budget = kMaxOpenPerFrame;
@@ -325,18 +346,21 @@ namespace wxl_livingazeroth::seethrough
             RoomMesh mesh;
         };
         std::unordered_map<const void*, MeshEntry> g_meshes;   // by the room's group object
+        std::unordered_map<const void*, MeshEntry> g_glassMeshes;   // an exterior group's glass alone (from inside), the same way
         unsigned g_meshBuilds = 0;                             // this frame's: one a frame (a big room takes a few ms)
 
         // The room's surfaces (its rendered triangles but its glass), built the first time a window of it is a candidate
-        // and again whenever the group's arrays move; null this frame when the frame's one build went elsewhere.
-        const RoomMesh* MeshOf(const RootEntry& r, const void* root, uint32_t room)
+        // and again whenever the group's arrays move; null this frame when the frame's one build went elsewhere. With
+        // `glassOnly`, its glass alone (from inside: the building's own window panes, the way out).
+        const RoomMesh* MeshOf(const RootEntry& r, const void* root, uint32_t room, bool glassOnly = false)
         {
             const uint8_t* group = nullptr;
             GroupArrays a;
             if (!ReadGroupArrays(static_cast<const uint8_t*>(root), room, group, a)) return nullptr;
             if (a.vertexCount == 0 || a.vertexCount > 65536 || a.indexCount == 0 || a.indexCount > (3u << 20) || a.batchCount == 0 || a.batchCount > 4096)
                 return nullptr;
-            if (const auto it = g_meshes.find(group); it != g_meshes.end())
+            std::unordered_map<const void*, MeshEntry>& meshes = glassOnly ? g_glassMeshes : g_meshes;
+            if (const auto it = meshes.find(group); it != meshes.end())
             {
                 const MeshEntry& e = it->second;
                 if (e.arrays.vertices == a.vertices && e.arrays.indices == a.indices && e.arrays.batches == a.batches &&
@@ -346,8 +370,8 @@ namespace wxl_livingazeroth::seethrough
             }
             if (g_meshBuilds) return nullptr;
             ++g_meshBuilds;
-            if (g_meshes.size() > 64) g_meshes.clear();
-            MeshEntry& e = g_meshes[group];
+            // (the caches are capped once a frame, in Update: from inside the room's and the shell's are held together)
+            MeshEntry& e = meshes[group];
             e = MeshEntry{};
             e.arrays = a;
             e.generation = glass::Generation();
@@ -366,7 +390,8 @@ namespace wxl_livingazeroth::seethrough
                 std::memcpy(&start, m + client::kMobaStart, 4);
                 std::memcpy(&count, m + client::kMobaCount, 2);
                 const uint8_t material = m[client::kMobaMaterial];
-                if (material < r.glassMaterial.size() && r.glassMaterial[material]) continue;   // a window's inner face
+                const bool isGlass = material < r.glassMaterial.size() && r.glassMaterial[material];
+                if (isGlass != glassOnly) continue;   // (a room: not a window's inner face)
                 ranges.emplace_back(start, count);
             }
             e.ok = e.mesh.Build(vertices.data(), a.vertexCount, indices.data(), a.indexCount, ranges);
@@ -436,10 +461,9 @@ namespace wxl_livingazeroth::seethrough
         float g_frameSeconds = 0.0f;   // the last frame's length (Update)
         ULONGLONG g_frameTick = 0;
 
-        bool SeenThrough(const void* instance, uint32_t group, uint32_t index, const SeeWindow& w, const float eye[3], const RoomMesh& room,
-                         const std::vector<SightPoints>* points, Sight& sight, bool& held)
+        // The verdict on what a window's rays met this frame (`sight`), held (Hold); `held` when it isn't this frame's.
+        bool Held(const void* instance, uint32_t group, uint32_t index, const Sight& sight, bool& held)
         {
-            LookThrough(w, eye, room, points && index < points->size() ? &(*points)[index] : nullptr, sight);
             const ULONGLONG now = GetTickCount64();
             if (g_gates.size() > 4096) g_gates.clear();
             GateEntry& e = g_gates[(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 20) ^ (static_cast<uint64_t>(group) << 8) ^ index];
@@ -449,6 +473,13 @@ namespace wxl_livingazeroth::seethrough
             const bool open = Hold(e.gate, want, g_frameSeconds);
             held = open != want;
             return open;
+        }
+
+        bool SeenThrough(const void* instance, uint32_t group, uint32_t index, const SeeWindow& w, const float eye[3], const RoomMesh& room,
+                         const std::vector<SightPoints>* points, Sight& sight, bool& held)
+        {
+            LookThrough(w, eye, room, points && index < points->size() ? &(*points)[index] : nullptr, sight);
+            return Held(instance, group, index, sight, held);
         }
 
         // The group render callback while our walk runs: notes the room reached, then the client's (the sort table's).
@@ -583,10 +614,150 @@ namespace wxl_livingazeroth::seethrough
             __except (EXCEPTION_EXECUTE_HANDLER) { Fault("the portal walk"); }
         }
 
+        // --- from inside: the room's own windows as ways out (SeeThroughFromInside) ------------------------------------
+        using ViewFn = void(__cdecl*)(PortalView* view);
+        unsigned g_insideBudget = kMaxInsidePerFrame;
+
+        // A window as the client's own way out: the view AddExteriorPortalView would make of a portal into an exterior
+        // group there, pushed and merged as it does (the outdoors culled through the rectangle round the ways out, the sky
+        // drawn in it).
+        void AddWayOut(PortalView& view)
+        {
+            reinterpret_cast<ViewFn>(client::kPushExteriorPortalView)(&view);
+            reinterpret_cast<ViewFn>(client::kMergeIntoWorldRect)(&view);
+            reinterpret_cast<ViewFn>(client::kMergeIntoFrustumRect)(&view);
+        }
+
+        // After the client's walk from inside reached `group` through `rect` (any depth): each of its own windows facing the
+        // camera from inside, on the screen within `rect` and in range, decided once a frame (at the first reach that sees
+        // it), opens as a way out where the street is seen through it.
+        void WalkInside(void* root, uint32_t group, float* rect)
+        {
+            uint32_t cullValid = 0;
+            const void* callback = nullptr;
+            const void* instance = nullptr;
+            const void* viewer = nullptr;
+            if (!ReadU32(client::kCullStateValid, cullValid) || !cullValid) return;
+            if (!ReadPtr(client::kRenderCallback, callback) || callback != reinterpret_cast<const void*>(client::kAddToSortTable)) return;
+            // (the camera's own building: RenderWithCallback's instance; not a moving one's)
+            if (!ReadPtr(client::kRenderParam, instance) || !instance || !ReadPtr(client::kViewerMapObjDef, viewer) || viewer != instance) return;
+            const void* owner = nullptr;
+            if (!ReadPtr(reinterpret_cast<uintptr_t>(instance) + client::kDefOwner, owner) || owner != root) return;
+            const RootEntry* r = RootFor(root);
+            if (!r || !r->whitelisted || group >= r->groups.size() || (r->groups[group].flags & client::kExteriorGroup)) return;
+            uint32_t count = 0;
+            const SeeWindow* windows = r->inside.Group(group, count);
+            if (!windows) return;
+            GroupFrame& f = g_frame[Key(instance, group)];
+            if (!f.root)
+            {
+                f.root = r;
+                f.group = group;
+                f.inside = true;
+                f.states.assign(count, kUnseen);
+                ++g_now.insideGroups;
+            }
+            if (!f.inside || f.states.size() != count) return;
+            float cam[3], model[16], viewProj[16], eye[3], crect[4];
+            if (!ReadFloats(client::kCamPosLocal, 3, cam) || !ReadFloats(client::kMapObjToWorld, 16, model) ||
+                !ReadFloats(client::kViewProj, 16, viewProj) || !ReadFloats(client::kActiveWorldView, 3, eye) ||
+                !ReadFloats(reinterpret_cast<uintptr_t>(rect), 4, crect))
+                return;
+            for (int k = 0; k < 3; ++k) { f.cam[k] = cam[k]; f.eye[k] = eye[k]; }
+            f.haveCam = true;
+            std::vector<WindowPlan> plan;
+            PlanInside(windows, count, cam, FromCRect(crect), model, eye, viewProj, g_insideBudget, plan);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const WindowPlan& p = plan[i];
+                if (f.states[i] != kUnseen)   // decided at an earlier reach this frame (its share of the budget back)
+                {
+                    g_insideBudget += p.candidate ? 1 : 0;
+                    continue;
+                }
+                if (p.state != kShut) continue;   // not seen from this reach
+                if (!p.candidate)
+                {
+                    f.states[i] = kShut;
+                    ++g_now.insideShut;
+                    ++g_now.insideFar;
+                    const float d[3] = { cam[0] - windows[i].center[0], cam[1] - windows[i].center[1], cam[2] - windows[i].center[2] };
+                    NoteWindow(g_now, windows[i].ordinal, d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > kInsideRange * kInsideRange ? Counts::kFar : Counts::kBudget,
+                               nullptr, false, true);
+                    continue;
+                }
+                // the street seen through it: its rays leave by the building's own glass, not through a wall or the roof
+                // from inside (the room's surfaces, its glass aside; the building's outside, walls and glass apart)
+                const RoomMesh* room = MeshOf(*r, root, group);
+                Shell shells[4];
+                size_t shellCount = 0;
+                bool meshes = room != nullptr;
+                for (const uint32_t g : r->exteriorGroups)
+                {
+                    if (shellCount >= 4) break;
+                    shells[shellCount].walls = MeshOf(*r, root, g);
+                    shells[shellCount].glass = MeshOf(*r, root, g, true);
+                    meshes = meshes && shells[shellCount].walls && shells[shellCount].glass;
+                    ++shellCount;
+                }
+                const std::vector<SightPoints>* points = PointsOf(*r, root, group, windows, count);
+                Sight sight;
+                bool held = false, open = false;
+                Counts::Why why = Counts::kNoMesh;
+                if (meshes)
+                {
+                    LookOut(windows[i], cam, *room, shells, shellCount, points && i < points->size() ? &(*points)[i] : nullptr, sight);
+                    open = Held(instance, group, i, sight, held);
+                    why = open ? Counts::kOpen : Counts::kBlind;
+                }
+                if (open)
+                {
+                    PortalView view = ViewOf(p.screen, p.depth);
+                    AddWayOut(view);
+                    f.states[i] = kOpened;
+                    ++f.opened;
+                    ++g_now.insideOpened;
+                }
+                else
+                {
+                    // (not seen through from here, or the surfaces not all read yet: one a frame, the next frame's)
+                    f.states[i] = kShut;
+                    ++g_now.insideShut;
+                    g_now.insideBlind += meshes ? 1 : 0;
+                }
+                NoteWindow(g_now, windows[i].ordinal, why, &sight, held, true);
+            }
+        }
+
+        void WalkInsideSafe(void* root, uint32_t group, float* rect, uint32_t depth)
+        {
+            __try
+            {
+                WalkInside(root, group, rect);
+                // after the walk from the camera's group: the ways out in all and whether the outdoors is drawn (the panel's)
+                if (depth == 0)
+                {
+                    uint32_t ways = 0;
+                    float outdoors = -1.0f;
+                    if (ReadU32(client::kExteriorPortalViews + client::kArrayCount, ways)) g_now.ways = ways;
+                    if (ReadFloats(client::kFrustumView + client::kViewDepth, 1, &outdoors)) g_now.outdoors = outdoors >= 0.0f ? 1 : 0;
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { Fault("the walk from inside"); }
+        }
+
         void __fastcall hkWalk(void* root, void* edx, uint32_t group, uint32_t fromGroup, float* rect, uint32_t depth, int interior)
         {
             g_origWalk(root, edx, group, fromGroup, rect, depth, interior);
-            if (depth != 0 || g_inWalk || !Active()) return;
+            if (g_inWalk || !Active()) return;
+            uint32_t interiorPass = 0;
+            if (!ReadU32(client::kInteriorPass, interiorPass)) return;
+            if (interiorPass)
+            {
+                if (g_settings.fromInside) WalkInsideSafe(root, group, rect, depth);
+                return;
+            }
+            if (depth != 0 || !g_settings.enabled) return;
             WalkSafe(root, group, rect);
         }
 
@@ -1190,7 +1361,10 @@ namespace wxl_livingazeroth::seethrough
         g_frame.clear();
         if (g_roots.size() > 2048) g_roots.clear();   // only here: nothing of this frame points at them now
         g_budget = kMaxOpenPerFrame;
+        g_insideBudget = kMaxInsidePerFrame;
         g_meshBuilds = 0;
+        if (g_meshes.size() > 64) g_meshes.clear();   // (here, where nothing of the frame holds one)
+        if (g_glassMeshes.size() > 64) g_glassMeshes.clear();
         {
             const ULONGLONG tick = GetTickCount64();
             g_frameSeconds = g_frameTick ? std::min(0.25f, static_cast<float>(tick - g_frameTick) / 1000.0f) : 0.0f;
@@ -1226,7 +1400,7 @@ namespace wxl_livingazeroth::seethrough
         if (it == g_frame.end() || !it->second.opened || !it->second.root) return;
         const GroupFrame& f = it->second;
         uint32_t count = 0;
-        const SeeWindow* windows = f.root->windows.Group(f.group, count);
+        const SeeWindow* windows = f.Windows(count);   // (an exterior group's, or a room's own from inside)
         if (!windows || count != f.states.size()) return;
         (void)root;
         g_draw.frame = &f;
@@ -1294,12 +1468,29 @@ namespace wxl_livingazeroth::seethrough
             api->UiCheckbox("debug view (not saved): the redraw's pixels by what the shader decided: magenta an open window's glass (through "
                             "grey to green as it's less glass), green its lead and frame (opaque), cyan a shut window, yellow no window "
                             "found##stdebug", &g_debugView);
+        api->UiCheckbox("from inside: the street through the room's own windows where it's really seen through them, as through an open "
+                        "door, the glass drawn over it the same way (SeeThroughFromInside; the inn only, for now; it doesn't need the "
+                        "first box)##stinside", &g_settings.fromInside);
         api->UiText(StatusLine());
         char line[800];
         std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget; "
                       "%u of them: the room not seen through it from here), %u rooms added",
                       g_last.groups, g_last.opened, g_last.shut, g_last.blind, g_last.groupsAdded);
         api->UiText(line);
+        if (g_settings.fromInside)
+        {
+            // what the walk from inside did: the ways out it found (the client's doors and openings) and the windows added to
+            // them, and whether the outdoors is drawn at all (with no way out on the screen it isn't, and the windows are as
+            // they were)
+            const unsigned own = g_last.ways >= g_last.insideOpened ? g_last.ways - g_last.insideOpened : 0;
+            std::snprintf(line, sizeof(line), "From inside last frame: %u rooms with windows of their own walked, %u windows opened as ways out, %u shut "
+                          "(%u of them: the street not seen through it from here; %u far or over the budget); ways out in all %u (the client's own "
+                          "doors and openings %u); the outdoors %s",
+                          g_last.insideGroups, g_last.insideOpened, g_last.insideShut, g_last.insideBlind, g_last.insideFar, g_last.ways, own,
+                          g_last.outdoors < 0 ? "- (the camera isn't in a building)" : g_last.outdoors ? "drawn through them"
+                                                                                       : "not drawn (no way out on the screen)");
+            api->UiText(line);
+        }
         std::snprintf(line, sizeof(line), "Glass batches: %u in opened groups, %u kept opaque, %u deferred, %u drawn over the room (%u opaque: no redraw "
                       "in their shader); %u drawn as they were", g_last.glassBatches, g_last.kept, g_last.deferred, g_last.redrawn, g_last.opaque, g_last.passed);
         api->UiText(line);
@@ -1356,23 +1547,32 @@ namespace wxl_livingazeroth::seethrough
         {
             const Counts::Note& n = g_last.notes[i];
             const Sight& s = n.sight;
-            char rays[320] = "";
+            char rays[360] = "";
             if ((n.why == Counts::kOpen || n.why == Counts::kBlind || n.why == Counts::kNotReached) && s.rays)
             {
-                std::snprintf(rays, sizeof(rays), "; of %d rays through its %s: %d see the room from inside, %d meet it from outside, %d nothing of it "
-                              "(to open %d seeing it, more than either; to stay %d)%s", s.rays, s.onGlass ? "glass" : "rectangle", s.front, s.back, s.none,
-                              kOpenFront, kStayFront, n.held ? "; held, not yet this frame's" : "");
+                if (n.inside)
+                    std::snprintf(rays, sizeof(rays), "; of %d rays through its %s: %d see the street (out by the building's own glass or into the open), "
+                                  "%d meet a wall or the roof from inside (culled: the street would show through it), %d a surface from the front (its "
+                                  "reveal, the building's outside) (to open %d seeing it, more than either; to stay %d)%s", s.rays,
+                                  s.onGlass ? "glass" : "rectangle", s.front, s.back, s.none, kOpenFront, kStayFront, n.held ? "; held, not yet this frame's" : "");
+                else
+                    std::snprintf(rays, sizeof(rays), "; of %d rays through its %s: %d see the room from inside, %d meet it from outside, %d nothing of it "
+                                  "(to open %d seeing it, more than either; to stay %d)%s", s.rays, s.onGlass ? "glass" : "rectangle", s.front, s.back, s.none,
+                                  kOpenFront, kStayFront, n.held ? "; held, not yet this frame's" : "");
                 if (s.missHit == RoomMesh::kBack)
                 {
                     char miss[80];
-                    std::snprintf(miss, sizeof(miss), "; the first from outside %.1f yd past the glass", s.missDepth);
+                    std::snprintf(miss, sizeof(miss), "; the first from %s %.1f yd past the glass", n.inside ? "behind" : "outside", s.missDepth);
                     std::strncat(rays, miss, sizeof(rays) - std::strlen(rays) - 1);
                 }
             }
             static const char* const kWhy[] = { "open", "shut: fake (nothing modelled behind it)", "shut: too far", "shut: over the frame's budget",
                                                 "shut: its room's group not loaded", "shut: its room's surfaces not read yet (one room a frame)",
                                                 "shut: its room isn't seen through it from here", "shut: the walk didn't reach its room" };
-            std::snprintf(line, sizeof(line), "  window %u: %s%s", n.ordinal, kWhy[n.why], rays);
+            static const char* const kWhyInside[] = { "open: a way out, the street behind its glass", "-", "shut: too far (40 yd)", "shut: over the frame's budget",
+                                                      "-", "shut: the room's or the building's surfaces not all read yet (one a frame)",
+                                                      "shut: the street isn't seen through it from here", "-" };
+            std::snprintf(line, sizeof(line), "  %swindow %u: %s%s", n.inside ? "from inside, " : "", n.ordinal, (n.inside ? kWhyInside : kWhy)[n.why], rays);
             api->UiText(line);
         }
     }
@@ -1380,12 +1580,14 @@ namespace wxl_livingazeroth::seethrough
     const char* StatusLine()
     {
         static char line[320];
-        const char* state = !g_settings.enabled ? "off (SeeThroughWindows 0)"
+        const char* state = !g_settings.enabled && !g_settings.fromInside ? "off (SeeThroughWindows 0, SeeThroughFromInside 0)"
                           : g_faulted ? "off after a fault"
                           : g_guards != 1 ? "off (the client differs)"
-                          : (!g_hookedWalk || !g_hookedDraw || !g_hookedScene) ? "off (a hook is missing)" : "on";
-        std::snprintf(line, sizeof(line), "%s; %s; last frame %u windows opened, %u glass batches deferred, %u redrawn; faults %u",
-                      g_status, state, g_last.opened, g_last.deferred, g_last.redrawn, g_faults);
+                          : (!g_hookedWalk || !g_hookedDraw || !g_hookedScene) ? "off (a hook is missing)"
+                          : !g_settings.enabled ? "on from inside only"
+                          : !g_settings.fromInside ? "on from outside only" : "on, from outside and inside";
+        std::snprintf(line, sizeof(line), "%s; %s; last frame %u windows opened, %u from inside, %u glass batches deferred, %u redrawn; faults %u",
+                      g_status, state, g_last.opened, g_last.insideOpened, g_last.deferred, g_last.redrawn, g_faults);
         return line;
     }
 }

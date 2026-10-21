@@ -4105,9 +4105,13 @@ namespace
         uint32_t start = 0, count = 0, minIndex = 0, maxIndex = 0;
     };
 
-    bool ReadInnGroup(const std::filesystem::path& scan, InnGroup& out)
+    // The inn's group `group` and its first batch of material `material` (4 and 5: the shell's mm_elwynn_wnd_ext__01; 5 and
+    // 21: the kitchen's own glass, mm_elwynn_wnd_int__01, seen from inside).
+    bool ReadInnGroup(const std::filesystem::path& scan, InnGroup& out, int group = 4, uint8_t material = 5)
     {
-        const std::vector<uint8_t> g = ReadBytes(scan / "world#wmo#azeroth#buildings#goldshireinn#goldshireinn_004.wmo");
+        char name[96];
+        std::snprintf(name, sizeof(name), "world#wmo#azeroth#buildings#goldshireinn#goldshireinn_%03d.wmo", group);
+        const std::vector<uint8_t> g = ReadBytes(scan / name);
         bool batch = false;
         for (size_t at = 0; at + 8 <= g.size();)
         {
@@ -4128,7 +4132,7 @@ namespace
                     else if (t == "MOTV" && out.uv.empty()) { out.uv.resize(s / 4); std::memcpy(out.uv.data(), p, out.uv.size() * 4); }
                     else if (t == "MOBA")
                         for (size_t b = 0; !batch && b + 24 <= s; b += 24)
-                            if (p[b + 23] == 5)   // mm_elwynn_wnd_ext__01
+                            if (p[b + 23] == material)
                             {
                                 uint16_t c, lo, hi;
                                 std::memcpy(&out.start, p + b + 12, 4);
@@ -4144,14 +4148,22 @@ namespace
                out.start + out.count <= out.idx.size();
     }
 
-    void SequenceTests(const std::filesystem::path& shaders, const std::filesystem::path& data)
+    // `inside` (SeeThroughFromInside, 2026-10-21: "windows should be see-through from the inside as well"): the same sequence
+    // for the kitchen's own glass (group 5's mm_elwynn_wnd_int__01, its windows 18 .. 25) seen from inside, the camera in the
+    // kitchen looking at its south wall, the street (blue) behind it: window 19 open (a way out; seethrough_tests' "from
+    // inside" finds 18 and 19 open from there), 18 shut; Glass's constants as the client's camera indoors has them (its inside
+    // look) over the kitchen's own window grid.
+    void SequenceTests(const std::filesystem::path& shaders, const std::filesystem::path& data, bool inside = false)
     {
         namespace mi = wxl_livingazeroth::modelice;
         namespace sp = wxl_livingazeroth::shaderpatch;
         namespace st = wxl_livingazeroth::seethrough;
+        const char* const label = inside ? "from inside (the kitchen's glass)" : "the game's sequence";
+        const char* const behind = inside ? "the street" : "the room";
+        const int innGroup = inside ? 5 : 4;
         const char* scan = std::getenv("GLASS_SCAN");
         const char* textures = TexturesFolder();
-        if (!scan || !textures) { std::printf("skip  the game's sequence (GLASS_SCAN and GLASS_TEXTURES not both set)\n"); return; }
+        if (!scan || !textures) { std::printf("skip  %s (GLASS_SCAN and GLASS_TEXTURES not both set)\n", label); return; }
         std::string src, why;
         for (const Blob& b : LoadBlobs(shaders))
             if (b.name == "ps_MapObjDiffuse_02" && !sp::Disassemble(b.code.data(), b.code.size(), src, why)) src.clear();
@@ -4165,16 +4177,16 @@ namespace
         std::string patched = src;
         if (src.empty() || !std::regex_search(src, mp, position) || !std::regex_search(src, mn, normal) || !std::regex_search(src, mt, texcoord) ||
             !mi::EditPixelWmoGlassForTests(patched, why) || !sp::Assemble(patched, "ps_MapObjDiffuse_02 patched", code, why))
-        { Check(false, "the game's sequence: the patched variant: " + why.substr(0, 200)); return; }
+        { Check(false, std::string(label) + ": the patched variant: " + why.substr(0, 200)); return; }
         const int vP = std::stoi(mp[1].str()), vN = std::stoi(mn[1].str()), vT = std::stoi(mt[1].str());
         InnGroup grp;
-        if (!ReadInnGroup(scan, grp)) { Check(false, "the game's sequence: the inn's group 4 from the scan"); return; }
+        if (!ReadInnGroup(scan, grp, innGroup, inside ? 21 : 5)) { Check(false, std::string(label) + ": the inn's group from the scan"); return; }
         Table mt0, wt, lt;
         if (!ReadTable(data / "GlassMaterials.cdbc", mt0) || !ReadTable(data / "GlassWindows.cdbc", wt) || !ReadTable(data / "GlassLead.cdbc", lt))
-        { Check(false, "the game's sequence: the tables read"); return; }
-        const std::string texture = "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp";
+        { Check(false, std::string(label) + ": the tables read"); return; }
+        const std::string texture = inside ? "dungeons\\textures\\windows\\mm_elwynn_wnd_int__01.blp" : "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp";
         gl::Material m;
-        if (!MaterialRow(mt0, texture, m)) { Check(false, "the game's sequence: the inn's glass row"); return; }
+        if (!MaterialRow(mt0, texture, m)) { Check(false, std::string(label) + ": the inn's glass row"); return; }
         std::vector<gl::Window> all;
         std::vector<gl::Window> innWindows;
         const uint32_t innPath = gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo");
@@ -4187,21 +4199,23 @@ namespace
             w.halfWidth = F(r[11]); w.halfHeight = F(r[12]);
             w.thickness = wt.fields > 16 ? F(r[16]) : 0.0f;
             all.push_back(w);
-            if (w.path == innPath && w.group == 4) innWindows.push_back(w);
+            if (w.path == innPath && w.group == static_cast<uint32_t>(innGroup)) innWindows.push_back(w);
         }
         std::sort(innWindows.begin(), innWindows.end(), [](const gl::Window& a, const gl::Window& b) { return a.ordinal < b.ordinal; });
-        // the see-through model's windows (ordinal order) and their states: 3, 9 and 14 open (the panel's), the rest shut
+        // the see-through model's windows (ordinal order) and their states: 3, 9 and 14 open (the panel's), the rest shut; from
+        // inside 19 open, the rest shut
         std::vector<st::SeeWindow> see;
         std::vector<uint8_t> states;
         for (const gl::Window& w : innWindows)
         {
             st::SeeWindow s;
-            s.ordinal = w.ordinal; s.group = w.group; s.kind = w.kind; s.interior = 1;
+            s.ordinal = w.ordinal; s.group = w.group; s.kind = w.kind; s.interior = inside ? -1 : 1;
             for (int k = 0; k < 3; ++k) { s.center[k] = w.center[k]; s.normal[k] = w.normal[k]; }
             gl::WindowFrame(s.normal, s.along, s.up);
             s.halfWidth = w.halfWidth; s.halfHeight = w.halfHeight; s.thickness = w.thickness;
             see.push_back(s);
-            states.push_back(w.ordinal == 3 || w.ordinal == 9 || w.ordinal == 14 ? st::kOpened : st::kShut);
+            const bool opened = inside ? w.ordinal == 19 : (w.ordinal == 3 || w.ordinal == 9 || w.ordinal == 14);
+            states.push_back(opened ? st::kOpened : st::kShut);
         }
         const uint32_t nverts = static_cast<uint32_t>(grp.pos.size() / 3);
         const st::BatchWindows bw = st::WindowsOfBatch(grp.idx.data(), static_cast<uint32_t>(grp.idx.size()), grp.pos.data(), nverts, grp.start, grp.count,
@@ -4211,8 +4225,8 @@ namespace
         float first = 0.0f;
         uint32_t bits = 0;
         st::OpenBits(bw, see.data(), states.data(), states.size(), first, bits);
-        if (!bw.valid || open.empty() || rest.empty() || innWindows.size() != 17)
-        { Check(false, "the game's sequence: the batch's windows (the model's)"); return; }
+        if (!bw.valid || open.empty() || rest.empty() || innWindows.size() != (inside ? 8u : 17u) || bw.strays != 0 || bw.windows.size() != innWindows.size())
+        { Check(false, std::string(label) + ": the batch's windows (the model's)"); return; }
         // the lead mask
         std::string flat = texture;
         std::replace(flat.begin(), flat.end(), '\\', '#');
@@ -4221,10 +4235,10 @@ namespace
         std::vector<uint8_t> leadMask;
         uint32_t tw = 0, th = 0;
         if (!wxl_livingazeroth::blp::DecodeTop(blp.data(), blp.size(), texRgb, tw, th) || !gl::LeadMask(texRgb.data(), tw, th, m, LeadRuleOf(lt, texture), leadMask))
-        { Check(false, "the game's sequence: the lead mask"); return; }
+        { Check(false, std::string(label) + ": the lead mask"); return; }
 
         Warp w;
-        if (!InitWarp(w, why)) { std::printf("skip  the game's sequence: %s\n", why.c_str()); return; }
+        if (!InitWarp(w, why)) { std::printf("skip  %s: %s\n", label, why.c_str()); return; }
         IDirect3DDevice9* d = w.dev;
         constexpr int kS = 192;
         IDirect3DPixelShader9 *ps = nullptr, *other = nullptr;
@@ -4239,7 +4253,7 @@ namespace
             FAILED(d->CreateRenderTarget(kS, kS, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
             FAILED(d->CreateDepthStencilSurface(kS, kS, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, TRUE, &depth, nullptr)) ||
             FAILED(d->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
-        { Check(false, "the game's sequence: WARP resources"); return; }
+        { Check(false, std::string(label) + ": WARP resources"); return; }
         IDirect3DTexture9* leadTex = nullptr;
         {
             UINT levels = 1;
@@ -4264,10 +4278,11 @@ namespace
         const float origin[3] = { -9464.25f, 24.40f, 56.53f };
         auto world = [&](const float* l, float* out) { for (int k = 0; k < 3; ++k) out[k] = origin[k] + l[0] * axes[k] + l[1] * axes[3 + k] + l[2] * axes[6 + k]; };
         auto turn = [&](const float* l, float* out) { for (int k = 0; k < 3; ++k) out[k] = l[0] * axes[k] + l[1] * axes[3 + k] + l[2] * axes[6 + k]; };
-        const float spot[3] = { 24, 7, 2 };
+        // (from inside: in the kitchen, looking at its south wall between 18 and 19)
+        const float spot[3] = { inside ? 0.0f : 24.0f, inside ? 6.0f : 7.0f, inside ? 3.0f : 2.0f }, southWall[3] = { 0, -8.8f, 2.8f };
         float eye[3], target9[3];
         world(spot, eye);
-        world(innWindows[8].center, target9);   // (ordinal 9)
+        world(inside ? southWall : innWindows[8].center, target9);   // (ordinal 9)
         float fwd[3] = { target9[0] - eye[0], target9[1] - eye[1], target9[2] - eye[2] };
         Norm(fwd);
         float right[3] = { fwd[1], -fwd[0], 0.0f };
@@ -4289,7 +4304,7 @@ namespace
         if (FAILED(d->CreateVertexDeclaration(el, &decl)) || FAILED(d->CreateVertexBuffer(nverts * sizeof(Vtx), 0, 0, D3DPOOL_MANAGED, &vb, nullptr)) ||
             FAILED(d->CreateIndexBuffer(static_cast<UINT>(grp.idx.size() * 2), 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &ib, nullptr)) ||
             FAILED(d->CreateIndexBuffer(64, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &otherIb, nullptr)))
-        { Check(false, "the game's sequence: its buffers"); return; }
+        { Check(false, std::string(label) + ": its buffers"); return; }
         {
             Vtx* v = nullptr;
             vb->Lock(0, 0, reinterpret_cast<void**>(&v), 0);
@@ -4300,10 +4315,12 @@ namespace
                 turn(&grp.nrm[3 * i], n);
                 const float q[3] = { p[0] - eye[0], p[1] - eye[1], p[2] - eye[2] };
                 const float vx = q[0] * right[0] + q[1] * right[1] + q[2] * right[2], vy = q[0] * up[0] + q[1] * up[1] + q[2] * up[2];
-                const float vz = std::max(0.1f, q[0] * fwd[0] + q[1] * fwd[1] + q[2] * fwd[2]);
+                const float ahead = q[0] * fwd[0] + q[1] * fwd[1] + q[2] * fwd[2], vz = std::max(0.1f, ahead);
                 Vtx& o = v[i];
                 o = Vtx{};
-                o.pos[0] = kS * 0.5f + focal * vx / vz - 0.5f; o.pos[1] = kS * 0.5f - focal * vy / vz - 0.5f; o.pos[2] = 0.5f; o.pos[3] = 1.0f / vz;
+                // (behind the camera, from inside the windows at its back: past the depth, so the depth test drops them)
+                o.pos[0] = kS * 0.5f + focal * vx / vz - 0.5f; o.pos[1] = kS * 0.5f - focal * vy / vz - 0.5f; o.pos[2] = ahead < 0.1f ? 2.0f : 0.5f;
+                o.pos[3] = 1.0f / vz;
                 for (float& c : o.col) c = 1.0f;
                 o.fog = 1.0f;
                 for (const auto& [reg, use] : usage)
@@ -4335,13 +4352,13 @@ namespace
         in.sky[0] = 0.55f; in.sky[1] = 0.65f; in.sky[2] = 0.8f;
         const gl::Light light = gl::Evaluate(in);
         float c[4 * gl::kConstantCount], seed[4 * gl::kSeedRegisters], look[4], day[4 * gl::kDayRegisters], regs[4 * gl::kRoomRegisters];
-        gl::BatchConstants(m, 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
+        gl::BatchConstants(m, inside ? 1.0f : 0.0f, light, in.sun, in.sunColour, in.sky, s, c);
         gl::RoomInputs ri;
         ri.night = 0; ri.hour = 9.5f; ri.unlit = true; ri.kind = m.kind;
         const gl::RoomStyle style;
         gl::RoomBatchConstants(style, nullptr, light, ri, s, c, seed, look);
         gl::DayConstants(m, light, s, 0, day);
-        gl::RoomRegisters(axes, origin, eye, rooms.table.Find(innPath, 4, false), rooms.table.Height(), style.cls, rooms.scales, rooms.gains, s, regs, m.kind, m.notGlass);
+        gl::RoomRegisters(axes, origin, eye, rooms.table.Find(innPath, static_cast<uint32_t>(innGroup), false), rooms.table.Height(), style.cls, rooms.scales, rooms.gains, s, regs, m.kind, m.notGlass);
         const float view[16] = { eye[0], eye[1], eye[2], 0, right[0], up[0], fwd[0], 0, right[1], up[1], fwd[1], 0, right[2], up[2], fwd[2], 0 };
         st::DrawArgs args;
         args.primitive = D3DPT_TRIANGLELIST; args.baseVertex = 0; args.minIndex = grp.minIndex; args.vertices = grp.maxIndex - grp.minIndex + 1;
@@ -4352,12 +4369,12 @@ namespace
         enum Through { kRightAway, kStateBlockAlone, kWithConstants };
         st::SplitBuffer buf;
         std::string lost;
-        auto run = [&](Through through, bool split, bool debug, std::vector<uint32_t>& img) -> bool {
+        auto run = [&](Through through, bool split, bool debug, std::vector<uint32_t>& img, D3DCOLOR backdrop = D3DCOLOR_ARGB(255, 0, 0, 255)) -> bool {
             d->SetRenderTarget(0, target);
             d->SetDepthStencilSurface(depth);
             D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
             d->SetViewport(&vp);
-            d->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(255, 0, 0, 255), 1.0f, 0);
+            d->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, backdrop, 1.0f, 0);
             // the client's draw
             d->SetVertexShader(nullptr); d->SetPixelShader(ps); d->SetVertexDeclaration(decl);
             d->SetStreamSource(0, vb, 0, sizeof(Vtx)); d->SetIndices(ib);
@@ -4443,14 +4460,15 @@ namespace
             if (r < 60 && g > 200 && b > 200) return 2;
             return 1;
         };
-        std::vector<uint32_t> a, broken, fixed, fixedSplit, aloneSplit, plain;
+        std::vector<uint32_t> a, broken, fixed, fixedSplit, aloneSplit, plain, plainRed;
         std::string lostAlone, lostFixed;
         bool ok = run(kRightAway, false, true, a);
         ok = ok && run(kStateBlockAlone, false, true, broken);
         lostAlone = lost;
         ok = ok && run(kWithConstants, false, true, fixed);
         lostFixed = lost;
-        ok = ok && run(kWithConstants, true, true, fixedSplit) && run(kStateBlockAlone, true, true, aloneSplit) && run(kWithConstants, false, false, plain);
+        ok = ok && run(kWithConstants, true, true, fixedSplit) && run(kStateBlockAlone, true, true, aloneSplit) && run(kWithConstants, false, false, plain) &&
+             run(kWithConstants, false, false, plainRed, D3DCOLOR_ARGB(255, 255, 0, 0));
         int count[5][4] = {}, differ = 0, differSplit = 0, differAlone = 0;
         for (size_t p = 0; ok && p < a.size(); ++p)
         {
@@ -4466,36 +4484,38 @@ namespace
             differAlone += ka != kind(aloneSplit[p]) && !(ka == 3 && kind(aloneSplit[p]) == 2) ? 1 : 0;
         }
         char line[700];
-        std::snprintf(line, sizeof(line), "the game's sequence (the inn turned -97 degrees 9,464 yd out, the camera turned, Glass's RoomRegisters): (a) the redraw "
-                      "right after the client's draw: %d open, %d shut, %d no window (pixels; the batch's stray triangles, in no window: %u)", count[0][1],
-                      count[0][2], count[0][3], bw.strays);
+        std::snprintf(line, sizeof(line), "%s (the inn turned -97 degrees 9,464 yd out, the camera turned, Glass's RoomRegisters): (a) the redraw "
+                      "right after the client's draw: %d open, %d shut, %d no window (pixels; the batch's stray triangles, in no window: %u)", label,
+                      count[0][1], count[0][2], count[0][3], bw.strays);
         Check(ok && count[0][1] > 200 && count[0][2] > 200 && count[0][3] <= (bw.strays ? 40 : 0), line);
-        std::snprintf(line, sizeof(line), "the game's sequence: (b) captured, clobbered, applied through the state block alone (as before): %d no window, %d open, %d "
-                      "shut (the game's screenshot: every pixel yellow); the pixel constants it didn't put back: %s", count[1][3], count[1][1], count[1][2],
+        std::snprintf(line, sizeof(line), "%s: (b) captured, clobbered, applied through the state block alone (as before): %d no window, %d open, %d "
+                      "shut (the game's screenshot: every pixel yellow); the pixel constants it didn't put back: %s", label, count[1][3], count[1][1], count[1][2],
                       lostAlone.c_str());
         Check(ok && count[1][3] > 400 && count[1][1] == 0 && count[1][2] == 0 && lostAlone.find("c180..c183") != std::string::npos, line);
-        std::snprintf(line, sizeof(line), "the game's sequence: (c) with every constant put back from the capture (none unlike: %s): drawn whole %d open, %d shut, %d "
+        std::snprintf(line, sizeof(line), "%s: (c) with every constant put back from the capture (none unlike: %s): drawn whole %d open, %d shut, %d "
                       "no window, %d pixels decided otherwise than (a); split by window (%zu triangles open, %zu the rest) %d otherwise; split through the state "
-                      "block alone (the lookup's inputs lost) %d otherwise", lostFixed.empty() ? "yes" : lostFixed.c_str(), count[2][1], count[2][2], count[2][3],
-                      differ, open.size() / 3, rest.size() / 3, differSplit, differAlone);
+                      "block alone (the lookup's inputs lost) %d otherwise", label, lostFixed.empty() ? "yes" : lostFixed.c_str(), count[2][1], count[2][2],
+                      count[2][3], differ, open.size() / 3, rest.size() / 3, differSplit, differAlone);
         // (split: a pixel at a window's edge goes by its triangle's middle, the lookup by the pixel: a few pixels apart)
         const int drawnPx = count[0][1] + count[0][2] + count[0][3];
         Check(ok && lostFixed.empty() && differ == 0 && differSplit * 100 <= drawnPx && differAlone * 100 <= drawnPx, line);
-        // (d) the plain view with the constants put back, drawn whole: the room's blue through the open windows' glass (its
-        // debug tint mostly magenta, over the blue: green under 100; blue over red by 40 in 8 of 10: where it's part glass
-        // the yellow glass keeps more), not their lead and frame (opaque green), not the shut windows (a pixel at a window's
-        // edge aside)
+        // (d) the plain view with the constants put back, drawn whole: what's behind (the backdrop) through the open windows'
+        // glass (its debug tint mostly magenta: green under 100; in 8 of 10, where it's part glass the glass keeps more), not
+        // their lead and frame (opaque green), not the shut windows (a pixel at a window's edge aside). A pixel shows what's
+        // behind when it changes with the backdrop (blue, then red; from inside the glass's own look is sky-blue by day)
         int glassBlue = 0, glassPx = 0, leadBlue = 0, leadPx = 0, shutBlue = 0, shutPx = 0;
         for (size_t p = 0; ok && p < plain.size(); ++p)
         {
             const int k = kind(a[p]), red = (a[p] >> 16) & 0xFF, green = (a[p] >> 8) & 0xFF;
-            const bool blue = (plain[p] & 0xFF) > ((plain[p] >> 16) & 0xFF) + 40;
+            const int dr = static_cast<int>((plainRed[p] >> 16) & 0xFF) - static_cast<int>((plain[p] >> 16) & 0xFF);
+            const int db = static_cast<int>(plain[p] & 0xFF) - static_cast<int>(plainRed[p] & 0xFF);
+            const bool blue = dr > 40 && db > 40;
             if (k == 1 && green < 100) { ++glassPx; glassBlue += blue ? 1 : 0; }
             if (k == 1 && green == 255 && red == 0) { ++leadPx; leadBlue += blue ? 1 : 0; }
             if (k == 2) { ++shutPx; shutBlue += blue ? 1 : 0; }
         }
-        std::snprintf(line, sizeof(line), "the game's sequence: (d) the plain view: the room through %d of %d open windows' glass pixels, %d of %d of their lead "
-                      "and frame, %d of %d shut windows'", glassBlue, glassPx, leadBlue, leadPx, shutBlue, shutPx);
+        std::snprintf(line, sizeof(line), "%s: (d) the plain view: %s through %d of %d open windows' glass pixels, %d of %d of their lead "
+                      "and frame, %d of %d shut windows'", label, behind, glassBlue, glassPx, leadBlue, leadPx, shutBlue, shutPx);
         Check(ok && glassPx > 100 && glassBlue * 10 >= glassPx * 8 && leadBlue * 100 <= leadPx && shutBlue * 100 <= shutPx, line);
         if (const char* dump = std::getenv("GLASS_DUMP"))
         {
@@ -4504,10 +4524,11 @@ namespace
                 for (size_t p = 0; p < im.size(); ++p) { rgb[3 * p] = (im[p] >> 16) & 0xFF; rgb[3 * p + 1] = (im[p] >> 8) & 0xFF; rgb[3 * p + 2] = im[p] & 0xFF; }
                 WritePnm(std::filesystem::path(dump) / name, kS, kS, 3, rgb);
             };
-            save("seq_a_right_away_debug.ppm", a);
-            save("seq_b_state_block_alone_debug.ppm", broken);
-            save("seq_c_with_constants_debug.ppm", fixed);
-            save("seq_d_with_constants_plain.ppm", plain);
+            const std::string pre = inside ? "inside_" : "seq_";
+            save((pre + "a_right_away_debug.ppm").c_str(), a);
+            save((pre + "b_state_block_alone_debug.ppm").c_str(), broken);
+            save((pre + "c_with_constants_debug.ppm").c_str(), fixed);
+            save((pre + "d_with_constants_plain.ppm").c_str(), plain);
         }
         buf.Release();
         for (IUnknown* u : std::initializer_list<IUnknown*>{ ps, other, target, depth, readback, glassTex, white, leadTex, decl, vb, ib, otherIb }) if (u) u->Release();
@@ -5654,7 +5675,7 @@ int main(int argc, char** argv)
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
-    // replay, lead, inn, sequence)
+    // replay, lead, inn, sequence, inside)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -5680,6 +5701,7 @@ int main(int argc, char** argv)
     if (run("lead")) LeadTests(args[1]);
     if (warp && run("inn")) InnRedrawTests(args[0], args[1]);
     if (warp && run("sequence")) SequenceTests(args[0], args[1]);
+    if (warp && run("inside")) SequenceTests(args[0], args[1], true);
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

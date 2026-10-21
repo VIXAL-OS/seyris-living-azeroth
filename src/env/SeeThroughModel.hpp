@@ -13,6 +13,9 @@
 // after the room and its furniture (the deferral below), its open windows' glass texels at the opacity and their lead,
 // frame and tracery opaque, so the room shows through the glass. A window with no room behind it (a "fake" window: the
 // glass is painted on a shell), or whose room couldn't be drawn this frame, stays as it was: opaque, its fake room in it.
+// From inside (SeeThroughFromInside) the room's own windows become ways out of the client's walk from inside (one more
+// exterior portal view each: ViewOf, PlanInside) where the street is really seen through them (LookOut), and the room's
+// glass is deferred the same way.
 #pragma once
 
 #include "GlassRooms.hpp"
@@ -82,6 +85,18 @@ namespace wxl_livingazeroth::seethrough
         constexpr uint32_t kPrimTriangles = 3, kD3dTriangleList = 4;
         // MOGP flags the walk from outside never enters (exterior 0x8, 0x10000)
         constexpr uint32_t kSkippedGroups = 0x10008, kExteriorGroup = 0x8;
+        // From inside (SeeThroughFromInside): the client's ways out of the camera's building. Its walk from inside
+        // (s_interiorPass 1) records each portal into an exterior group (or one with 0x40, 0x100, 0x40000) as an exterior
+        // portal view (CMapObj::AddExteriorPortalView 0x007A8F20): a CPortalView pushed to s_exteriorPortalViews and merged
+        // into the world view (the sky's scissor, and with its depth >= 0 the sky and the weather) and, into an exterior
+        // group, the frustum view (the rectangle the outdoors is culled through; its depth < 0: no outdoors at all).
+        constexpr uintptr_t kPushExteriorPortalView = 0x00795D00;   // __cdecl(CPortalView*): s_exteriorPortalViews.Add
+        constexpr uintptr_t kMergeIntoWorldRect = 0x00790AB0;       // __cdecl(CPortalView*): s_unk_ADF570.Merge
+        constexpr uintptr_t kMergeIntoFrustumRect = 0x00790AD0;     // __cdecl(CPortalView*): frustumPortalView.Merge
+        constexpr uintptr_t kExteriorPortalViews = 0x00CDD0E8;      // TSGrowableArray<CPortalView>: its count at +4
+        constexpr uintptr_t kWorldView = 0x00ADF570;                // CWorldScene::s_unk_ADF570 (CPortalView)
+        constexpr uintptr_t kFrustumView = 0x00ADF58C;              // CWorldScene::frustumPortalView (CPortalView)
+        constexpr size_t kArrayCount = 0x4, kViewDepth = 0x10;      // a TSGrowableArray's count; a CPortalView's depth
     }
 
     /// Bytes of the client's code the runtime relies on (wowdecomp's offsets as the exe has them). Never a hooked
@@ -149,6 +164,22 @@ namespace wxl_livingazeroth::seethrough
          {0x89, 0xB7, 0x24, 0x01, 0x00, 0x00, 0x8B, 0x48, 0x04, 0x89, 0x8F, 0x64, 0x01, 0x00, 0x00}},
         {"root walker: MOMT at +0x160, its count (size / 64) at +0x19C", 0x007D74B0, 18,
          {0x89, 0xB7, 0x60, 0x01, 0x00, 0x00, 0x8B, 0x50, 0x04, 0xC1, 0xEA, 0x06, 0x89, 0x97, 0x9C, 0x01, 0x00, 0x00}},
+        // From inside: the ways out (an exterior portal view per portal into an exterior group) and what reads them.
+        {"portal walk from inside: an exterior portal view for a portal into a group with 0x50148", 0x007AC3C0, 28,
+         {0xF7, 0xC7, 0x48, 0x01, 0x05, 0x00, 0x74, 0x53, 0x8B, 0x45, 0xE8, 0x8B, 0x4D, 0xFC, 0x81, 0xE7, 0x08, 0x00, 0x01, 0x00,
+          0x57, 0x56, 0x53, 0x50, 0xE8, 0x43, 0xCB, 0xFF}},
+        {"exterior portal view: its depth at +0x10, PushExteriorPortalView, MergeIntoWorldRect", 0x007A904C, 26,
+         {0xE8, 0x7F, 0xE0, 0xFF, 0xFF, 0x8D, 0x4D, 0xCC, 0xD9, 0x5D, 0xDC, 0x51, 0xE8, 0xA3, 0xCC, 0xFE, 0xFF, 0x8D, 0x55, 0xCC,
+          0x52, 0xE8, 0x4A, 0x7A, 0xFE, 0xFF}},
+        {"PushExteriorPortalView: s_exteriorPortalViews.Add", 0x00795D06, 13,
+         {0x50, 0x6A, 0x01, 0xB9, 0xE8, 0xD0, 0xCD, 0x00, 0xE8, 0xDD, 0xE3, 0xFF, 0xFF}},
+        {"MergeIntoWorldRect: s_unk_ADF570.Merge", 0x00790AB6, 11, {0x50, 0xB9, 0x70, 0xF5, 0xAD, 0x00, 0xE8, 0xEF, 0xFA, 0xFF, 0xFF}},
+        {"MergeIntoFrustumRect: frustumPortalView.Merge", 0x00790AD6, 11, {0x50, 0xB9, 0x8C, 0xF5, 0xAD, 0x00, 0xE8, 0xCF, 0xFA, 0xFF, 0xFF}},
+        {"scene render: the frustum view's depth gates the outdoors", 0x0079AA33, 6, {0xD9, 0x05, 0x9C, 0xF5, 0xAD, 0x00}},
+        {"scene render: the outdoors culled through the frustum view's rectangle", 0x0079AA4B, 16,
+         {0x68, 0x8C, 0xF5, 0xAD, 0x00, 0xD9, 0x1D, 0x80, 0x87, 0xCD, 0x00, 0xE8, 0x35, 0xFD, 0xFF, 0xFF}},
+        {"scene render: the world view's depth gates the sky; the exterior views' count", 0x0079AC41, 19,
+         {0xD8, 0x1D, 0x80, 0xF5, 0xAD, 0x00, 0xDF, 0xE0, 0xF6, 0xC4, 0x41, 0x74, 0x76, 0x39, 0x1D, 0xEC, 0xD0, 0xCD, 0x00}},
     };
 
     /// The first guard of `guards` whose bytes differ (read through `read(address, size)`, a pointer to that many bytes or
@@ -357,6 +388,8 @@ namespace wxl_livingazeroth::seethrough
         WindowState state = kUnseen;
         Rect clip;         // kOpened candidates: the walk's rectangle for it (the window's & the walk's)
         bool candidate = false;   // facing, on the screen, in range, with a room: open it (budget allowing)
+        Rect screen;       // from inside (PlanInside): the window's own screen rectangle, and its farthest depth
+        float depth = 0.0f;
     };
     /// The plan for one exterior group's windows: the camera (WMO space), the group's box, the walk's rectangle, the
     /// matrices; `budget` windows may still open this frame (it goes down by each candidate). Candidates' states are
@@ -369,6 +402,58 @@ namespace wxl_livingazeroth::seethrough
     /// A walk rectangle from the client's CRect ({minY, minX, maxY, maxX}) and back.
     Rect FromCRect(const float c[4]);
     void ToCRect(const Rect& r, float out[4]);
+
+    // --- from inside: the street through the room's own windows ---------------------------------------------------------
+    // "windows should be see-through from the inside as well" (the user, 2026-10-21, standing in the inn's ground floor).
+    // From inside, the client draws the outdoors only through its ways out: its walk from the camera's groups records each
+    // portal into an exterior group as an exterior portal view (CMapObj::AddExteriorPortalView: the portal's screen
+    // rectangle and its farthest depth), and the outdoors (the terrain, other buildings, the models, the liquids, the
+    // horizon) is culled through the rectangle round them, the sky drawn in it, as through an open door; with none, no
+    // outdoors at all. Windows aren't portals, so from inside the street never shows behind the glass. features/SeeThrough
+    // adds each window of a room the walk reaches (GlassWindows' rows of interior groups: the room's own glass) that faces
+    // the camera from inside, lies on the screen within the walk's rectangle and is in range as an exterior portal view of
+    // its own, through the client's own PushExteriorPortalView and merges, where the street is really seen through it
+    // (LookOut), and draws its glass again over what's behind it, as from outside.
+    /// A WMO's interior groups' windows (GlassWindows rows without Flags 0x1: a room's own glass), by group then ordinal;
+    /// no room behind them (interior -1).
+    RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, size_t groupCount);
+    /// Whether the camera (WMO space) is inside a window's plane (its normal points out of the building) by kFacing.
+    bool FacingIn(const SeeWindow& w, const float camLocal[3]);
+    /// How far (yd) the camera may be from a window's middle for the street to open through it, and how many a frame.
+    constexpr float kInsideRange = 40.0f;
+    constexpr unsigned kMaxInsidePerFrame = 16;
+    /// The client's CPortalView (0x1C; Win32): its screen rectangle (0..1, CRect's order {minY, minX, maxY, maxX}), its
+    /// farthest depth along the view (the outdoor cull's occluders start 33 1/3 yd past it), no vertices (a null pointer).
+    struct PortalView
+    {
+        float rect[4] = {};
+        float maxViewDepth = 0.0f;
+        uint32_t verts = 0, vertCount = 0;
+    };
+    static_assert(sizeof(PortalView) == 0x1C, "the client's CPortalView");
+    /// The view AddExteriorPortalView makes of a portal, for a window: its screen rectangle (NDC) as (x + 1) / 2 in
+    /// CRect's order, its depth (at least 0, as CalcPortalFarthestDistance's).
+    PortalView ViewOf(const Rect& screen, float depth);
+    /// The farthest of a polygon's (WMO space) depths along the view: its clip w through `model`, less `eye`, `viewProj`
+    /// (CalcPortalFarthestDistance's distance from the camera's plane); false when none is finite.
+    bool FarthestDepth(const float (*corners)[3], int count, const float model[16], const float eye[3], const float viewProj[16], float& out);
+    /// One interior group's windows from inside: facing in (FacingIn), on the screen and within the walk's rectangle
+    /// (`walk`): kShut, with its own screen rectangle and depth; within kInsideRange of the camera with `budget` left (it
+    /// goes down by each): a candidate.
+    void PlanInside(const SeeWindow* windows, uint32_t count, const float camLocal[3], const Rect& walk, const float model[16],
+                    const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out);
+    /// The building's outside: an exterior group's surfaces but its glass (`walls`) and its glass (`glass`: the windows'
+    /// outer panes).
+    struct Shell { const RoomMesh* walls = nullptr; const RoomMesh* glass = nullptr; };
+    /// The rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) on past its glass, and
+    /// what each met first of the room's own surfaces (`room`, its glass aside) and the building's outside (`shells`).
+    /// Front: it leaves by the building's own glass, or meets nothing (out in the open): the street is seen. Back: it meets
+    /// a surface from behind, a wall or the roof from inside (the outside's or the room's own: culled, so the street would
+    /// show through them; a dormer's sloped inner pane seen from below). None: it meets a surface from the front (drawn as
+    /// it is: the window's reveal behind its glass, the building's outside past an opening). SightOpen and Hold decide as
+    /// from outside: to open four see the street and more than meet a surface either way, at most two from behind.
+    void LookOut(const SeeWindow& w, const float eye[3], const RoomMesh& room, const Shell* shells, size_t shellCount,
+                 const SightPoints* points, Sight& out);
 
     // --- which windows a glass batch is in ------------------------------------------------------------------------------
     /// The window (index into `windows`) whose lookup box holds a point: within kLookup yd of its rectangle and its

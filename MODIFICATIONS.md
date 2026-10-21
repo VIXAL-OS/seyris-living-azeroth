@@ -83,7 +83,11 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   put back only the pixel shader's c0..c127: in game the per-pixel redraw found no window (21 October 2026). A window
   opens where rays through points on its own glass see the room, a ray meeting nothing of it (on through a doorway)
   neutral and only one meeting it from outside against, with separate thresholds to open and to stay open and a 0.35 s
-  hold, so the inn's arched window no longer flips at ordinary street angles (21 October 2026).
+  hold, so the inn's arched window no longer flips at ordinary street angles (21 October 2026). From inside
+  (`SeeThroughFromInside`, off by default, 21 October 2026): the street through the room's own windows, each one that
+  faces the camera from inside and is really seen out of (its rays leave by the building's own window glass, not through
+  a wall or the roof) added as one more of the client's exterior portal views, so the outdoors, its sky and its weather
+  come through it as through an open door; the room's glass is drawn again over the street as from outside.
 - **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's
