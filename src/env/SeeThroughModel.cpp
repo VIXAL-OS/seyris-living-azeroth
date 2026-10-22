@@ -161,10 +161,17 @@ namespace wxl_livingazeroth::seethrough
     bool RoomMesh::Build(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
                          const std::vector<std::pair<uint32_t, uint32_t>>& ranges)
     {
+        return Build(vertices, vertexCount, indices, indexCount, ranges, {});
+    }
+
+    bool RoomMesh::Build(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
+                         const std::vector<std::pair<uint32_t, uint32_t>>& ranges, const std::vector<uint8_t>& tags)
+    {
         *this = RoomMesh{};
         if (!vertices || !indices) return false;
-        for (const auto& r : ranges)
+        for (size_t ri = 0; ri < ranges.size(); ++ri)
         {
+            const auto& r = ranges[ri];
             if (r.first > indexCount || r.second > indexCount - r.first || r.second % 3) { *this = RoomMesh{}; return false; }
             for (uint32_t k = r.first; k < r.first + r.second; ++k)
             {
@@ -172,6 +179,7 @@ namespace wxl_livingazeroth::seethrough
                 if (i >= vertexCount) { *this = RoomMesh{}; return false; }
                 for (int c = 0; c < 3; ++c) m_tris.push_back(vertices[3 * static_cast<size_t>(i) + c]);
             }
+            m_tags.insert(m_tags.end(), r.second / 3, ri < tags.size() ? tags[ri] : uint8_t{ 0 });
         }
         for (const float f : m_tris)
             if (!std::isfinite(f)) { *this = RoomMesh{}; return false; }
@@ -234,7 +242,7 @@ namespace wxl_livingazeroth::seethrough
         return any;
     }
 
-    RoomMesh::Hit RoomMesh::First(const float o[3], const float d[3], float tmin, float tmax, float* tOut) const
+    RoomMesh::Hit RoomMesh::First(const float o[3], const float d[3], float tmin, float tmax, float* tOut, uint8_t* tagOut) const
     {
         if (m_tris.empty() || !Finite3(o) || !Finite3(d) || !(tmax > tmin)) return kNone;
         // the ray within the grid's box
@@ -279,6 +287,7 @@ namespace wxl_livingazeroth::seethrough
         float t, det;
         if (!Intersect(&m_tris[9 * static_cast<size_t>(bestTri)], o, d, t, det)) return kNone;
         if (tOut) *tOut = best;
+        if (tagOut) *tagOut = static_cast<size_t>(bestTri) < m_tags.size() ? m_tags[static_cast<size_t>(bestTri)] : uint8_t{ 0 };
         return det > 0.0f ? kFront : kBack;
     }
 
@@ -622,54 +631,122 @@ namespace wxl_livingazeroth::seethrough
         }
     }
 
-    void LookOut(const SeeWindow& w, const float eye[3], const RoomMesh& room, const Shell* shells, size_t shellCount,
-                 const SightPoints* points, Sight& out)
+    namespace
     {
-        out = Sight{};
-        if (!Finite3(eye)) return;
-        out.onGlass = points && points->n > 0;
-        const int rays = out.onGlass ? points->n : static_cast<int>(sizeof(kSight) / sizeof(kSight[0]));
-        for (int i = 0; i < rays; ++i)
+        // What a line of sight meets first through a building as the client draws it (faces one-sided; a pane seen from
+        // behind see-through and passed; `outerPanes`: from inside, an outer pane either way is the way out and stops it).
+        enum class Met { kNothing, kRoomFront, kRoomBack, kShellFront, kShellBack, kRoomPane, kOuterPane };
+
+        Met Trace(const SightMesh* groups, size_t count, const float o[3], const float d[3], float tmin, float tmax, bool outerPanes,
+                  float ownPane, float& at)
         {
-            float d[3];
-            for (int k = 0; k < 3; ++k)
-                d[k] = (out.onGlass ? points->p[i][k] : w.center[k] + w.along[k] * kSight[i][0] * w.halfWidth + w.up[k] * kSight[i][1] * w.halfHeight) - eye[k];
-            const float len = std::sqrt(Dot(d, d));
-            ++out.rays;
-            // what's met first past the glass (from a hair before it: an outer pane in the same plane is its own way out)
-            enum { kNothing, kGlass, kSurfaceFront, kSurfaceBack } met = kSurfaceFront;   // (no ray: neither)
-            float best = len + kSightReach;
-            if (len > 1e-3f && std::isfinite(len))
+            at = tmax;
+            for (int pass = 0; pass < 8; ++pass)
             {
-                met = kNothing;
-                for (float& v : d) v /= len;
-                const float from = len - 0.02f;
-                auto take = [&](const RoomMesh* m, bool glass) {
-                    if (!m || m->Empty()) return;
-                    float t = 0.0f;
-                    const RoomMesh::Hit h = m->First(eye, d, from, best, &t);
-                    if (h == RoomMesh::kNone || !(t < best)) return;
-                    best = t;
-                    met = glass ? kGlass : h == RoomMesh::kFront ? kSurfaceFront : kSurfaceBack;
-                };
-                take(&room, false);
-                for (size_t s = 0; shells && s < shellCount; ++s)
+                float best = tmax;
+                for (size_t g = 0; groups && g < count; ++g)
                 {
-                    take(shells[s].walls, false);
-                    take(shells[s].glass, true);
+                    if (!groups[g].mesh || groups[g].mesh->Empty()) continue;
+                    float t = 0.0f;
+                    if (groups[g].mesh->First(o, d, tmin, best, &t) != RoomMesh::kNone && t < best) best = t;
+                }
+                if (!(best < tmax)) return Met::kNothing;
+                at = best;
+                // every surface at that depth (a window's inner and outer panes may share a plane): an outer pane among them
+                // is the way out (from inside, either way) or the building's outside (from outside, its front); else a wall;
+                // else a room's pane from its front (but the window's own, before `ownPane`); else panes from behind, passed
+                const float edge = best + 1e-3f;
+                bool outer = false, roomPane = false, wall = false, wallFront = false, wallExterior = false;
+                for (size_t g = 0; groups && g < count; ++g)
+                {
+                    if (!groups[g].mesh || groups[g].mesh->Empty()) continue;
+                    float t = 0.0f;
+                    uint8_t tag = 0;
+                    const RoomMesh::Hit h = groups[g].mesh->First(o, d, tmin, edge, &t, &tag);
+                    if (h == RoomMesh::kNone) continue;
+                    const bool exterior = groups[g].exterior;
+                    if (tag & kGlassTag)
+                    {
+                        if (exterior) outer = outer || outerPanes || h == RoomMesh::kFront;
+                        else roomPane = roomPane || (h == RoomMesh::kFront && t >= ownPane);
+                    }
+                    else if (!wall)
+                    {
+                        wall = true;
+                        wallFront = h == RoomMesh::kFront;
+                        wallExterior = exterior;
+                    }
+                }
+                if (outer) return Met::kOuterPane;
+                if (wall) return wallExterior ? (wallFront ? Met::kShellFront : Met::kShellBack) : (wallFront ? Met::kRoomFront : Met::kRoomBack);
+                if (roomPane) return Met::kRoomPane;
+                tmin = edge;   // panes from behind (and the window's own): see-through
+            }
+            return Met::kNothing;
+        }
+
+        // The rays through a window's sight points (or kSight's on its rectangle) from `eye`, each from `from` past the
+        // glass (its own pane passed before `ownPane` past it), classified by `as`.
+        template <class As>
+        void Rays(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, float from,
+                  float ownPane, float reach, bool outerPanes, As as, Sight& out)
+        {
+            out = Sight{};
+            if (!Finite3(eye)) return;
+            out.onGlass = points && points->n > 0;
+            const int rays = out.onGlass ? points->n : static_cast<int>(sizeof(kSight) / sizeof(kSight[0]));
+            for (int i = 0; i < rays; ++i)
+            {
+                float d[3];
+                for (int k = 0; k < 3; ++k)
+                    d[k] = (out.onGlass ? points->p[i][k] : w.center[k] + w.along[k] * kSight[i][0] * w.halfWidth + w.up[k] * kSight[i][1] * w.halfHeight) - eye[k];
+                const float len = std::sqrt(Dot(d, d));
+                ++out.rays;
+                RoomMesh::Hit seen = RoomMesh::kNone;   // (no ray: neither)
+                float at = 0.0f;
+                if (len > 1e-3f && std::isfinite(len))
+                {
+                    for (float& v : d) v /= len;
+                    seen = as(Trace(groups, count, eye, d, len + from, len + reach, outerPanes, len + ownPane, at));
+                }
+                if (i == 0) out.middle = seen;
+                if (seen == RoomMesh::kFront) { ++out.front; continue; }
+                ++(seen == RoomMesh::kBack ? out.back : out.none);
+                if (out.firstMiss < 0)
+                {
+                    out.firstMiss = i;
+                    out.missHit = seen;
+                    out.missDepth = std::isfinite(at - len) ? at - len : 0.0f;
                 }
             }
-            const RoomMesh::Hit as = met == kGlass || met == kNothing ? RoomMesh::kFront : met == kSurfaceBack ? RoomMesh::kBack : RoomMesh::kNone;
-            if (i == 0) out.middle = as;
-            if (as == RoomMesh::kFront) { ++out.front; continue; }
-            ++(as == RoomMesh::kBack ? out.back : out.none);
-            if (out.firstMiss < 0)
-            {
-                out.firstMiss = i;
-                out.missHit = as;
-                out.missDepth = std::isfinite(best - len) ? best - len : 0.0f;
-            }
         }
+    }
+
+    void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out)
+    {
+        // (past its own outer pane: on its glass points, a hair; on its rectangle, its thickness too)
+        const float skip = points && points->n > 0 ? 0.02f : 0.05f + w.thickness;
+        Rays(w, eye, groups, count, points, skip, skip, kVoidReach, false, [](Met m) {
+            switch (m)
+            {
+            case Met::kRoomFront: case Met::kRoomPane: return RoomMesh::kFront;
+            case Met::kShellFront: case Met::kOuterPane: return RoomMesh::kNone;
+            default: return RoomMesh::kBack;   // a surface from behind, or the void
+            }
+        }, out);
+    }
+
+    void LookOut(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out)
+    {
+        // (from a hair before its own inner pane, which faces the room and is passed: an outer pane in its plane is the way out)
+        Rays(w, eye, groups, count, points, -0.02f, 0.02f, kSightReach, true, [](Met m) {
+            switch (m)
+            {
+            case Met::kOuterPane: case Met::kNothing: return RoomMesh::kFront;
+            case Met::kRoomBack: case Met::kShellBack: return RoomMesh::kBack;
+            default: return RoomMesh::kNone;
+            }
+        }, out);
     }
 
     int WindowOf(const float p[3], const SeeWindow* windows, uint32_t count)

@@ -273,9 +273,12 @@ namespace wxl_livingazeroth::seethrough
         /// batches but the glass ones: first index, count). False (and empty) when an index or a range is out of bounds.
         bool Build(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
                    const std::vector<std::pair<uint32_t, uint32_t>>& ranges);
+        /// The same with a tag for each range's triangles (`tags`, one a range: kGlassTag for a glass batch; missing: 0).
+        bool Build(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
+                   const std::vector<std::pair<uint32_t, uint32_t>>& ranges, const std::vector<uint8_t>& tags);
         /// The first triangle along o + t d (t in (tmin, tmax)): kFront when it faces the ray's origin (its winding's front:
-        /// cross(b - a, c - a) . d < 0), kBack when it faces away, kNone. Its t in `t` when one is met.
-        Hit First(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr) const;
+        /// cross(b - a, c - a) . d < 0), kBack when it faces away, kNone. Its t in `t` and its tag in `tag` when one is met.
+        Hit First(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr, uint8_t* tag = nullptr) const;
         /// The same over every triangle (the tests' reference).
         Hit FirstBrute(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr) const;
         size_t Triangles() const { return m_tris.size() / 9; }
@@ -283,6 +286,7 @@ namespace wxl_livingazeroth::seethrough
 
     private:
         std::vector<float> m_tris;                // a, b, c: nine floats a triangle
+        std::vector<uint8_t> m_tags;              // each triangle's tag (Build's)
         std::vector<uint32_t> m_cellStart, m_refs;   // cell i's triangles: m_refs[m_cellStart[i] .. m_cellStart[i + 1])
         float m_lo[3] = {}, m_cell = 1.0f;
         int m_n[3] = {};
@@ -343,8 +347,10 @@ namespace wxl_livingazeroth::seethrough
     /// more than from outside (at most kStayBack), and at most kStayNone fewer than meet nothing. Over the inn's 17 windows
     /// from 252 street views each (5 .. 30 yd, 60 degrees aside, the eye 2 .. 11 yd up): the dormers over the ceiling
     /// meet nothing with most rays (they go over the room) and see it with at most four; the arched window 9 sees it with
-    /// at least three, and opens from every view (it was 230 of 252).
-    constexpr int kOpenFront = 4, kStayFront = 3, kOpenBack = 2, kStayBack = 3, kStayNone = 2;
+    /// at least three, and opens from every view (it was 230 of 252). Since 2026-10-22 (LookIn: the rays followed on through
+    /// the building) a majority, five, must see in to open: a dormer seen from high and far met its room from inside with
+    /// four, the void with two and its cavity's own walls with three, and opened; no other view opens with four.
+    constexpr int kOpenFront = 5, kStayFront = 3, kOpenBack = 2, kStayBack = 3, kStayNone = 2;
     bool SightOpen(const Sight& s, bool wasOpen);
     /// A window's held verdict across frames: a new one stands once it has held kGateHold seconds.
     constexpr float kGateHold = 0.35f;
@@ -357,6 +363,28 @@ namespace wxl_livingazeroth::seethrough
     /// The frame's verdict `want` after `dt` seconds: the first stands at once, a change after kGateHold. The verdict that
     /// stands.
     bool Hold(Gate& g, bool want, float dt);
+
+    // "dormers still switch between the fake rooms and the real ones" (the user, 2026-10-22, mounted before the inn's
+    // dormer front, the camera 14.5 yd up: 15 at its threshold, 16 and 17 open with four of nine rays meeting nothing of the
+    // room). A dormer's rays that meet nothing of its room go on into the attic and out where the roof's inside isn't
+    // modelled (the shell is one-sided: from inside the client culls it, so the void or the sky shows through), while
+    // window 9's went on through the stair's opening into the next room, which the walk draws. So a ray that meets nothing
+    // of the room is followed on through every group of the building, as the client draws them: faces one-sided, glass
+    // see-through from behind.
+    /// A group's surfaces for the line of sight: its mesh (every rendered batch, its glass tagged kGlassTag) and whether
+    /// it's an exterior group (the building's shell) or an interior one (a room).
+    struct SightMesh { const RoomMesh* mesh = nullptr; bool exterior = false; };
+    constexpr uint8_t kGlassTag = 1;
+    /// How far past a window a ray from outside looks for anything at all (yd): meeting nothing, it shows the void.
+    constexpr float kVoidReach = 60.0f;
+    /// From outside, the rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) past its
+    /// own outer pane, through the building (`groups`: every group's mesh), what each meets first that the client draws
+    /// from that side: a pane seen from behind is see-through and passed (the window's own inner pane, a dormer's sloped one
+    /// from above), so is another outer pane from inside. Front (seeing in): a room's surface from inside, its own or the
+    /// next room's through a doorway or a stair's opening, or a room's pane from inside. Back (against): any surface from
+    /// behind, a room's from outside or the shell's from inside (the roof, an outer wall: the void shows through it), or
+    /// nothing at all within kVoidReach. None: the building's outside from outside (out by an opening).
+    void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out);
 
     // --- a window on the screen --------------------------------------------------------------------------------------
     /// The quad (WMO space), grown by `grow` yd along and up: corners counter-clockwise from (-along, -up).
@@ -442,18 +470,15 @@ namespace wxl_livingazeroth::seethrough
     /// goes down by each): a candidate.
     void PlanInside(const SeeWindow* windows, uint32_t count, const float camLocal[3], const Rect& walk, const float model[16],
                     const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out);
-    /// The building's outside: an exterior group's surfaces but its glass (`walls`) and its glass (`glass`: the windows'
-    /// outer panes).
-    struct Shell { const RoomMesh* walls = nullptr; const RoomMesh* glass = nullptr; };
-    /// The rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) on past its glass, and
-    /// what each met first of the room's own surfaces (`room`, its glass aside) and the building's outside (`shells`).
-    /// Front: it leaves by the building's own glass, or meets nothing (out in the open): the street is seen. Back: it meets
-    /// a surface from behind, a wall or the roof from inside (the outside's or the room's own: culled, so the street would
-    /// show through them; a dormer's sloped inner pane seen from below). None: it meets a surface from the front (drawn as
-    /// it is: the window's reveal behind its glass, the building's outside past an opening). SightOpen and Hold decide as
-    /// from outside: to open four see the street and more than meet a surface either way, at most two from behind.
-    void LookOut(const SeeWindow& w, const float eye[3], const RoomMesh& room, const Shell* shells, size_t shellCount,
-                 const SightPoints* points, Sight& out);
+    /// The rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) on past its own pane,
+    /// through the building (`groups`: every group's mesh, as LookIn), and what each meets first that the client draws from
+    /// that side (a room's pane from behind is see-through). Front: it leaves by the building's own glass (an exterior
+    /// group's pane either way), or meets nothing (out in the open): the street is seen. Back: it meets a surface from
+    /// behind, a wall or the roof from inside (culled, so the street would show through them: a dormer's sloped inner pane
+    /// seen from below). None: it meets a surface from the front (drawn as it is: the window's reveal behind its glass, the
+    /// building's outside past an opening, another room). SightOpen and Hold decide as from outside: to open four see the
+    /// street and more than meet a surface either way, at most two from behind.
+    void LookOut(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out);
 
     // --- which windows a glass batch is in ------------------------------------------------------------------------------
     /// The window (index into `windows`) whose lookup box holds a point: within kLookup yd of its rectangle and its

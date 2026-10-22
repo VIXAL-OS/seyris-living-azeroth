@@ -37,7 +37,10 @@
 //    rendered triangles copied out of its group once (MOVT, MOVI, MOBA: RoomMesh) and the windows' glass points out of the
 //    walked group's glass batches (GlassSightPoints); the verdict held per window (its own thresholds to open and to stay,
 //    a change after 0.35 s): "certain attic windows shouldn't be able to see through the roof" (the user, 2026-10-20);
-//    "it works at some angles and goes back to the fake room at others lol" (2026-10-21).
+//    "it works at some angles and goes back to the fake room at others lol" (2026-10-21). Since 2026-10-22 ("dormers
+//    still switch between the fake rooms and the real ones") a ray that meets nothing of the room is followed on through
+//    every group of the building (LookIn over each group's surfaces, its glass tagged: BuildingOf): the next room through
+//    a doorway sees in, the roof or a wall from inside, or the void, is against; five of nine must see in to open.
 //  - From inside (SeeThroughFromInside, off by default; "windows should be see-through from the inside as well", the user,
 //    2026-10-21, in the inn's ground floor): the client draws the outdoors from inside only through its ways out, the
 //    exterior portal views its walk from the camera's groups records for each portal into an exterior group (the outdoors

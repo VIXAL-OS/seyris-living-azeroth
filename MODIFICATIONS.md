@@ -87,7 +87,10 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   (`SeeThroughFromInside`, off by default, 21 October 2026): the street through the room's own windows, each one that
   faces the camera from inside and is really seen out of (its rays leave by the building's own window glass, not through
   a wall or the roof) added as one more of the client's exterior portal views, so the outdoors, its sky and its weather
-  come through it as through an open door; the room's glass is drawn again over the street as from outside.
+  come through it as through an open door; the room's glass is drawn again over the street as from outside. A ray through
+  a window that meets nothing of its room is followed on through the whole building (the next room through a doorway
+  counts as seeing in, the roof or a wall from inside, or the void, against), and a majority must see in, so the dormers no
+  longer open onto the void through the roof from high viewpoints (22 October 2026).
 - **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's

@@ -171,15 +171,34 @@ out, 60 degrees aside either way, the eye 2 to 8 yd up and a mounted camera's 11
 west and north fronts to 60 degrees aside (8 and 14 yd out, on foot and mounted, a frame each 1/60 s), 9, 14 and the
 north front's windows never change their verdict (the old rule: 9 four times, 1 nine), 3 three times (the old rule
 twenty): it shuts past about 50 degrees on its one side, where its deep reveal hides the room (its rays meet the wall
-round it from outside). The lights panel lists each window on the screen last frame: open, or why it's shut (fake, far,
+round it from outside). **Followed on** (2026-10-22): "dormers still switch between the fake rooms and the real ones" (the
+user, mounted before the dormer front, the camera 14.5 yd up and 32.5 yd out: 15 shut at 4 / 1 / 4 seeing the room, meeting
+it from outside, meeting nothing; 16 and 17 open at 5 / 0 / 4). A dormer's rays that meet nothing of its room go on into
+the attic and out where the roof's inside isn't modelled: the shell is one-sided, the client culls it from inside, and the
+void or the sky shows through; window 9's went on through the stair's opening into the next room, which the walk draws.
+So a ray that meets nothing of the room is now followed on through every group of the building as the client draws them
+(`LookIn`: each group's rendered triangles, its glass tagged; faces one-sided; a pane seen from behind see-through and
+passed, the window's own inner pane and a dormer's sloped one from above among them): a room's surface from inside, its own
+or the next room's through a doorway or a stair's opening, or a room's pane from its front, sees in; any surface from
+behind (a room's from outside, the shell's roof or walls from inside) or nothing at all within 60 yd is against; the
+building's outside from outside (past an opening) neither. And a majority must see in to open (five of nine; four still
+keep an open window open): from high and far a dormer met its room with four, the void with two and its cavity's own
+walls with three. From the user's viewpoint the rule before gives what the panel showed (15 4 / 1 / 4, 16 and 17 5 / 0 /
+4); now 15 is 4 / 5 / 0, 16 and 17 5 / 4 / 0, all shut, and 4, 5, 6 open with nine of nine. Over the street sweep every
+window opens from as many views or more (3 from 252 of 252, it was 227; 9 252, 244; 5 216, 134; 6 221, 202; 8 238, 188;
+the north front's 244 .. 252), the dormers from none; high and close before the dormer front (4 to 12 yd out, 9 to 15 yd
+up) 4 from 119 of 140 as before, 5 and 6 from 138 (100, 131), the dormers from none (17 was 4); high and farther out (18
+to 36 yd) 4, 5, 6 from every view, the dormers from none (17 was 8, 15 1). Walking past every front, on foot, mounted and
+at 9, 12 and 15 yd up and at the user's 32.5 yd, no window changes its verdict (the rule before: 3 three times, 5
+nineteen, 6 thirteen, 15 and 16 twice, 17 six) and the dormers never open. The lights panel lists each window on the screen last frame: open, or why it's shut (fake, far,
 the budget, not loaded, its surfaces not read yet, not seen: how many of its rays saw the room from inside, met it from
-outside, met nothing, and whether the verdict is held). The room's surfaces are its group's rendered triangles (its MOBA
-batches; the collision-only ones after them are left out) but its glass (the window's own inner face,
-`mm_elwynn_wnd_int__01` in the inn: its back is to the street), copied out of the group the first time a window of it is
-a candidate (MOVT at +0xE8, MOVI at +0xE0, MOBA at +0xF8 and their counts, guarded at the group walker 0x7D7F50; the
-root's MOMT and MOTX for which materials are glass, guarded at the root walker 0x7D7470) into a grid of cells
-(`RoomMesh`: about 32 along its longest side), one build a frame (the inn's kitchen: 10,847 triangles). Each frame the
-rays run against the actual camera, so the answer follows the viewing angle.
+outside, met nothing, and whether the verdict is held). The surfaces are each group's rendered triangles (its MOBA
+batches; the collision-only ones after them are left out), its glass tagged (since 2026-10-22; before, the room's alone
+with its glass left out), copied out of the group the first time a window needs them (MOVT at +0xE8, MOVI at +0xE0, MOBA
+at +0xF8 and their counts, guarded at the group walker 0x7D7F50; the root's MOMT and MOTX for which materials are glass,
+guarded at the root walker 0x7D7470) into a grid of cells (`RoomMesh`: about 32 along its longest side), one build a frame
+(the inn's kitchen: 10,847 triangles; the inn's twelve groups over its first twelve frames, a window shut until all are
+read). Each frame the rays run against the actual camera, so the answer follows the viewing angle.
 
 With the map scan's files, from street viewpoints in front of each window (8, 15 and 30 yd out, straight and 30 / 60
 degrees aside, the eye 2 and 6 yd up; `seethrough_tests` prints them): the ground floor's windows open from most of them,
@@ -431,14 +450,14 @@ group's windows), Glass's inside look kept.
 building's own outside from behind (a wall, the roof, a dormer's cheeks: their faces face out, so the client culls them
 from inside and the street would show through them) or leave by the building's own outer pane (`mm_elwynn_wnd_ext__01`,
 0.4 yd out in the inn, one-sided, MOMT 0x11, so from inside it's culled too and doesn't hide the street). The rays go from
-the eye through the window's own glass points (`GlassSightPoints` over the room's glass batch) on past it, against the
-room's surfaces (its glass aside) and each exterior group's (the shell: its walls, and its glass apart). Leaving by the
-building's glass, or meeting nothing at all, sees the street; meeting a surface from behind (the shell's or the room's own)
-is against; meeting one from the front (the window's reveal behind its glass, the building's outside past an opening)
-neither: it's drawn as it is. `SightOpen` and `Hold` decide as from outside (four see the street, more than either other
-kind, at most two from behind; held 0.35 s). The dormers' sloped inner panes (0, 25, 29: up into the dormer, its roof and
-cheeks from inside) are the windows it shuts; see the tests below. Another interior group beyond the window (none in the
-inn) isn't in the test.
+the eye through the window's own glass points (`GlassSightPoints` over the room's glass batch) on past it, through every
+group of the building as from outside (2026-10-22; before, the room's surfaces and the shell's: the same answers but one
+window's two views), the room's own inner pane passed. Leaving by the building's glass (an outer pane either way, one in
+the inner pane's own plane too: window 32's), or meeting nothing at all, sees the street; meeting a surface from behind
+(the shell's or a room's) is against; meeting one from the front (the window's reveal behind its glass, the building's
+outside past an opening, another room) neither: it's drawn as it is. `SightOpen` and `Hold` decide as from outside (five
+see the street, more than either other kind, at most two from behind; held 0.35 s). The dormers' sloped inner panes (0,
+25, 29: up into the dormer, its roof and cheeks from inside) are the windows it shuts; see the tests below.
 
 ### Risks
 
