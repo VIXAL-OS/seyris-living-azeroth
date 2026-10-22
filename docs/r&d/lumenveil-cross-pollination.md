@@ -25,6 +25,7 @@ which we can use directly.
 | 9 | Per-zone looks | 37 zones tuned for dawn, day, dusk and night in clear, rain, snow and sandstorm, partly by an automated loop | AreaClimate, FogSettings, per-zone fog | A region panel for zone × time × weather, and a capture helper (see 10) to tune from screenshots. |
 | 10 | Compare and snapshot keys | one key for all effects off/on; one key saves place, time, weather and camera to a file | per-feature toggles | Both help bug reports: a snapshot replaces guessing the camera position from screenshots. |
 | 11 | Water extras | reflections that stay put as you turn, sun glitter, rain rings, lamps reflected at night | Modern Water: waves, wind, foam, ripples | Check what Modern Water already has, then add what's missing. |
+| 12 | Sandstorms | per-zone sandstorm looks (and WoW Forever's Tanaris sandstorms, "phenomenal", 2026-10-21) | the server sends them (AzerothCore game_weather: Tanaris storm 15% every season, Silithus 15–25%; a desert zone's storm is a sandstorm), the client draws its light tan particles; LA knows the type (ClientWeather type 3) but only dims the shafts | Dense drifting dust in the sand's colour from the fog field, visibility falling with intensity, streaks blowing with the wind, a darker yellow-brown sky (Storm's band shading for type 3), sand settling in the surface cover, and a wind sound. Asked for 2026-10-22. |
 
 ## What we can offer them
 
