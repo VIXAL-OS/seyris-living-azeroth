@@ -8,6 +8,7 @@
 #include "game/Camera.hpp"
 #include "game/Doodad.hpp"
 #include "game/Gx.hpp"
+#include "UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -390,13 +391,13 @@ namespace wxl_livingazeroth::debug
             const world::Snapshot& s = world::Current();
             char line[512];
             std::snprintf(line, sizeof(line), "DoodadLightProperties / DoodadLightAssignment: %s%s", lt::Status(), lt::Dirty() ? " -- EDITED, not saved" : "");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             if (g_api->UiButton("Save to DBFilesClient")) lt::Save(g_message, sizeof(g_message));
             g_api->UiSameLine();
             if (g_api->UiButton("Reload from disk (discards edits)")) { lt::Load(g_cdbc); std::snprintf(g_message, sizeof(g_message), "reloaded: %s", lt::Status()); }
-            if (g_message[0]) g_api->UiText(g_message);
-            if (!lights::Config().enabled) g_api->UiText("(our point lights are switched off in the lights panel: edits won't show)");
-            if (!s.inWorld) { g_api->UiText("not in world"); return; }
+            if (g_message[0]) ui::Text(g_api, g_message);
+            if (!lights::Config().enabled) ui::Text(g_api, "(our point lights are switched off in the lights panel: edits won't show)");
+            if (!s.inWorld) { ui::Text(g_api, "not in world"); return; }
 
             g_api->UiSeparator();
             g_api->UiSliderFloat("models within (yd)", &g_range, 3.0f, 60.0f);
@@ -405,13 +406,13 @@ namespace wxl_livingazeroth::debug
             const std::vector<ModelInfo> models = NearbyModels(s);
             const ModelInfo* selected = nullptr;
             std::snprintf(line, sizeof(line), "%u different model(s) within %.0f yd", static_cast<unsigned>(models.size()), g_range);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             if (g_api->UiCollapsingHeader("Models near you"))
             {
                 // Coloured text is a newer core call (UiTextColored); an older core gets tags instead.
                 const bool colour = false; // Released core: use the existing text-tag fallback.
                 static const float kOurs[4] = { 0.45f, 1.0f, 0.45f, 1.0f }, kStock[4] = { 1.0f, 0.8f, 0.35f, 1.0f };
-                g_api->UiText("Show:");
+                ui::Text(g_api, "Show:");
                 for (int c = 0; c < kCategoryCount; ++c)
                 {
                     g_api->UiSameLine();
@@ -420,11 +421,11 @@ namespace wxl_livingazeroth::debug
                 }
                 if (colour)
                 {
-                    g_api->UiText("green: has our light (DoodadLightAssignment)");
+                    ui::Text(g_api, "green: has our light (DoodadLightAssignment)");
                     g_api->UiSameLine();
-                    g_api->UiText("  amber: only its own (stock) lights");
+                    ui::Text(g_api, "  amber: only its own (stock) lights");
                     g_api->UiSameLine();
-                    g_api->UiText("  white: no light");
+                    ui::Text(g_api, "  white: no light");
                 }
                 char label[64];
                 int k = 0, shown = 0;
@@ -451,11 +452,11 @@ namespace wxl_livingazeroth::debug
                                   colour ? "" : (ours ? "[ours] " : (stock ? "[stock] " : "")),
                                   m.nearest, m.path.c_str(), where.c_str(), m.placed, m.bones, m.attachments, m.emitters, m.lights,
                                   suppressed && m.lights ? ", suppressed" : "", static_cast<unsigned>(rows.size()));
-                    if (colour && (ours || stock)) g_api->UiText(line);
-                    else g_api->UiText(line);
+                    if (colour && (ours || stock)) ui::Text(g_api, line);
+                    else ui::Text(g_api, line);
                 }
-                if (models.empty()) g_api->UiText("(no placed models within range)");
-                else if (!shown) g_api->UiText("(none match the filters)");
+                if (models.empty()) ui::Text(g_api, "(no placed models within range)");
+                else if (!shown) ui::Text(g_api, "(none match the filters)");
             }
             for (const ModelInfo& m : models) if (lt::Normalize(m.path) == g_selected) selected = &m;
             // Out of range (teleported, walked away): drop the selection instead of staying stuck on it.
@@ -466,18 +467,18 @@ namespace wxl_livingazeroth::debug
             }
 
             g_api->UiSeparator();
-            if (!selected) g_api->UiText("Select a model above to add lights to it.");
+            if (!selected) ui::Text(g_api, "Select a model above to add lights to it.");
             else
             {
-                std::snprintf(line, sizeof(line), "Selected: %s", selected->path.c_str()); g_api->UiText(line);
-                std::snprintf(line, sizeof(line), "  attachment points (ID:bone): %s", Indexed(selected->header, 0xF0, 0x28, 4, true).c_str()); g_api->UiText(line);
-                std::snprintf(line, sizeof(line), "  particle emitters (index:bone): %s", Indexed(selected->header, 0x128, 0x1DC, 0x14, false).c_str()); g_api->UiText(line);
-                std::snprintf(line, sizeof(line), "  own lights (index:bone): %s;  bones: %u", Indexed(selected->header, 0x108, 0x9C, 2, false).c_str(), selected->bones); g_api->UiText(line);
+                std::snprintf(line, sizeof(line), "Selected: %s", selected->path.c_str()); ui::Text(g_api, line);
+                std::snprintf(line, sizeof(line), "  attachment points (ID:bone): %s", Indexed(selected->header, 0xF0, 0x28, 4, true).c_str()); ui::Text(g_api, line);
+                std::snprintf(line, sizeof(line), "  particle emitters (index:bone): %s", Indexed(selected->header, 0x128, 0x1DC, 0x14, false).c_str()); ui::Text(g_api, line);
+                std::snprintf(line, sizeof(line), "  own lights (index:bone): %s;  bones: %u", Indexed(selected->header, 0x108, 0x9C, 2, false).c_str(), selected->bones); ui::Text(g_api, line);
                 EditAssignments(*selected);
             }
 
             g_api->UiSeparator();
-            g_api->UiText("Lights (DoodadLightProperties):");
+            ui::Text(g_api, "Lights (DoodadLightProperties):");
             EditLights();
         }
     }

@@ -5,6 +5,7 @@
 #include "../env/Storm.hpp"
 #include "../env/Wind.hpp"
 #include "GrassPerf.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -305,9 +306,9 @@ namespace wxl_livingazeroth::fogwake
         api->UiSliderFloat("wind mixes the fog back##fwwind", &g_settings.windMixing, 0.0f, 1.0f);
         std::snprintf(line, sizeof(line), "weather: rain %.2f, storm %.2f, wind %.2f -> mixing %.2f: push x%.2f, fills in in %.1f s",
                       g_rainNow, g_stormNow, g_windNow, g_mixing, g_scale.push, Life());
-        api->UiText(line);
+        ui::Text(api, line);
         std::snprintf(line, sizeof(line), "wake: %u units, %u stretches, %.3f ms CPU; map %dx%d of %.0f yd (%u KB)",
                       g_units, g_segments, g_lastMs, N, N, kTexel, static_cast<unsigned>(N * N * 8 / 1024));
-        api->UiText(line);
+        ui::Text(api, line);
     }
 }

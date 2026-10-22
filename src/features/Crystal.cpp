@@ -3,6 +3,7 @@
 #include "../env/CdbcLoad.hpp"
 #include "../wxl_seyris/CdbcApi.hpp"
 #include "Windows.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 
@@ -701,7 +702,7 @@ namespace wxl_livingazeroth::crystal
     void DrawPanelSection(const WXL_Api* api)
     {
         if (!api) return;
-        api->UiText(StatusLine());
+        ui::Text(api, StatusLine());
         int on = g_settings.enabled ? 1 : 0;
         if (api->UiCheckbox("crystals look like deep crystal (draenei, fel, Crystalsong, mana and cave crystals...)", &on)) g_settings.enabled = on;
         api->UiSliderFloat("crystal strength", &g_settings.strength, 0.0f, 1.0f);

@@ -1,6 +1,7 @@
 #include "DoodadFade.hpp"
 
 #include "game/Gx.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -348,13 +349,13 @@ namespace wxl_livingazeroth::doodadfade
         std::snprintf(line, sizeof(line), "view distance / fade start (yd), radius <1, <4, <15, <100, larger: %.0f/%.0f  %.0f/%.0f  %.0f/%.0f  %.0f/%.0f  %.0f/%.0f "
                                           "(environmentDetail scale %.2f)",
                       dist[0], fade[0], dist[1], fade[1], dist[2], fade[2], dist[3], fade[3], dist[4], fade[4], g_scale);
-        api->UiText(line);
+        ui::Text(api, line);
         if (!g_hookedFade || !g_hookedBatch || !g_hookedDoodad)
             std::snprintf(line, sizeof(line), "dissolve: off, a hook is missing (fade %d, batch %d, doodad %d)", g_hookedFade ? 1 : 0, g_hookedBatch ? 1 : 0, g_hookedDoodad ? 1 : 0);
         else
             std::snprintf(line, sizeof(line), "dissolve: %s; last frame %u doodads dissolving (%u of them drawn out of shared draws of copies); "
                                               "M2 pixel shader variants with it %u, without %u%s%s; dissolving draws so far %u",
                           Dissolving() ? "on" : (g_settings.dissolve ? "waiting for the shaders" : "off"), g_lastNoted, g_lastSplit, g_variants, g_variantsLeft, g_leftWhy.empty() ? "" : ": ", g_leftWhy.c_str(), g_draws);
-        api->UiText(line);
+        ui::Text(api, line);
     }
 }

@@ -20,6 +20,7 @@
 #include "offsets/engine/Gx.hpp"
 #include "game/Gfx.hpp"
 #include "game/Gx.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -2769,7 +2770,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             std::snprintf(line, sizeof(line), "Fog: not drawing -- %s", g_inactive);
         else
             std::snprintf(line, sizeof(line), "Fog: drawing (%.2f ms CPU; GPU: profiler 'ours: fog draw')", g_lastMs);
-        g_api->UiText(line);
+        ui::Text(g_api, line);
     }
 
     void DrawMainControls()
@@ -2802,20 +2803,20 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                 wxl::game::camera::GetPosition(camNow);
                 std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f; drawn x%.2f)%s", g_deck.base, g_deck.top,
                               g_deck.density, world::Current().playerPos[2], DeckThinning(camNow[2]), g_psDeck ? "" : " -- its shader failed (see the log)");
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s); colour %.2f %.2f %.2f (%s)", g_deck.cover * 100.0f,
                               g_deck.coverWhy, g_deck.color[0], g_deck.color[1], g_deck.color[2], g_deck.colorWhy);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 std::snprintf(line, sizeof(line), "see-through draws after it: %u fogged to the cloud's colour, %u left (another fog colour)%s; lights glowing in it: %d",
                               g_tintedShown, g_tintOtherShown, g_hookedFrame ? "" : " -- no world frame hook: off", g_deckLightsUsed);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 std::snprintf(line, sizeof(line), "storm clouds and lightning (Storm Peaks): %u draws took the deck's colour %.2f %.2f %.2f (x%.2f where you see it)%s",
                               g_stormTintedShown, g_stormColour[0], g_stormColour[1], g_stormColour[2], g_deckShade,
                               !g_hookedBatches ? " -- no M2 batch hooks: they fog like the rest" : (g_fogModeGuarded ? "" : " -- batch fog modes not read: told by their colour"));
             }
             else
                 std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
     }
 
@@ -2846,7 +2847,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             g_api->UiSliderFloat("strength##gflstr", &g_settings.lightStrength, 0.0f, 4.0f);
             g_api->UiSliderFloat("range (yd from the camera)##gflrange", &g_settings.lightRange, 16.0f, 256.0f);
             std::snprintf(line, sizeof(line), "%u lights reach the fog, %.2f ms CPU", g_lightsUsed, g_lightMs);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
         if (g_api->UiCollapsingHeader("Colour test##gfcolour"))
         {
@@ -2855,7 +2856,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             static const char* const kModes[] = { "stock", "hue", "replace" };
             std::snprintf(line, sizeof(line), "here (FogSettings, all kinds): %s, colour %.2f %.2f %.2f, saturation %.2f, brightness %.2f",
                           kModes[v.colorMode], v.color[0], v.color[1], v.color[2], v.saturation, v.brightness);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             g_api->UiCheckbox("test a colour (instead of the table; not saved)##gfctest", &g_settings.colorTest);
             if (g_settings.colorTest)
             {
@@ -2873,17 +2874,17 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         g_api->UiCheckbox("probe ray: read the march at the yellow cross (screen centre)##gfprobe", &g_settings.probe);
         if (g_settings.probe)
         {
-            if (g_probeFailed) g_api->UiText("probe: couldn't create its target (see the log)");
-            else if (!g_probeHave) g_api->UiText("probe: waiting for the fog to draw");
+            if (g_probeFailed) ui::Text(g_api, "probe: couldn't create its target (see the log)");
+            else if (!g_probeHave) ui::Text(g_api, "probe: waiting for the fog to draw");
             else
             {
                 std::snprintf(line, sizeof(line), "probe: %d iterations, %s; light let through %.3f",
                               ProbeIterations(), ProbeEnding(), g_probe[6][0][3]);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 static char saved[MAX_PATH] = "";
                 if (g_api->UiButton("Save the probe to Logs\\fog-probe.txt##gfprobesave"))
                     if (!SaveProbe(saved, sizeof(saved))) std::snprintf(saved, sizeof(saved), "couldn't write Logs\\fog-probe.txt");
-                if (saved[0]) g_api->UiText(saved);
+                if (saved[0]) ui::Text(g_api, saved);
             }
         }
         g_api->UiCheckbox("water writes depth while fog draws##gfwater", &g_settings.forceWaterDepth);
@@ -2907,7 +2908,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                           g_check.open, g_check.tooHigh, g_check.tooLow, g_check.worst, g_check.worstX, g_check.worstY,
                           g_check.worstStored, g_check.worstFresh, g_check.floors, g_check.structures,
                           g_check.unknown, g_check.unknownNoQuery, g_check.unknownWorst);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
         {
             const float m22 = g_seenM22, m32 = g_seenM32;
@@ -2915,10 +2916,10 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                                               "near/far if OpenGL %.3f / %.1f, if D3D %.3f / %.1f",
                           g_seenViewport.X, g_seenViewport.Y, g_seenViewport.Width, g_seenViewport.Height, g_seenViewport.MinZ, g_seenViewport.MaxZ,
                           m22, m32, m32 / (-1.0f - m22), m32 / (1.0f - m22), m22 != 0.0f ? -m32 / m22 : 0.0f, m32 / (1.0f - m22));
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
         std::snprintf(line, sizeof(line), "renderer: %u frames drawn, %u field uploads; lights: %u cell hits", g_draws, g_fieldUploads, g_lightCells);
-        g_api->UiText(line);
+        ui::Text(g_api, line);
         {
             // The fog's column where the player stands: is the player inside a pool, and how deep is it?
             const world::Snapshot& s = world::Current();
@@ -2941,12 +2942,12 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                               ground, block, pool, ground + pool, g_poolDensity, light, g_ceiling, s.playerPos[2], cam[2]);
             else
                 std::snprintf(line, sizeof(line), "your column: not known yet");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
         const fog::Grid& grid = fog::Current();
         std::snprintf(line, sizeof(line), "ground under the field: %u of %d cells not known yet (unloaded terrain or holes)",
                       grid.groundMissing, fog::kGridSize * fog::kGridSize);
-        g_api->UiText(line);
+        ui::Text(g_api, line);
     }
 
     void OnDeviceLost()

@@ -15,6 +15,7 @@
 #include "game/Camera.hpp"
 #include "game/Gfx.hpp"
 #include "game/Gx.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -506,11 +507,11 @@ namespace wxl_livingazeroth::sunshafts
         char line[320];
         if (g_stats.inactive) std::snprintf(line, sizeof(line), "not drawing: %s", g_stats.inactive);
         else std::snprintf(line, sizeof(line), "drawing at %ux%u, %.2f ms CPU (GPU: the profiler's 'ours: sun shafts'); %u frames", g_stats.w, g_stats.h, g_stats.ms, g_stats.draws);
-        api->UiText(line);
+        ui::Text(api, line);
         const shafts::Strength& m = g_stats.model;
         std::snprintf(line, sizeof(line), "strength %.2f = (sun %.2f [low sun %.2f] + moon %.2f) x air %.2f (in the air %.2f) x weather %.2f x outdoors %.2f",
                       m.total, m.sun, m.golden, m.moon, m.airFactor, m.air, m.weather, m.indoor);
-        api->UiText(line);
+        ui::Text(api, line);
         // Both directions: where the sky draws the sun (and the moon), and where the light comes from.
         const climate::Sun& now = climate::SunNow();
         auto bearing = [](const float d[3]) { // compass degrees (+x north, +y west)
@@ -527,10 +528,10 @@ namespace wxl_livingazeroth::sunshafts
         at(lightAt, sizeof(lightAt), g_stats.light);
         std::snprintf(line, sizeof(line), "visible sun at %s, %.0f deg up, bearing %.0f; moon %.0f deg up (from %s)",
                       skyAt, up(now.sky), bearing(now.sky), up(now.moon), now.skyFrom);
-        api->UiText(line);
+        ui::Text(api, line);
         std::snprintf(line, sizeof(line), "light from bearing %.0f, %.0f deg up, at %s on the screen (%s): shades the world, the glass, the deck's in-scatter",
                       bearing(now.dir), up(now.dir), lightAt, now.fromClient ? "the client's" : "the client's rule at the hour");
-        api->UiText(line);
+        ui::Text(api, line);
         const shafts::SunScreen& sun = g_stats.sun;
         char discAt[32];
         at(discAt, sizeof(discAt), sun);
@@ -539,9 +540,9 @@ namespace wxl_livingazeroth::sunshafts
                                                              : "the light's direction (standing in for the sky's)";
         std::snprintf(line, sizeof(line), "the centre: %s at %s, fade %.2f x horizon %.2f; screen-space part %.2f, under the deck %.2f",
                       centre, discAt, sun.fade, g_stats.horizon, g_stats.screen, g_stats.volume);
-        api->UiText(line);
+        ui::Text(api, line);
         std::snprintf(line, sizeof(line), "the cloud deck: %s; light colour %.2f %.2f %.2f", g_stats.deck,
                       g_stats.colour[0], g_stats.colour[1], g_stats.colour[2]);
-        api->UiText(line);
+        ui::Text(api, line);
     }
 }

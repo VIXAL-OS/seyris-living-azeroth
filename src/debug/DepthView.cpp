@@ -6,6 +6,7 @@
 #include "engine/events/Event.hpp"
 #include "game/Camera.hpp"
 #include "game/Gx.hpp"
+#include "UiText.hpp"
 
 #include <d3d9.h>
 #include <cstdio>
@@ -91,25 +92,25 @@ namespace wxl_livingazeroth::debug
                 depth::SetEnabled(enabled != 0);
 
             std::snprintf(line, sizeof(line), "state: %s", StateText(depth::CurrentState()));
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             if (depth::CurrentState() == depth::State::Active || depth::CurrentState() == depth::State::Copied)
             {
                 std::snprintf(line, sizeof(line), "size %ux%u, replaced %s, swaps %u",
                               depth::Width(), depth::Height(), FormatName(depth::OriginalFormat()), depth::SwapCount());
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             if (depth::CurrentState() == depth::State::Copied || depth::CurrentState() == depth::State::Multisampled)
             {
                 std::snprintf(line, sizeof(line), "copy: %s, %u done, %u failed%s%s", depth::CopyMethod(),
                               depth::CopiesDone(), depth::CopiesFailed(),
                               depth::CopyUnavailable()[0] ? "; " : "", depth::CopyUnavailable());
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
 
             std::snprintf(line, sizeof(line), "world passes drawn into our depth: %u / %u",
                           g_scenesOnOurDepth, g_scenesTotal);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             g_api->UiSeparator();
             g_api->UiCheckbox("Show depth overlay", &g_showOverlay);
@@ -126,23 +127,23 @@ namespace wxl_livingazeroth::debug
                 {
                     std::snprintf(line, sizeof(line), "row %d: %10.5f %10.5f %10.5f %10.5f",
                                   row, m[row * 4 + 0], m[row * 4 + 1], m[row * 4 + 2], m[row * 4 + 3]);
-                    g_api->UiText(line);
+                    ui::Text(g_api, line);
                 }
                 std::snprintf(line, sizeof(line), "used: m10 = %.6f, m14 = %.6f (perspective %s)",
                               g_projM10, g_projM14, g_haveProjection ? "yes" : "NOT seen");
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 const float samples[] = { 0.5f, 0.9f, 0.99f, 0.999f, 0.9999f };
                 for (float d : samples)
                 {
                     const float denom = (d / 0.94f * 2.0f - 1.0f) - g_projM10; // see kDepthViewHlsl
                     std::snprintf(line, sizeof(line), "d = %.4f -> z = %.3f yards", d,
                                   denom != 0.0f ? g_projM14 / denom : 0.0f);
-                    g_api->UiText(line);
+                    ui::Text(g_api, line);
                 }
             }
 
             if (g_shaderFailed)
-                g_api->UiText("Overlay shader failed to compile (d3dcompiler_47.dll missing?).");
+                ui::Text(g_api, "Overlay shader failed to compile (d3dcompiler_47.dll missing?).");
         }
 
         void __cdecl OnWorldSceneEndThunk(void* /*user*/, const void* args) { OnWorldSceneEnd(args); }

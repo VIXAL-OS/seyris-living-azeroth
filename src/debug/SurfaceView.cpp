@@ -5,6 +5,7 @@
 #include "../env/TerrainHeight.hpp"
 #include "../env/WorldQuery.hpp"
 #include "../features/GrassInstanced.hpp"
+#include "UiText.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -44,11 +45,11 @@ namespace wxl_livingazeroth::debug
         {
             char line[256], a[96], b[96];
             const world::Snapshot& s = world::Current();
-            if (!s.inWorld) { g_api->UiText("not in world"); return; }
+            if (!s.inWorld) { ui::Text(g_api, "not in world"); return; }
 
             Describe(s.playerTerrainType, a, sizeof(a));
             std::snprintf(line, sizeof(line), "client says the player stands on: TerrainType %s", a);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             // The client's own terrain query (0x7A0530) at the player: matches the line above on
             // terrain, differs on WMOs (those come from the WMO material instead).
@@ -56,7 +57,7 @@ namespace wxl_livingazeroth::debug
             if (terrain::TerrainTypeAt(s.playerPos[0], s.playerPos[1], queried)) Describe(queried, a, sizeof(a));
             else std::snprintf(a, sizeof(a), "(no terrain here: hole or not loaded)");
             std::snprintf(line, sizeof(line), "client terrain query at the player: TerrainType %s", a);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             // Terrain height from the chunk's MCVT under the player vs the player's own z: on open
             // ground these should agree to a few centimetres.
@@ -66,17 +67,17 @@ namespace wxl_livingazeroth::debug
                               ground, s.playerPos[2], s.playerPos[2] - ground);
             else
                 std::snprintf(line, sizeof(line), "terrain height (MCVT): none here (hole or chunk not loaded)");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             const grassinst::TerrainProbe& p = grassinst::Probe();
             if (!p.valid)
             {
-                g_api->UiText("terrain under the player: not seen (needs instanced grass on and ground effects in this chunk)");
+                ui::Text(g_api, "terrain under the player: not seen (needs instanced grass on and ground effects in this chunk)");
                 return;
             }
             std::snprintf(line, sizeof(line), "chunk %08X, player at local (%.1f, %.1f), cell (%d, %d)",
                           p.chunk, p.local[0], p.local[1], p.cellA[0], p.cellA[1]);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             bool anyMatch = false;
             for (unsigned i = 0; i < p.layers; ++i)
@@ -86,7 +87,7 @@ namespace wxl_livingazeroth::debug
                 anyMatch |= match;
                 std::snprintf(line, sizeof(line), "  layer %u: ground effect %u -> TerrainType %s%s", i, p.effect[i], a,
                               match ? "   <== same as the client's" : "");
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
 
             const int ta = (p.dominantA >= 0 && p.dominantA < static_cast<int>(p.layers)) ? p.effectTerrain[p.dominantA] : -1;
@@ -95,14 +96,14 @@ namespace wxl_livingazeroth::debug
             Describe(tb, b, sizeof(b));
             std::snprintf(line, sizeof(line), "cell's dominant layer: A = layer %d -> %s   B (axes swapped) = layer %d -> %s",
                           p.dominantA, a, p.dominantB, b);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             const char* verdict =
                 ta >= 0 && ta == s.playerTerrainType ? "MATCH (A): the client's value is the cell's dominant layer -> ground effect -> last column" :
                 tb >= 0 && tb == s.playerTerrainType ? "MATCH (B): same, with the axes the other way round" :
                 anyMatch                             ? "PARTIAL: one of the chunk's layers matches, but not the cell's dominant one" :
                                                        "NO MATCH: the client's value doesn't come from these layers (or you're on a WMO/object)";
-            g_api->UiText(verdict);
+            ui::Text(g_api, verdict);
         }
 
         void __cdecl Panel(void* user)

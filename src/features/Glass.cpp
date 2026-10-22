@@ -14,6 +14,7 @@
 #include "game/Camera.hpp"
 #include "game/Gfx.hpp"
 #include "game/Gx.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -1611,17 +1612,17 @@ namespace wxl_livingazeroth::glass
         api->UiCheckbox("light through the panes on the floor##glfl", &s.floorLight);
         api->UiSliderFloat("floor light: strength##glfls", &s.floorStrength, 0.0f, 3.0f);
         api->UiSliderFloat("panes: range from the camera (yd)##glr", &s.range, 20.0f, 150.0f);
-        api->UiText(g_status.c_str());
-        api->UiText(StatusLine());
-        api->UiText(glassshafts::StatusLine());
+        ui::Text(api, g_status.c_str());
+        ui::Text(api, StatusLine());
+        ui::Text(api, glassshafts::StatusLine());
         char line[256];
         std::snprintf(line, sizeof(line), "light: sun through %.2f, sky %.2f, day %.2f, dim %.2f; camera indoors %.2f",
                       g_light.sunGain, g_light.skyGain, g_light.day, g_light.dim, g_indoors);
-        api->UiText(line);
-        api->UiText(RoomLine());
-        api->UiText(WindowLine());
-        api->UiText(FrostLine());
-        api->UiText(BacklitLine());
+        ui::Text(api, line);
+        ui::Text(api, RoomLine());
+        ui::Text(api, WindowLine());
+        ui::Text(api, FrostLine());
+        ui::Text(api, BacklitLine());
     }
 
     const char* BacklitLine()

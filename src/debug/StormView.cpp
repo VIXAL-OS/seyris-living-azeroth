@@ -6,6 +6,7 @@
 #include "../env/Storm.hpp"
 #include "../env/StormModel.hpp"
 #include "../env/ThunderDsp.hpp"
+#include "UiText.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -40,17 +41,17 @@ namespace wxl_livingazeroth::debug
             std::snprintf(line, sizeof(line), "%s: rain grade %.2f%s (rain %.2f), storminess %.2f",
                           storm::PhaseName(static_cast<storm::Phase>(st.phase)), st.grade,
                           st.overridden ? " (the climate panel's override)" : "", st.rain, st.storminess);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             char next[32] = "none coming";
             if (st.nextFlash >= 0.0f) std::snprintf(next, sizeof(next), "in %.0f s", st.nextFlash);
             std::snprintf(line, sizeof(line), "now: darkness %.2f, flash in the sky %.2f, on the ground %.2f; next flash %s",
                           st.darkness, st.skyFlash, st.sceneFlash, next);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             std::snprintf(line, sizeof(line), "this session: %u flashes in the clouds, %u strikes (last at %.0f yd), %u cracks played (%d on their way), %u bolts (%d up), %u frames of strike light; scorch mark: %.0f s left",
                           st.flashes, st.strikes, st.lastStrikeDistance, st.sounds, st.pendingSounds, st.bolts, st.liveBolts, st.lights, st.scorchLeft);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             std::snprintf(line, sizeof(line), "day-night colours: %s (%u frames shaded); bolt models: %s", storm::BandStatus(), st.bandFrames, storm::BoltStatus());
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             g_api->UiSeparator();
             g_api->UiCheckbox("storms##storm", &s.enabled);
@@ -76,11 +77,11 @@ namespace wxl_livingazeroth::debug
             {
                 std::snprintf(line, sizeof(line), "the fog (the distance fog; the ground fog and haze take it): the client's #%06X -> ours #%06X, day %.2f",
                               static_cast<unsigned>(st.fogIn & 0xFFFFFF), static_cast<unsigned>(st.fogOut & 0xFFFFFF), st.day);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             std::snprintf(line, sizeof(line), "snow (%s): the weather set's share %.2f; the distance fog ends %.0f -> %.0f yd, starts x%.2f -> x%.2f",
                           storm::SnowStatus(), st.snow, st.fogEndIn, st.fogEndOut, st.fogStartIn, st.fogStartOut);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             if (g_api->UiCollapsingHeader("Experimental##storm"))
             {
                 g_api->UiCheckbox("bolt models at strikes (our own models in the client's scene)##storm", &s.bolts);
@@ -94,17 +95,17 @@ namespace wxl_livingazeroth::debug
                 g_api->UiSliderFloat("echo amount (x its repeats)##storm", &d.echoAmount, 0.0f, 2.0f);
                 const thunderdsp::Status& ft = thunderdsp::GetStatus();
                 std::snprintf(line, sizeof(line), "  filters: %s", thunderdsp::StatusText());
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 std::snprintf(line, sizeof(line), "  %u layers filtered, %u near enough to stay crisp, %u unfiltered while unavailable; chains: %d made, %d busy now",
                               ft.filtered, ft.plain, ft.unavailable, ft.chains, ft.busyChains);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 std::snprintf(line, sizeof(line), "  %u sounds joined a chain (%u sharing one), %u layers found no chain free, %u came too late for theirs, %u refused by FMOD",
                               ft.pool.joined, ft.pool.shared, ft.pool.busy, ft.pool.stale, ft.pool.failedJoins);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
 
             g_api->UiSeparator();
-            g_api->UiText("Testing (not saved). Rain grades: light from 0.27, medium from 0.40, heavy (thunder) from 0.70.");
+            ui::Text(g_api, "Testing (not saved). Rain grades: light from 0.27, medium from 0.40, heavy (thunder) from 0.70.");
             g_api->UiSliderFloat("rain grade##stormtest", &g_grade, 0.0f, 1.0f);
             if (g_api->UiButton("Storm at this grade (ours only)##stormtest")) climate::SetWeatherOverride(1, g_grade);
             g_api->UiSameLine();
@@ -121,7 +122,7 @@ namespace wxl_livingazeroth::debug
             {
                 const clientweather::Result& r = clientweather::Last();
                 std::snprintf(line, sizeof(line), "client weather: state %u, %s", r.state, r.note);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             if (g_api->UiButton("Flash in the clouds##stormtest")) storm::TestFlash();
             g_api->UiSameLine();
@@ -142,7 +143,7 @@ namespace wxl_livingazeroth::debug
             std::snprintf(line, sizeof(line), "at %.0f yd: the thunder comes %.1f s after the flash: %s%s", g_distance,
                           storm::ThunderDelay(g_distance), heard,
                           plan.count && g_distance < storm::kNearCrack ? " (near cracks vary: machine lightning half the time, Shaman thunder or Call Lightning)" : "");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             // Audition: each candidate recording at the slider's distance.
             const char* kits[static_cast<int>(storm::Kit::Count)];
@@ -159,16 +160,16 @@ namespace wxl_livingazeroth::debug
                 std::snprintf(line, sizeof(line), "  kit %d \"%s\": volume %.2f here (its own %.2f, min distance %.0f yd%s); Lua fallback: %s",
                               k.soundKitId, k.name, volume, k.volume, k.minDistance, k.positional ? ", from the strike's direction" : ", not positional",
                               lua ? lua : "none quiet enough (left out)");
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 char filters[160];
                 const storm::Kit kit = static_cast<storm::Kit>(g_kit >= 0 && g_kit < static_cast<int>(storm::Kit::Count) ? g_kit : 0);
                 Describe(thunderdsp::Preview(kit == storm::Kit::Rumble ? thunderdsp::Layer::Rumble : thunderdsp::Layer::Crack, g_distance), filters, sizeof(filters));
                 std::snprintf(line, sizeof(line), "  its distance filters here: %s%s", filters, g_kitFilters ? "" : " -- off for this audition");
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             std::snprintf(line, sizeof(line), "thunder through %s; played %u through the kits, %u through Lua; declined by the client %u, left out %u; last kit result %d",
                           storm::SoundStatus(), st.nativeSounds, st.luaSounds, st.declinedSounds, st.droppedSounds, st.lastKitResult);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
     }
 

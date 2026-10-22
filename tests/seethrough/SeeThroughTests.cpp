@@ -33,6 +33,7 @@
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
 #include "env/SeeThroughModel.hpp"
+#include "debug/UiText.hpp"
 #include "features/Glass.hpp"
 #include "wxl_seyris/CdbcApi.hpp"
 
@@ -482,6 +483,29 @@ int main(int argc, char** argv)
             std::printf("  %zu guards\n", sizeof(st::kGuards) / sizeof(st::kGuards[0]));
         });
     else std::printf("SKIP guards (no Wow.exe given)\n");
+
+    // --- the panel's text -------------------------------------------------------------------------------------------
+    Test("panel text (2026-10-22): UiTextWrapped where the running core's table carries it (v1.1.272), UiText on an older "
+         "core's shorter table or with the member unset", [] {
+        static int plain = 0, wrapped = 0;
+        WXL_Api api{};
+        api.UiText = [](const char*) { ++plain; };
+        api.UiTextWrapped = [](const char*) { ++wrapped; };
+        // (appended right after UiInputText: the core before v1.1.272 hands a table that ends there)
+        CHECK(offsetof(WXL_Api, UiTextWrapped) == offsetof(WXL_Api, UiInputText) + sizeof(api.UiInputText));
+        api.structSize = static_cast<uint32_t>(sizeof(WXL_Api));
+        CHECK(wxl_livingazeroth::ui::HasTextWrapped(&api));
+        wxl_livingazeroth::ui::Text(&api, "a line");
+        CHECK(wrapped == 1 && plain == 0);
+        api.structSize = static_cast<uint32_t>(offsetof(WXL_Api, UiTextWrapped));   // the older core's size
+        CHECK(!wxl_livingazeroth::ui::HasTextWrapped(&api));
+        wxl_livingazeroth::ui::Text(&api, "a line");
+        CHECK(wrapped == 1 && plain == 1);
+        api.structSize = static_cast<uint32_t>(sizeof(WXL_Api));
+        api.UiTextWrapped = nullptr;
+        wxl_livingazeroth::ui::Text(&api, "a line");
+        CHECK(wrapped == 1 && plain == 2 && !wxl_livingazeroth::ui::HasTextWrapped(nullptr));
+    });
 
     // --- the room behind a window ----------------------------------------------------------------------------------
     Test("InteriorBehind: the smallest interior box holding a probe; the walk's skipped groups; the deeper probe; none", [] {

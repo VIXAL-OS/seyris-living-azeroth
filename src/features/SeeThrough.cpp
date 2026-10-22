@@ -9,6 +9,7 @@
 #include "SeeThroughDraw.hpp"
 
 #include "game/Gx.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -1484,12 +1485,12 @@ namespace wxl_livingazeroth::seethrough
         api->UiCheckbox("from inside: the street through the room's own windows where it's really seen through them, as through an open "
                         "door, the glass drawn over it the same way (SeeThroughFromInside; the inn only, for now; it doesn't need the "
                         "first box)##stinside", &g_settings.fromInside);
-        api->UiText(StatusLine());
+        ui::Text(api, StatusLine());
         char line[800];
         std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget; "
                       "%u of them: the room not seen through it from here), %u rooms added",
                       g_last.groups, g_last.opened, g_last.shut, g_last.blind, g_last.groupsAdded);
-        api->UiText(line);
+        ui::Text(api, line);
         if (g_settings.fromInside)
         {
             // what the walk from inside did: the ways out it found (the client's doors and openings) and the windows added to
@@ -1502,20 +1503,20 @@ namespace wxl_livingazeroth::seethrough
                           g_last.insideGroups, g_last.insideOpened, g_last.insideShut, g_last.insideBlind, g_last.insideFar, g_last.ways, own,
                           g_last.outdoors < 0 ? "- (the camera isn't in a building)" : g_last.outdoors ? "drawn through them"
                                                                                        : "not drawn (no way out on the screen)");
-            api->UiText(line);
+            ui::Text(api, line);
         }
         std::snprintf(line, sizeof(line), "Glass batches: %u in opened groups, %u kept opaque, %u deferred, %u drawn over the room (%u opaque: no redraw "
                       "in their shader); %u drawn as they were", g_last.glassBatches, g_last.kept, g_last.deferred, g_last.redrawn, g_last.opaque, g_last.passed);
-        api->UiText(line);
+        ui::Text(api, line);
         std::snprintf(line, sizeof(line), "Faults: %u%s%s; captures failed %u, target changed %u, dropped %u", g_faults, g_faulted ? " (off: " : "",
                       g_faulted ? g_faultWhere : "", g_last.captureFailed, g_last.targetMoved, g_last.dropped);
         if (g_faulted) std::strncat(line, ")", sizeof(line) - std::strlen(line) - 1);
-        api->UiText(line);
+        ui::Text(api, line);
         if (g_settings.redraw)
         {
             std::snprintf(line, sizeof(line), "Lead masks (the per-pixel redraw's, from GlassLead.cdbc's panes): %u built, %u not%s%s", g_leadBuilt,
                           g_leadFailed, g_leadFailed ? ": " : "", g_leadWhy);
-            api->UiText(line);
+            ui::Text(api, line);
         }
         // what the redraw set and read back (once a second)
         if (g_probeShown.valid)
@@ -1527,7 +1528,7 @@ namespace wxl_livingazeroth::seethrough
                           q.mode ? "per pixel" : "the whole glass", q.glassOn, q.hasReplay, q.b11, q.c219[0], q.c219[1], q.c219[2], q.c219[3], q.c28[0],
                           q.c28[1], q.c28[2], q.c28[3], q.c33[0], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.atoc, q.multisample,
                           q.shader);
-            api->UiText(line);
+            ui::Text(api, line);
         }
         if (g_lookupShown.valid)
         {
@@ -1542,19 +1543,19 @@ namespace wxl_livingazeroth::seethrough
                           d[5][3], d[3][0], d[3][1], d[3][2], d[4][0] != 0.0f ? 1.0f / d[4][0] : 0.0f, d[5][0], d[5][1], d[5][2], d[0][3], d[1][3], d[2][3],
                           q.haveCam ? "" : "(none) ", q.cam[0], q.cam[1], q.cam[2], d[6][0], d[6][1], d[6][2], q.eye[0], q.eye[1], q.eye[2], q.tableAtDraw,
                           q.glassTable, !q.applied ? "not read" : same ? "the state block put them back" : "the state block didn't put them all back (put back from the capture)");
-            api->UiText(line);
+            ui::Text(api, line);
             std::snprintf(line, sizeof(line), "The redraw split by window: %s (%u triangles open, %u the rest); the client's index buffer %s",
                           q.split ? "yes" : "no: whole, the lookup alone", q.open, q.rest,
                           q.indices == 1 ? "holds the batch's own indices" : q.indices == 0 ? "differs from the batch's (drawn whole)"
                           : q.indices == -1 ? "can't be read (write-only: drawn whole)" : "not checked (nothing open to split)");
-            api->UiText(line);
+            ui::Text(api, line);
         }
         // each window on the screen and facing the camera last frame: open, or why not
         if (g_last.replayFirst >= 0.0f)
         {
             std::snprintf(line, sizeof(line), "The redraw: open windows from ordinal %.0f, bits 0x%04X (a shut window's glass and fake room as the client draws them)",
                           g_last.replayFirst, g_last.replayBits);
-            api->UiText(line);
+            ui::Text(api, line);
         }
         for (unsigned i = 0; i < g_last.noteCount; ++i)
         {
@@ -1587,7 +1588,7 @@ namespace wxl_livingazeroth::seethrough
                                                       "-", "shut: the room's or the building's surfaces not all read yet (one a frame)",
                                                       "shut: the street isn't seen through it from here", "-" };
             std::snprintf(line, sizeof(line), "  %swindow %u: %s%s", n.inside ? "from inside, " : "", n.ordinal, (n.inside ? kWhyInside : kWhy)[n.why], rays);
-            api->UiText(line);
+            ui::Text(api, line);
         }
     }
 

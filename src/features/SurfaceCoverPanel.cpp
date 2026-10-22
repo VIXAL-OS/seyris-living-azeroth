@@ -6,6 +6,7 @@
 #include "../env/Regional.hpp"
 #include "../env/WorldQuery.hpp"
 #include "GroundMaterialTable.hpp"
+#include "../debug/UiText.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -43,7 +44,7 @@ namespace wxl_livingazeroth::cover::detail
         static const char* const coverage[] = { "Everywhere (test: nothing painted, fallen snow anywhere)", "From SurfaceCover.cdbc" };
         g_api->UiCombo("Where", &g_settings.coverage, coverage, 2);
         g_api->UiSliderInt("Levels (40 / 80 / 160 / 320 / 640 yd)", &g_settings.levels, 1, kMaxLevels);
-        g_api->UiText("Multipliers on SurfaceCover.cdbc (1 = exactly the table):");
+        ui::Text(g_api, "Multipliers on SurfaceCover.cdbc (1 = exactly the table):");
         g_api->UiSliderFloat("Depth (x table)", &g_settings.depthMul, 0.0f, 3.0f);
         g_api->UiSliderFloat("Drift noise (x table)", &g_settings.driftMul, 0.0f, 3.0f);
         g_api->UiSliderFloat("Edge breakup (x table)", &g_settings.breakupMul, 0.0f, 3.0f);
@@ -59,15 +60,15 @@ namespace wxl_livingazeroth::cover::detail
         std::snprintf(line, sizeof(line), "  rings: %u drawn, %u made (%u following the print's outline) from %u prints found; on building floors %u live, %u made",
                       static_cast<unsigned>(g_ripples.List().size()), g_ripplesMade, g_ripplesShaped, coverprints::PrintsFound(),
                       static_cast<unsigned>(g_wmoRipples.List().size()), g_wmoRipplesMade);
-        g_api->UiText(line);
+        ui::Text(g_api, line);
         g_api->UiCheckbox("The client's footprints on top of the cover", &g_settings.printsOnCover);
         std::snprintf(line, sizeof(line), "  footprints: %s; last draw %u, %u of them on the cover", coverprints::Status(),
                       coverprints::LastLive(), coverprints::LastOnCover());
-        g_api->UiText(line);
+        ui::Text(g_api, line);
         g_api->UiCheckbox("Sand: footprints where the client counts it as dirt (Silithus, Feralas, Ashenvale, ...)", &g_settings.sandPrints);
         std::snprintf(line, sizeof(line), "  sand prints: %s; steps %u, %u of them printed on such sand", coverprints::StepStatus(),
                       coverprints::StepsSeen(), coverprints::StepsOnSand());
-        g_api->UiText(line);
+        ui::Text(g_api, line);
         g_api->UiSliderFloat("Trench width (x unit size)", &g_settings.stampScale, 0.3f, 3.0f);
         g_api->UiSliderFloat("Far lift (yd, 80 -> 400 yd away)", &g_settings.farLift, 0.0f, 3.0f);
         g_api->UiCheckbox("Light and fog like the terrain", &g_settings.sceneLight);
@@ -78,13 +79,13 @@ namespace wxl_livingazeroth::cover::detail
             char cam[128];
             std::snprintf(cam, sizeof(cam), "  camera tests %u, pulled in %u (last by %.2f yd)",
                           g_cameraStats.calls, g_cameraStats.pulled, g_cameraStats.lastPull);
-            g_api->UiText(cam);
+            ui::Text(g_api, cam);
         }
         g_api->UiCheckbox("Effects at units' feet (auras) sit on the cover", &g_settings.liftBase);
         {
             char lift[96];
             std::snprintf(lift, sizeof(lift), "  lifted %u times (last by %.2f yd)", LiftedCount(), LastLift());
-            g_api->UiText(lift);
+            ui::Text(g_api, lift);
         }
         g_api->UiCheckbox("Selection circles and spell ground effects on the cover", &g_settings.decals);
         {
@@ -92,15 +93,15 @@ namespace wxl_livingazeroth::cover::detail
             char decals[256];
             std::snprintf(decals, sizeof(decals), "  decal calls %u (%u from models): drawn on the cover %u; skipped: no cover drawn %u, nothing on the terrain %u, not overhead %u (last caller 0x%08X, flags 0x%X)",
                           ds.calls, ds.modelCalls, ds.drawn, ds.noCover, ds.noPieces, ds.noBox, static_cast<unsigned>(ds.lastCaller), ds.lastFlags);
-            g_api->UiText(decals);
+            ui::Text(g_api, decals);
             std::snprintf(decals, sizeof(decals), "  last replayed (%s): colour %08X, patches %u; stage 0 coords 0x%X flags 0x%X, stage 1 coords 0x%X flags 0x%X; blend %u/%u, alpha test %u ref %u, z func %u, shaders %u",
                           ds.lastFromModel ? "model" : "decal", ds.lastColor, ds.lastPatches, ds.texCoordIndex, ds.transformFlags,
                           ds.texCoordIndex1, ds.transformFlags1, ds.srcBlend, ds.dstBlend, ds.alphaTest, ds.alphaRef, ds.zFunc, ds.shaders);
-            g_api->UiText(decals);
+            ui::Text(g_api, decals);
             const float* m = ds.matrix;
             std::snprintf(decals, sizeof(decals), "  stage 0 matrix [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
                           m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
-            g_api->UiText(decals);
+            ui::Text(g_api, decals);
             if (g_api->UiButton("Reset decal counts")) g_decalStats = DecalStats{};
         }
         g_api->UiSliderFloat("Snow brightness", &g_settings.brightness, 0.3f, 1.5f);
@@ -116,7 +117,7 @@ namespace wxl_livingazeroth::cover::detail
         g_api->UiCombo("Draw point", &g_settings.drawPoint, drawPoints, 2);
 
         g_api->UiSeparator();
-        g_api->UiText("Fallen snow (test, not saved): a deposit on your zone, which then melts or stays by the climate.");
+        ui::Text(g_api, "Fallen snow (test, not saved): a deposit on your zone, which then melts or stays by the climate.");
         g_api->UiSliderFloat("Deposit (yd)", &g_depositYards, 0.02f, 0.6f);
         if (g_api->UiButton("Deposit snow")) regional::DepositSnow(g_depositYards);
         g_api->UiSameLine();
@@ -124,19 +125,19 @@ namespace wxl_livingazeroth::cover::detail
 
         g_api->UiSeparator();
         std::snprintf(line, sizeof(line), "SurfaceCover.cdbc: %s", covertable::Status());
-        g_api->UiText(line);
+        ui::Text(g_api, line);
         // On its own line: the status runs past the window's edge and took the button with it.
         if (g_api->UiButton("Reload table (SurfaceCover, GroundMaterial, GroundMaterialSelector)")) covertable::Load(g_cdbcApi);
         std::snprintf(line, sizeof(line), "  cover textures in view: %u (slots: %d)%s", g_texturesInView, covertable::kMaxCoverTextures,
                       g_texturesInView > static_cast<unsigned>(covertable::kMaxCoverTextures) ? " -- the least present ones draw without their texture" : "");
-        g_api->UiText(line);
+        ui::Text(g_api, line);
         for (int sl = 0; sl < covertable::kMaxCoverTextures; ++sl)
         {
             if (!g_slotId[sl]) continue;
             auto st = g_textureStatus.find(g_slotId[sl]);
             std::snprintf(line, sizeof(line), "  slot %d: \"%s\" -- %s", sl + 1, covertable::CoverTexturePath(g_slotId[sl]),
                           st == g_textureStatus.end() ? "?" : st->second.c_str());
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
         std::vector<std::string> lines;
         auto add = [&lines, &line]() { lines.emplace_back(line); };
@@ -282,7 +283,7 @@ namespace wxl_livingazeroth::cover::detail
             for (const std::string& l : lines) text += l + "\r\n";
             std::snprintf(status, sizeof(status), CopyToClipboard(text) ? "copied" : "clipboard unavailable");
         }
-        if (status[0]) { g_api->UiSameLine(); g_api->UiText(status); }
-        for (const std::string& l : lines) g_api->UiText(l.c_str());
+        if (status[0]) { g_api->UiSameLine(); ui::Text(g_api, status); }
+        for (const std::string& l : lines) ui::Text(g_api, l.c_str());
     }
 }

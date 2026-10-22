@@ -12,6 +12,7 @@
 #include "../features/TerrainWetness.hpp"
 #include "../features/WmoIce.hpp"
 #include "../env/WorldQuery.hpp"
+#include "UiText.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -34,38 +35,38 @@ namespace wxl_livingazeroth::debug
         {
             const world::Snapshot& s = world::Current();
             char line[256];
-            if (!s.inWorld) { g_api->UiText("not in world"); return; }
+            if (!s.inWorld) { ui::Text(g_api, "not in world"); return; }
 
             const climate::Clock& c = climate::Now();
             const int minutes = static_cast<int>(c.dayFraction * 1440.0f + 0.5f) % 1440;
             std::snprintf(line, sizeof(line), "game date %04d-%02d-%02d %02d:%02d (server); sky time %02d:%02d; year %.2f",
                           c.year, c.month, c.day, c.hour, c.minute, minutes / 60, minutes % 60, c.yearFraction);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             // Where: the client's zone names and the area chain (what AreaClimate and the other scoped
             // tables match against, most specific first).
             std::snprintf(line, sizeof(line), "zone \"%s\", sub-zone \"%s\", map %d", s.zoneText, s.subZoneText, s.mapId);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             int n = std::snprintf(line, sizeof(line), "area chain:");
             for (int i = 0; i < s.areaCount && n < static_cast<int>(sizeof(line)) - 16; ++i)
                 n += std::snprintf(line + n, sizeof(line) - n, "%s %u", i ? " ->" : "", s.areaChain[i]);
             if (!s.areaCount) std::snprintf(line + n, sizeof(line) - n, " none");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             const uint32_t area = s.areaCount > 0 ? s.areaChain[0] : 0;
             const climate::Row& row = climate::For(area, s.mapId);
             std::snprintf(line, sizeof(line), "AreaClimate.cdbc: %s", climate::Status());
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             std::snprintf(line, sizeof(line), "here (area %u, map %d): day %.1f / night %.1f degC, season +-%.1f (offset %.1f months), humidity %.2f",
                           area, s.mapId, row.dayTemp, row.nightTemp, row.seasonAmplitude * 0.5f, row.seasonOffset, row.humidity);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             if (climate::HasCloudBase(row))
             {
                 char top[32] = "base + deck thickness";
                 if (row.cloudTop > climate::kNoCloudBase * 0.5f) std::snprintf(top, sizeof(top), "%.0f", row.cloudTop);
                 std::snprintf(line, sizeof(line), "mountain cloud: a deck from z %.0f to %s (you're at %.0f; fogginess %.2f)",
                               row.cloudBase, top, s.playerPos[2], row.fogginess);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             const climate::Breakdown t = climate::Temperature(row);
             const climate::Weather& w = climate::CurrentWeather();
@@ -73,17 +74,17 @@ namespace wxl_livingazeroth::debug
             std::snprintf(line, sizeof(line), "temperature %.1f degC = %.1f time of day %+.1f season %+.1f weather (%s %.2f)%s",
                           t.total, t.daily, t.season, t.weather, kWeather[w.type >= 0 && w.type < 4 ? w.type : 0], w.intensity,
                           t.test != 0.0f ? " + test offset" : "");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             if (g_api->UiButton("Reload AreaClimate")) climate::Load(g_cdbc);
 
             g_api->UiSeparator();
             const fields::MoistureDetail m = fields::Moisture(s.playerPos);
-            if (!m.known) g_api->UiText("moisture here: not sampled yet");
+            if (!m.known) ui::Text(g_api, "moisture here: not sampled yet");
             else
             {
                 std::snprintf(line, sizeof(line), "moisture here %.2f -> settles at %.2f (material rest %.2f, absorbency %.2f)",
                               m.value, m.equilibrium, m.rest, m.absorbency);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 static const char* const kCategory[] = { "water", "ocean", "magma", "slime" };
                 const int cat = terrain::LiquidCategoryOf(m.liquid);
                 char liquid[96];
@@ -94,10 +95,10 @@ namespace wxl_livingazeroth::debug
                     std::snprintf(line, sizeof(line), "  liquid %s: %.1f yd away, %.1f yd above its surface -> shore %.2f",
                                   liquid, m.waterDistance, m.heightAboveWater, m.shore);
                 else std::snprintf(line, sizeof(line), "  no liquid within the grid");
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 std::snprintf(line, sizeof(line), "  spot's zone %u (yours %u), zone share %.2f, zone soak mix %.2f, rain now %.2f, changing %+.4f/s",
                               m.zone, regional::PlayerZone(), m.zoneShare, m.zoneSoakMix, m.rainShare, m.changePerSecond);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 std::snprintf(line, sizeof(line), "  ground %.1f degC (air %.1f%s); open sky %.2f", m.temperature, m.airTemperature,
                               m.liquidHot && m.heat > 0.0f ? ", warmed by the liquid" : "", m.open);
                 if (m.liquidHot && m.heat > 0.0f)
@@ -105,20 +106,20 @@ namespace wxl_livingazeroth::debug
                     const size_t len = std::strlen(line);
                     std::snprintf(line + len, sizeof(line) - len, "; liquid %.0f degC, heat reach %.2f", m.liquidTemperature, m.heat);
                 }
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 if (m.hotShare > 0.0f)
                     std::snprintf(line, sizeof(line), "  hot ground here: %.0f%% painted, %.0f degC", m.hotShare * 100.0f, m.hotTemperature);
                 else if (m.groundHeatDistance >= 0.0f)
                     std::snprintf(line, sizeof(line), "  hot ground %.1f yd away (%.0f degC), heat reach %.2f", m.groundHeatDistance, m.groundHeatTemperature, m.groundHeat);
                 else
                     std::snprintf(line, sizeof(line), "  no hot ground within the grid");
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             if (g_api->UiButton("Refill moisture grid (test)")) fields::Refill();
             const fields::Stats st = fields::GetStats();
             std::snprintf(line, sizeof(line), "moisture grid: %u / %u cells sampled, %u under water, %u hot ground; rain soak so far %.2f; fill %.2f ms, shore pass %.2f ms, step %.2f ms",
                           st.filled, st.cells, st.water, st.hotGround, st.rainSoak, st.fillMs, st.transformMs, st.tickMs);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             int shoreWorker = fields::ShoreWorker() ? 1 : 0;
             if (g_api->UiCheckbox("shoreline on a worker thread", &shoreWorker)) fields::SetShoreWorker(shoreWorker != 0);
             if (st.shoreWorker == fields::ShoreWorkerState::Failed)
@@ -129,7 +130,7 @@ namespace wxl_livingazeroth::debug
                 std::snprintf(line, sizeof(line), "  shore pass on the worker%s (game thread: copy %.2f ms + apply %.2f ms); %u results applied, %u dropped (grid moved)%s",
                               st.shoreWorker == fields::ShoreWorkerState::Running ? "" : " (starts when needed)",
                               st.shoreCopyMs, st.shoreApplyMs, st.shoreApplied, st.shoreStale, st.shorePending ? "; one on its way" : "");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
 
             // The regional layer: every zone seen this session.
             if (g_api->UiCollapsingHeader("Zones (regional layer)"))
@@ -137,11 +138,11 @@ namespace wxl_livingazeroth::debug
                 const uint32_t zone = regional::PlayerZone();
                 std::snprintf(line, sizeof(line), "you are in zone %u \"%s\" (AreaTable name; the client says \"%s\")",
                               zone, regional::AreaName(zone), s.zoneText);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 const regional::ZoneMap& zm = regional::Map();
                 std::snprintf(line, sizeof(line), "far map: %u / %d chunks known (+-%.0f yd), each showing its zone's state",
                               zm.known, zm.size * zm.size, zm.size * zm.cellSize * 0.5f);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
                 for (const regional::Zone& z : regional::Zones())
                 {
                     const double ago = regional::Now() - z.lastSeen;
@@ -153,12 +154,12 @@ namespace wxl_livingazeroth::debug
                     const size_t len = std::strlen(line);
                     if (!(z.map == s.mapId && z.id == zone) && z.source == regional::Source::Observed)
                         std::snprintf(line + len, sizeof(line) - len, "last here %.0f s ago", ago);
-                    g_api->UiText(line);
+                    ui::Text(g_api, line);
                 }
             }
 
             g_api->UiSeparator();
-            g_api->UiText(terrainwet::StatusLine());
+            ui::Text(g_api, terrainwet::StatusLine());
             int terrainOn = terrainwet::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("wet terrain (darker where the ground is wetter than its rest)", &terrainOn)) terrainwet::SetEnabled(terrainOn != 0);
             static const char* const kDebugViews[] = { "debug: off", "debug: whole moisture grid (+-128 yd)", "debug: whole terrain", "debug: 10 yd stripes" };
@@ -168,21 +169,21 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiSliderFloat("wet terrain strength", &strength, 0.0f, 1.0f)) terrainwet::SetStrength(strength);
 
             g_api->UiSeparator();
-            g_api->UiText(terrainice::StatusLine());
+            ui::Text(g_api, terrainice::StatusLine());
             int iceOn = terrainice::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice on icy ground", &iceOn)) terrainice::SetEnabled(iceOn != 0);
             float iceStrength = terrainice::Strength();
             if (g_api->UiSliderFloat("clear ice strength", &iceStrength, 0.0f, 1.0f)) terrainice::SetStrength(iceStrength);
             float clarity = terrainice::Clarity();
             if (g_api->UiSliderFloat("clear ice clarity", &clarity, 0.0f, 1.0f)) terrainice::SetClarity(clarity);
-            g_api->UiText(modelice::StatusLine());
+            ui::Text(g_api, modelice::StatusLine());
             int iceModels = modelice::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice on ice models", &iceModels)) modelice::SetEnabled(iceModels != 0);
             int fadeHats = modelice::FadeHats() ? 1 : 0;
             if (g_api->UiCheckbox("fade the waterfall hats in from their upstream end", &fadeHats)) modelice::SetFadeHats(fadeHats != 0);
             int hideHats = modelice::HideHats() ? 1 : 0;
             if (g_api->UiCheckbox("hide the waterfall hats (test)", &hideHats)) modelice::SetHideHats(hideHats != 0);
-            g_api->UiText(wmoice::StatusLine());
+            ui::Text(g_api, wmoice::StatusLine());
             int iceBuildings = wmoice::Enabled() ? 1 : 0;
             if (g_api->UiCheckbox("clear ice in buildings and dungeons", &iceBuildings)) wmoice::SetEnabled(iceBuildings != 0);
             crystal::DrawPanelSection(g_api);
@@ -191,7 +192,7 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiCheckbox("clear ice debug: tint what counts as ice magenta", &iceDebug)) terrainice::SetDebug(iceDebug != 0);
 
             g_api->UiSeparator();
-            g_api->UiText("Testing (not saved):");
+            ui::Text(g_api, "Testing (not saved):");
             static const char* const kChoices[] = { "live weather", "fine", "rain", "snow", "sand" };
             bool changed = g_api->UiCombo("weather", &g_weatherChoice, kChoices, 5) != 0;
             changed |= g_api->UiSliderFloat("intensity", &g_weatherIntensity, 0.0f, 1.0f) != 0;
@@ -208,7 +209,7 @@ namespace wxl_livingazeroth::debug
             {
                 const clientweather::Result& r = clientweather::Last();
                 std::snprintf(line, sizeof(line), "client weather: state %u, %s (record type %d)", r.state, r.note, r.recordType);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             bool timeChanged = g_api->UiCheckbox("override time of day", &g_timeOn) != 0;
             timeChanged |= g_api->UiSliderFloat("hour", &g_timeHours, 0.0f, 24.0f) != 0;

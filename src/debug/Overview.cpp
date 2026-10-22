@@ -13,6 +13,7 @@
 #include "../features/GroundFog.hpp"
 #include "../render/PostAA.hpp"
 #include "../render/SceneDepth.hpp"
+#include "UiText.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -37,7 +38,7 @@ namespace wxl_livingazeroth::debug
         {
             const world::Snapshot& s = world::Current();
             char line[320];
-            if (!s.inWorld) { g_api->UiText("Not in the world."); return; }
+            if (!s.inWorld) { ui::Text(g_api, "Not in the world."); return; }
 
             // Where: names and the IDs table rows need.
             std::string chain;
@@ -48,11 +49,11 @@ namespace wxl_livingazeroth::debug
                 chain += part;
             }
             std::snprintf(line, sizeof(line), "You are in: %s", chain.empty() ? "(no area)" : chain.c_str());
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             std::snprintf(line, sizeof(line), "Map %d, %s; position %.1f %.1f %.1f; zone record %u",
                           s.mapId, s.outdoors ? "outdoors" : "indoors", s.playerPos[0], s.playerPos[1], s.playerPos[2],
                           regional::PlayerZone());
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             g_api->UiSeparator();
 
             // When and the air.
@@ -65,17 +66,17 @@ namespace wxl_livingazeroth::debug
             const int sky = static_cast<int>(c.dayFraction * 1440.0f + 0.5f) % 1440;
             std::snprintf(line, sizeof(line), "%04d-%02d-%02d, sky %02d:%02d%s", c.year, c.month, c.day, sky / 60, sky % 60,
                           climate::TimeOverride() >= 0.0f ? " (time override)" : "");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             std::snprintf(line, sizeof(line), "Air %.1f degC, %s %.1f degC/h (in an hour: %.1f)   humidity %.0f%%   fogginess %.2f   water %.1f degC",
                           t.total, trend < -0.2f ? "cooling" : (trend > 0.2f ? "warming" : "steady"), trend, hourAhead,
                           row.humidity * 100.0f, row.fogginess, climate::WaterTemperature(row));
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             const climate::Weather& w = climate::CurrentWeather();
             const wind::Sample ws = wind::At(s.playerPos);
             std::snprintf(line, sizeof(line), "Weather %s %.2f%s   wind %.2f from bearing %.0f (gust %.2f)   daylight %.2f",
                           WeatherName(w.type), w.intensity, climate::WeatherOverrideType() >= 0 ? " (override)" : "",
                           ws.strength, wind::BearingDegrees(), ws.gust, climate::SunNow().daylight);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             g_api->UiSeparator();
 
             // The ground here, and the zone's record.
@@ -87,12 +88,12 @@ namespace wxl_livingazeroth::debug
                               m.submerged ? ", under liquid" : "");
             else
                 std::snprintf(line, sizeof(line), "Ground: not known here yet");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             if (const regional::Zone* z = regional::Find(s.mapId, regional::PlayerZone()))
             {
                 std::snprintf(line, sizeof(line), "Zone: rain soak %.2f, fallen snow %.2f yd, painted snow kept %.2f",
                               z->rainSoak, z->snowDepth, z->paintedKeep);
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
             g_api->UiSeparator();
 
@@ -101,7 +102,7 @@ namespace wxl_livingazeroth::debug
             {
                 std::snprintf(line, sizeof(line), "Fog %-10s here %.2f -> %.2f", fog::KindName(k),
                               fog::AmountAt(k, s.playerPos[0], s.playerPos[1]), fog::TargetAt(k, s.playerPos[0], s.playerPos[1]));
-                g_api->UiText(line);
+                ui::Text(g_api, line);
             }
         }
 
@@ -172,7 +173,7 @@ namespace wxl_livingazeroth::debug
             std::snprintf(line, sizeof(line), "readable depth: %s",
                           depth::CurrentState() == depth::State::Active ? "active"
                           : depth::CurrentState() == depth::State::Copied ? "active (MSAA copy)" : "off (see the scene depth page)");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
 
         void __cdecl QuickWhere(void* /*user*/)
@@ -183,7 +184,7 @@ namespace wxl_livingazeroth::debug
             const uint32_t zone = s.areaCount > 1 ? s.areaChain[s.areaCount - 1] : area;
             std::snprintf(line, sizeof(line), "%s (%u), zone %s (%u), map %d", regional::AreaName(area), area,
                           regional::AreaName(zone), zone, s.mapId);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
     }
 

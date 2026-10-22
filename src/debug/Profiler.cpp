@@ -3,6 +3,7 @@
 
 #include "engine/events/Event.hpp"
 #include "game/Gx.hpp"
+#include "UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -769,7 +770,7 @@ namespace wxl_livingazeroth::prof
             g_api->UiCheckbox("profile the frame (a little overhead while on)", &g_enabled);
             g_api->UiCheckbox("GPU time per category (timestamp queries; read back 3 frames late)", &g_gpu);
             g_api->UiCheckbox("main thread by module (sampled about 1000 times a second; ~1-3% overhead)", &g_sample);
-            if (!g_gpuSupported) g_api->UiText("GPU timestamps are not supported by this device.");
+            if (!g_gpuSupported) ui::Text(g_api, "GPU timestamps are not supported by this device.");
             unsigned hooked = 0;
             for (int k = 0; k < kHookCount; ++k) hooked += g_hooked[k] ? 1 : 0;
             char line[640];
@@ -778,9 +779,9 @@ namespace wxl_livingazeroth::prof
                           "GPU times are spans on the GPU's timeline, waiting included: when the CPU is the limit "
                           "(the GPU span about equals the CPU frame), the GPU's idle time lands in 'other', and the CPU column is the one to read.",
                           hooked, kHookCount, g_origDraw ? "on" : "off", g_gpuNotReady, g_gpuDisjoint);
-            g_api->UiText(line);
-            if (!g_enabled) { g_api->UiText("(off)"); return; }
-            if (!g_shown.valid) { g_api->UiText("(collecting...)"); return; }
+            ui::Text(g_api, line);
+            if (!g_enabled) { ui::Text(g_api, "(off)"); return; }
+            if (!g_shown.valid) { ui::Text(g_api, "(collecting...)"); return; }
             const std::string report = Report();
             if (g_api->UiButton("Copy to clipboard##profcopy")) CopyToClipboard(report);
             size_t at = 0;
@@ -788,7 +789,7 @@ namespace wxl_livingazeroth::prof
             {
                 const size_t end = report.find('\n', at);
                 const std::string row = report.substr(at, end == std::string::npos ? std::string::npos : end - at);
-                g_api->UiText(row.c_str());
+                ui::Text(g_api, row.c_str());
                 if (end == std::string::npos) break;
                 at = end + 1;
             }

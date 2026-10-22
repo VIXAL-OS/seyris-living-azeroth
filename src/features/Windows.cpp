@@ -7,6 +7,7 @@
 #include "Glass.hpp"
 
 #include "wxl/PluginApi.h"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 
@@ -430,8 +431,8 @@ namespace wxl_livingazeroth::windows
         if (s.nightTest >= 0.0f) api->UiSliderFloat("test: night factor (0 day .. 1 night)##wntv", &s.nightTest, 0.0f, 1.0f);
 
         char line[384];
-        api->UiText(g_status.c_str());
-        api->UiText(g_roomStatus.c_str());
+        ui::Text(api, g_status.c_str());
+        ui::Text(api, g_roomStatus.c_str());
         {
             const float ch = glass::Clock().Hour();
             const int hh = static_cast<int>(ch) % 24, mm = static_cast<int>((ch - std::floor(ch)) * 60.0f);
@@ -445,7 +446,7 @@ namespace wxl_livingazeroth::windows
                               hh, mm, g_stats.roomWindows, g_stats.roomWindows - g_stats.roomDimmed - g_stats.roomDark, g_stats.roomDimmed,
                               g_stats.roomDark, 100.0f * g_stats.roomMeanLit, glass::Clock().Fading() ? "; the time jumped: cross-fading" : "",
                               g_unresolved ? "; some rooms not in GlassBuildings (the default house)" : "");
-            api->UiText(line);
+            ui::Text(api, line);
             if (!s.lightsFollowRooms) std::snprintf(line, sizeof(line), "frosted windows: the lights don't follow the glass (switched off)");
             else if (!glass::FrostedHideGlow() && glass::HearthAmplitudeNow() <= 0.0f)
                 std::snprintf(line, sizeof(line), "frosted windows: lights out and flicker off (FrostedLightsOut, HearthFlicker; or the glass off): lights at full");
@@ -454,19 +455,19 @@ namespace wxl_livingazeroth::windows
                 std::snprintf(line, sizeof(line), "frosted windows near (lit frosted glass): %u lit, %u dimmed, %u dark; lit %.0f%% on the whole; hearth flicker %.0f%% now",
                               g_stats.frostWindows - g_stats.frostDimmed - g_stats.frostDark, g_stats.frostDimmed, g_stats.frostDark,
                               100.0f * g_stats.frostMeanLit, 100.0f * glass::HearthAmplitudeNow());
-            api->UiText(line);
+            ui::Text(api, line);
         }
         std::snprintf(line, sizeof(line), "night factor %.2f, from %s (the client's windows: 1 at 06:00, 0 from 07:00 to 20:30, 1 from 21:30)%s%s",
                       g_night, g_nightSource, g_nightGuards == 2 ? "; guard: " : "", g_nightGuards == 2 ? g_nightWhy : "");
-        api->UiText(line);
+        ui::Text(api, line);
         std::snprintf(line, sizeof(line), "the client's Full Screen Glow (ffxGlow): %s%s%s",
                       g_clientGlow == 1 ? "on" : (g_clientGlow == 0 ? "off" : "unknown"),
                       g_glowGuards == 2 ? " -- guard: " : "", g_glowGuards == 2 ? g_glowWhy : "");
-        api->UiText(line);
+        ui::Text(api, line);
         std::snprintf(line, sizeof(line), "window lights: %u near, %u drawn, %u kept out of full light cells", g_stats.inRange, g_stats.lights, g_stats.leftOutOfCells);
-        api->UiText(line);
+        ui::Text(api, line);
         std::snprintf(line, sizeof(line), "window glow: %u window(s) in range, %u drawn, %.2f ms CPU%s%s", g_stats.glowWindows, g_stats.glowDrawn, g_stats.glowMs,
                       g_stats.glowInactive ? " -- not drawing: " : "", g_stats.glowInactive ? g_stats.glowInactive : "");
-        api->UiText(line);
+        ui::Text(api, line);
     }
 }

@@ -95,6 +95,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's
   smithies and the Venture Co.'s log machines.
+- **Panel text** (22 October 2026): the panels' lines wrap at the window's edge instead of running off it where the
+  WarcraftXL core has `UiTextWrapped` (core v1.1.272 appended it to the extension API; `debug/UiText.hpp` checks the
+  table's `structSize` first), else they're drawn as before. The lines themselves are unchanged.
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
   see-through windows.
 

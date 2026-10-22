@@ -20,6 +20,7 @@
 
 #include "game/Gx.hpp"
 #include "game/World.hpp"
+#include "../debug/UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -141,14 +142,14 @@ namespace wxl_livingazeroth::playerdepth
             g_api->UiCheckbox("Your mount's see-through parts (wings) write depth: the water reflects them, fog and clouds sit right",
                               &g_settings.enabled);
             g_api->UiSliderInt("Which of their pixels count as solid (alpha test, 0..255)", &g_settings.alphaRef, 16, 250);
-            g_api->UiText(g_status);
+            ui::Text(g_api, g_status);
             char line[200];
             std::snprintf(line, sizeof(line), "Your batches last frame: opaque %u, alpha key %u, alpha (see-through) %u, additive/other %u",
                           g_last.blend[0], g_last.blend[1], g_last.blend[2], g_last.blend[3]);
-            g_api->UiText(line);
+            ui::Text(g_api, line);
             std::snprintf(line, sizeof(line), "Depth added for %u of them%s", g_last.depthDraws,
                           g_last.faded ? " (some skipped: you're faded -- stealth or a ghost)" : "");
-            g_api->UiText(line);
+            ui::Text(g_api, line);
         }
     }
 

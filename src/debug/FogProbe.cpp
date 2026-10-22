@@ -4,6 +4,7 @@
 #include "../render/GxState.hpp"
 
 #include "game/Gx.hpp"
+#include "UiText.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -346,7 +347,7 @@ namespace wxl_livingazeroth::debug
 
         void Section()
         {
-            g_api->UiText("Ground fog phase 1. Capture a frame above water and one under water; "
+            ui::Text(g_api, "Ground fog phase 1. Capture a frame above water and one under water; "
                                  "check the water's depth with the scene depth panel's overlay.");
             g_api->UiSeparator();
 
@@ -354,11 +355,11 @@ namespace wxl_livingazeroth::debug
             g_api->UiSameLine();
             if (g_api->UiButton("Copy all##fogprobe"))
                 CopyToClipboard(g_report + "\r\n" + DepthWriteReport() + "\r\n" + GlobalsReport());
-            g_api->UiText(g_report.c_str());
+            ui::Text(g_api, g_report.c_str());
 
             g_api->UiSeparator();
             g_api->UiCheckbox("Force depth writes during the water pass (liquid type 1)", &g_forceWaterDepth);
-            g_api->UiText(DepthWriteReport().c_str());
+            ui::Text(g_api, DepthWriteReport().c_str());
             if (g_api->UiButton("Reset counts##fogprobe"))
             {
                 std::memset(g_asked, 0, sizeof(g_asked));
@@ -370,7 +371,7 @@ namespace wxl_livingazeroth::debug
 
             g_api->UiSeparator();
             if (g_api->UiCollapsingHeader("Day-night globals (live)##fogprobe"))
-                g_api->UiText(GlobalsReport().c_str());
+                ui::Text(g_api, GlobalsReport().c_str());
         }
     }
 
