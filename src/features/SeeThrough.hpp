@@ -58,10 +58,11 @@
 //  - Stained glass (2026-10-22: "the coloured glass should stay coloured over the room (tint, not just blend); and from
 //    inside, the street through the coloured glass"): with SeeThroughRedraw 1 what's behind an open window's stained glass
 //    is multiplied by the glass's colour before the glass is blended over it (SeeThroughStainedTint; SeeThroughDraw's tint
-//    pass, its own pixel shader, not the stock variants': split, over the open windows' triangles; whole, where the
-//    stencil's top bit marks the see-through draw's pixels). Its lead mask is found in the texture (GlassLead.cdbc's rows
-//    over its designs or the whole texture: env/GlassModel LeadMask), and the gate passes the inside of a thick wall round
-//    a window's opening (env/SeeThroughModel kReveal).
+//    pass, its own pixel shader, not the stock variants': after the opaque draw, depth tested LESS, so only where the glass
+//    is in front of what's behind it: split, over the open windows' triangles; whole, over the batch's). Its lead mask is
+//    found in the texture (GlassLead.cdbc's rows over its designs or the whole texture: env/GlassModel LeadMask), and the
+//    gate passes the inside of a thick wall round a window's opening (env/SeeThroughModel kReveal) and, from inside, the
+//    lining of a deep opening up to the building's outer glass behind it (OuterBehind, kLiningMargin).
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once

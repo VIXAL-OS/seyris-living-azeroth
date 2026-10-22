@@ -467,6 +467,9 @@ namespace
         unsigned walkFrames = 0, walkOpen = 0, flips = 0, flipWindows = 0, maxFlips = 0;
         unsigned walks = 0, flickers = 0;   // walks, and those whose verdict changed more than twice (open, shut, open again)
         unsigned insideViews = 0, insideOpen = 0, insideWindows = 0, insideMostly = 0, insideNever = 0;
+        // walks through each room (2026-10-22, Northshire Abbey: "it does flicker between fake rooms and outside"): the
+        // windows' verdicts changed, over how many, at most for one, and the walks that changed one more than twice
+        unsigned insideWalks = 0, insideFlips = 0, insideFlipWindows = 0, insideMaxFlips = 0, insideFlickers = 0, insideFrames = 0, insideOpenFrames = 0;
         std::vector<std::string> lines;
         double seconds = 0;
     };
@@ -667,6 +670,16 @@ namespace
                             st::LookOut(w[i], eye, around[i].data(), around[i].size(), i < points.size() && points[i].n ? &points[i] : nullptr, s);
                             ++views[i];
                             open[i] += st::SightOpen(s, false) ? 1 : 0;
+                            // (SEETHROUGH_PROBE_WINDOW <ordinal>: that window's every eye, shut ones with what their rays met)
+                            if (const char* pw = std::getenv("SEETHROUGH_PROBE_WINDOW"); pw && std::atoi(pw) == static_cast<int>(w[i].ordinal) &&
+                                !st::SightOpen(s, false) && row.lines.size() < 4000)
+                            {
+                                char line[200];
+                                std::snprintf(line, sizeof(line), "    eye %.1f %.1f %.1f -> window %u: %d out, %d against, %d neither; first not out %s at %.2f",
+                                              eye[0], eye[1], eye[2], w[i].ordinal, s.front, s.back, s.none,
+                                              s.missHit == st::RoomMesh::kBack ? "against" : "neither", s.missDepth);
+                                row.lines.push_back(line);
+                            }
                         }
                     }
                 }
@@ -686,6 +699,93 @@ namespace
                     row.lines.push_back(line);
                 }
             }
+            // (SEETHROUGH_PROBE "x y z": what each of the room's windows facing that eye, within kInsideRange, sees from there)
+            if (const char* probe = std::getenv("SEETHROUGH_PROBE"))
+            {
+                float eye[3] = {};
+                if (std::sscanf(probe, "%f %f %f", &eye[0], &eye[1], &eye[2]) == 3)
+                    for (uint32_t i = 0; i < n; ++i)
+                    {
+                        const float d[3] = { eye[0] - w[i].center[0], eye[1] - w[i].center[1], eye[2] - w[i].center[2] };
+                        if (!st::FacingIn(w[i], eye) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > st::kInsideRange * st::kInsideRange) continue;
+                        st::Sight s;
+                        st::LookOut(w[i], eye, around[i].data(), around[i].size(), i < points.size() && points[i].n ? &points[i] : nullptr, s);
+                        char line[220];
+                        std::snprintf(line, sizeof(line), "    probe (%.2f %.2f %.2f): group %3u window %4u (outer %.2f yd): %s; %d see the street, %d against, "
+                                      "%d neither; the first not out: %s %.2f yd past the glass", eye[0], eye[1], eye[2], g, w[i].ordinal, w[i].outer,
+                                      st::SightOpen(s, false) ? "open" : "shut", s.front, s.back, s.none,
+                                      s.firstMiss < 0 ? "-" : s.missHit == st::RoomMesh::kBack ? "against" : "neither", s.missDepth);
+                        row.lines.push_back(line);
+                    }
+            }
+            // walks through the room: across it along x and along y at a quarter, half and three quarters of its box, the
+            // camera 2.5 yd over the floor (on foot) and 5 (mounted), 7 yd a second, a frame each 1/60 s; each window facing
+            // in within kInsideRange held as the runtime holds it (as if the camera looked at it)
+            std::vector<unsigned> flips(n, 0), flickers(n, 0);
+            for (int axis = 0; axis < 2; ++axis)
+                for (const float at : { 0.25f, 0.5f, 0.75f })
+                    for (const float h : { 2.5f, 5.0f })
+                    {
+                        std::vector<st::Gate> gates(n);
+                        std::vector<uint8_t> last(n, 0), seen(n, 0);
+                        std::vector<unsigned> changes(n, 0);
+                        const int other = 1 - axis;
+                        const float fixed = box.lo[other] + at * (box.hi[other] - box.lo[other]);
+                        for (float s = box.lo[axis] + 0.5f; s <= box.hi[axis] - 0.5f; s += 7.0f / 60.0f)
+                        {
+                            float p[2];
+                            p[axis] = s;
+                            p[other] = fixed;
+                            bool found = false;
+                            const float floorZ = b.Ground(p[0], p[1], box.hi[2] - 0.1f, roomOnly, &found);
+                            const float eye[3] = { p[0], p[1], floorZ + h };
+                            if (!found || eye[2] >= box.hi[2])
+                            {
+                                for (uint32_t i = 0; i < n; ++i) { gates[i] = st::Gate{}; seen[i] = 0; }
+                                continue;
+                            }
+                            for (uint32_t i = 0; i < n; ++i)
+                            {
+                                const float d[3] = { eye[0] - w[i].center[0], eye[1] - w[i].center[1], eye[2] - w[i].center[2] };
+                                if (!st::FacingIn(w[i], eye) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > st::kInsideRange * st::kInsideRange)
+                                {
+                                    gates[i] = st::Gate{};
+                                    seen[i] = 0;
+                                    continue;
+                                }
+                                st::Sight sg;
+                                st::LookOut(w[i], eye, around[i].data(), around[i].size(), i < points.size() && points[i].n ? &points[i] : nullptr, sg);
+                                const bool held = st::Hold(gates[i], st::SightOpen(sg, gates[i].seen && gates[i].open), 1.0f / 60.0f);
+                                if (seen[i]) changes[i] += held != (last[i] != 0) ? 1 : 0;
+                                last[i] = held ? 1 : 0;
+                                seen[i] = 1;
+                                ++row.insideFrames;
+                                row.insideOpenFrames += held ? 1 : 0;
+                            }
+                        }
+                        ++row.insideWalks;
+                        bool flickered = false;
+                        for (uint32_t i = 0; i < n; ++i)
+                        {
+                            flips[i] += changes[i];
+                            flickers[i] += changes[i] > 2 ? 1 : 0;
+                            flickered = flickered || changes[i] > 2;
+                        }
+                        row.insideFlickers += flickered ? 1 : 0;
+                    }
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                row.insideFlips += flips[i];
+                row.insideFlipWindows += flips[i] ? 1 : 0;
+                row.insideMaxFlips = std::max(row.insideMaxFlips, flips[i]);
+                if (verbose && flips[i])
+                {
+                    char line[160];
+                    std::snprintf(line, sizeof(line), "    inside walks: group %3u window %4u: its verdict changed %u times (%u walks more than twice)", g,
+                                  w[i].ordinal, flips[i], flickers[i]);
+                    row.lines.push_back(line);
+                }
+            }
         }
         row.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         return true;
@@ -701,6 +801,9 @@ namespace
                     "changed it more than twice\n", r.walkOpen, r.walkFrames, r.flips, r.flipWindows, r.maxFlips, r.flickers, r.walks);
         std::printf("    from inside: %u windows seen, open from %u of %u eyes (%.0f%%); %u from half their eyes or more, %u never; %.1f s\n", r.insideWindows,
                     r.insideOpen, r.insideViews, r.insideViews ? 100.0 * r.insideOpen / r.insideViews : 0.0, r.insideMostly, r.insideNever, r.seconds);
+        std::printf("    walks inside: open %u of %u frames; the verdict changed %u times in all, over %u windows (at most %u for one); %u of %u walks "
+                    "changed one more than twice\n", r.insideOpenFrames, r.insideFrames, r.insideFlips, r.insideFlipWindows, r.insideMaxFlips, r.insideFlickers,
+                    r.insideWalks);
         for (const std::string& l : r.lines) std::printf("%s\n", l.c_str());
     }
 }
@@ -1318,6 +1421,76 @@ int main(int argc, char** argv)
         st::LookIn(over, high, lowRoom, 1, nullptr, s);
         CHECK(s.front == 3 && s.back == 6 && !st::SightOpen(s, false));
         CHECK(st::kReveal == 2.0f && st::kRevealFacing == 0.7f);
+    });
+
+    Test("LookOut's lining (2026-10-22, Northshire Abbey: \"it does flicker between fake rooms and outside\"): a room's own "
+         "window 2.7 yd inside the building's outer window (OuterBehind finds it) sees the street at a slant past the outer "
+         "wall's back; with no outer window behind it, against; the building's own outside past the lining is the street", [] {
+        // the room: x -6..6, y 0..12, z 0..8, its faces in, its front wall (y 0) with the window's opening x -0.65..0.65,
+        // z 2..6, its pane in it (facing the room); the shell's outer wall 2.7 yd out (y -2.7, facing out) with the outer
+        // window's opening x -0.7..0.7, z 2..6 and its pane; nothing between them (the abbey's embrasure isn't modelled)
+        std::vector<float> rv, pv, sv, ov, wv;
+        std::vector<uint16_t> ri, pi, si, oi, wi;
+        AddRect(rv, ri, 2, 0, -6, 6, 0, 12, 1);
+        AddRect(rv, ri, 2, 8, -6, 6, 0, 12, -1);
+        AddRect(rv, ri, 0, -6, 0, 12, 0, 8, 1);
+        AddRect(rv, ri, 0, 6, 0, 12, 0, 8, -1);
+        AddRect(rv, ri, 1, 12, 0, 8, -6, 6, -1);
+        AddRect(rv, ri, 1, 0, 0, 2, -6, 6, 1);
+        AddRect(rv, ri, 1, 0, 6, 8, -6, 6, 1);
+        AddRect(rv, ri, 1, 0, 2, 6, -6, -0.65f, 1);
+        AddRect(rv, ri, 1, 0, 2, 6, 0.65f, 6, 1);
+        AddRect(pv, pi, 1, 0.02f, 2, 6, -0.65f, 0.65f, 1);
+        AddRect(sv, si, 1, -2.7f, 0, 8, -12, -0.7f, -1);
+        AddRect(sv, si, 1, -2.7f, 0, 8, 0.7f, 12, -1);
+        AddRect(sv, si, 1, -2.7f, 0, 2, -0.7f, 0.7f, -1);
+        AddRect(sv, si, 1, -2.7f, 6, 8, -0.7f, 0.7f, -1);
+        AddRect(ov, oi, 1, -2.7f, 2, 6, -0.7f, 0.7f, -1);
+        AddRect(wv, wi, 1, -14, 0, 10, -30, 30, 1);   // another wing 14 yd out, facing the window
+        st::RoomMesh room, pane, shell, outerPane, wing;
+        const auto all = [](const std::vector<uint16_t>& i) { return std::vector<std::pair<uint32_t, uint32_t>>{ { 0u, static_cast<uint32_t>(i.size()) } }; };
+        CHECK(room.Build(rv.data(), static_cast<uint32_t>(rv.size() / 3), ri.data(), static_cast<uint32_t>(ri.size()), all(ri)));
+        CHECK(pane.Build(pv.data(), static_cast<uint32_t>(pv.size() / 3), pi.data(), static_cast<uint32_t>(pi.size()), all(pi), { st::kGlassTag }));
+        CHECK(shell.Build(sv.data(), static_cast<uint32_t>(sv.size() / 3), si.data(), static_cast<uint32_t>(si.size()), all(si)));
+        CHECK(outerPane.Build(ov.data(), static_cast<uint32_t>(ov.size() / 3), oi.data(), static_cast<uint32_t>(oi.size()), all(oi), { st::kGlassTag }));
+        CHECK(wing.Build(wv.data(), static_cast<uint32_t>(wv.size() / 3), wi.data(), static_cast<uint32_t>(wi.size()), all(wi)));
+        // OuterBehind: the outer window found 2.7 yd behind; not another WMO's, not one beside it, not one facing across
+        const uint32_t path = gl::PathHash("world\\wmo\\test\\abbey.wmo");
+        auto glassWindow = [&](uint32_t p, uint32_t flags, float x, float y, float nx, float ny) {
+            gl::Window g;
+            g.path = p; g.flags = flags; g.center[0] = x; g.center[1] = y; g.center[2] = 4;
+            g.normal[0] = nx; g.normal[1] = ny; g.normal[2] = 0; g.halfWidth = 0.7f; g.halfHeight = 2;
+            return g;
+        };
+        st::SeeWindow w = MakeWindow(0, 0.02f, 4, 0, -1, 0, 0.65f, 2, -1, 4);
+        CHECK(Close(st::OuterBehind(w, path, { glassWindow(path, 1, 0, -2.7f, 0, -1) }), 2.72f, 1e-4f));
+        CHECK(st::OuterBehind(w, path, { glassWindow(path + 1, 1, 0, -2.7f, 0, -1) }) == 0.0f);   // another WMO's
+        CHECK(st::OuterBehind(w, path, { glassWindow(path, 0, 0, -2.7f, 0, -1) }) == 0.0f);       // a room's own, not outer
+        CHECK(st::OuterBehind(w, path, { glassWindow(path, 1, 3, -2.7f, 0, -1) }) == 0.0f);       // beside it
+        CHECK(st::OuterBehind(w, path, { glassWindow(path, 1, 0, -2.7f, 1, 0) }) == 0.0f);        // across it
+        CHECK(st::OuterBehind(w, path, { glassWindow(path, 1, 0, -7.0f, 0, -1) }) == 0.0f);       // past kOuterReach
+        // head on: out by the outer pane, as before
+        const st::SightMesh building[4] = { { &room, false }, { &pane, false }, { &shell, true }, { &outerPane, true } };
+        const float ahead[3] = { 0, 8, 4 }, slant[3] = { 5, 6, 4 };
+        st::Sight s;
+        w.outer = 0.0f;
+        st::LookOut(w, ahead, building, 4, nullptr, s);
+        CHECK(s.front == 9 && st::SightOpen(s, false));
+        // at a slant the rays miss the outer window and meet the outer wall's back beside it: against without the lining ...
+        st::LookOut(w, slant, building, 4, nullptr, s);
+        CHECK(s.back == 9 && !st::SightOpen(s, false));
+        // ... passed with it (the opening 2.72 yd deep): out into the open
+        w.outer = 2.72f;
+        st::LookOut(w, slant, building, 4, nullptr, s);
+        CHECK(s.front == 9 && s.back == 0 && st::SightOpen(s, false));
+        // and the building's other wing met from the front past it is the street seen out of the window
+        const st::SightMesh winged[5] = { { &room, false }, { &pane, false }, { &shell, true }, { &outerPane, true }, { &wing, true } };
+        st::LookOut(w, slant, winged, 5, nullptr, s);
+        CHECK(s.front == 9 && st::SightOpen(s, false));
+        w.outer = 0.0f;
+        st::LookOut(w, slant, winged, 5, nullptr, s);
+        CHECK(s.back == 9 && !st::SightOpen(s, false));
+        CHECK(st::kLiningMargin == 1.0f && st::kOuterReach == 6.0f);
     });
 
     Test("NearGroups (2026-10-22): the groups round a window's room and its middle, grown 6 yd; none for a window far off", [] {

@@ -13,10 +13,13 @@
 //    glass is multiplied by the glass's colour (TintOf: lerp(1, the texel's hue at full value, the strength), by its lead
 //    mask: none on the lead and frame), as light through coloured glass is, in a pass of its own: its own small pixel
 //    shader (TintShaderText, the client's vertex shader's TEXCOORD0, the batch's texture at s0 and its lead mask at s15;
-//    ZERO / SRCCOLOR), not the stock WMO variants, whose largest uses 2032 of its 2048 slots. Split: over the open
-//    windows' triangles. Whole: the see-through draw's pixels marked first in the stencil's top bit (its texkill keeps
-//    only the open windows' glass; the bit cleared under the batch before and by the tint after), the tint only there;
-//    without a stencil in the depth surface, no tint.
+//    ZERO / SRCCOLOR), not the stock WMO variants, whose largest uses 2032 of its 2048 slots. It's drawn after the opaque
+//    draw and before the glass is blended, depth tested LESS: the opaque draw wrote the depth of everything that stays
+//    opaque (the open windows' lead and frame, every shut window) and none of the open windows' glass, so with the same
+//    triangles and vertex shader the tint passes exactly where the glass is in front of what's behind it. Split: over the
+//    open windows' triangles; whole: over the batch's. In game (2026-10-22, Northshire Abbey) the client's index buffer
+//    can't be read, so the redraw is whole, and the first build's whole tint went through the stencil, which the client's
+//    depth surface may not have: "0 tinted over their open windows, 0 through the stencil". The depth needs neither.
 #pragma once
 
 #include "../env/SeeThroughModel.hpp"
@@ -44,7 +47,6 @@ namespace wxl_livingazeroth::seethrough
         bool split = true;                  // draw split by window when the entry has its triangles
         IDirect3DPixelShader9* tintShader = nullptr;   // stained glass's tint pass (CreateTintShader; null, or no lead mask: none)
         float tint = 0.0f;                  // its strength (SeeThroughStainedTint; 0: none)
-        bool stencil = false;               // the depth surface has a stencil (the whole draw's tint needs it)
     };
 
     struct PerPixelDrawn
@@ -52,7 +54,8 @@ namespace wxl_livingazeroth::seethrough
         bool drawn = false;                 // every draw went through
         bool split = false;                 // split by window (else whole, the lookup's alone)
         uint32_t open = 0, rest = 0;        // triangles drawn open and shut (split)
-        int tinted = 0;                     // the tint: 0 none, 1 over the open windows' triangles, 2 through the stencil
+        int tinted = 0;                     // the tint: 0 none, 1 over the open windows' triangles, 2 over the batch's (whole)
+        const char* untinted = nullptr;     // why not, when a tint was asked for
     };
 
     /// The device's state at a batch's draw into `e` (e.state: a D3DSBT_ALL state block) and, apart, every pixel shader
@@ -81,9 +84,9 @@ namespace wxl_livingazeroth::seethrough
     /// The tint pass's pixel shader (ps_3_0 text): c223.x the strength, c223.y 1 (0: no tint).
     const char* TintShaderText();
     constexpr int kTintConstant = 223;
-    constexpr DWORD kTintBit = 0x80;        // the stencil bit the whole draw's tint marks
     /// The tint pass's shader on `dev` (assembled from TintShaderText), null and why when it can't be made.
     IDirect3DPixelShader9* CreateTintShader(IDirect3DDevice9* dev, std::string& why);
-    /// Whether a depth surface's format has a stencil.
+    /// Whether a depth surface's format has a stencil, and its name (the panel's).
     bool HasStencil(D3DFORMAT depthFormat);
+    const char* DepthFormatName(D3DFORMAT depthFormat);
 }

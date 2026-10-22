@@ -690,11 +690,15 @@ T = lerp(1, the texel's hue at full value, `SeeThroughStainedTint`, 0.8), weight
 `ZERO / SRCCOLOR`: light through coloured glass (`TintOf`, its pixel shader's twin). From inside the same: the street through
 the coloured glass. It's a pass of its own (`features/SeeThroughDraw`: its own 13-instruction pixel shader, the client's
 vertex shader's TEXCOORD0, the batch's texture at s0, the lead mask at s15, c223), not the stock WMO variants: their largest
-uses 2032 of its 2048 slots and is unchanged. Split by window, it's drawn over the open windows' triangles; whole (the
-client's indices unreadable), the see-through draw's pixels (its texkill keeps only the open windows' glass) are first
-marked in the stencil's top bit, the bit cleared under the batch before and by the tint after, and the tint goes only there;
-without a stencil in the depth surface there's no tint. Only stained glass (kind 2) is tinted; Northrend's amber windows are
-leaded glass and blend as the human windows do. The lights panel counts the stained batches redrawn and tinted each way.
+uses 2032 of its 2048 slots and is unchanged. It's drawn after the opaque draw and before the glass is blended, depth tested
+LESS: the opaque draw wrote the depth of everything that stays opaque (the open windows' lead and frame, every shut window)
+and none of the open windows' glass, so with the same triangles and the same vertex shader the tint passes exactly where
+the glass is in front of what's behind it. Split by window, over the open windows' triangles; whole (the client's indices
+unreadable), over the batch's. (The first build's whole tint marked the see-through draw's pixels in the stencil's top bit
+instead; in game at the abbey: "0 tinted over their open windows, 0 through the stencil", the redraw whole, the client's
+depth surface very likely without a stencil. The depth needs neither the index buffer nor a stencil; the panel now names
+the depth surface's format and why a batch wasn't tinted.) Only stained glass (kind 2) is tinted; Northrend's amber windows
+are leaded glass and blend as the human windows do. The lights panel counts the stained batches redrawn and tinted each way.
 
 **Proofs (WARP).** glass_tests' sequence harness now takes a scene (`SequenceScene`: a WMO's group and glass batch, its
 placement, the camera, its open windows): besides the inn's two, the chapel from the street (window 15 open, 13 and 17 shut),
@@ -704,11 +708,34 @@ redraw). Each: every pixel decided as right after the client's draw, whole and s
 yellow; what's behind changes with the backdrop through all of the open windows' glass and through none of their lead and
 frame or the shut windows (the chapel 431 of 431, 0 of 36, 0 of 1675). The tint, over a grey backdrop: every open window's
 glass pixel changed (the chapel's 431 of 431, its channels' spread 82 to 122; from inside 405 of 405, 73 to 107), not one of
-the lead, frame and shut windows' pixels a level apart (the stencil filled with ones first, so its clearing is what keeps
-them), whole through the stencil and split alike (21 and 0 pixels apart, at the windows' edges). The tint's shader alone:
+the lead, frame and shut windows' pixels a level apart, whole by the depth (a depth surface without a stencil, D24X8) and
+split alike (3 and 0 pixels apart, at the windows' edges). The tint's shader alone:
 the backdrop x `TintOf` to a level over eight texels and masks. With GLASS_DUMP each scene's views by day and at night over a
 room's checker (debug, tinted, untinted).
 
-**Only the game can confirm**: the tint by day and night, in the chapel and from its nave; whether the client's depth surface
-has a stencil (the whole draw's tint needs one; the panel says which way each was tinted); the abbey's frame rate (46 windows
-with rooms, its nave a big room); the reveal on the existing buildings (more views open, none expected to flicker).
+**Only the game can confirm**: the tint by day and night, in the chapel and from its nave; the reveal on the existing
+buildings (more views open, none expected to flicker).
+
+**In game, 2026-10-22, at the abbey** ("Northshire Abbey framerate looks awesome but it does flicker between fake rooms and
+outside", 62 to 68 FPS, from inside the nave). The panel, the camera at (-18.20, -1.53, 6.46) in the abbey's space: window 4
+open (nine rays out), 0, 5 and 6 shut, "9 meet a wall or the roof from inside", "the first against 1.5 .. 4.0 yd past the
+glass"; and the tint "0 tinted over their open windows, 0 through the stencil", the redraw whole (the client's index buffer
+write-only). Reproduced offline from that camera (seethrough_tests' survey: `SEETHROUGH_PROBE`, its windows' rays from an eye;
+`SEETHROUGH_PROBE_WINDOW`, one window's from every eye) and with a new measure, **walks inside**: across each room along x and
+along y at a quarter, half and three quarters of its box, the camera 2.5 and 5 yd over its floor, 7 yd a second, each window
+facing in held as the runtime holds it. The nave's windows stand 2.5 to 2.7 yd inside the abbey's outer windows (its
+`mainlobby2` shell's 40 .. 42 behind 4 .. 6), and the embrasure between them isn't modelled: at a slant a window's rays left
+its glass and met the outer wall beside the outer window from behind, so each window opened only within some 25 degrees of
+its axis and they came and went one after another walking about the nave (the abbey's walks inside: 479 changes over 40
+windows, 6 of 72 walks changing a window more than twice; from inside 33% of eyes open). **The lining**: a room's own window
+with the building's outer glass behind it (`OuterBehind`: an exterior window of the same WMO facing within 0.9 of it, its
+middle 0 .. 6 yd behind, their rectangles overlapping; 46 of the abbey's 55 room windows, the inn's 14 of 17 at 0.1 .. 0.4
+yd) has an opening that deep: from inside, the shell met from behind before the outer glass's plane (and `kLiningMargin`, 1
+yd, past it: the wall round a recessed pane), along the window or its width, is passed; past it the building's own outside
+met from the front (another wing) is the street. From that camera now windows 4 to 9 open with all their rays out, 0 shut
+(its rays meet the entrance tower's wall from the front: it does face a wall), 3 shut; the abbey's walks inside 155 changes
+over 37 windows (at most 11 for one), none changing a window more than twice; from inside 86% of eyes. The other buildings
+from inside: the inns 84 .. 85% (82 .. 83%), the two-storey houses 98 .. 99%, the prison camp's headquarters 97% (69%), the
+chapel 91% (71%), Northrend's barracks 82% (41%; its narrow upper windows, a foot wide, still change more than twice on 4 of
+36 walks, at the slant along the room's far wall). A window with no outer glass behind it keeps the old rule. **The tint** now
+goes by the depth (above).

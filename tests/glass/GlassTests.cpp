@@ -4374,7 +4374,8 @@ namespace
             FAILED(d->CreatePixelShader(reinterpret_cast<const DWORD*>(otherCode.data()), &other)) || !glassTex || !white || !backTex ||
             (sc.tint > 0.0f && !tintShader) ||
             FAILED(d->CreateRenderTarget(kS, kS, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) ||
-            FAILED(d->CreateDepthStencilSurface(kS, kS, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, TRUE, &depth, nullptr)) ||
+            // (no stencil: the game's depth surface may have none, 2026-10-22; the tint goes by the depth)
+            FAILED(d->CreateDepthStencilSurface(kS, kS, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE, &depth, nullptr)) ||
             FAILED(d->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
         { Check(false, std::string(label) + ": WARP resources " + why.substr(0, 120)); return; }
         IDirect3DTexture9* leadTex = nullptr;
@@ -4493,9 +4494,8 @@ namespace
         args.startIndex = grp.start; args.primitives = grp.count / 3;
         // One run: the client's draw (colour writes off), then (`through`) the capture, the clobbering and the apply with or
         // without the constants put back, else right away; the redraw split or whole, debug view or plain, tinted or not
-        // (`tint`: the tint pass at that strength; the stencil filled with ones first, so its clearing under the batch is
-        // what keeps the shut windows untinted); the target's pixels (BGRA) over the backdrop (blue; `checker`: the room's
-        // checker). `lost`: the pixel constants after the apply unlike at the draw; `tinted`: the tint as drawn.
+        // (`tint`: the tint pass at that strength); the target's pixels (BGRA) over the backdrop (blue; `checker`: the
+        // room's checker). `lost`: the pixel constants after the apply unlike at the draw; `tinted`: the tint as drawn.
         enum Through { kRightAway, kStateBlockAlone, kWithConstants };
         st::SplitBuffer buf;
         std::string lost;
@@ -4506,7 +4506,7 @@ namespace
             d->SetDepthStencilSurface(depth);
             D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
             d->SetViewport(&vp);
-            d->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, backdrop, 1.0f, 0xFF);
+            d->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, backdrop, 1.0f, 0);
             if (FAILED(d->BeginScene())) return false;
             if (checkerBack)
             {
@@ -4586,7 +4586,7 @@ namespace
             d->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
             st::PerPixel pp;
             pp.opacity = 0.35f; pp.debug = debug; pp.lead = leadTex; pp.split = split;
-            pp.tintShader = tint > 0.0f ? tintShader : nullptr; pp.tint = tint; pp.stencil = true;
+            pp.tintShader = tint > 0.0f ? tintShader : nullptr; pp.tint = tint;
             const st::PerPixelDrawn drawn = st::DrawPerPixel(d, e, pp, buf);
             tinted = drawn.tinted;
             d->EndScene();
@@ -4666,7 +4666,7 @@ namespace
                       "and frame, %d of %d shut windows'", label, behind, glassBlue, glassPx, leadBlue, leadPx, shutBlue, shutPx);
         Check(ok && glassPx > sc.minOpen / 2 && glassBlue * 10 >= glassPx * 8 && leadBlue * 100 <= leadPx && shutBlue * 100 <= shutPx, line);
         // (e) stained glass's tint (2026-10-22: "the coloured glass should stay coloured over the room (tint, not just
-        // blend)"): over a grey backdrop, tinted against not, drawn whole (through the stencil, filled with ones first) and
+        // blend)"): over a grey backdrop, tinted against not, drawn whole (by the depth the opaque draw wrote) and
         // split: the open windows' glass pixels take the glass's colour (most of them changed, and more coloured: the spread
         // between their channels wider); their lead and frame and the shut windows not a level apart; whole and split alike
         // but for the windows' edges
@@ -4704,7 +4704,7 @@ namespace
             std::snprintf(line, sizeof(line), "%s: (e) the tint (%.1f): %d of %d open windows' glass pixels changed, their channels' spread %.0f -> %.0f; %d of "
                           "%d lead, frame and shut-window pixels moved; drawn %s and %s; whole and split %d pixels apart", label, sc.tint, changed, glass,
                           glass ? spreadBefore / glass : 0.0, glass ? spreadAfter / glass : 0.0, moved, kept,
-                          tintWhole == 2 ? "whole through the stencil" : "whole NOT tinted", tintSplit == 1 ? "split over the open windows" : "split NOT tinted", splitApart);
+                          tintWhole == 2 ? "whole by the depth (no stencil)" : "whole NOT tinted", tintSplit == 1 ? "split over the open windows" : "split NOT tinted", splitApart);
             Check(tok && glass > 50 && changed * 10 >= glass * 7 && spreadAfter > spreadBefore * 1.2 && moved == 0 && kept > 50 && tintWhole == 2 &&
                   tintSplit == 1 && splitApart * 100 <= drawnPx * 2, line);
         }

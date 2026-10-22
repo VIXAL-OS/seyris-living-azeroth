@@ -38,39 +38,26 @@ namespace wxl_livingazeroth::seethrough
             return true;
         }
 
-        void Stencil(IDirect3DDevice9* dev, D3DCMPFUNC func, D3DSTENCILOP pass, D3DSTENCILOP zfail)
-        {
-            dev->SetRenderState(D3DRS_STENCILENABLE, TRUE);
-            dev->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
-            dev->SetRenderState(D3DRS_STENCILFUNC, func);
-            dev->SetRenderState(D3DRS_STENCILREF, kTintBit);
-            dev->SetRenderState(D3DRS_STENCILMASK, kTintBit);
-            dev->SetRenderState(D3DRS_STENCILWRITEMASK, kTintBit);
-            dev->SetRenderState(D3DRS_STENCILPASS, pass);
-            dev->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
-            dev->SetRenderState(D3DRS_STENCILZFAIL, zfail);
-        }
-
-        // A draw of the range with the tint pass's shader (its constant put back after): `colour` the tint itself (ZERO /
-        // SRCCOLOR: what's there x the shader's colour), else no colour written (the stencil's clearing). The batch's shader
-        // and blend put back for the draws after.
-        bool TintDraw(IDirect3DDevice9* dev, const DrawArgs& a, UINT start, UINT primitives, const PerPixel& in, bool colour)
+        // The tint pass over the range (after the opaque draw): its shader, ZERO / SRCCOLOR (what's there x the shader's
+        // colour), depth tested LESS (only where the glass is in front of what's behind it: not where the opaque draw wrote
+        // the glass's own depth), no depth written; the batch's shader, its constant, blend and depth test put back.
+        bool TintDraw(IDirect3DDevice9* dev, const DrawArgs& a, UINT start, UINT primitives, const PerPixel& in)
         {
             IDirect3DPixelShader9* stock = nullptr;
             dev->GetPixelShader(&stock);
             float keep[4] = {};
             dev->GetPixelShaderConstantF(kTintConstant, keep, 1);
-            DWORD write = 0;
-            dev->GetRenderState(D3DRS_COLORWRITEENABLE, &write);
+            DWORD func = D3DCMP_LESSEQUAL;
+            dev->GetRenderState(D3DRS_ZFUNC, &func);
             const float c[4] = { in.tint, 1.0f, 0.0f, 0.0f };
             dev->SetPixelShaderConstantF(kTintConstant, c, 1);
             dev->SetPixelShader(in.tintShader);
             dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESS);
             dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ZERO);
             dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
-            if (!colour) dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0);
             const bool ok = DrawRange(dev, a, start, primitives);
-            dev->SetRenderState(D3DRS_COLORWRITEENABLE, write);
+            dev->SetRenderState(D3DRS_ZFUNC, func);
             dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
             dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
             dev->SetPixelShader(stock);
@@ -128,6 +115,23 @@ namespace wxl_livingazeroth::seethrough
     bool HasStencil(D3DFORMAT f)
     {
         return f == D3DFMT_D24S8 || f == D3DFMT_D24X4S4 || f == D3DFMT_D15S1 || f == D3DFMT_D24FS8;
+    }
+
+    const char* DepthFormatName(D3DFORMAT f)
+    {
+        switch (f)
+        {
+        case D3DFMT_D24S8: return "D24S8";
+        case D3DFMT_D24X8: return "D24X8";
+        case D3DFMT_D24X4S4: return "D24X4S4";
+        case D3DFMT_D24FS8: return "D24FS8";
+        case D3DFMT_D16: return "D16";
+        case D3DFMT_D15S1: return "D15S1";
+        case D3DFMT_D32: return "D32";
+        case D3DFMT_D32F_LOCKABLE: return "D32F";
+        case D3DFMT_UNKNOWN: return "none";
+        default: return "another";
+        }
     }
 
     bool CaptureState(IDirect3DDevice9* dev, Deferral::Entry& e)
@@ -200,7 +204,9 @@ namespace wxl_livingazeroth::seethrough
         auto setDraw = [&](float sign) { draw[1] = sign; dev->SetPixelShaderConstantF(glass::kReplayDrawConstant, draw, 1); };
         auto setWindow = [&](float state) { const float w[4] = { state, 0.0f, 0.0f, 0.0f }; dev->SetPixelShaderConstantF(glass::kReplayWindowConstant, w, 1); };
         // the tint (stained glass), with its lead mask only: none in the debug view (its colours are the decisions')
-        const bool tint = in.tintShader && in.tint > 0.0f && in.lead && !in.debug;
+        const bool asked = in.tintShader && in.tint > 0.0f;
+        const bool tint = asked && in.lead && !in.debug;
+        if (asked && !tint) out.untinted = !in.lead ? "no lead mask (yet)" : "the debug view";
         IDirect3DIndexBuffer9* own = nullptr;
         if (in.split && !e.open.empty() && Fill(dev, e, buf) && SUCCEEDED(dev->SetIndices(buf.ib))) own = buf.ib;
         if (own)
@@ -221,7 +227,7 @@ namespace wxl_livingazeroth::seethrough
                 ok = DrawRange(dev, e.args, openTris * 3, restTris) && ok;
             }
             // stained glass: what's behind the open windows' glass x its colour
-            if (tint && TintDraw(dev, e.args, 0, openTris, in, true)) out.tinted = 1;
+            if (tint) { if (TintDraw(dev, e.args, 0, openTris, in)) out.tinted = 1; else out.untinted = "its draw failed"; }
             // the open windows' glass over the room, no depth
             dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
             setDraw(-1.0f);
@@ -235,24 +241,10 @@ namespace wxl_livingazeroth::seethrough
         dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
         setDraw(1.0f);
         bool ok = DrawRange(dev, e.args, e.args.startIndex, e.args.primitives);
+        // stained glass: what's behind the batch's glass where it's in front (the open windows' glass) x its colour
+        if (tint) { if (TintDraw(dev, e.args, e.args.startIndex, e.args.primitives, in)) out.tinted = 2; else out.untinted = "its draw failed"; }
         dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
         setDraw(-1.0f);
-        if (tint && in.stencil)
-        {
-            // stained glass: the stencil's bit cleared under the batch, set where the see-through draw will blend (its
-            // texkill keeps the open windows' glass), then what's behind there x the glass's colour, the bit cleared again
-            Stencil(dev, D3DCMP_ALWAYS, D3DSTENCILOP_ZERO, D3DSTENCILOP_ZERO);
-            bool marked = TintDraw(dev, e.args, e.args.startIndex, e.args.primitives, in, false);
-            DWORD write = 0;
-            dev->GetRenderState(D3DRS_COLORWRITEENABLE, &write);
-            dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0);
-            Stencil(dev, D3DCMP_ALWAYS, D3DSTENCILOP_REPLACE, D3DSTENCILOP_KEEP);
-            marked = DrawRange(dev, e.args, e.args.startIndex, e.args.primitives) && marked;
-            dev->SetRenderState(D3DRS_COLORWRITEENABLE, write);
-            Stencil(dev, D3DCMP_EQUAL, D3DSTENCILOP_ZERO, D3DSTENCILOP_ZERO);
-            if (marked && TintDraw(dev, e.args, e.args.startIndex, e.args.primitives, in, true)) out.tinted = 2;
-            dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
-        }
         ok = DrawRange(dev, e.args, e.args.startIndex, e.args.primitives) && ok;
         out.drawn = ok;
         return out;

@@ -235,8 +235,27 @@ namespace wxl_livingazeroth::seethrough
         int interior = -1;                  // the interior group behind it, -1: none (fake)
         float center[3] = {}, normal[3] = { 1, 0, 0 }, along[3] = { 0, 1, 0 }, up[3] = { 0, 0, 1 };
         float halfWidth = 0.5f, halfHeight = 0.5f, thickness = 0.0f;
+        float outer = 0.0f;                 // a room's own window (from inside): how deep its opening is, to the building's
+                                            // outer glass behind it (OuterBehind; 0: none)
     };
     constexpr uint32_t kWindowExterior = 0x1;   // GlassWindows.Flags
+    // "Northshire Abbey framerate looks awesome but it does flicker between fake rooms and outside" (the user, 2026-10-22,
+    // in the nave). The abbey's nave windows stand 2.5 to 2.7 yd inside its outer windows: from the nave at a slant a
+    // window's rays leave its glass and meet the outer wall beside the outer window from behind (the embrasure between
+    // them isn't modelled), so they counted against it and each window opened only within some 25 degrees of its axis:
+    // walking about the nave the windows came and went one after another. A room's own window with the building's outer
+    // glass behind it (an exterior window facing the same way, within kOuterReach yd behind it, their rectangles
+    // overlapping: OuterBehind) has an opening that deep, and from inside a ray that meets the building's shell from
+    // behind before the outer glass's plane (and kLiningMargin past it: the wall round a recessed outer pane), facing
+    // along the window or along its width, is in that opening (its lining, culled as the client draws it from there):
+    // passed, as kReveal passes a room's from outside; and past that, the building's own outside met from the front (another
+    // wing's face: the abbey's library windows saw it with four rays of eight) is the street seen out of it. A window with
+    // none (one onto a blind wall) keeps the old rule.
+    constexpr float kOuterFacing = 0.9f, kOuterReach = 6.0f, kLiningMargin = 1.0f;
+    /// The depth to the building's outer glass behind a room's own window (`w`, its group an interior one): the nearest
+    /// exterior window of the same WMO in `all` facing within kOuterFacing of it, its middle 0 .. kOuterReach yd behind
+    /// it (along its normal, out of the building), their rectangles overlapping; 0: none.
+    float OuterBehind(const SeeWindow& w, uint32_t path, const std::vector<glass::Window>& all);
 
     /// One WMO's exterior windows, by group then ordinal; byGroup[g] = (first, count) into windows.
     struct RootWindows
@@ -492,7 +511,8 @@ namespace wxl_livingazeroth::seethrough
     /// behind, a wall or the roof from inside (culled, so the street would show through them: a dormer's sloped inner pane
     /// seen from below). None: it meets a surface from the front (drawn as it is: the window's reveal behind its glass, the
     /// building's outside past an opening, another room). SightOpen and Hold decide as from outside: to open four see the
-    /// street and more than meet a surface either way, at most two from behind.
+    /// street and more than meet a surface either way, at most two from behind. With the building's outer glass behind it
+    /// (`w.outer`), the shell met from behind within that opening (its lining) is passed.
     void LookOut(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out);
 
     // --- which windows a glass batch is in ------------------------------------------------------------------------------

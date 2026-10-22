@@ -57,7 +57,8 @@ namespace wxl_livingazeroth::seethrough
             unsigned passed = 0, captureFailed = 0, targetMoved = 0, dropped = 0;
             unsigned blind = 0;      // shut: the room not seen through the window from here (SeesRoom)
             unsigned opaque = 0;     // redrawn opaque: the batch's shader without the redraw (or its glass off)
-            unsigned stained = 0, tintedSplit = 0, tintedStencil = 0;   // stained glass redrawn per pixel; tinted (SeeThroughDraw)
+            unsigned stained = 0, tintedSplit = 0, tintedWhole = 0;     // stained glass redrawn per pixel; tinted (SeeThroughDraw)
+            const char* untinted = nullptr;                             // ... and why one wasn't (the last's)
             // From inside (SeeThroughFromInside): the rooms walked with windows of their own, the ways out added (windows
             // opened), shut (`insideBlind` of them: the street not seen through it), far or over the budget; after the
             // walk, the exterior portal views in all (the client's own and ours) and whether the outdoors is drawn.
@@ -1140,6 +1141,7 @@ namespace wxl_livingazeroth::seethrough
         IDirect3DPixelShader9* g_tintShader = nullptr;
         bool g_tintTried = false;
         char g_tintWhy[160] = "";
+        D3DFORMAT g_depthFormat = D3DFMT_UNKNOWN;   // the depth surface's at the last redraw (the panel's)
 
         IDirect3DPixelShader9* TintShader(IDirect3DDevice9* dev)
         {
@@ -1173,6 +1175,8 @@ namespace wxl_livingazeroth::seethrough
             DWORD atoc = 0, multisample = 0;               // D3DRS_ADAPTIVETESS_Y (a driver's alpha-to-coverage switch), the target's MSAA
             DWORD srcBlend = 0, destBlend = 0, blend = 0, alphaTest = 0, zWrite = 0;   // as set for the see-through draw
             const void* shader = nullptr;
+            D3DFORMAT depth = D3DFMT_UNKNOWN;              // the depth surface's format (2026-10-22: the first tint wanted its stencil)
+            DWORD zFunc = 0;                               // the batch's depth test
         };
         ReplayProbe g_probeNow, g_probeShown;
         int g_debugView = 0;                     // the panel's debug view (not saved)
@@ -1233,6 +1237,8 @@ namespace wxl_livingazeroth::seethrough
             dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &g_probeNow.blend);
             dev->GetRenderState(D3DRS_ALPHATESTENABLE, &g_probeNow.alphaTest);
             dev->GetRenderState(D3DRS_ZWRITEENABLE, &g_probeNow.zWrite);
+            dev->GetRenderState(D3DRS_ZFUNC, &g_probeNow.zFunc);
+            g_probeNow.depth = g_depthFormat;
             dev->GetRenderState(D3DRS_ADAPTIVETESS_Y, &g_probeNow.atoc);
             g_probeNow.multisample = multisample;
             IDirect3DPixelShader9* ps = nullptr;
@@ -1261,7 +1267,7 @@ namespace wxl_livingazeroth::seethrough
             D3DSURFACE_DESC desc{}, depthDesc{};
             if (target) { target->GetDesc(&desc); target->Release(); }
             if (depth) { depth->GetDesc(&depthDesc); depth->Release(); }
-            const bool stencil = depth && HasStencil(depthDesc.Format);
+            g_depthFormat = depth ? depthDesc.Format : D3DFMT_UNKNOWN;
             const bool perPixel = g_settings.redraw != 0;
             __try
             {
@@ -1330,11 +1336,12 @@ namespace wxl_livingazeroth::seethrough
                         ++g_now.stained;
                         in.tintShader = TintShader(dev);
                         in.tint = std::clamp(g_settings.stainedTint, 0.0f, 1.0f);
-                        in.stencil = stencil;
+                        if (!in.tintShader) g_now.untinted = "its shader wasn't made";
                     }
                     const PerPixelDrawn drawn = DrawPerPixel(dev, e, in, g_split);
                     g_now.tintedSplit += drawn.tinted == 1 ? 1 : 0;
-                    g_now.tintedStencil += drawn.tinted == 2 ? 1 : 0;
+                    g_now.tintedWhole += drawn.tinted == 2 ? 1 : 0;
+                    if (drawn.untinted) g_now.untinted = drawn.untinted;
                     if (g_lookupNow.valid && g_lookupNow.indices == -2)
                     {
                         g_lookupNow.indices = agree;
@@ -1599,8 +1606,11 @@ namespace wxl_livingazeroth::seethrough
                           g_leadFailed, g_leadFailed ? ": " : "", g_leadWhy);
             ui::Text(api, line);
             std::snprintf(line, sizeof(line), "Stained glass's tint (SeeThroughStainedTint %.2f): %u stained batches redrawn, %u tinted over their open "
-                          "windows, %u through the stencil; its shader %s%s", g_settings.stainedTint, g_last.stained, g_last.tintedSplit, g_last.tintedStencil,
-                          g_tintShader ? "made" : g_tintTried ? "not made: " : "not needed yet", g_tintShader ? "" : g_tintWhy);
+                          "windows (split), %u over the batch where its glass is in front (whole, by the depth the opaque draw wrote)%s%s; its shader %s%s; "
+                          "the depth surface %s (%s stencil)", g_settings.stainedTint, g_last.stained, g_last.tintedSplit, g_last.tintedWhole,
+                          g_last.untinted ? "; not tinted: " : "", g_last.untinted ? g_last.untinted : "",
+                          g_tintShader ? "made" : g_tintTried ? "not made: " : "not needed yet", g_tintShader ? "" : g_tintWhy,
+                          DepthFormatName(g_depthFormat), HasStencil(g_depthFormat) ? "a" : "no");
             ui::Text(api, line);
         }
         // what the redraw set and read back (once a second)
@@ -1609,10 +1619,10 @@ namespace wxl_livingazeroth::seethrough
             const ReplayProbe& q = g_probeShown;
             std::snprintf(line, sizeof(line), "The redraw's device state (read back): %s; glass b9 %d, redraw in its shader %d, b11 %d; c219 %.3g %.3g %.0f %.1f; "
                           "c28 %.0f %.0f %.3f %.0f, c33 %.0f; the batch's alpha test %lu (func %lu, ref %lu); blend %lu (src %lu, dest %lu), alpha test %lu, depth "
-                          "write %lu; alpha-to-coverage switch 0x%08lX, target MSAA %lu; shader %p",
+                          "write %lu, depth test %lu, the depth surface %s; alpha-to-coverage switch 0x%08lX, target MSAA %lu; shader %p",
                           q.mode ? "per pixel" : "the whole glass", q.glassOn, q.hasReplay, q.b11, q.c219[0], q.c219[1], q.c219[2], q.c219[3], q.c28[0],
-                          q.c28[1], q.c28[2], q.c28[3], q.c33[0], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.atoc, q.multisample,
-                          q.shader);
+                          q.c28[1], q.c28[2], q.c28[3], q.c33[0], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.zFunc,
+                          DepthFormatName(q.depth), q.atoc, q.multisample, q.shader);
             ui::Text(api, line);
         }
         if (g_lookupShown.valid)

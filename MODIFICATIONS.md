@@ -100,7 +100,12 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   its designs, each with its own darkness for the frame); what's seen through stained glass, the room or the street, takes
   the glass's colour (`SeeThroughStainedTint`, a pass of its own before the glass is blended over it); and the gate passes
   the inside of a thick wall round a window's opening, and the sides of a narrow one, so the chapel's tall windows open
-  from 96% of street views instead of 48% (the inns' from 82% instead of 79%; the dormers still never).
+  from 96% of street views instead of 48% (the inns' from 82% instead of 79%; the dormers still never). From inside, a
+  window with the building's outer glass behind it has an opening that deep (Northshire Abbey's nave windows stand 2.7 yd
+  inside its outer ones): the shell met from behind within it is passed, so the nave's windows no longer come and go as
+  you walk about it ("it does flicker between fake rooms and outside"); and the tint goes by the depth the redraw's opaque
+  draw writes, needing neither the client's index buffer nor a stencil, which the game's depth surface lacked (22 October
+  2026).
 - **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's

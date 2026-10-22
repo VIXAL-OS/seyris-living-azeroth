@@ -101,6 +101,7 @@ namespace wxl_livingazeroth::seethrough
                 s.halfHeight = w.halfHeight;
                 s.thickness = w.thickness;
                 s.interior = inside ? -1 : InteriorBehind(s.center, s.normal, groups, count);
+                s.outer = inside ? OuterBehind(s, path, all) : 0.0f;
                 r.windows.push_back(s);
             }
             std::stable_sort(r.windows.begin(), r.windows.end(), [](const SeeWindow& a, const SeeWindow& b) {
@@ -115,6 +116,22 @@ namespace wxl_livingazeroth::seethrough
             }
             return r;
         }
+    }
+
+    float OuterBehind(const SeeWindow& w, uint32_t path, const std::vector<glass::Window>& all)
+    {
+        float best = 0.0f;
+        for (const glass::Window& o : all)
+        {
+            if (o.path != path || !(o.flags & kWindowExterior) || !Finite3(o.center) || !Finite3(o.normal)) continue;
+            if (std::fabs(Dot(o.normal, w.normal)) < kOuterFacing) continue;
+            const float d[3] = { o.center[0] - w.center[0], o.center[1] - w.center[1], o.center[2] - w.center[2] };
+            const float depth = Dot(d, w.normal);
+            if (!(depth > 0.0f && depth <= kOuterReach)) continue;
+            if (std::fabs(Dot(d, w.along)) > w.halfWidth + o.halfWidth || std::fabs(Dot(d, w.up)) > w.halfHeight + o.halfHeight) continue;
+            if (best == 0.0f || depth < best) best = depth;
+        }
+        return best;
     }
 
     RootWindows BuildRoot(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count)
@@ -641,7 +658,7 @@ namespace wxl_livingazeroth::seethrough
         enum class Met { kNothing, kRoomFront, kRoomBack, kShellFront, kShellBack, kRoomPane, kOuterPane };
 
         Met Trace(const SightMesh* groups, size_t count, const float o[3], const float d[3], float tmin, float tmax, bool outerPanes,
-                  float ownPane, float& at, const float* reveal = nullptr, float revealUntil = 0.0f)
+                  float ownPane, float& at, const float* reveal = nullptr, float revealUntil = 0.0f, bool revealShell = false)
         {
             at = tmax;
             for (int pass = 0; pass < 8; ++pass)
@@ -659,7 +676,7 @@ namespace wxl_livingazeroth::seethrough
                 // is the way out (from inside, either way) or the building's outside (from outside, its front); else a wall;
                 // else a room's pane from its front (but the window's own, before `ownPane`); else panes from behind, passed,
                 // and (`reveal`: the window's normal and along) a room's wall round its opening or a side of it, from behind,
-                // before `revealUntil`
+                // before `revealUntil` (`revealShell`: the shell's instead, an opening's lining from inside)
                 const float edge = best + 1e-3f;
                 bool outer = false, roomPane = false, wall = false, wallFront = false, wallExterior = false;
                 for (size_t g = 0; groups && g < count; ++g)
@@ -675,7 +692,7 @@ namespace wxl_livingazeroth::seethrough
                         if (exterior) outer = outer || outerPanes || h == RoomMesh::kFront;
                         else roomPane = roomPane || (h == RoomMesh::kFront && t >= ownPane);
                     }
-                    else if (reveal && !exterior && h == RoomMesh::kBack && t < revealUntil &&
+                    else if (reveal && exterior == revealShell && h == RoomMesh::kBack && t < revealUntil &&
                              (std::fabs(Dot(n, reveal)) >= kRevealFacing || std::fabs(Dot(n, reveal + 3)) >= kRevealFacing))
                         continue;
                     else if (!wall)
@@ -697,7 +714,7 @@ namespace wxl_livingazeroth::seethrough
         // glass (its own pane passed before `ownPane` past it), classified by `as`.
         template <class As>
         void Rays(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, float from,
-                  float ownPane, float reach, bool outerPanes, As as, Sight& out, float reveal = 0.0f)
+                  float ownPane, float reach, bool outerPanes, As as, Sight& out, float reveal = 0.0f, bool lining = false)
         {
             out = Sight{};
             if (!Finite3(eye)) return;
@@ -716,8 +733,14 @@ namespace wxl_livingazeroth::seethrough
                 if (len > 1e-3f && std::isfinite(len))
                 {
                     for (float& v : d) v /= len;
-                    seen = as(Trace(groups, count, eye, d, len + from, len + reach, outerPanes, len + ownPane, at,
-                                    reveal > 0.0f ? axes : nullptr, len + reveal));
+                    // (the reveal along the ray; the lining to a plane `reveal` past the glass, along the window's normal)
+                    const float until = lining ? len + reveal / std::max(Dot(d, w.normal), 0.2f) : len + reveal;
+                    Met met = Trace(groups, count, eye, d, len + from, len + reach, outerPanes, len + ownPane, at,
+                                    reveal > 0.0f ? axes : nullptr, until, lining);
+                    // (from inside, out past its opening's lining: the building's own outside met from the front, another wing's
+                    // face, is the street seen out of it, as the client draws it there)
+                    if (lining && met == Met::kShellFront && at > until) met = Met::kOuterPane;
+                    seen = as(met);
                 }
                 if (i == 0) out.middle = seen;
                 if (seen == RoomMesh::kFront) { ++out.front; continue; }
@@ -777,7 +800,7 @@ namespace wxl_livingazeroth::seethrough
             case Met::kRoomBack: case Met::kShellBack: return RoomMesh::kBack;
             default: return RoomMesh::kNone;
             }
-        }, out);
+        }, out, w.outer > 0.0f ? w.outer + kLiningMargin : 0.0f, true);
     }
 
     int WindowOf(const float p[3], const SeeWindow* windows, uint32_t count)
