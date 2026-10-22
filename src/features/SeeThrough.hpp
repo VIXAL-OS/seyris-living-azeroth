@@ -1,8 +1,10 @@
 // See-through windows (experimental, SeeThroughWindows, off by default): from outside, the real modelled room behind a
 // window, its furniture with it, seen through the glass. The rules: env/SeeThroughModel; the research:
 // docs/r&d/see-through-windows.md.
-//  - The room: the client's portal walk (Wmo.RenderThroughPortals) reaches an exterior group of a building in the
-//    whitelist from outside (s_interiorPass 0, the camera in no building of it); after it, each of the group's windows
+//  - The buildings: SeeThroughBuildings.cdbc's (features/Glass loads it; 2026-10-22, before the inn alone in the code):
+//    a WMO's path and its Flags, from outside and from inside.
+//  - The room: the client's portal walk (Wmo.RenderThroughPortals) reaches an exterior group of a building the table
+//    names from outside (s_interiorPass 0, the camera in no building of it); after it, each of the group's windows
 //    with an interior group behind it, facing the camera, on the screen and within kRange of the group, is opened: the
 //    client's own walk runs on into the room through the window's screen rectangle (FrustumPush, FrustumSet, the walk at
 //    depth 1, as through a doorway), so the room joins the frame's sort table clipped to the window, its doodads (the
@@ -45,7 +47,7 @@
 //    2026-10-21, in the inn's ground floor): the client draws the outdoors from inside only through its ways out, the
 //    exterior portal views its walk from the camera's groups records for each portal into an exterior group (the outdoors
 //    culled through the rectangle round them, the sky drawn in it), so the street never shows behind a window. In that walk
-//    (s_interiorPass 1, the camera's building in the whitelist), each window of a room it reaches (GlassWindows' rows of
+//    (s_interiorPass 1, the camera's building one the table names), each window of a room it reaches (GlassWindows' rows of
 //    interior groups) that faces the camera from inside, lies on the screen within the walk's rectangle and within 40 yd
 //    becomes a way out of its own: the view the client would make of a portal there (its screen rectangle, its farthest
 //    depth) pushed and merged through the client's own PushExteriorPortalView, MergeIntoWorldRect and

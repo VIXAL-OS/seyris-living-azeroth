@@ -17,9 +17,18 @@ every window in GlassWindows.cdbc, which have one:
   triangles lies in a window (within TRIM yd^2 of strays) and every window it touches has a room: a batch that also
   covers a fake window would show the void behind it. Counted per batch, and the windows those batches cover.
 
+The buildings whose windows go see-through are data (SeeThroughBuildings.cdbc, 2026-10-22: "more buildings"), written
+from SEE_THROUGH below by --table: the WMOs with the human window atlases GlassLead covers whose glass can go see-through
+(every glass batch's strays trim, a room behind its windows) and that the gate opens from most street views with few flips
+(seethrough_tests' survey, SEETHROUGH_SURVEY). Left out, with the survey's reason: the town halls (their rooms seen from 1
+to 5% of street views, flips on walks), the barns, the smithies, the Westfall guard tower and Northrend's human house
+(their rooms never seen through their windows), the closed variants (no rooms), Stormwind (one WMO for the city: 113 of its
+397 windows have an interior group behind, mostly a few large volumes, seen from 2% of street views), the dungeons'.
+
 Inputs: <scan> (waterfall-scan's out folder: wmo-windows/ roots and groups, as gen_glass.py) and the data folder with
 GlassWindows.cdbc. Nothing here opens an MPQ.
 Usage:  python see_through_survey.py <scan> [data dir] [--wmo <path>]   (--wmo: one WMO's windows, one per line)
+        python see_through_survey.py --table [data dir]                 (writes SeeThroughBuildings.cdbc from SEE_THROUGH)
 """
 import collections
 import math
@@ -37,6 +46,49 @@ TRIM = 0.25             # yd^2: a batch's glass outside every window, at most th
 LOOKUP = 0.05           # yd: a triangle's middle this far outside a window's rectangle is still in it
 SLAB = 0.3              # yd: ... and within its Thickness (at least this) of its plane
 EXTERIOR_WINDOW = 0x1   # GlassWindows.Flags
+
+# SeeThroughBuildings.cdbc (features/SeeThrough): the buildings whose windows go see-through, and how (Flags: 0x1 from
+# outside, the room behind the glass; 0x2 from inside, the street through it). From the survey of 2026-10-22 (the street
+# sweep, high and close views, walks past every front, the inside sweep: docs/r&d/see-through-windows.md section 9).
+FROM_OUTSIDE, FROM_INSIDE = 0x1, 0x2
+SEE_THROUGH = [
+    # the inns: 17 windows, 14 open from most street views, the dormers never; no flips; from inside 82% (Stratholme's 32%:
+    # its 59 interior windows, 40 of them between its rooms)
+    (r"world\wmo\azeroth\buildings\goldshireinn\goldshireinn.wmo", "the Lion's Pride Inn (Goldshire)"),
+    (r"world\wmo\azeroth\buildings\duskwood_inn\duskwood_inn.wmo", "the Scarlet Raven Tavern (Darkshire)"),
+    (r"world\wmo\azeroth\buildings\redridge_inn\redridge_inn.wmo", "the Lakeshire Inn"),
+    (r"world\wmo\azeroth\buildings\westfall_inn\westfall_inn.wmo", "the inn in Westfall's style (Southshore and others)"),
+    (r"world\wmo\buildings\oldstrat_inn.wmo", "the inn of old Stratholme"),
+    # the two-storey houses: 8 windows, 97 to 99% of street views, one window changing 4 times over the walks
+    (r"world\wmo\azeroth\buildings\humantwostory\humantwostory.wmo", "the human two-storey house"),
+    (r"world\wmo\azeroth\buildings\duskwood_humantwostory\duskwood_humantwostory.wmo", "the two-storey house, Duskwood's"),
+    (r"world\wmo\azeroth\buildings\redridge_humantwostory\redridge_humantwostory.wmo", "the two-storey house, Redridge's"),
+    (r"world\wmo\azeroth\buildings\westfall_humantwostory\westfall_humantwostory.wmo", "the two-storey house, Westfall's"),
+    (r"world\wmo\buildings\oldstrat_humantwostory.wmo", "the two-storey house of old Stratholme"),
+    # the mage towers: 8 windows, every street view, no flips
+    (r"world\wmo\azeroth\buildings\magetower\magetower.wmo", "the human mage tower"),
+    (r"world\wmo\azeroth\buildings\magetower\cot_magetower01.wmo", "the mage tower, the Caverns of Time's"),
+    (r"world\wmo\azeroth\buildings\duskwood_magetower\duskwood_magetower.wmo", "the mage tower, Duskwood's"),
+    (r"world\wmo\azeroth\buildings\duskwood_magetower\duskwood_magetowerpurple.wmo", "the mage tower, Duskwood's purple"),
+    (r"world\wmo\azeroth\buildings\duskwood_magetower\netherpvp_magetower.wmo", "the mage tower, Hellfire's battleground"),
+    (r"world\wmo\azeroth\buildings\redridge_magetower\redridge_magetower.wmo", "the mage tower, Redridge's"),
+    (r"world\wmo\azeroth\buildings\westfall_magetower\westfall_magetower.wmo", "the mage tower, Westfall's"),
+    # the farmhouses: 3 windows, the two downstairs from most street views, the attic's hardly; a few changes on the walks
+    (r"world\wmo\azeroth\buildings\human_farm\farm.wmo", "the human farmhouse"),
+    (r"world\wmo\azeroth\buildings\duskwood_human_farm\duskwood_human_farm.wmo", "the farmhouse, Duskwood's"),
+    (r"world\wmo\azeroth\buildings\duskwood_human_farm\humanfarm_ab.wmo", "the farmhouse, Arathi Basin's"),
+    (r"world\wmo\azeroth\buildings\redridge_human_farm\redridge_human_farm.wmo", "the farmhouse, Redridge's"),
+    (r"world\wmo\azeroth\buildings\westfall_human_farm\westfall_human_farm.wmo", "the farmhouse, Westfall's"),
+    (r"world\wmo\buildings\oldstrat_farm.wmo", "the farmhouse of old Stratholme"),
+    # Redridge's prison camp headquarters: 10 windows with a room, 65% of street views
+    (r"world\wmo\azeroth\buildings\prison_camp\prisonhq_redridge.wmo", "the prison camp's headquarters (Redridge)"),
+]
+SEE_THROUGH_COLUMNS = ["u", "s", "u", "s"]   # ID Wmo Flags Comment
+
+
+def see_through_table():
+    """SeeThroughBuildings.cdbc's rows: every SEE_THROUGH building, from outside and from inside."""
+    return [[i + 1, wmo, FROM_OUTSIDE | FROM_INSIDE, comment] for i, (wmo, comment) in enumerate(SEE_THROUGH)]
 
 
 def frame(n):
@@ -181,6 +233,12 @@ def survey(scan, data, only=None):
 
 def main():
     args = [a for a in sys.argv[1:]]
+    if args and args[0] == "--table":
+        data = Path(args[1]) if len(args) > 1 else Path(__file__).resolve().parent.parent / "data"
+        rows = see_through_table()
+        print(f"{len(rows)} see-through buildings")
+        gg.write(data / "SeeThroughBuildings.cdbc", io.build(SEE_THROUGH_COLUMNS, [tuple(r) for r in rows]))
+        return
     only = None
     if "--wmo" in args:
         k = args.index("--wmo")

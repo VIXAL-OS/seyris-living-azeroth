@@ -47,14 +47,6 @@ namespace wxl_livingazeroth::seethrough
         }
     }
 
-    bool Whitelisted(uint32_t pathHash)
-    {
-        if (!pathHash) return false;
-        for (const char* p : kWhitelist)
-            if (glass::PathHash(p) == pathHash) return true;
-        return false;
-    }
-
     int InteriorBehind(const float center[3], const float normal[3], const GroupInfo* groups, size_t count)
     {
         if (!groups || !Finite3(center) || !Finite3(normal)) return -1;
@@ -550,7 +542,8 @@ namespace wxl_livingazeroth::seethrough
             if (!ScreenRect(quad, 4, model, eye, viewProj, screen) || !Overlap(screen, walk, clip)) continue;
             p.clip = clip;
             p.state = kShut;
-            if (w.interior >= 0 && inRange && budget > 0)
+            const float d[3] = { camLocal[0] - w.center[0], camLocal[1] - w.center[1], camLocal[2] - w.center[2] };
+            if (w.interior >= 0 && inRange && Dot(d, d) <= kRange * kRange && budget > 0)
             {
                 p.candidate = true;
                 --budget;
@@ -719,6 +712,27 @@ namespace wxl_livingazeroth::seethrough
                     out.missDepth = std::isfinite(at - len) ? at - len : 0.0f;
                 }
             }
+        }
+    }
+
+    void NearGroups(const SeeWindow& w, int room, const GroupInfo* groups, size_t count, std::vector<uint16_t>& out)
+    {
+        out.clear();
+        if (!groups || !Finite3(w.center)) return;
+        float lo[3], hi[3];
+        for (int k = 0; k < 3; ++k) lo[k] = hi[k] = w.center[k];
+        if (room >= 0 && static_cast<size_t>(room) < count)
+            for (int k = 0; k < 3; ++k)
+            {
+                lo[k] = std::min(lo[k], groups[room].lo[k]);
+                hi[k] = std::max(hi[k], groups[room].hi[k]);
+            }
+        for (int k = 0; k < 3; ++k) { lo[k] -= kNearMargin; hi[k] += kNearMargin; }
+        for (size_t g = 0; g < count && g < 65536; ++g)
+        {
+            bool meets = true;
+            for (int k = 0; k < 3 && meets; ++k) meets = groups[g].lo[k] <= hi[k] && groups[g].hi[k] >= lo[k];
+            if (meets) out.push_back(static_cast<uint16_t>(g));
         }
     }
 

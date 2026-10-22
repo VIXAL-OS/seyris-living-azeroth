@@ -421,17 +421,18 @@ dragged holds them until it stops). The shader's rooms fade the same way. Withou
 `LightsFollowRooms` 0, the lights stay as WindowLights has them. If GlassBuildings or GlassWindows
 changes, rerun gen_window_lights.py (the building IDs and the windows' ordinals come from them).
 
-## Window glass: six tables
+## Window glass: seven tables
 
 Window glass that looks like glass (features/Glass, `[LivingAzeroth.Glass]` in config.md): seen from
 inside, the day coming through it (stained glass glowing in its own colours, brightest with the sun
 beyond it); seen from outside by day, the client's painted glass a little darker with the sky in it and, behind clear panes, a hint of a room;
 at night the client's own lit windows, or a lamp-lit room behind them. Sunlit panes also cast their
-light on the room's floor and walls and through its air (coloured shafts). All six tables come from
-`tools/gen_glass.py` (its header says how glass is found and how buildings are classed) and can be
-edited by hand. Without GlassMaterials and GlassPanes there's no glass look, floor light or shafts;
+light on the room's floor and walls and through its air (coloured shafts). Six tables come from
+`tools/gen_glass.py` (its header says how glass is found and how buildings are classed), the seventh
+(SeeThroughBuildings) from `tools/see_through_survey.py --table`; all can be edited by hand. Without GlassMaterials and GlassPanes there's no glass look, floor light or shafts;
 without RoomStyles and GlassBuildings every room is the same plain warm one (and lamp-lit at night);
-without GlassLead the see-through windows' per-pixel redraw keeps the glass mask (GlassMaterials').
+without GlassLead the see-through windows' per-pixel redraw keeps the glass mask (GlassMaterials');
+without SeeThroughBuildings no building's windows go see-through.
 After editing, press "Reload light tables from disk" in the lights panel.
 
 ### GlassMaterials.cdbc — `GlassMaterials.xml`
@@ -647,6 +648,23 @@ GlassMaterials' mask in the redraw.
 | Dark | lead: darker than this x the lit glass's median luminance (0.18) |
 | Line | lead: a thin dark line deeper than this x that median (0.15) |
 | Comment | the layout and the rectangle's number; never read |
+
+### SeeThroughBuildings.cdbc — `SeeThroughBuildings.xml`
+
+The buildings whose windows go see-through (features/SeeThrough: `SeeThroughWindows`, `SeeThroughFromInside`),
+one row per WMO: from outside its real modelled room behind the glass, from inside the street through it
+(docs/r&d/see-through-windows.md). Written by `tools/see_through_survey.py --table` from its SEE_THROUGH
+list: the WMOs with the human window atlases (GlassLead's) whose glass can go see-through and whose rooms
+the gate opens from most street views with few flips (the survey of 2026-10-22: the inns, the two-storey
+houses, the mage towers, the farmhouses, Redridge's prison camp headquarters; 24). A WMO not here keeps its
+windows as they are. Every placement of a WMO counts, on every map.
+
+| Field | Meaning |
+|---|---|
+| ID | row id |
+| Wmo | the WMO's path (case and slashes don't matter) |
+| Flags | 0x1 from outside (its windows open onto the room behind them), 0x2 from inside (its rooms' own windows open onto the street); 0 = neither (as if the row weren't there) |
+| Comment | which building; never read |
 
 ## CrystalMaterials.cdbc — `CrystalMaterials.xml`
 

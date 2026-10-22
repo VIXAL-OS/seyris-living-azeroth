@@ -262,6 +262,10 @@ namespace wxl_livingazeroth::glass
     /// A material's lead rule (GlassLead.cdbc: where its texture's panes are, for the see-through redraw's mask), null:
     /// none; and its texture's path as GlassMaterials has it (null: no such material).
     const LeadRule* LeadOf(uint32_t indexPlusOne);
+    /// SeeThroughBuildings.cdbc's Flags for a WMO (its PathHash; features/SeeThrough's kSeeFromOutside, kSeeFromInside),
+    /// 0 when it isn't there; and how many buildings the table names.
+    uint32_t SeeThroughFlags(uint32_t pathHash);
+    size_t SeeThroughBuildings();
     const char* TextureOf(uint32_t indexPlusOne);
     /// The window table's texture on the device (s13's for every glass batch; null: none yet), for the see-through panel.
     const void* TableTexture();

@@ -4,7 +4,7 @@
 // "Windows you can actually see through into a building's modelled interior" (the user and Simon, 2026-10-20). From
 // outside, the client draws a WMO's interior groups only where its portal walk (CMapObj::RenderThruPortals) reaches
 // them, through the doors: windows aren't portals, so the room behind a window is never drawn. features/SeeThrough opens
-// a window of a building in its whitelist as a portal of its own, inside the client's walk and without touching the
+// a window of a building SeeThroughBuildings.cdbc names as a portal of its own, inside the client's walk and without touching the
 // WMO's portal arrays: when the walk from outside reaches an exterior group, each of its windows that has an interior
 // group behind it (InteriorBehind), faces the camera and lies on the screen is projected to a screen rectangle
 // (ScreenRect), and the client's own walk runs on into that group through that rectangle, as through a doorway (the
@@ -197,16 +197,14 @@ namespace wxl_livingazeroth::seethrough
     }
 
     // --- the buildings ----------------------------------------------------------------------------------------------
-    /// The prototype's whitelist: the WMOs whose windows open (lower case, backslashes, as GlassWindows names them).
-    /// Goldshire's Lion's Pride Inn: one exterior group (4) with all 17 of its windows in one glass batch, each with a
-    /// room behind it (tools/see_through_survey.py).
-    inline constexpr const char* kWhitelist[] = {
-        "world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo",
-    };
-    /// Whether a WMO (its glass::PathHash) is in kWhitelist.
-    bool Whitelisted(uint32_t pathHash);
+    /// The buildings whose windows open: SeeThroughBuildings.cdbc's rows (features/Glass loads it with the glass tables;
+    /// tools/see_through_survey.py --table writes it from its SEE_THROUGH list, the WMOs the survey and the gate's sweeps
+    /// pick: 2026-10-22, "more buildings"), by WMO path, each with its Flags: from outside (the room behind its windows),
+    /// from inside (the street through them). Before 2026-10-22 one hard-coded entry: Goldshire's Lion's Pride Inn.
+    constexpr uint32_t kSeeFromOutside = 0x1, kSeeFromInside = 0x2;
 
-    /// How far the camera may be from an exterior group's box (yd) for its windows to open.
+    /// How far the camera may be from an exterior group's box, and from the window's middle (yd), for a window to open
+    /// (the window's own distance since 2026-10-22: a city's one exterior group can hold the camera in its box).
     constexpr float kRange = 60.0f;
     /// At most this many windows opened a frame, and glass batches deferred a frame.
     constexpr unsigned kMaxOpenPerFrame = 48, kMaxDeferred = 24;
@@ -385,6 +383,11 @@ namespace wxl_livingazeroth::seethrough
     /// behind, a room's from outside or the shell's from inside (the roof, an outer wall: the void shows through it), or
     /// nothing at all within kVoidReach. None: the building's outside from outside (out by an opening).
     void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out);
+    /// The groups a window's rays go through (2026-10-22, more buildings: a city's one WMO has hundreds): those whose box
+    /// meets the box round its room (`room`: the interior group behind it from outside, its own group from inside; -1
+    /// none) and its middle, grown by kNearMargin yd. A ray that leaves them all leaves the building round the room.
+    constexpr float kNearMargin = 6.0f;
+    void NearGroups(const SeeWindow& w, int room, const GroupInfo* groups, size_t count, std::vector<uint16_t>& out);
 
     // --- a window on the screen --------------------------------------------------------------------------------------
     /// The quad (WMO space), grown by `grow` yd along and up: corners counter-clockwise from (-along, -up).

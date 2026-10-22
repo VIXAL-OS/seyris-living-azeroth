@@ -73,7 +73,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   in the client's own portal walk (a hook on `Wmo.RenderThroughPortals`; nothing in the WMO changes), and its glass is
   drawn again after the room, blended at a constant opacity (`env/SeeThroughModel`, `features/SeeThrough`,
   `[LivingAzeroth.Glass]` `SeeThroughWindows`, `SeeThroughOpacity`; the research in `docs/r&d/see-through-windows.md`,
-  the count in `tools/see_through_survey.py`). Only Goldshire's Lion's Pride Inn for now. With `SeeThroughRedraw` 1
+  the count in `tools/see_through_survey.py`). The buildings are data (`SeeThroughBuildings.cdbc`, 22 October 2026; before,
+  Goldshire's Lion's Pride Inn alone): the human inns, two-storey houses, mage towers and farmhouses and Redridge's prison
+  camp headquarters, 24 WMOs the survey's sweeps pick; not Stormwind, whose houses aren't modelled inside. With `SeeThroughRedraw` 1
   (the default; 0 is the constant blend above) only the glass goes see-through, every pane's inside, lit and shaded
   alike (the texture's lead mask: `GlassLead.cdbc`'s panes, the mask built at run time from the texture; 21 October
   2026), the painted lead, frame, tracery and shutters stay opaque, and a window opens only where its room is really seen

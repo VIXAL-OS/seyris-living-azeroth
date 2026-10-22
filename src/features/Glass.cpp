@@ -110,6 +110,15 @@ namespace wxl_livingazeroth::glass
             {"Dark", 6, WXL_CDBC_FIELD_VALUE}, {"Line", 7, WXL_CDBC_FIELD_VALUE},   {"Comment", 8, WXL_CDBC_FIELD_STRING},
         };
         constexpr WXL_SeyrisCdbcDefinition kLeadDef = { "GlassLead", kLeadFile, kLeadFields, 9 };
+        // The buildings whose windows go see-through (features/SeeThrough; tools/see_through_survey.py --table, its
+        // SEE_THROUGH list; 2026-10-22): one row per WMO, its Flags (0x1 from outside, 0x2 from inside). Optional: without
+        // it no building's windows open.
+        constexpr const char* kSeeThroughFile = "DBFilesClient\\SeeThroughBuildings.cdbc";
+        constexpr WXL_SeyrisCdbcField kSeeThroughFields[] = {
+            {"ID", 0, WXL_CDBC_FIELD_VALUE}, {"Wmo", 1, WXL_CDBC_FIELD_STRING}, {"Flags", 2, WXL_CDBC_FIELD_VALUE},
+            {"Comment", 3, WXL_CDBC_FIELD_STRING},
+        };
+        constexpr WXL_SeyrisCdbcDefinition kSeeThroughDef = { "SeeThroughBuildings", kSeeThroughFile, kSeeThroughFields, 4 };
 
         // Each kind's look (features/GlassShader's constants): the room behind it (x the settings' shares by day and
         // night), the glass's thickness (yd), saturation seen from inside, the reflection at grazing (Fresnel's
@@ -150,6 +159,7 @@ namespace wxl_livingazeroth::glass
         std::vector<Material> g_materials;
         std::vector<std::string> g_texturePaths;   // each material's texture, as GlassMaterials has it
         std::vector<LeadRule> g_lead;              // each material's lead rule (GlassLead.cdbc; no rectangles: none)
+        std::unordered_map<uint32_t, uint32_t> g_seeThrough;   // SeeThroughBuildings.cdbc: a WMO's PathHash -> its Flags
         std::unordered_map<std::string, uint32_t> g_byTexture;
         std::unordered_map<uint32_t, uint32_t> g_materialById;   // GlassMaterials ID -> index + 1
         PaneIndex g_panes;
@@ -1033,6 +1043,29 @@ namespace wxl_livingazeroth::glass
         }
         else if (!g_materials.empty()) status += std::string("; GlassLead.cdbc: ") + (err[0] ? err : "not found") + " (the see-through redraw keeps the glass mask)";
 
+        // The see-through windows' buildings (their WMOs' paths, from outside and from inside).
+        g_seeThrough.clear();
+        err[0] = 0;
+        if (void* t = cdbcload::LoadAppendOnly(cdbc, kSeeThroughDef, err, sizeof(err)))
+        {
+            unsigned unnamed = 0;
+            for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
+            {
+                const void* row = cdbc->RowAt(t, i);
+                if (!row) continue;
+                const uint32_t path = PathHash(cdbc->GetString(t, row, "Wmo"));
+                const uint32_t flags = cdbc->Value(t, row, "Flags", 0);
+                if (!path) { ++unnamed; continue; }
+                if (flags) g_seeThrough[path] = flags;
+            }
+            cdbc->Release(t);
+            char line[160];
+            std::snprintf(line, sizeof(line), "; SeeThroughBuildings.cdbc: %u buildings%s", static_cast<unsigned>(g_seeThrough.size()),
+                          unnamed ? " (some rows left out: no WMO)" : "");
+            status += line;
+        }
+        else status += std::string("; SeeThroughBuildings.cdbc: ") + (err[0] ? err : "not found") + " (no see-through windows)";
+
         std::vector<Pane> panes;
         err[0] = 0;
         if (void* t = cdbcload::LoadAppendOnly(cdbc, kPaneDef, err, sizeof(err)))
@@ -1251,6 +1284,14 @@ namespace wxl_livingazeroth::glass
     {
         return indexPlusOne && indexPlusOne <= g_materials.size() ? &g_materials[indexPlusOne - 1] : nullptr;
     }
+
+    uint32_t SeeThroughFlags(uint32_t pathHash)
+    {
+        const auto it = pathHash ? g_seeThrough.find(pathHash) : g_seeThrough.end();
+        return it == g_seeThrough.end() ? 0u : it->second;
+    }
+
+    size_t SeeThroughBuildings() { return g_seeThrough.size(); }
 
     const LeadRule* LeadOf(uint32_t indexPlusOne)
     {

@@ -347,8 +347,8 @@ tuskarr huts, the human houses, and the Lion's Pride Inn (17 of 17, one batch).
 `SeeThroughWindows` 0 by default, `SeeThroughOpacity` 0.35, `SeeThroughRedraw` 1 (per pixel; 0 the whole glass), in
 `[LivingAzeroth.Glass]` and the lights panel (under the glass; the per-pixel redraw's debug view there, not saved) with
 last frame's counts: exterior groups walked, windows opened and shut, rooms added, glass batches in opened groups, kept
-opaque, deferred and redrawn, faults. Whitelist: `goldshireinn.wmo` only. It needs the glass feature on (its batch hooks
-name the glass batches).
+opaque, deferred and redrawn, faults. The buildings: SeeThroughBuildings.cdbc's (section 9; before 2026-10-22
+`goldshireinn.wmo` alone, in the code). It needs the glass feature on (its batch hooks name the glass batches).
 
 Next, in order: try it in game at the inn; widen the whitelist to the 109 all-real WMOs; the same windows as portals
 *outward* from inside (the street through the window), which wants the interior pass's exterior portal views and the
@@ -523,3 +523,100 @@ screen); the frame rate with the street drawn from inside; the outer panes' cull
 nothing of the shell left standing in the view; the street's fog (the inn's MFOG, about 83 yd) and light; rain seen outside
 and none falling in the room; Modern Water's fog over the glass; that Glass's inside look and the lead mask hold on the
 real device; the dormers' sloped panes shut and their outside's back faces not seen through.
+
+## 9. More buildings (2026-10-22)
+
+"More buildings for see-through windows", starting with the human buildings that use the window atlases the lead masks
+cover (`mm_elwynn`, `mm_duskwood`, `mm_rr`, `mm_westfall` `_wnd_ext__01` / `_int__01`). Which buildings is now data:
+**SeeThroughBuildings.cdbc** (cdbc-tables.md: one row per WMO path, its Flags 0x1 from outside, 0x2 from inside; written by
+`tools/see_through_survey.py --table` from its SEE_THROUGH list; features/Glass loads it with the glass tables, so the
+lights panel's reload picks up an edit). The runtime's check is the table's flags for the root's path; a WMO not in it is
+as it was.
+
+**Which.** 79 WMOs use a human atlas; 47 have every glass batch see-through-able by the per-pixel redraw (its strays trim,
+a room behind at least one window: `human_survey`), 56 at least one. Each candidate went through the gates offline
+(seethrough_tests' survey: `SEETHROUGH_SURVEY`, a list of WMO paths; the map scan's files and the shipped GlassWindows):
+from outside the street sweep (each window with a room, 5 to 30 yd out, 60 degrees aside, 2 to 11 yd up: 252 views),
+high and close (4 to 12 yd out, 9 to 15 yd up), slow walks past each front (8 and 14 yd out, 3, 7 and 12 yd up, 7 yd a
+second, a frame each 1/60 s, the verdict held as the runtime holds it), and from inside each room's windows from eyes all
+over it. The eye stands on the building's lowest point (a house on the terrain), or for a city's WMO on the street under
+each window. Each window's rays go through its near groups (`NearGroups`: the groups whose box meets the box round its room
+and its middle, grown 6 yd; a city's WMO has 286), as the runtime's.
+
+| WMO | windows with a room | street views open | windows open from most | never (dormers, recesses) | high and close | flips on walks (windows, most) | inside: windows, views open, never |
+|---|---|---|---|---|---|---|---|
+| goldshireinn | 17 | 79% | 14 | 3 | 76% | 0 (0, 0) | 17, 82%, 0 |
+| duskwood_inn | 17 | 78% | 14 | 3 | 78% | 0 (0, 0) | 17, 83%, 0 |
+| redridge_inn | 17 | 78% | 14 | 3 | 78% | 0 (0, 0) | 17, 83%, 0 |
+| westfall_inn | 17 | 78% | 14 | 3 | 78% | 0 (0, 0) | 17, 83%, 0 |
+| oldstrat_inn | 17 | 79% | 14 | 3 | 76% | 0 (0, 0) | 59, 32%, 40 |
+| humantwostory | 8 | 99% | 8 | 0 | 97% | 4 (1, 4) | 8, 98%, 0 |
+| duskwood_humantwostory | 8 | 99% | 8 | 0 | 96% | 4 (1, 4) | 8, 97%, 0 |
+| redridge_humantwostory | 8 | 97% | 8 | 0 | 96% | 4 (1, 4) | 8, 91%, 0 |
+| westfall_humantwostory | 8 | 97% | 8 | 0 | 96% | 4 (1, 4) | 8, 92%, 0 |
+| oldstrat_humantwostory | 8 | 99% | 8 | 0 | 97% | 4 (1, 4) | 8, 98%, 0 |
+| magetower | 8 | 100% | 8 | 0 | 100% | 0 (0, 0) | 8, 97%, 0 |
+| cot_magetower01 | 8 | 100% | 8 | 0 | 100% | 0 (0, 0) | 8, 96%, 0 |
+| duskwood_magetower | 8 | 100% | 8 | 0 | 100% | 0 (0, 0) | 8, 96%, 0 |
+| duskwood_magetowerpurple | 8 | 100% | 8 | 0 | 100% | 0 (0, 0) | 8, 96%, 0 |
+| netherpvp_magetower | 8 | 100% | 8 | 0 | 100% | 0 (0, 0) | 8, 96%, 0 |
+| redridge_magetower | 8 | 100% | 8 | 0 | 100% | 0 (0, 0) | 8, 96%, 0 |
+| westfall_magetower | 8 | 100% | 8 | 0 | 100% | 0 (0, 0) | 8, 96%, 0 |
+| townhall | 8 | 1% | 0 | 6 | 0% | 4 (2, 2) | 2, 52%, 0 |
+| townhall_nowall | 8 | 5% | 0 | 6 | 0% | 20 (2, 10) | 2, 51%, 0 |
+| duskwood_townhall | 8 | 1% | 0 | 6 | 0% | 4 (2, 2) | 2, 53%, 0 |
+| duskwood_townhall_nowall | 8 | 5% | 0 | 6 | 0% | 20 (2, 10) | 2, 52%, 0 |
+| redridge_townhall | 8 | 1% | 0 | 6 | 0% | 4 (2, 2) | 2, 53%, 0 |
+| redridge_townhall_nowall | 8 | 5% | 0 | 6 | 0% | 20 (2, 10) | 2, 51%, 0 |
+| westfall_townhall_nowall | 8 | 5% | 0 | 6 | 0% | 20 (2, 10) | 2, 52%, 0 |
+| farm | 3 | 64% | 2 | 0 | 62% | 6 (2, 4) | 2, 97%, 0 |
+| duskwood_human_farm | 3 | 64% | 2 | 0 | 61% | 6 (2, 4) | 2, 97%, 0 |
+| humanfarm_ab | 3 | 64% | 2 | 0 | 61% | 6 (2, 4) | 2, 97%, 0 |
+| redridge_human_farm | 3 | 64% | 2 | 0 | 63% | 6 (2, 4) | 2, 98%, 0 |
+| westfall_human_farm | 3 | 64% | 2 | 0 | 59% | 5 (2, 3) | 2, 94%, 0 |
+| oldstrat_farm | 3 | 64% | 2 | 0 | 62% | 6 (2, 4) | 2, 97%, 0 |
+| barn | 3 | 0% | 0 | 3 | 0% | 0 (0, 0) | 0, 0%, 0 |
+| duskwood_barn | 3 | 0% | 0 | 3 | 0% | 0 (0, 0) | 0, 0%, 0 |
+| redridge_barn | 3 | 0% | 0 | 3 | 0% | 0 (0, 0) | 0, 0%, 0 |
+| westfall_barn | 3 | 0% | 0 | 3 | 0% | 0 (0, 0) | 0, 0%, 0 |
+| oldstrat_barn | 3 | 0% | 0 | 3 | 0% | 0 (0, 0) | 0, 0%, 0 |
+| goldshireblacksmith | 2 | 0% | 0 | 1 | 5% | 0 (0, 0) | 2, 0%, 0 |
+| duskwood_blacksmith | 2 | 0% | 0 | 1 | 5% | 0 (0, 0) | 2, 0%, 0 |
+| blacksmith_ab | 2 | 0% | 0 | 1 | 5% | 0 (0, 0) | 2, 0%, 0 |
+| redridge_blacksmith | 2 | 0% | 0 | 1 | 5% | 0 (0, 0) | 2, 0%, 0 |
+| westfall_blacksmith | 2 | 0% | 0 | 1 | 5% | 0 (0, 0) | 2, 0%, 0 |
+| nh_blacksmith | 2 | 0% | 0 | 1 | 5% | 0 (0, 0) | 2, 0%, 0 |
+| westfall_guardtower | 2 | 0% | 0 | 2 | 0% | 0 (0, 0) | 0, 0%, 0 |
+| prisonhq_redridge | 10 | 65% | 6 | 0 | 83% | 25 (6, 6) | 10, 69%, 0 |
+| nd_human_house01 | 12 | 0% | 0 | 11 | 0% | 0 (0, 0) | 10, 0%, 10 |
+| stormwind | 113 | 2% | 0 | 84 | 2% | 72 (14, 10) | 662, 10%, 276 |
+
+(Stormwind's row is with its eyes on its streets; with them at its lowest, its canals, the same 2%.) Chosen, 24: the five
+inns (the Lion's Pride Inn and its Duskwood, Redridge and Westfall variants, old Stratholme's: 17 windows, 14 open from most
+street views, the three dormers never, no flips; from inside 82%, Stratholme's 32% over its 59 room windows, 40 of them
+between its rooms), the five two-storey houses (97 to 99% of street views; one window shutting once a walk as the view
+turns steep), the seven mage towers (every view, no flips), the six farmhouses (the two downstairs windows from most views,
+the attic's hardly: the dormer case; a window shutting once a walk), and Redridge's prison camp headquarters (10 windows,
+65%; six shutting once a walk at the steep end). Left out: the town halls (8 windows with a room but seen from 1 to 5% of
+views, the doors' rooms behind thick walls; 2 windows flipping up to 10 times), the barns, smithies, the Westfall guard
+tower and Northrend's human house (their windows' rooms never seen through them: the probe's room isn't the one behind
+the glass), the closed variants (no rooms), the vrykul buildings (not human; a later pass), the dungeons', and
+**Stormwind**: one WMO for the city, 113 of its 397 windows with an interior group behind, mostly a few large volumes (its
+houses aren't modelled inside); seen from 2% of street views, 14 windows changing their verdict up to 10 times on walks.
+
+**Cost.** GlassPanes' panes of the chosen WMOs within 60 yd of busy spots, facing them (a pane is about a window): before
+Goldshire's inn 5 (18 within 60 yd), Goldshire's crossroads 3, Lakeshire 2, Darkshire 15 over three buildings (the inn and
+two houses), Southshore 7 over three, the busiest spot anywhere about 21; Stormwind 0 (not chosen). So a busy street opens
+some 5 to 20 windows a frame from outside, each its room (and the rooms beyond its doors) as a door would, within the caps:
+48 windows a frame from outside, 16 ways out from inside, 24 deferred glass batches, one mesh build a frame (a window stays
+shut until its building's near groups are read: the inn's twelve over its first twelve frames), the mesh cache emptied past
+128 groups (each about 50 to 400 KB). The rays: nine a window, through its near groups, only for windows facing and on the
+screen. The range is now the window's own (60 yd) as well as its group's box (a city's group can hold the camera).
+
+**The panel** names each window's building and group (its WMO's file name: "duskwood_inn group 4 window 3: open") and says
+how many buildings the table names.
+
+**Only the game can confirm**: the frame rate in Darkshire and Southshore with a few buildings' rooms open; that each
+placement's rooms are its own (every placement of a chosen WMO opens, wherever it stands: a ruined or empty village's
+too); the farmhouses' and houses' rooms by night and day; the new buildings' interior glass (the same atlases) with the
+lead mask.

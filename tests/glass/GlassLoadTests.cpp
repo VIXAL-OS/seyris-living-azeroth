@@ -223,7 +223,7 @@ namespace
     }
 
     const char* const kTables[] = { "GlassMaterials.cdbc", "GlassPanes.cdbc", "RoomStyles.cdbc", "GlassBuildings.cdbc", "GlassWindows.cdbc",
-                                    "WindowLights.cdbc", "WindowRooms.cdbc", "GlassLead.cdbc" };
+                                    "WindowLights.cdbc", "WindowRooms.cdbc", "GlassLead.cdbc", "SeeThroughBuildings.cdbc" };
 
     // What the files say Load should keep (tools/gen_glass.py's columns).
     struct Expected
@@ -400,6 +400,22 @@ namespace
               inn->rects[0].u1 == 61.0f / 256 && inn->rects[0].v1 == 57.0f / 256 && inn->dark == gl::kLeadDark && inn->line == gl::kLeadLine && innTexture &&
               std::string(innTexture) == "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp" &&
               status.find("GlassLead.cdbc: 152 rectangles over 8 textures;") != std::string::npos, line);
+
+        // SeeThroughBuildings.cdbc (2026-10-22): the see-through windows' buildings as the reader gives them, by their WMO's
+        // path in any case: the inns, the two-storey houses, the mage towers, the farmhouses and Redridge's prison camp
+        // headquarters, from outside and from inside; not Stormwind, a barn, a smithy or the inn's closed variant.
+        auto see = [](const char* wmo) { return gl::SeeThroughFlags(gl::PathHash(wmo)); };
+        const uint32_t seeInn = see("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo");
+        const uint32_t seeHouse = see("world\\wmo\\azeroth\\buildings\\duskwood_humantwostory\\duskwood_humantwostory.wmo");
+        const uint32_t seeTower = see("world\\wmo\\azeroth\\buildings\\magetower\\magetower.wmo");
+        const uint32_t seeFarm = see("world\\wmo\\buildings\\oldstrat_farm.wmo");
+        const uint32_t seeNone = see("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo") | see("world\\wmo\\azeroth\\buildings\\human_barn_silo\\barn.wmo") |
+                                 see("world\\wmo\\azeroth\\buildings\\goldshireblacksmith\\goldshireblacksmith.wmo") |
+                                 see("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo");
+        std::snprintf(line, sizeof(line), "%s: SeeThroughBuildings.cdbc: %zu buildings; the inn's flags %u, a two-storey house's %u, a mage tower's %u, a "
+                      "farmhouse's %u; Stormwind, a barn, a smithy, the closed inn %u", via, gl::SeeThroughBuildings(), seeInn, seeHouse, seeTower, seeFarm, seeNone);
+        Check(gl::SeeThroughBuildings() == 24 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeNone == 0 &&
+              status.find("SeeThroughBuildings.cdbc: 24 buildings") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).
         const std::string rooms = gl::RoomLine(), windows = gl::WindowLine();

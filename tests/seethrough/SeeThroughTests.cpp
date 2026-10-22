@@ -29,6 +29,9 @@
 //  - The rays followed on through the building (LookIn, 2026-10-22): a doorway into the next room, the roof from inside, the
 //    void, a window half over its room's ceiling; the scan's inn by the rule of 2026-10-21 and now over the street sweep,
 //    high and close and high and far before the dormer front, the user's viewpoint, and walks past every front at heights.
+//  - The buildings (SeeThroughBuildings.cdbc, 2026-10-22) through the real reader; the panel's wrapped text; with
+//    SEETHROUGH_SURVEY (a file of WMO paths) a survey of each building printed: the street sweep, high and close, walks
+//    past each front, the inside sweep, through each window's near groups (NearGroups).
 // Usage:  seethrough_tests <Wow.exe> <repo data folder> [<map scan's wmo-windows folder>]
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
@@ -370,6 +373,325 @@ namespace
         api.Save = &wxl_seyris::cdbc::Save;
         api.Reload = &wxl_seyris::cdbc::Reload;
         return api;
+    }
+
+    // --- a survey of buildings (SEETHROUGH_SURVEY: a file of WMO paths, one a line; 2026-10-22, more buildings) ----------
+    // Each WMO from the map scan's files with the loaded GlassWindows: its windows with rooms behind them; from outside the
+    // street sweep, high and close views, and slow walks past each of its fronts (the held verdict's changes); from inside
+    // each room's own windows from eyes all over it. Every window's rays go through its near groups (NearGroups), as the
+    // runtime's. The eye stands on the building's own floors and streets where it has them (a city's), else at its lowest.
+    struct ScanBuilding
+    {
+        std::string base;   // the scan's flat path less ".wmo"
+        std::vector<st::GroupInfo> groups;
+        std::vector<bool> glass;
+        std::map<int, ScanGroup> files;
+        std::map<int, st::RoomMesh> meshes;
+        float lowest = 0.0f;
+        const ScanGroup& File(int g)
+        {
+            auto it = files.find(g);
+            if (it == files.end())
+            {
+                char n[16];
+                std::snprintf(n, sizeof(n), "_%03d.wmo", g);
+                it = files.emplace(g, fs::exists(base + n) ? ReadScanGroup(base + n) : ScanGroup{}).first;
+            }
+            return it->second;
+        }
+        const st::RoomMesh& Mesh(int g)
+        {
+            auto it = meshes.find(g);
+            if (it == meshes.end())
+            {
+                it = meshes.emplace(g, st::RoomMesh{}).first;
+                BuildFull(File(g), glass, it->second);
+            }
+            return it->second;
+        }
+        std::vector<st::SightMesh> Near(const st::SeeWindow& w, int room)
+        {
+            std::vector<uint16_t> ids;
+            st::NearGroups(w, room, groups.data(), groups.size(), ids);
+            std::vector<st::SightMesh> out;
+            for (const uint16_t g : ids) out.push_back({ &Mesh(g), (groups[g].flags & st::client::kExteriorGroup) != 0 });
+            return out;
+        }
+        // The street under a window (a city's: the first upward face below a point 1.5 yd before it, among the exterior
+        // groups over it), else the building's lowest point (a house on the terrain). The eyes before it stand on it.
+        float StreetOf(const st::SeeWindow& w)
+        {
+            if (groups.size() < 50) return lowest;
+            const float x = w.center[0] + 1.5f * w.normal[0], y = w.center[1] + 1.5f * w.normal[1];
+            std::vector<st::SightMesh> over;
+            for (size_t g = 0; g < groups.size(); ++g)
+                if ((groups[g].flags & st::client::kExteriorGroup) && groups[g].lo[0] <= x && groups[g].hi[0] >= x && groups[g].lo[1] <= y &&
+                    groups[g].hi[1] >= y && groups[g].lo[2] < w.center[2])
+                    over.push_back({ &Mesh(static_cast<int>(g)), true });
+            return Ground(x, y, w.center[2], over);
+        }
+        // The first upward face under (x, y, z) among `near` (a street, a floor), else the building's lowest point.
+        float Ground(float x, float y, float z, const std::vector<st::SightMesh>& around, bool* found = nullptr) const
+        {
+            if (found) *found = false;
+            const float o[3] = { x, y, z }, d[3] = { 0, 0, -1 };
+            float tmin = 0.0f;
+            for (int pass = 0; pass < 8; ++pass)
+            {
+                float best = 200.0f;
+                st::RoomMesh::Hit hit = st::RoomMesh::kNone;
+                for (const st::SightMesh& m : around)
+                {
+                    float t = 0;
+                    const auto h = m.mesh->First(o, d, tmin, best, &t);
+                    if (h != st::RoomMesh::kNone && t < best) { best = t; hit = h; }
+                }
+                if (hit == st::RoomMesh::kNone) break;
+                if (hit == st::RoomMesh::kFront)
+                {
+                    if (found) *found = true;
+                    return z - best;
+                }
+                tmin = best + 1e-3f;
+            }
+            return lowest;
+        }
+    };
+
+    struct SurveyRow
+    {
+        std::string wmo;
+        unsigned groups = 0, ext = 0, real = 0, fake = 0, inside = 0;
+        unsigned streetViews = 0, streetOpen = 0, highViews = 0, highOpen = 0;
+        unsigned mostlyOpen = 0, neverOpen = 0, highOnly = 0;
+        unsigned walkFrames = 0, walkOpen = 0, flips = 0, flipWindows = 0, maxFlips = 0;
+        unsigned insideViews = 0, insideOpen = 0, insideWindows = 0, insideMostly = 0, insideNever = 0;
+        std::vector<std::string> lines;
+        double seconds = 0;
+    };
+
+    bool SurveyBuilding(const std::string& scan, const std::string& wmo, const std::vector<gl::Window>& all, SurveyRow& row)
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        row = SurveyRow{};
+        row.wmo = wmo;
+        std::string flat = wmo;
+        std::replace(flat.begin(), flat.end(), '\\', '#');
+        ScanBuilding b;
+        b.base = (fs::path(scan) / flat).string();
+        b.base.resize(b.base.size() - 4);
+        if (!fs::exists(b.base + ".wmo")) return false;
+        const std::vector<uint8_t> r = ReadFile(b.base + ".wmo");
+        for (const Chunk& c : Chunks(r, 0, r.size()))
+            if (c.tag == "MOGI")
+                for (size_t at = c.at; at + 32 <= c.at + c.size; at += 32)
+                {
+                    st::GroupInfo gi;
+                    std::memcpy(&gi.flags, &r[at], 4);
+                    std::memcpy(gi.lo, &r[at + 4], 12);
+                    std::memcpy(gi.hi, &r[at + 16], 12);
+                    b.groups.push_back(gi);
+                }
+        const std::vector<std::string> textures = ReadRootTextures(b.base + ".wmo");
+        b.glass.resize(textures.size());
+        for (size_t i = 0; i < textures.size(); ++i) b.glass[i] = gl::MaterialOf(textures[i].c_str()) != 0;
+        b.lowest = 1e30f;
+        for (const st::GroupInfo& g : b.groups)
+            if (g.flags & st::client::kExteriorGroup) b.lowest = std::min(b.lowest, g.lo[2]);
+        if (b.lowest > 1e29f) b.lowest = 0.0f;
+        row.groups = static_cast<unsigned>(b.groups.size());
+        const uint32_t path = gl::PathHash(wmo.c_str());
+        const st::RootWindows outside = st::BuildRoot(path, all, b.groups.data(), b.groups.size());
+        const st::RootWindows in = st::BuildInside(path, all, b.groups.size());
+        row.ext = static_cast<unsigned>(outside.windows.size());
+        row.real = outside.real;
+        row.fake = outside.fake;
+        row.inside = static_cast<unsigned>(in.windows.size());
+        const bool verbose = std::getenv("SEETHROUGH_SURVEY_VERBOSE") != nullptr;
+        // each group's windows' sight points (its glass batches)
+        auto pointsOf = [&](const st::RootWindows& rw, uint32_t g, std::vector<st::SightPoints>& out) {
+            uint32_t n = 0;
+            const st::SeeWindow* w = rw.Group(g, n);
+            out.clear();
+            if (!w) return;
+            const ScanGroup& sg = b.File(static_cast<int>(g));
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            for (const ScanGroup::Moba& m : sg.batches)
+                if (m.material < b.glass.size() && b.glass[m.material]) ranges.emplace_back(m.start, m.count);
+            st::GlassSightPoints(sg.vertices.data(), static_cast<uint32_t>(sg.vertices.size() / 3), sg.indices.data(),
+                                 static_cast<uint32_t>(sg.indices.size()), ranges, w, n, out);
+        };
+        const float dists[] = { 5, 8, 12, 18, 24, 30 }, degs[] = { -60, -40, -20, 0, 20, 40, 60 }, heights[] = { 2, 3.5f, 5, 6.5f, 8, 11 };
+        const float closeDists[] = { 4, 6, 8, 10, 12 }, highHeights[] = { 9, 11, 13, 15 };
+        for (uint32_t g = 0; g < b.groups.size(); ++g)
+        {
+            uint32_t n = 0;
+            const st::SeeWindow* w = outside.Group(g, n);
+            if (!w) continue;
+            std::vector<st::SightPoints> points;
+            pointsOf(outside, g, points);
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                if (w[i].interior < 0) continue;
+                const float nx = w[i].normal[0], ny = w[i].normal[1], l = std::sqrt(nx * nx + ny * ny);
+                if (l < 0.5f) continue;   // (a skylight: no street before it)
+                const std::vector<st::SightMesh> around = b.Near(w[i], w[i].interior);
+                const st::SightPoints* sp = i < points.size() && points[i].n ? &points[i] : nullptr;
+                const float street = b.StreetOf(w[i]);
+                unsigned views = 0, open = 0, hviews = 0, hopen = 0;
+                auto look = [&](float r, float deg, float h, unsigned& v, unsigned& o) {
+                    const float a = deg * 3.14159265f / 180.0f;
+                    const float dx = (nx * std::cos(a) - ny * std::sin(a)) / l, dy = (ny * std::cos(a) + nx * std::sin(a)) / l;
+                    const float x = w[i].center[0] + r * dx, y = w[i].center[1] + r * dy;
+                    const float eye[3] = { x, y, street + h };
+                    if (!st::Facing(w[i], eye)) return;
+                    ++v;
+                    st::Sight s;
+                    st::LookIn(w[i], eye, around.data(), around.size(), sp, s);
+                    o += st::SightOpen(s, false) ? 1 : 0;
+                };
+                for (const float r : dists)
+                    for (const float deg : degs)
+                        for (const float h : heights) look(r, deg, h, views, open);
+                for (const float r : closeDists)
+                    for (const float deg : degs)
+                        for (const float h : highHeights) look(r, deg, h, hviews, hopen);
+                row.streetViews += views; row.streetOpen += open; row.highViews += hviews; row.highOpen += hopen;
+                if (views && open * 2 >= views) ++row.mostlyOpen;
+                if (!open) ++row.neverOpen;
+                if (!open && hopen) ++row.highOnly;
+                if (verbose)
+                {
+                    char line[200];
+                    std::snprintf(line, sizeof(line), "    group %3u window %4u (z %5.1f, room %3d): street %3u of %3u, high and close %3u of %3u", g,
+                                  w[i].ordinal, w[i].center[2], w[i].interior, open, views, hopen, hviews);
+                    row.lines.push_back(line);
+                }
+            }
+            // walks past each front of the group (its windows with rooms facing within 30 degrees of each other): 8 and 14 yd
+            // out, 3, 7 and 12 yd up, to 60 degrees aside, 7 yd a second, a frame each 1/60 s
+            std::vector<bool> walked(n, false);
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                if (walked[i] || w[i].interior < 0) continue;
+                const float nx = w[i].normal[0], ny = w[i].normal[1], l = std::sqrt(nx * nx + ny * ny);
+                if (l < 0.5f) continue;
+                std::vector<uint32_t> front;
+                for (uint32_t j = i; j < n; ++j)
+                {
+                    const float mx = w[j].normal[0], my = w[j].normal[1], lm = std::sqrt(mx * mx + my * my);
+                    if (walked[j] || w[j].interior < 0 || lm < 0.5f || (nx * mx + ny * my) / (l * lm) < 0.866f) continue;
+                    walked[j] = true;
+                    front.push_back(j);
+                }
+                float c[3] = { 0, 0, 0 };
+                for (const uint32_t j : front) for (int k = 0; k < 3; ++k) c[k] += w[j].center[k] / static_cast<float>(front.size());
+                const float ox = nx / l, oy = ny / l, ax = -oy, ay = ox;
+                for (const uint32_t j : front)
+                {
+                    const std::vector<st::SightMesh> around = b.Near(w[j], w[j].interior);
+                    const st::SightPoints* sp = j < points.size() && points[j].n ? &points[j] : nullptr;
+                    const float street = b.StreetOf(w[j]);
+                    unsigned flips = 0;
+                    for (const float out : { 8.0f, 14.0f })
+                        for (const float h : { 3.0f, 7.0f, 12.0f })
+                        {
+                            st::Gate gate;
+                            bool last = false, first = true;
+                            const float span = out * 1.7320508f;
+                            for (float s = -span; s <= span; s += 7.0f / 60.0f)
+                            {
+                                const float x = c[0] + ox * out + ax * s, y = c[1] + oy * out + ay * s;
+                                const float eye[3] = { x, y, street + h };
+                                if (!st::Facing(w[j], eye)) { first = true; gate = st::Gate{}; continue; }
+                                st::Sight sg;
+                                st::LookIn(w[j], eye, around.data(), around.size(), sp, sg);
+                                const bool held = st::Hold(gate, st::SightOpen(sg, gate.seen && gate.open), 1.0f / 60.0f);
+                                if (!first) flips += held != last ? 1 : 0;
+                                last = held;
+                                first = false;
+                                ++row.walkFrames;
+                                row.walkOpen += held ? 1 : 0;
+                            }
+                        }
+                    row.flips += flips;
+                    row.flipWindows += flips ? 1 : 0;
+                    row.maxFlips = std::max(row.maxFlips, flips);
+                    if (verbose && flips)
+                    {
+                        char line[160];
+                        std::snprintf(line, sizeof(line), "    group %3u window %4u: its verdict changed %u times over the walks", g, w[j].ordinal, flips);
+                        row.lines.push_back(line);
+                    }
+                }
+            }
+        }
+        // from inside: each room's own windows from eyes all over it (on its floor, found from above), within 20 yd
+        for (uint32_t g = 0; g < b.groups.size(); ++g)
+        {
+            uint32_t n = 0;
+            const st::SeeWindow* w = in.Group(g, n);
+            if (!w) continue;
+            std::vector<st::SightPoints> points;
+            pointsOf(in, g, points);
+            const st::GroupInfo& box = b.groups[g];
+            const std::vector<st::SightMesh> roomOnly = { { &b.Mesh(static_cast<int>(g)), false } };
+            std::vector<unsigned> views(n), open(n);
+            std::vector<std::vector<st::SightMesh>> around(n);
+            for (uint32_t i = 0; i < n; ++i) around[i] = b.Near(w[i], static_cast<int>(g));
+            for (float x = box.lo[0] + 0.5f; x <= box.hi[0] - 0.5f; x += 1.5f)
+                for (float y = box.lo[1] + 0.5f; y <= box.hi[1] - 0.5f; y += 1.5f)
+                {
+                    bool found = false;
+                    const float floorZ = b.Ground(x, y, box.hi[2] - 0.1f, roomOnly, &found);
+                    if (!found) continue;
+                    for (const float h : { 1.8f, 3.0f, 4.5f })
+                    {
+                        const float eye[3] = { x, y, floorZ + h };
+                        if (eye[2] >= box.hi[2]) continue;
+                        for (uint32_t i = 0; i < n; ++i)
+                        {
+                            const float d[3] = { eye[0] - w[i].center[0], eye[1] - w[i].center[1], eye[2] - w[i].center[2] };
+                            if (!st::FacingIn(w[i], eye) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 400.0f) continue;
+                            st::Sight s;
+                            st::LookOut(w[i], eye, around[i].data(), around[i].size(), i < points.size() && points[i].n ? &points[i] : nullptr, s);
+                            ++views[i];
+                            open[i] += st::SightOpen(s, false) ? 1 : 0;
+                        }
+                    }
+                }
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                if (!views[i]) continue;
+                ++row.insideWindows;
+                row.insideViews += views[i];
+                row.insideOpen += open[i];
+                if (open[i] * 2 >= views[i]) ++row.insideMostly;
+                if (!open[i]) ++row.insideNever;
+                if (verbose)
+                {
+                    char line[160];
+                    std::snprintf(line, sizeof(line), "    inside: group %3u window %4u (z %5.1f): opens from %4u of %4u eyes", g, w[i].ordinal, w[i].center[2],
+                                  open[i], views[i]);
+                    row.lines.push_back(line);
+                }
+            }
+        }
+        row.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return true;
+    }
+
+    void PrintSurveyRow(const SurveyRow& r)
+    {
+        std::printf("  %s: %u groups; %u outside windows, %u with a room, %u fake; %u in its rooms\n", r.wmo.c_str(), r.groups, r.ext, r.real, r.fake, r.inside);
+        std::printf("    street sweep: open from %u of %u views (%.0f%%); %u windows from half their views or more, %u never (%u of them only from "
+                    "high and close); high and close: %u of %u\n", r.streetOpen, r.streetViews, r.streetViews ? 100.0 * r.streetOpen / r.streetViews : 0.0,
+                    r.mostlyOpen, r.neverOpen, r.highOnly, r.highOpen, r.highViews);
+        std::printf("    walks: open %u of %u frames; the verdict changed %u times in all, over %u windows (at most %u for one)\n", r.walkOpen, r.walkFrames,
+                    r.flips, r.flipWindows, r.maxFlips);
+        std::printf("    from inside: %u windows seen, open from %u of %u eyes (%.0f%%); %u from half their eyes or more, %u never; %.1f s\n", r.insideWindows,
+                    r.insideOpen, r.insideViews, r.insideViews ? 100.0 * r.insideOpen / r.insideViews : 0.0, r.insideMostly, r.insideNever, r.seconds);
+        for (const std::string& l : r.lines) std::printf("%s\n", l.c_str());
     }
 }
 
@@ -929,6 +1251,24 @@ int main(int argc, char** argv)
         CHECK(s.none == 9);
     });
 
+    Test("NearGroups (2026-10-22): the groups round a window's room and its middle, grown 6 yd; none for a window far off", [] {
+        std::vector<uint16_t> ids;
+        // the inn's window 1 (north front, ground floor), the kitchen behind it: the kitchen, the shell, the rooms over and beside it
+        const st::SeeWindow w = MakeWindow(-8.68f, -9.23f, 2.83f, 0, -1, 0, 2.74f, 1.31f, 5, 1);
+        st::NearGroups(w, 5, kInnGroups, 12, ids);
+        auto has = [&](uint16_t g) { return std::find(ids.begin(), ids.end(), g) != ids.end(); };
+        CHECK(has(5) && has(4) && has(9) && has(3) && ids.size() >= 8);
+        // a small room's window: the room alone and what's within 6 yd (room04, the porch: not the far west's room01)
+        const st::SeeWindow porch = MakeWindow(21.9f, -2.6f, 3.0f, 1, 0, 0, 1, 1, 11, 2);
+        st::NearGroups(porch, 11, kInnGroups, 12, ids);
+        CHECK(has(11) && has(0) && has(4) && !has(8) && !has(10));
+        const st::SeeWindow lone = MakeWindow(500, 500, 0, 0, -1, 0, 1, 1, -1, 3);
+        st::NearGroups(lone, -1, kInnGroups, 12, ids);
+        CHECK(ids.empty());
+        st::NearGroups(w, 5, nullptr, 12, ids);
+        CHECK(ids.empty());
+    });
+
     // --- which windows a batch is in -----------------------------------------------------------------------------------
     Test("WindowOf, WindowsOfBatch: each triangle's middle in a window's box; strays and their area; a bad index reads nothing", [] {
         const st::SeeWindow w[2] = { MakeWindow(0, 0, 0, 0, -1, 0, 1, 1, 1, 0), MakeWindow(4, 0, 0, 0, -1, 0, 1, 1, 1, 1) };
@@ -1215,13 +1555,6 @@ int main(int argc, char** argv)
         CHECK(d.Passed() == 0 && d.Failed() == 0);
     });
 
-    Test("the whitelist: the Lion's Pride Inn, and nothing else", [] {
-        CHECK(st::Whitelisted(gl::PathHash(kInn)));
-        CHECK(st::Whitelisted(gl::PathHash("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo")));   // as the client names it
-        CHECK(!st::Whitelisted(gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo")));
-        CHECK(!st::Whitelisted(0));
-    });
-
     // --- the real data -------------------------------------------------------------------------------------------------
     if (!data.empty())
     {
@@ -1244,6 +1577,11 @@ int main(int argc, char** argv)
                                                                                : fs::path(exe).parent_path() / ".." / ".." / "repo" / "data" / "GlassLead.cdbc";
             std::printf("  GlassLead.cdbc from %s\n", lead.string().c_str());
             copied = copied && fs::copy_file(lead, db / "GlassLead.cdbc", fs::copy_options::overwrite_existing, ec);
+            // SeeThroughBuildings.cdbc (2026-10-22), the same way
+            const fs::path buildings = fs::exists(fs::path(data) / "SeeThroughBuildings.cdbc") ? fs::path(data) / "SeeThroughBuildings.cdbc"
+                                       : fs::path(exe).parent_path() / ".." / ".." / "repo" / "data" / "SeeThroughBuildings.cdbc";
+            std::printf("  SeeThroughBuildings.cdbc from %s\n", buildings.string().c_str());
+            copied = copied && fs::copy_file(buildings, db / "SeeThroughBuildings.cdbc", fs::copy_options::overwrite_existing, ec);
         }
         const fs::path cwd = fs::current_path();
         if (copied) fs::current_path(root);
@@ -1255,6 +1593,15 @@ int main(int argc, char** argv)
             const auto& all = gl::Windows().All();
             std::printf("  GlassWindows.cdbc: %zu windows kept\n", all.size());
             CHECK(all.size() > 10000);
+            // the see-through buildings (SeeThroughBuildings.cdbc, 2026-10-22; before, the inn alone, hard-coded): the inn by
+            // any case, from outside and inside; not its closed variant, Stormwind or nothing
+            std::printf("  SeeThroughBuildings.cdbc: %zu buildings\n", gl::SeeThroughBuildings());
+            CHECK(gl::SeeThroughBuildings() == 24);
+            CHECK(gl::SeeThroughFlags(gl::PathHash(kInn)) == (st::kSeeFromOutside | st::kSeeFromInside));
+            CHECK(gl::SeeThroughFlags(gl::PathHash("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo")) == 3);   // as the client names it
+            CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo")) == 0);
+            CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo")) == 0);
+            CHECK(gl::SeeThroughFlags(0) == 0);
             const uint32_t path = gl::PathHash(kInn);
             inn = st::BuildRoot(path, all, kInnGroups, 12);
             std::printf("  the inn: %zu exterior windows, %u with a room behind, %u fake\n", inn.windows.size(), inn.real, inn.fake);
@@ -1811,6 +2158,22 @@ int main(int argc, char** argv)
                 CHECK(beyond > 0 && inside == beyond);
             });
         else std::printf("SKIP the scan's inn (no wmo-windows folder given)\n");
+        // the survey of buildings (SEETHROUGH_SURVEY: a file of WMO paths, one a line; # a comment): printed, not checked
+        if (const char* list = std::getenv("SEETHROUGH_SURVEY"); list && !scan.empty())
+        {
+            std::ifstream f(list);
+            std::string line;
+            std::printf("the survey of buildings (%s):\n", list);
+            while (std::getline(f, line))
+            {
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+                if (line.empty() || line[0] == '#') continue;
+                SurveyRow row;
+                if (!SurveyBuilding(scan, line, gl::Windows().All(), row)) { std::printf("  %s: not in the scan\n", line.c_str()); continue; }
+                PrintSurveyRow(row);
+                std::fflush(stdout);
+            }
+        }
     }
     else std::printf("SKIP the real tables (no data folder given)\n");
 

@@ -1,0 +1,6 @@
+  <Table Name="SeeThroughBuildings" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="Wmo" Type="string" />
+    <Field Name="Flags" Type="int" />
+    <Field Name="Comment" Type="string" />
+  </Table>
