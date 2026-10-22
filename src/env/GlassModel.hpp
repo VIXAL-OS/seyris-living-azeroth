@@ -78,13 +78,29 @@ namespace wxl_livingazeroth::glass
     // LEAD_LAYOUTS), its texels in them that aren't lead: not dark (luminance under `dark` x the median luminance of the
     // lit glass in them: the mask above over half) and not on a thin dark line (the luminance closed over kLeadClose x
     // kLeadClose texels, minus it, under `line` x that median). Built at run time from the client's texture, never stored.
+    // Stained glass and Northrend's arched human windows (2026-10-22: "the GlassLead rectangles can't follow curved tracery,
+    // so derive the lead mask from the texture itself (the dark lead lines, thin dark features, the frame)"): the arched
+    // windows' rows are one rectangle, the whole texture, the stained sheets' their designs' quadrants and the lattice
+    // window's lights, and the same rule finds the panes in them: the lead and its thin dark lines as before, the frame
+    // (wood, stone) by its darkness against the glass (`dark` of 0.4 .. 0.5 by texture: the wood of nr_hu_window is about
+    // half the glass's luminance). With no rectangle to keep it out, what's round the window must go too, and glass is
+    // coloured or lit where that isn't (Northrend's windows stand on a flat grey as bright as their glass's shade): with a
+    // rule over the whole texture (Whole) a texel is glass only where the light's mask is over half or it's coloured
+    // (1 - its least channel / its largest at least kLeadColour). (The abbey's lattice window sits in grey stone as bright
+    // and as grey as its sheet's white glass: there rectangles, its four lights'.)
     struct LeadRect { float u0 = 0.0f, v0 = 0.0f, u1 = 0.0f, v1 = 0.0f; };   // in the texture's uv (0..1), half-open
     constexpr float kLeadDark = 0.18f, kLeadLine = 0.15f;
     constexpr int kLeadClose = 5;
+    constexpr float kLeadColour = 0.3f;
     struct LeadRule
     {
         std::vector<LeadRect> rects;
         float dark = kLeadDark, line = kLeadLine;
+        /// One rectangle over the whole texture (stained glass's and Northrend's arched windows' rows).
+        bool Whole() const
+        {
+            return rects.size() == 1 && rects[0].u0 <= 0.0f && rects[0].v0 <= 0.0f && rects[0].u1 >= 1.0f && rects[0].v1 >= 1.0f;
+        }
     };
     /// The lead mask of a texture's level (`rgb`: w x h texels, three floats each, 0..1 as stored, rows top down) by
     /// its material's light mask (the lit glass) and its rule: w x h bytes, 255 glass, 0 not. False (and `out` empty)

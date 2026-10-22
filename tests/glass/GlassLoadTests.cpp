@@ -10,7 +10,9 @@
 //     and is found at its own origin (placed, not by WMO); a city group under its placement; every style's class is the
 //     file's; GlassMaterials' corner that isn't glass (NotGlassU, NotGlassV) on the eight human window atlases (the
 //     forge's fire slots) and on nothing else, and Goldshire's smithy left its four real windows; GlassLead.cdbc's panes
-//     (the see-through redraw's lead mask) on those eight textures, 19 rectangles each. The lines the lights panel shows
+//     (the see-through redraw's lead mask) on those eight textures, 19 rectangles each, and (2026-10-22) stained glass's
+//     and Northrend's arched windows' five, each with its own Dark: the arched windows' the whole texture, the stained
+//     sheets' the lattice's four lights and three quadrants. The lines the lights panel shows
 //     say so, and LogLoad's one line to the log (info).
 //  2b. The window lights' cells (features/Windows: WindowLights.cdbc, WindowRooms.cdbc through the same reader): each
 //     light's share lit as its cells say, with stained glass's rooms (its stained cells, not the ones read only without
@@ -386,36 +388,52 @@ namespace
               status.find("8 with a corner that isn't glass") != std::string::npos, line);
 
         // GlassLead.cdbc (2026-10-21): the see-through redraw's panes as the reader gives them, on the eight human window
-        // atlases (the inn's among them, by any case), on nothing else; their texture's path as GlassMaterials has it.
+        // atlases (the inn's among them, by any case); since 2026-10-22 also on stained glass's and Northrend's arched
+        // windows' five, each its own Dark (the abbey's 0.4, the others' 0.5): the arched windows one rectangle, the whole
+        // texture, the stained sheets seven; on nothing else; their texture's path as GlassMaterials has it.
         size_t ruled = 0, rects = 0;
         for (uint32_t i = 1; gl::MaterialAt(i); ++i)
             if (const gl::LeadRule* r = gl::LeadOf(i)) { ++ruled; rects += r->rects.size(); }
+        auto own = [](const char* texture, size_t rects, float dark) {
+            const gl::LeadRule* r = gl::LeadOf(gl::MaterialOf(texture));
+            return r && r->rects.size() == rects && r->Whole() == (rects == 1) && std::fabs(r->dark - dark) < 1e-6f && r->line == gl::kLeadLine;
+        };
+        auto whole = [&](const char* texture, float dark) { return own(texture, 1, dark); };
+        const bool wholeOk = own("Dungeons\\Textures\\Windows\\MM_Stained_01.blp", 7, 0.4f) && own("dungeons\\textures\\windows\\mm_redridge_stained_01.blp", 7, 0.5f) &&
+                             whole("dungeons\\textures\\northrend\\humans\\nr_hu_window.blp", 0.5f) &&
+                             whole("dungeons\\textures\\northrend\\humans\\nr_hu_window_half.blp", 0.5f) &&
+                             whole("dungeons\\textures\\northrend\\humans\\nr_hu_interwindow.blp", 0.5f);
         const uint32_t innMaterial = gl::MaterialOf("Dungeons\\Textures\\Windows\\MM_Elwynn_Wnd_Ext__01.blp");
         const gl::LeadRule* inn = gl::LeadOf(innMaterial);
         const char* innTexture = gl::TextureOf(innMaterial);
         std::snprintf(line, sizeof(line), "%s: GlassLead.cdbc: %zu textures with panes, %zu rectangles; the inn's texture %zu (its first %.4f %.4f .. %.4f %.4f, "
-                      "dark %.2f, line %.2f; its path %s)", via, ruled, rects, inn ? inn->rects.size() : 0, inn ? inn->rects[0].u0 : -1.0f, inn ? inn->rects[0].v0 : -1.0f,
-                      inn ? inn->rects[0].u1 : -1.0f, inn ? inn->rects[0].v1 : -1.0f, inn ? inn->dark : -1.0f, inn ? inn->line : -1.0f, innTexture ? innTexture : "none");
-        Check(ruled == 8 && rects == 152 && inn && inn->rects.size() == 19 && inn->rects[0].u0 == 32.0f / 256 && inn->rects[0].v0 == 8.0f / 256 &&
+                      "dark %.2f, line %.2f; its path %s); the five others %s", via, ruled, rects, inn ? inn->rects.size() : 0, inn ? inn->rects[0].u0 : -1.0f,
+                      inn ? inn->rects[0].v0 : -1.0f, inn ? inn->rects[0].u1 : -1.0f, inn ? inn->rects[0].v1 : -1.0f, inn ? inn->dark : -1.0f, inn ? inn->line : -1.0f,
+                      innTexture ? innTexture : "none", wholeOk ? "as written" : "not as written");
+        Check(ruled == 13 && rects == 169 && wholeOk && inn && inn->rects.size() == 19 && inn->rects[0].u0 == 32.0f / 256 && inn->rects[0].v0 == 8.0f / 256 &&
               inn->rects[0].u1 == 61.0f / 256 && inn->rects[0].v1 == 57.0f / 256 && inn->dark == gl::kLeadDark && inn->line == gl::kLeadLine && innTexture &&
               std::string(innTexture) == "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp" &&
-              status.find("GlassLead.cdbc: 152 rectangles over 8 textures;") != std::string::npos, line);
+              status.find("GlassLead.cdbc: 169 rectangles over 13 textures;") != std::string::npos, line);
 
         // SeeThroughBuildings.cdbc (2026-10-22): the see-through windows' buildings as the reader gives them, by their WMO's
         // path in any case: the inns, the two-storey houses, the mage towers, the farmhouses and Redridge's prison camp
-        // headquarters, from outside and from inside; not Stormwind, a barn, a smithy or the inn's closed variant.
+        // headquarters, from outside and from inside; not Stormwind, a barn, a smithy or the inn's closed variant. Since
+        // 2026-10-22 the stained glass's too: the chapel from outside and inside, Northrend's town hall from outside only.
         auto see = [](const char* wmo) { return gl::SeeThroughFlags(gl::PathHash(wmo)); };
         const uint32_t seeInn = see("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo");
         const uint32_t seeHouse = see("world\\wmo\\azeroth\\buildings\\duskwood_humantwostory\\duskwood_humantwostory.wmo");
         const uint32_t seeTower = see("world\\wmo\\azeroth\\buildings\\magetower\\magetower.wmo");
         const uint32_t seeFarm = see("world\\wmo\\buildings\\oldstrat_farm.wmo");
+        const uint32_t seeChapel = see("World\\wmo\\Azeroth\\Buildings\\Chapel\\RedridgeChapel.wmo");
+        const uint32_t seeHall = see("world\\wmo\\northrend\\buildings\\human\\nd_human_townhall\\nd_human_townhall.wmo");
         const uint32_t seeNone = see("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo") | see("world\\wmo\\azeroth\\buildings\\human_barn_silo\\barn.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireblacksmith\\goldshireblacksmith.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo");
         std::snprintf(line, sizeof(line), "%s: SeeThroughBuildings.cdbc: %zu buildings; the inn's flags %u, a two-storey house's %u, a mage tower's %u, a "
-                      "farmhouse's %u; Stormwind, a barn, a smithy, the closed inn %u", via, gl::SeeThroughBuildings(), seeInn, seeHouse, seeTower, seeFarm, seeNone);
-        Check(gl::SeeThroughBuildings() == 24 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeNone == 0 &&
-              status.find("SeeThroughBuildings.cdbc: 24 buildings") != std::string::npos, line);
+                      "farmhouse's %u, the chapel's %u, Northrend's town hall's %u; Stormwind, a barn, a smithy, the closed inn %u", via, gl::SeeThroughBuildings(),
+                      seeInn, seeHouse, seeTower, seeFarm, seeChapel, seeHall, seeNone);
+        Check(gl::SeeThroughBuildings() == 33 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 && seeNone == 0 &&
+              status.find("SeeThroughBuildings.cdbc: 33 buildings") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).
         const std::string rooms = gl::RoomLine(), windows = gl::WindowLine();

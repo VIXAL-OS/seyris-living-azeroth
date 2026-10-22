@@ -638,14 +638,22 @@ rectangles). The mask itself is built at run time from the texture as the client
 stored): the texels inside the rectangles that aren't lead, i.e. not darker than Dark x the median
 luminance of the lit glass in them (GlassMaterials' mask over a half) and not on a thin dark line (the
 luminance closed over 5 x 5 texels, minus it, under Line x that median). A texture with no rows keeps
-GlassMaterials' mask in the redraw.
+GlassMaterials' mask in the redraw. Since 2026-10-22 ("the GlassLead rectangles can't follow curved
+tracery, so derive the lead mask from the texture itself"): stained glass's sheets (Northshire Abbey's
+`mm_stained_01`, the Redridge chapel's `mm_redridge_stained_01`: their three designs a quadrant each and
+the lattice window's four lights, 7 rows) and Northrend's arched human windows (`nr_hu_window`,
+`nr_hu_window_half`, `nr_hu_interwindow`: one row, the whole texture), each with its own Dark (0.4 the
+abbey's, 0.5 the others': the frame's wood and stone by their darkness against the glass). With one row
+over the whole texture a texel must also be lit (GlassMaterials' mask over a half) or coloured (1 - its
+least channel / its largest at least 0.3): the flat grey round Northrend's windows is as bright as their
+glass's shade. 169 rows over 13 textures.
 
 | Field | Meaning |
 |---|---|
 | ID | row id |
 | Texture | the texture's path as GlassMaterials names it (case and slashes don't matter); it must be a GlassMaterials texture |
 | U0, V0, U1, V1 | a rectangle of panes in the texture's uv (0..1; half-open; v down, as the texture's rows) |
-| Dark | lead: darker than this x the lit glass's median luminance (0.18) |
+| Dark | lead (and, over a whole texture, the frame): darker than this x the lit glass's median luminance (0.18; 0.4 .. 0.5 for stained glass and Northrend's windows) |
 | Line | lead: a thin dark line deeper than this x that median (0.15) |
 | Comment | the layout and the rectangle's number; never read |
 
@@ -656,8 +664,11 @@ one row per WMO: from outside its real modelled room behind the glass, from insi
 (docs/r&d/see-through-windows.md). Written by `tools/see_through_survey.py --table` from its SEE_THROUGH
 list: the WMOs with the human window atlases (GlassLead's) whose glass can go see-through and whose rooms
 the gate opens from most street views with few flips (the survey of 2026-10-22: the inns, the two-storey
-houses, the mage towers, the farmhouses, Redridge's prison camp headquarters; 24). A WMO not here keeps its
-windows as they are. Every placement of a WMO counts, on every map.
+houses, the mage towers, the farmhouses, Redridge's prison camp headquarters; 24), and since stained glass
+(2026-10-22) the chapel (Lakeshire's, Tyr's Hand's, New Hearthglen's), Northshire Abbey and New Hearthglen's,
+Northrend's human barracks (two), its town hall, the Isle of Conquest's keep and Valgarde's inn (from
+outside only) and Wintergarde's small house: 33. A WMO not here keeps its windows as they are. Every placement of a WMO
+counts, on every map.
 
 | Field | Meaning |
 |---|---|

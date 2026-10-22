@@ -55,6 +55,13 @@
 //    building's own window glass, not through a wall or the roof from inside, whose faces are culled). The room's glass
 //    batch is then deferred and drawn again over the street as from outside (SeeThroughRedraw, SeeThroughOpacity). Nothing
 //    else of the walk changes; the outdoors, the sky and the weather come as through an open door.
+//  - Stained glass (2026-10-22: "the coloured glass should stay coloured over the room (tint, not just blend); and from
+//    inside, the street through the coloured glass"): with SeeThroughRedraw 1 what's behind an open window's stained glass
+//    is multiplied by the glass's colour before the glass is blended over it (SeeThroughStainedTint; SeeThroughDraw's tint
+//    pass, its own pixel shader, not the stock variants': split, over the open windows' triangles; whole, where the
+//    stencil's top bit marks the see-through draw's pixels). Its lead mask is found in the texture (GlassLead.cdbc's rows
+//    over its designs or the whole texture: env/GlassModel LeadMask), and the gate passes the inside of a thick wall round
+//    a window's opening (env/SeeThroughModel kReveal).
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
@@ -73,6 +80,8 @@ namespace wxl_livingazeroth::seethrough
                                     // shutters opaque; only where the room is seen); 0 the whole glass at the opacity (2026-10-20)
         int   fromInside = 0;       // SeeThroughFromInside: from inside, the street through the room's own windows (a way out
                                     // each, as a door is); off by default, not tied to `enabled`
+        float stainedTint = 0.8f;   // SeeThroughStainedTint: with SeeThroughRedraw 1, how much stained glass colours what's seen
+                                    // through it (0..1; SeeThroughDraw's tint pass; 0 none: the glass only blended over it)
     };
     Settings& Config();
 

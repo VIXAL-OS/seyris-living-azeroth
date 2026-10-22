@@ -234,7 +234,8 @@ namespace wxl_livingazeroth::seethrough
         return any;
     }
 
-    RoomMesh::Hit RoomMesh::First(const float o[3], const float d[3], float tmin, float tmax, float* tOut, uint8_t* tagOut) const
+    RoomMesh::Hit RoomMesh::First(const float o[3], const float d[3], float tmin, float tmax, float* tOut, uint8_t* tagOut,
+                                  float* normalOut) const
     {
         if (m_tris.empty() || !Finite3(o) || !Finite3(d) || !(tmax > tmin)) return kNone;
         // the ray within the grid's box
@@ -280,6 +281,15 @@ namespace wxl_livingazeroth::seethrough
         if (!Intersect(&m_tris[9 * static_cast<size_t>(bestTri)], o, d, t, det)) return kNone;
         if (tOut) *tOut = best;
         if (tagOut) *tagOut = static_cast<size_t>(bestTri) < m_tags.size() ? m_tags[static_cast<size_t>(bestTri)] : uint8_t{ 0 };
+        if (normalOut)
+        {
+            const float* tri = &m_tris[9 * static_cast<size_t>(bestTri)];
+            const float e1[3] = { tri[3] - tri[0], tri[4] - tri[1], tri[5] - tri[2] };
+            const float e2[3] = { tri[6] - tri[0], tri[7] - tri[1], tri[8] - tri[2] };
+            const float n[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
+            const float l = std::sqrt(Dot(n, n));
+            for (int k = 0; k < 3; ++k) normalOut[k] = l > 0.0f ? n[k] / l : 0.0f;
+        }
         return det > 0.0f ? kFront : kBack;
     }
 
@@ -631,7 +641,7 @@ namespace wxl_livingazeroth::seethrough
         enum class Met { kNothing, kRoomFront, kRoomBack, kShellFront, kShellBack, kRoomPane, kOuterPane };
 
         Met Trace(const SightMesh* groups, size_t count, const float o[3], const float d[3], float tmin, float tmax, bool outerPanes,
-                  float ownPane, float& at)
+                  float ownPane, float& at, const float* reveal = nullptr, float revealUntil = 0.0f)
         {
             at = tmax;
             for (int pass = 0; pass < 8; ++pass)
@@ -647,15 +657,17 @@ namespace wxl_livingazeroth::seethrough
                 at = best;
                 // every surface at that depth (a window's inner and outer panes may share a plane): an outer pane among them
                 // is the way out (from inside, either way) or the building's outside (from outside, its front); else a wall;
-                // else a room's pane from its front (but the window's own, before `ownPane`); else panes from behind, passed
+                // else a room's pane from its front (but the window's own, before `ownPane`); else panes from behind, passed,
+                // and (`reveal`: the window's normal and along) a room's wall round its opening or a side of it, from behind,
+                // before `revealUntil`
                 const float edge = best + 1e-3f;
                 bool outer = false, roomPane = false, wall = false, wallFront = false, wallExterior = false;
                 for (size_t g = 0; groups && g < count; ++g)
                 {
                     if (!groups[g].mesh || groups[g].mesh->Empty()) continue;
-                    float t = 0.0f;
+                    float t = 0.0f, n[3] = {};
                     uint8_t tag = 0;
-                    const RoomMesh::Hit h = groups[g].mesh->First(o, d, tmin, edge, &t, &tag);
+                    const RoomMesh::Hit h = groups[g].mesh->First(o, d, tmin, edge, &t, &tag, n);
                     if (h == RoomMesh::kNone) continue;
                     const bool exterior = groups[g].exterior;
                     if (tag & kGlassTag)
@@ -663,6 +675,9 @@ namespace wxl_livingazeroth::seethrough
                         if (exterior) outer = outer || outerPanes || h == RoomMesh::kFront;
                         else roomPane = roomPane || (h == RoomMesh::kFront && t >= ownPane);
                     }
+                    else if (reveal && !exterior && h == RoomMesh::kBack && t < revealUntil &&
+                             (std::fabs(Dot(n, reveal)) >= kRevealFacing || std::fabs(Dot(n, reveal + 3)) >= kRevealFacing))
+                        continue;
                     else if (!wall)
                     {
                         wall = true;
@@ -682,10 +697,11 @@ namespace wxl_livingazeroth::seethrough
         // glass (its own pane passed before `ownPane` past it), classified by `as`.
         template <class As>
         void Rays(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, float from,
-                  float ownPane, float reach, bool outerPanes, As as, Sight& out)
+                  float ownPane, float reach, bool outerPanes, As as, Sight& out, float reveal = 0.0f)
         {
             out = Sight{};
             if (!Finite3(eye)) return;
+            const float axes[6] = { w.normal[0], w.normal[1], w.normal[2], w.along[0], w.along[1], w.along[2] };   // (Trace's reveal)
             out.onGlass = points && points->n > 0;
             const int rays = out.onGlass ? points->n : static_cast<int>(sizeof(kSight) / sizeof(kSight[0]));
             for (int i = 0; i < rays; ++i)
@@ -700,7 +716,8 @@ namespace wxl_livingazeroth::seethrough
                 if (len > 1e-3f && std::isfinite(len))
                 {
                     for (float& v : d) v /= len;
-                    seen = as(Trace(groups, count, eye, d, len + from, len + reach, outerPanes, len + ownPane, at));
+                    seen = as(Trace(groups, count, eye, d, len + from, len + reach, outerPanes, len + ownPane, at,
+                                    reveal > 0.0f ? axes : nullptr, len + reveal));
                 }
                 if (i == 0) out.middle = seen;
                 if (seen == RoomMesh::kFront) { ++out.front; continue; }
@@ -747,7 +764,7 @@ namespace wxl_livingazeroth::seethrough
             case Met::kShellFront: case Met::kOuterPane: return RoomMesh::kNone;
             default: return RoomMesh::kBack;   // a surface from behind, or the void
             }
-        }, out);
+        }, out, kReveal);
     }
 
     void LookOut(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out)

@@ -323,6 +323,27 @@ LEAD_LAYOUTS = {
 LEAD_TEXTURES = {"dungeons\\textures\\windows\\%s.blp" % b: "human" for b in NOT_GLASS}
 LEAD_DARK = 0.18
 LEAD_LINE = 0.15
+# Stained glass and Northrend's arched human windows (2026-10-22: "the GlassLead rectangles can't follow curved tracery, so
+# derive the lead mask from the texture itself (the dark lead lines, thin dark features, the frame)"): the runtime's rule
+# finds the panes in the texture, the frame (wood, stone) by its darkness against the glass: each texture's Dark (x the lit
+# glass's median luminance) by eye from sheets of 0.3 .. 0.6, the lead and the frame opaque, the glass and its shaded parts
+# see-through. Northrend's arched windows: one rectangle over the whole texture (the runtime then keeps only texels lit or
+# coloured, env/GlassModel kLeadColour: the flat grey round each window is as bright as its glass's shade). The stained
+# sheets (one layout, recoloured): their three whole designs, a quadrant each (their lead is their frame), and the lattice
+# window's four lights (top left), not the stone cross between them, as bright as its glass's shade.
+LEAD_LAYOUTS["whole"] = [(0, 0, 256, 256)]
+LEAD_LAYOUTS["stained"] = [
+    (10, 5, 52, 56), (74, 5, 118, 56), (10, 70, 52, 118), (74, 70, 118, 118),   # the lattice window's lights
+    (128, 0, 256, 128), (0, 128, 128, 256), (128, 128, 256, 256),               # the three designs
+]
+LEAD_OWN = {   # texture: (its layout, its Dark)
+    "dungeons\\textures\\windows\\mm_stained_01.blp": ("stained", 0.4),             # Northshire Abbey, New Hearthglen's abbey
+    "dungeons\\textures\\windows\\mm_redridge_stained_01.blp": ("stained", 0.5),    # the chapel (its stone dark red: 0.4 kept it)
+    "dungeons\\textures\\northrend\\humans\\nr_hu_window.blp": ("whole", 0.5),       # Northrend's halls and houses (0.4: the wood)
+    "dungeons\\textures\\northrend\\humans\\nr_hu_window_half.blp": ("whole", 0.5),
+    "dungeons\\textures\\northrend\\humans\\nr_hu_interwindow.blp": ("whole", 0.5),  # ... their rooms' side
+}
+LEAD_TEXTURES.update({t: layout for t, (layout, _dark) in LEAD_OWN.items()})
 
 # Titan glass lit from behind (see the docstring): the maps, and per texture (the glow's strength x the texel, its pulse's
 # amplitude, its period in seconds, the colour the pulse adds or None for white). Strengths by eye from the textures'
@@ -1780,13 +1801,14 @@ GLASS_LEAD = ["u", "s", "f", "f", "f", "f", "f", "f", "s"]
 
 
 def lead_table():
-    """GlassLead.cdbc's rows: each LEAD_TEXTURES texture's layout's rectangles in its uv (0..1, half-open)."""
+    """GlassLead.cdbc's rows: each LEAD_TEXTURES texture's layout's rectangles in its uv (0..1, half-open), the human
+    atlases' first (their rows as on 2026-10-21), then LEAD_OWN's."""
     rows = []
-    for texture in sorted(LEAD_TEXTURES):
+    for texture in sorted(LEAD_TEXTURES, key=lambda t: (t in LEAD_OWN, t)):
         layout = LEAD_TEXTURES[texture]
         for k, (x0, y0, x1, y1) in enumerate(LEAD_LAYOUTS[layout]):
-            rows.append([len(rows) + 1, texture, x0 / 256.0, y0 / 256.0, x1 / 256.0, y1 / 256.0, LEAD_DARK, LEAD_LINE,
-                         "%s %d" % (layout, k + 1)])
+            rows.append([len(rows) + 1, texture, x0 / 256.0, y0 / 256.0, x1 / 256.0, y1 / 256.0, LEAD_OWN.get(texture, (None, LEAD_DARK))[1],
+                         LEAD_LINE, "%s %d" % (layout, k + 1)])
     return rows
 
 

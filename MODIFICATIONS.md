@@ -92,7 +92,15 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   come through it as through an open door; the room's glass is drawn again over the street as from outside. A ray through
   a window that meets nothing of its room is followed on through the whole building (the next room through a doorway
   counts as seeing in, the roof or a wall from inside, or the void, against), and a majority must see in, so the dormers no
-  longer open onto the void through the roof from high viewpoints (22 October 2026).
+  longer open onto the void through the roof from high viewpoints (22 October 2026). Stained glass (22 October 2026): the
+  Redridge chapel (Lakeshire's, Tyr's Hand's, New Hearthglen's), Northshire Abbey and New Hearthglen's, and Northrend's
+  human halls with their arched windows (the barracks of Westguard, Valiance and Wintergarde Keep, the town hall, the Isle
+  of Conquest's keep, Wintergarde's small house, Valgarde's inn) join the table, 33 WMOs; their lead masks are found in the texture itself,
+  the curved tracery, the lead and the wooden or stone frame opaque (`GlassLead.cdbc`'s rows for them: the whole texture or
+  its designs, each with its own darkness for the frame); what's seen through stained glass, the room or the street, takes
+  the glass's colour (`SeeThroughStainedTint`, a pass of its own before the glass is blended over it); and the gate passes
+  the inside of a thick wall round a window's opening, and the sides of a narrow one, so the chapel's tall windows open
+  from 96% of street views instead of 48% (the inns' from 82% instead of 79%; the dormers still never).
 - **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's

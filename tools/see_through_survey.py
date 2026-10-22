@@ -25,6 +25,15 @@ to 5% of street views, flips on walks), the barns, the smithies, the Westfall gu
 (their rooms never seen through their windows), the closed variants (no rooms), Stormwind (one WMO for the city: 113 of its
 397 windows have an interior group behind, mostly a few large volumes, seen from 2% of street views), the dungeons'.
 
+Stained glass (2026-10-22, "Phase A"): the chapels and cathedrals with modelled rooms behind their stained glass, not a
+dungeon's (gen_glass.is_dungeon), and Northrend's arched human windows (nr_hu_window), surveyed the same way once the gate
+passed the inside of a thick wall round a window's opening (env/SeeThroughModel kReveal): the Redridge chapel (96% of
+street views), Northshire Abbey and New Hearthglen's (58%), Northrend's barracks (61%), its town hall (66%), the Isle of
+Conquest's keep (55%), Wintergarde's small house and the inn (Valgarde's: its ground-floor window), none flickering on the
+walks. Left out: the Scarlet cathedral (Tyr's Hand's, New Hearthglen's: 16 of its 60 windows have a room, seen from 1% of
+views), the Scarlet Monastery's outside (14%), Northrend's other human houses (1 and 8%), Silvermoon's houses (19 to 36%, a
+window changing more than twice on a walk), the night elves' houses and Sporeggar's huts (not churches; 67% and 0%).
+
 Inputs: <scan> (waterfall-scan's out folder: wmo-windows/ roots and groups, as gen_glass.py) and the data folder with
 GlassWindows.cdbc. Nothing here opens an MPQ.
 Usage:  python see_through_survey.py <scan> [data dir] [--wmo <path>]   (--wmo: one WMO's windows, one per line)
@@ -82,13 +91,32 @@ SEE_THROUGH = [
     (r"world\wmo\buildings\oldstrat_farm.wmo", "the farmhouse of old Stratholme"),
     # Redridge's prison camp headquarters: 10 windows with a room, 65% of street views
     (r"world\wmo\azeroth\buildings\prison_camp\prisonhq_redridge.wmo", "the prison camp's headquarters (Redridge)"),
+    # stained glass (2026-10-22): the chapel, 11 windows, 96% of street views, from inside 71%; the abbey, 46 of its 94
+    # windows with a room (the rest over its nave's walls), 58%, from inside 33% (its 55 windows of its rooms, many between
+    # them, as old Stratholme's inn's)
+    (r"world\wmo\azeroth\buildings\chapel\redridgechapel.wmo", "the chapel (Lakeshire, Tyr's Hand, New Hearthglen)"),
+    (r"world\wmo\azeroth\buildings\nsabbey\nsabbey.wmo", "Northshire Abbey (and Tyr's Hand's)"),
+    (r"world\wmo\northrend\dragonblight\newhearthglen\nh_abbey.wmo", "New Hearthglen's abbey"),
+    # Northrend's arched human windows: the barracks, 20 windows, 61%, from inside 41%; the town hall, 66%, and the Isle of
+    # Conquest's keep, 55%, from outside only (from inside 15% and 3%); Wintergarde's small house, one of its two windows
+    (r"world\wmo\northrend\buildings\human\nd_human_barracks\nd_human_barracks.wmo", "the barracks (Westguard Keep)"),
+    (r"world\wmo\northrend\buildings\human\nd_human_boreanalliancetown_barracks\nd_human_boreanalliancetown_barracks.wmo",
+     "the barracks (Valiance Keep, Wintergarde Keep)"),
+    (r"world\wmo\northrend\buildings\human\nd_human_townhall\nd_human_townhall.wmo",
+     "the town hall (Amberpine Lodge, Farshire, Wintergarde Keep)", FROM_OUTSIDE),
+    (r"world\wmo\northrend\buildings\human\nd_human_bg_keep\nd_human_bg_keep.wmo", "the keep (the Isle of Conquest)", FROM_OUTSIDE),
+    (r"world\wmo\northrend\buildings\human\nd_human_house03\nd_human_house03.wmo", "the small house (Wintergarde Keep)"),
+    # ... and the inn (Valgarde's, Westguard Keep's): its ground-floor window from 79% of street views, its four upper ones
+    # never (their rays meet the roof from inside), no flicker; from outside only (from inside 7%)
+    (r"world\wmo\northrend\buildings\human\nd_human_inn\nd_human_inn.wmo", "the inn (Valgarde, Westguard Keep)", FROM_OUTSIDE),
 ]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s"]   # ID Wmo Flags Comment
 
 
 def see_through_table():
-    """SeeThroughBuildings.cdbc's rows: every SEE_THROUGH building, from outside and from inside."""
-    return [[i + 1, wmo, FROM_OUTSIDE | FROM_INSIDE, comment] for i, (wmo, comment) in enumerate(SEE_THROUGH)]
+    """SeeThroughBuildings.cdbc's rows: every SEE_THROUGH building, from outside and from inside unless its entry says
+    (a third member: its Flags)."""
+    return [[i + 1, entry[0], entry[2] if len(entry) > 2 else FROM_OUTSIDE | FROM_INSIDE, entry[1]] for i, entry in enumerate(SEE_THROUGH)]
 
 
 def frame(n):

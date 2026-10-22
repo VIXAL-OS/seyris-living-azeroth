@@ -37,14 +37,22 @@ namespace wxl_livingazeroth::glass
         for (const LeadRect& r : rule.rects)
             for (long y = texel(r.v0, h); y < texel(r.v1, h); ++y)
                 for (long x = texel(r.u0, w); x < texel(r.u1, w); ++x) inside[static_cast<size_t>(y) * w + x] = 1;
-        // the lit glass's median luminance in them (else all of theirs)
+        // the lit glass's median luminance in them (else all of theirs); over the whole texture, its texels lit or coloured
+        const bool whole = rule.Whole();
+        std::vector<uint8_t> coloured(whole ? n : 0, 0);
         std::vector<float> lit, all;
         for (size_t i = 0; i < n; ++i)
         {
             if (!inside[i]) continue;
             all.push_back(lum[i]);
-            const float g = m.mask[0] * rgb[3 * i] + m.mask[1] * rgb[3 * i + 1] + m.mask[2] * rgb[3 * i + 2] + m.mask[3];
+            const float* c = rgb + 3 * i;
+            const float g = m.mask[0] * c[0] + m.mask[1] * c[1] + m.mask[2] * c[2] + m.mask[3];
             if (g > 0.5f) lit.push_back(lum[i]);
+            if (whole)
+            {
+                const float hi = std::max(std::max(c[0], c[1]), c[2]), lo = std::min(std::min(c[0], c[1]), c[2]);
+                coloured[i] = g > 0.5f || (hi > 0.0f && 1.0f - lo / hi >= kLeadColour);
+            }
         }
         if (all.empty()) return false;
         std::vector<float>& from = lit.empty() ? all : lit;
@@ -76,7 +84,7 @@ namespace wxl_livingazeroth::glass
         pass(a, b, false, false);
         out.assign(n, 0);
         for (size_t i = 0; i < n; ++i)
-            if (inside[i] && lum[i] >= rule.dark * ref && b[i] - lum[i] < rule.line * ref) out[i] = 255;
+            if (inside[i] && lum[i] >= rule.dark * ref && b[i] - lum[i] < rule.line * ref && (!whole || coloured[i])) out[i] = 255;
         return true;
     }
 

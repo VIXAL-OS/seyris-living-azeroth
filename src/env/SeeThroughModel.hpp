@@ -275,8 +275,10 @@ namespace wxl_livingazeroth::seethrough
         bool Build(const float* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount,
                    const std::vector<std::pair<uint32_t, uint32_t>>& ranges, const std::vector<uint8_t>& tags);
         /// The first triangle along o + t d (t in (tmin, tmax)): kFront when it faces the ray's origin (its winding's front:
-        /// cross(b - a, c - a) . d < 0), kBack when it faces away, kNone. Its t in `t` and its tag in `tag` when one is met.
-        Hit First(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr, uint8_t* tag = nullptr) const;
+        /// cross(b - a, c - a) . d < 0), kBack when it faces away, kNone. Its t in `t`, its tag in `tag` and its unit normal
+        /// (toward its front) in `normal` when one is met.
+        Hit First(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr, uint8_t* tag = nullptr,
+                  float* normal = nullptr) const;
         /// The same over every triangle (the tests' reference).
         Hit FirstBrute(const float o[3], const float d[3], float tmin, float tmax, float* t = nullptr) const;
         size_t Triangles() const { return m_tris.size() / 9; }
@@ -383,6 +385,16 @@ namespace wxl_livingazeroth::seethrough
     /// behind, a room's from outside or the shell's from inside (the roof, an outer wall: the void shows through it), or
     /// nothing at all within kVoidReach. None: the building's outside from outside (out by an opening).
     void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out);
+    // Stained glass (2026-10-22: the Redridge chapel, Northshire Abbey, Northrend's town hall and barracks): their walls are
+    // a yard and more thick, the room's opening behind the glass smaller than the glass, so a ray through the glass near its
+    // edge met the inner face of the wall round that opening from behind (the chapel's tall windows: a third of their rays)
+    // and counted against the room; so did the sides of a narrow window's deep opening (Northrend's barracks: its upper
+    // windows a foot wide, their rays at a slant). The client culls those faces and draws the room past them; so a room's
+    // surface from behind within kReveal yd of the window's outer pane, standing in the window's own wall or as a side of
+    // its opening (facing along its normal or along it, within kRevealFacing), is passed. A dormer's ceiling from above
+    // faces up the window, as a sill or a lintel does: still against.
+    constexpr float kReveal = 2.0f;
+    constexpr float kRevealFacing = 0.7f;
     /// The groups a window's rays go through (2026-10-22, more buildings: a city's one WMO has hundreds): those whose box
     /// meets the box round its room (`room`: the interior group behind it from outside, its own group from inside; -1
     /// none) and its middle, grown by kNearMargin yd. A ray that leaves them all leaves the building round the room.

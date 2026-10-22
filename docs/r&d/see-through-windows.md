@@ -347,7 +347,7 @@ tuskarr huts, the human houses, and the Lion's Pride Inn (17 of 17, one batch).
 `SeeThroughWindows` 0 by default, `SeeThroughOpacity` 0.35, `SeeThroughRedraw` 1 (per pixel; 0 the whole glass), in
 `[LivingAzeroth.Glass]` and the lights panel (under the glass; the per-pixel redraw's debug view there, not saved) with
 last frame's counts: exterior groups walked, windows opened and shut, rooms added, glass batches in opened groups, kept
-opaque, deferred and redrawn, faults. The buildings: SeeThroughBuildings.cdbc's (section 9; before 2026-10-22
+opaque, deferred and redrawn, faults. The buildings: SeeThroughBuildings.cdbc's (sections 9 and 10; before 2026-10-22
 `goldshireinn.wmo` alone, in the code). It needs the glass feature on (its batch hooks name the glass batches).
 
 Next, in order: try it in game at the inn; widen the whitelist to the 109 all-real WMOs; the same windows as portals
@@ -620,3 +620,95 @@ how many buildings the table names.
 placement's rooms are its own (every placement of a chosen WMO opens, wherever it stands: a ruined or empty village's
 too); the farmhouses' and houses' rooms by night and day; the new buildings' interior glass (the same atlases) with the
 lead mask.
+
+## 10. Stained glass (2026-10-22)
+
+"Cathedrals and chapels with modelled interiors (Northshire Abbey, the Redridge/Lakeshire chapel, others), Silvermoon and
+Scarlet-style churches outside dungeons; plus Northrend's arched human windows (nr_hu_window: Valgarde, Westguard Keep, New
+Hearthglen), which have the same curved-tracery problem ... The coloured glass should stay coloured over the room (tint, not
+just blend); and from inside, the street through the coloured glass. Dungeons and raids stay out."
+
+**Which.** 69 WMOs outside the dungeons' folders (gen_glass's `is_dungeon`) use stained glass (GlassMaterials kind 2) or a
+Northrend human window (`nr_hu_*`); 22 have at least one such glass batch over windows with a room behind them. Through the
+same survey as section 9, with one more measure: of the walks past each front (six a window), how many changed its verdict
+more than twice (open, shut, open again: a flicker; opening as the front comes round and shutting as it goes is two):
+
+| WMO | windows with a room | street views open | windows open from most | never | high and close | flips on walks (windows, most); walks flickering | inside: windows, views open, never |
+|---|---|---|---|---|---|---|---|
+| redridgechapel | 11 | 96% (48% before the reveal) | 11 | 0 | 97% | 14 (2, 11); 0 of 66 | 11, 71%, 0 |
+| nsabbey, nh_abbey | 46 | 58% (16%) | 31 | 4 | 51% | 246 (37, 12); 0 of 276 | 47, 33%, 1 |
+| nd_human_barracks, its Borean twin | 20 | 61% (20%) | 14 | 6 | 63% | 6 (2, 3); 0 of 120 (14 with the wall's face alone) | 8, 41%, 0 |
+| nd_human_townhall | 6 | 66% (41%) | 5 | 0 | 70% | 34 (5, 9); 0 of 36 | 6, 15%, 0 |
+| nd_human_bg_keep | 12 | 55% (3%) | 8 | 4 | 57% | 6 (2, 3); 0 of 72 | 16, 3%, 9 |
+| nd_human_house03 | 2 | 50% | 1 | 1 | 50% | 0 | 1, 100%, 0 |
+| cathedral, nh_cathedral (the Scarlet cathedral) | 16 of 60 | 1% | 0 | 11 | 0% | 1 | 11, 5%, 4 |
+| scarlet_monestary (its outside) | 8 of 27 | 14% | 0 | 4 | 15% | 5 | 3, 1%, 1 |
+| nd_human_inn | 5 | 17% (its ground-floor window 79%) | 1 | 4 | 11% | 2 (1, 2); 0 of 30 | 10, 7%, 5 |
+| nd_human_house01, house02 | 12, 45 | 1%, 8% | 0, 2 | | | | |
+| bloodelf/highelf small houses | 8 .. 14 | 19 .. 36% | 0 .. 6 | | | 79 .. 110 (most 12); 2 of 84 | none in their rooms |
+| night elf small houses | 5 | 67% | 3 | 0 | 62% | 23 (3, 9); 0 | 5, 36%, 0 |
+| sporehut_01 | 19 | 0% | 0 | 19 | | | 11, 6%, 7 |
+
+**The reveal.** Before it the chapel's tall windows opened from 48% of street views, a third of their rays "against": past
+the outer glass they met the inner face of the wall round the window's opening from behind, the opening behind the glass
+being smaller than the glass (the chapel's walls are about a yard thick, the town hall's 1.1 to 1.6). The client culls that
+face and draws the room past it, so the gate now passes a room's surface from behind within `kReveal` (2 yd) of the window's
+outer pane when it stands in the window's own wall (facing along its normal within `kRevealFacing`, 0.7). Northrend's
+barracks' upper windows (a foot wide) still flickered on 14 of 120 walks: at a slant their rays met the sides of the deep
+opening from behind; a face along the window (`along`) is passed too. A face up the window (a dormer's ceiling seen from
+above, a sill, a lintel) still counts against: the inn's dormers 15 to 17 stay shut from every sweep (seethrough_tests' gate
+test, unchanged), and its other windows open from more views (82% of street views, 79% before; the two-storey houses 98 to
+99%; the prison camp's headquarters 71%, 65% before, its upper windows changing at most 10 times over six walks, never more
+than twice in one). `RoomMesh::First` gives the face's normal for it.
+
+**Chosen, 9** (SeeThroughBuildings.cdbc, 33 rows now): the chapel (Lakeshire's; the same WMO stands in Tyr's Hand, New
+Hearthglen and old Hillsbrad, as the human farm's copies stand in old Stratholme: the table is per WMO), Northshire Abbey and
+New Hearthglen's (their 48 fake windows over the nave's blind walls stay shut), Northrend's barracks (Westguard Keep's;
+Valiance and Wintergarde Keep's twin), from outside and inside; its town hall (Amberpine Lodge, Farshire, Wintergarde) and the
+Isle of Conquest's Alliance keep from outside only (their rooms' own windows open onto the street from 15% and 3% of eyes
+inside); Wintergarde's small house (one window of two); Valgarde's and Westguard Keep's inn from outside only (its
+ground-floor window from 79% of street views; its four upper ones never, their rays meeting the roof from inside). Left out: the Scarlet cathedral (Tyr's Hand's, New Hearthglen's: 16
+of its 60 windows have a room, the nave's volume, seen from 1% of views), the Scarlet Monastery's outside, Northrend's other
+houses, Silvermoon's small houses (their windows have no room glass inside, 19 to 36% of views, flickering), the
+night elves' houses and Sporeggar's huts (not churches; a later phase may take the houses). Silvermoon's churches are its
+city's one WMO (no window with a room).
+
+**The lead mask from the texture.** GlassLead's rectangles can't follow an arch. The same runtime rule (env/GlassModel
+LeadMask: not darker than Dark x the lit glass's median luminance, not on a thin dark line) now reads the panes out of the
+texture: Northrend's arched windows have one row, the whole texture, with Dark 0.5 (their wooden frame is about half the
+glass's luminance), and over a whole texture a texel must also be lit (the light's mask over a half) or coloured (1 - its
+least channel / its largest at least `kLeadColour`, 0.3), since the flat grey round each window is as bright as its glass's
+shade; `nr_hu_window` 35% glass, the lit glass 95% of it, the grey round it 0%, a pane 78%. The stained sheets (the abbey's
+and the chapel's are one layout, recoloured) have their three designs a quadrant each (their lead is their frame) and the
+lattice window's four lights, not the stone cross between them (grey stone as bright as the sheet's white glass; by colour
+it read 24 .. 56% glass): Dark 0.4 the abbey's, 0.5 the chapel's (its stone is dark red): 57% and 47% glass, the lit glass
+96%, the cross 0%. glass_tests' "lead" checks each (and dumps them with GLASS_DUMP); no image data is stored.
+
+**The tint.** Blended at `SeeThroughOpacity`, stained glass lay over the room as a coloured veil and the room kept its own
+colours. Now, before the glass is blended over it, what's behind an open window's glass is multiplied by the glass's colour:
+T = lerp(1, the texel's hue at full value, `SeeThroughStainedTint`, 0.8), weighted by the lead mask (the lead and frame 1),
+`ZERO / SRCCOLOR`: light through coloured glass (`TintOf`, its pixel shader's twin). From inside the same: the street through
+the coloured glass. It's a pass of its own (`features/SeeThroughDraw`: its own 13-instruction pixel shader, the client's
+vertex shader's TEXCOORD0, the batch's texture at s0, the lead mask at s15, c223), not the stock WMO variants: their largest
+uses 2032 of its 2048 slots and is unchanged. Split by window, it's drawn over the open windows' triangles; whole (the
+client's indices unreadable), the see-through draw's pixels (its texkill keeps only the open windows' glass) are first
+marked in the stencil's top bit, the bit cleared under the batch before and by the tint after, and the tint goes only there;
+without a stencil in the depth surface there's no tint. Only stained glass (kind 2) is tinted; Northrend's amber windows are
+leaded glass and blend as the human windows do. The lights panel counts the stained batches redrawn and tinted each way.
+
+**Proofs (WARP).** glass_tests' sequence harness now takes a scene (`SequenceScene`: a WMO's group and glass batch, its
+placement, the camera, its open windows): besides the inn's two, the chapel from the street (window 15 open, 13 and 17 shut),
+from inside its nave (4 open, 2 and 6 shut, the street behind) and Northrend's town hall's west front (0 and 4 open, 1 shut),
+each placed turned 33 degrees, through the game's order (the client's draw, the capture, the state clobbered, applied, the
+redraw). Each: every pixel decided as right after the client's draw, whole and split; the state block alone every pixel
+yellow; what's behind changes with the backdrop through all of the open windows' glass and through none of their lead and
+frame or the shut windows (the chapel 431 of 431, 0 of 36, 0 of 1675). The tint, over a grey backdrop: every open window's
+glass pixel changed (the chapel's 431 of 431, its channels' spread 82 to 122; from inside 405 of 405, 73 to 107), not one of
+the lead, frame and shut windows' pixels a level apart (the stencil filled with ones first, so its clearing is what keeps
+them), whole through the stencil and split alike (21 and 0 pixels apart, at the windows' edges). The tint's shader alone:
+the backdrop x `TintOf` to a level over eight texels and masks. With GLASS_DUMP each scene's views by day and at night over a
+room's checker (debug, tinted, untinted).
+
+**Only the game can confirm**: the tint by day and night, in the chapel and from its nave; whether the client's depth surface
+has a stencil (the whole draw's tint needs one; the panel says which way each was tinted); the abbey's frame rate (46 windows
+with rooms, its nave a big room); the reveal on the existing buildings (more views open, none expected to flicker).

@@ -57,6 +57,7 @@ namespace wxl_livingazeroth::seethrough
             unsigned passed = 0, captureFailed = 0, targetMoved = 0, dropped = 0;
             unsigned blind = 0;      // shut: the room not seen through the window from here (SeesRoom)
             unsigned opaque = 0;     // redrawn opaque: the batch's shader without the redraw (or its glass off)
+            unsigned stained = 0, tintedSplit = 0, tintedStencil = 0;   // stained glass redrawn per pixel; tinted (SeeThroughDraw)
             // From inside (SeeThroughFromInside): the rooms walked with windows of their own, the ways out added (windows
             // opened), shut (`insideBlind` of them: the street not seen through it), far or over the budget; after the
             // walk, the exterior portal views in all (the client's own and ours) and whether the outdoors is drawn.
@@ -1134,6 +1135,31 @@ namespace wxl_livingazeroth::seethrough
             return lt.tex;
         }
 
+        // Stained glass's tint pass (SeeThroughDraw's TintShaderText; 2026-10-22): its shader, made the first time a stained
+        // batch is redrawn, again after a device reset; why it couldn't be made, for the panel.
+        IDirect3DPixelShader9* g_tintShader = nullptr;
+        bool g_tintTried = false;
+        char g_tintWhy[160] = "";
+
+        IDirect3DPixelShader9* TintShader(IDirect3DDevice9* dev)
+        {
+            if (!g_tintTried)
+            {
+                g_tintTried = true;
+                std::string why;
+                g_tintShader = CreateTintShader(dev, why);
+                std::snprintf(g_tintWhy, sizeof(g_tintWhy), "%s", g_tintShader ? "" : why.c_str());
+            }
+            return g_tintShader;
+        }
+
+        void ReleaseTint()
+        {
+            if (g_tintShader) g_tintShader->Release();
+            g_tintShader = nullptr;
+            g_tintTried = false;
+        }
+
         // What the redraw set and read back at its first batch (the panel's, refreshed once a second): so an in-game check
         // says whether the device got what the redraw meant ("see-through windows don't seem to work anymore now", the user,
         // 2026-10-21, with every count saying it was drawn).
@@ -1232,9 +1258,10 @@ namespace wxl_livingazeroth::seethrough
             IDirect3DSurface9* depth = nullptr;
             dev->GetRenderTarget(0, &target);
             dev->GetDepthStencilSurface(&depth);
-            D3DSURFACE_DESC desc{};
+            D3DSURFACE_DESC desc{}, depthDesc{};
             if (target) { target->GetDesc(&desc); target->Release(); }
-            if (depth) depth->Release();
+            if (depth) { depth->GetDesc(&depthDesc); depth->Release(); }
+            const bool stencil = depth && HasStencil(depthDesc.Format);
             const bool perPixel = g_settings.redraw != 0;
             __try
             {
@@ -1296,7 +1323,18 @@ namespace wxl_livingazeroth::seethrough
                     in.lead = LeadTextureOf(dev, e.material);
                     const int agree = e.open.empty() ? -2 : IndicesAgree(dev, e);
                     in.split = agree == 1;
+                    // stained glass: what's seen through it in its colours (the tint pass)
+                    const glass::Material* m = glass::MaterialAt(e.material);
+                    if (m && m->kind == glass::kStained && g_settings.stainedTint > 0.0f)
+                    {
+                        ++g_now.stained;
+                        in.tintShader = TintShader(dev);
+                        in.tint = std::clamp(g_settings.stainedTint, 0.0f, 1.0f);
+                        in.stencil = stencil;
+                    }
                     const PerPixelDrawn drawn = DrawPerPixel(dev, e, in, g_split);
+                    g_now.tintedSplit += drawn.tinted == 1 ? 1 : 0;
+                    g_now.tintedStencil += drawn.tinted == 2 ? 1 : 0;
                     if (g_lookupNow.valid && g_lookupNow.indices == -2)
                     {
                         g_lookupNow.indices = agree;
@@ -1441,6 +1479,7 @@ namespace wxl_livingazeroth::seethrough
         std::vector<Deferral::Entry> left = g_deferral.Take();
         Release(left);
         g_replayShaders.clear();
+        ReleaseTint();
     }
 
     void BeginGroupDraw(const void* root, int group, const void* instanceArg)
@@ -1511,15 +1550,19 @@ namespace wxl_livingazeroth::seethrough
     void DrawPanelSection(const WXL_Api* api)
     {
         if (!api->UiCollapsingHeader("See-through windows (experimental): the real room behind the glass##seethrough")) return;
-        api->UiCheckbox("see-through windows (the buildings SeeThroughBuildings.cdbc names: the human inns, houses, mage towers and farms)##ston", &g_settings.enabled);
+        api->UiCheckbox("see-through windows (the buildings SeeThroughBuildings.cdbc names: the human inns, houses, mage towers and farms, the "
+                        "chapels, the abbey, Northrend's halls)##ston", &g_settings.enabled);
         api->UiSliderFloat("the glass's opacity over the room##stop", &g_settings.opacity, 0.0f, 1.0f);
         api->UiCheckbox("per-pixel redraw: the panes see-through, the lead, frame and shutters opaque, only where the room is seen "
                         "(SeeThroughRedraw 1; off: the whole glass at the opacity, every window with a room open, as on 2026-10-20)##stredraw",
                         &g_settings.redraw);
         if (g_settings.redraw)
+        {
+            api->UiSliderFloat("stained glass's colour over what's seen through it (SeeThroughStainedTint)##sttint", &g_settings.stainedTint, 0.0f, 1.0f);
             api->UiCheckbox("debug view (not saved): the redraw's pixels by what the shader decided: magenta an open window's glass (through "
                             "grey to green as it's less glass), green its lead and frame (opaque), cyan a shut window, yellow no window "
                             "found##stdebug", &g_debugView);
+        }
         api->UiCheckbox("from inside: the street through the room's own windows where it's really seen through them, as through an open "
                         "door, the glass drawn over it the same way (SeeThroughFromInside; the same buildings; it doesn't need the "
                         "first box)##stinside", &g_settings.fromInside);
@@ -1554,6 +1597,10 @@ namespace wxl_livingazeroth::seethrough
         {
             std::snprintf(line, sizeof(line), "Lead masks (the per-pixel redraw's, from GlassLead.cdbc's panes): %u built, %u not%s%s", g_leadBuilt,
                           g_leadFailed, g_leadFailed ? ": " : "", g_leadWhy);
+            ui::Text(api, line);
+            std::snprintf(line, sizeof(line), "Stained glass's tint (SeeThroughStainedTint %.2f): %u stained batches redrawn, %u tinted over their open "
+                          "windows, %u through the stencil; its shader %s%s", g_settings.stainedTint, g_last.stained, g_last.tintedSplit, g_last.tintedStencil,
+                          g_tintShader ? "made" : g_tintTried ? "not made: " : "not needed yet", g_tintShader ? "" : g_tintWhy);
             ui::Text(api, line);
         }
         // what the redraw set and read back (once a second)
