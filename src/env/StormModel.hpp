@@ -202,6 +202,9 @@ namespace wxl_livingazeroth::storm
     float ClientRolloff(float minDistance, float maxDistance, float distance);
 
     // --- the day-night colours -------------------------------------------------------------------
+    // AreaTable's Flags (WorldQuery's snapshot: every area of the chain): a capital city and its sub-areas (AzerothCore
+    // DBCEnums AREA_FLAG_CAPITAL 0x100, AREA_FLAG_SLAVE_CAPITAL 0x8).
+    constexpr uint32_t kAreaCapital = 0x100, kAreaSlaveCapital = 0x8;
     // The client's 18 interpolated band colours (0xAARRGGBB at 0xD38BD4, core Liquid.hpp kDnBandColors):
     // 0 direct light, 1 ambient, 2..7 the sky from the top to the horizon, 8 the fog (what the terrain
     // and the ground fog take, debug/FogProbe), 9..10 the sun, 11..13 the clouds, 14..17 the water.
@@ -237,7 +240,23 @@ namespace wxl_livingazeroth::storm
         float snowBright = 1.0f; // a grey band's luminance in snow by day, x the client's own (at night x 1), up to
                                  // kSnowCeiling. A floor: snow never darkens a band.
         float snowWhite = 0.0f;  // 0..1: how much of a grey band's hue gives way to kSnowWhite in snow
+        // Darker nights (2026-10-22, Lumenveil's queue #1: "darker night ambient and sky so lamps and lit windows matter"):
+        // this frame's night darkening (NightShade), each band x 1 - night x its night weight (NightWeight): the ambient most,
+        // the sky and clouds, the direct light (the moon's) and the water less, the fog least (a black fog wall reads worse
+        // than a dark one), the sun's bands not at all. 0: the bands as they were.
+        float night = 0.0f;
     };
+    /// A band's share of the night's darkening (0..1).
+    float NightWeight(int band);
+    /// The night's darkening this frame (Shade::night): `setting` (Storm NightDarkness, 0..1) x how much night it is (1 -
+    /// `day`, the sky's) x the place's share: in a city (`city`: its area or a parent flagged a capital) kNightCityShare
+    /// (lamps everywhere already), where it's freezing (`temperature` degC, climate: snow on the ground lights the night)
+    /// down to kNightSnowShare from kNightWarm to kNightCold, and indoors (`outdoors` 0, smoothed) kNightIndoorShare (a
+    /// room's own light; the bands still light what's seen out of it). Not finite or out of range: clamped, NaN 0.
+    struct NightShare { float night = 0.0f, city = 1.0f, snow = 1.0f, indoor = 1.0f, total = 0.0f; };
+    NightShare NightShade(float setting, float day, bool city, float temperature, float outdoors);
+    constexpr float kNightCityShare = 0.5f, kNightSnowShare = 0.5f, kNightIndoorShare = 0.3f;
+    constexpr float kNightWarm = 2.0f, kNightCold = -4.0f;
     constexpr float kFlashGain = 0.55f;  // a full flash adds this much white (of 255) to a fully weighted band
     constexpr float kFogNightShare = 0.75f;
     constexpr float kFogCeiling = 0.70f; // luminance (0..1): fogBright lifts the fog no higher (a brighter fog keeps its own)

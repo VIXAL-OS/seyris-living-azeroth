@@ -2763,14 +2763,56 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
                  g_fogModeGuarded ? "read" : "not read (the client code differs or no hooks): storm doodads by their colour");
     }
 
+    namespace
+    {
+        void StatusLine(char* line, size_t size)
+        {
+            if (g_inactive)
+                std::snprintf(line, size, "Fog: not drawing -- %s", g_inactive);
+            else
+                std::snprintf(line, size, "Fog: drawing (%.2f ms CPU; GPU: profiler 'ours: fog draw')", g_lastMs);
+        }
+
+        // The cloud deck's lines (with it on).
+        void DeckLines(std::vector<std::string>& out)
+        {
+            char line[320];
+            if (g_deck.density > 0.0f)
+            {
+                float camNow[3] = {};
+                wxl::game::camera::GetPosition(camNow);
+                std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f; drawn x%.2f)%s", g_deck.base, g_deck.top,
+                              g_deck.density, world::Current().playerPos[2], DeckThinning(camNow[2]), g_psDeck ? "" : " -- its shader failed (see the log)");
+                out.emplace_back(line);
+                std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s); colour %.2f %.2f %.2f (%s)", g_deck.cover * 100.0f,
+                              g_deck.coverWhy, g_deck.color[0], g_deck.color[1], g_deck.color[2], g_deck.colorWhy);
+                out.emplace_back(line);
+                std::snprintf(line, sizeof(line), "see-through draws after it: %u fogged to the cloud's colour, %u left (another fog colour)%s; lights glowing in it: %d",
+                              g_tintedShown, g_tintOtherShown, g_hookedFrame ? "" : " -- no world frame hook: off", g_deckLightsUsed);
+                out.emplace_back(line);
+                std::snprintf(line, sizeof(line), "storm clouds and lightning (Storm Peaks): %u draws took the deck's colour %.2f %.2f %.2f (x%.2f where you see it)%s",
+                              g_stormTintedShown, g_stormColour[0], g_stormColour[1], g_stormColour[2], g_deckShade,
+                              !g_hookedBatches ? " -- no M2 batch hooks: they fog like the rest" : (g_fogModeGuarded ? "" : " -- batch fog modes not read: told by their colour"));
+            }
+            else
+                std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");
+            out.emplace_back(line);
+        }
+    }
+
     void DrawStatusLine()
     {
         char line[256];
-        if (g_inactive)
-            std::snprintf(line, sizeof(line), "Fog: not drawing -- %s", g_inactive);
-        else
-            std::snprintf(line, sizeof(line), "Fog: drawing (%.2f ms CPU; GPU: profiler 'ours: fog draw')", g_lastMs);
+        StatusLine(line, sizeof(line));
         ui::Text(g_api, line);
+    }
+
+    void StatusLines(std::vector<std::string>& out)
+    {
+        char line[256];
+        StatusLine(line, sizeof(line));
+        out.emplace_back(line);
+        if (g_settings.cloudDeck) DeckLines(out);
     }
 
     void DrawMainControls()
@@ -2796,27 +2838,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
             g_api->UiCheckbox("in the deck, see-through models fog to the cloud's colour##gfdeckt", &g_settings.cloudDeckTint);
             g_api->UiSliderFloat("deck glow: lights in it, and lightning and the moon beyond 60 yd##gfdeckg", &g_settings.cloudDeckGlow, 0.0f, 3.0f);
             g_api->UiCheckbox("smooth deck (half resolution, blurred: no pixel grain)##gfdecks", &g_settings.cloudDeckSmooth);
-            char line[320];
-            if (g_deck.density > 0.0f)
-            {
-                float camNow[3] = {};
-                wxl::game::camera::GetPosition(camNow);
-                std::snprintf(line, sizeof(line), "cloud deck here: z %.0f .. %.0f, %.4f per yd (you're at z %.0f; drawn x%.2f)%s", g_deck.base, g_deck.top,
-                              g_deck.density, world::Current().playerPos[2], DeckThinning(camNow[2]), g_psDeck ? "" : " -- its shader failed (see the log)");
-                ui::Text(g_api, line);
-                std::snprintf(line, sizeof(line), "sky over it: %.0f%% overcast (%s); colour %.2f %.2f %.2f (%s)", g_deck.cover * 100.0f,
-                              g_deck.coverWhy, g_deck.color[0], g_deck.color[1], g_deck.color[2], g_deck.colorWhy);
-                ui::Text(g_api, line);
-                std::snprintf(line, sizeof(line), "see-through draws after it: %u fogged to the cloud's colour, %u left (another fog colour)%s; lights glowing in it: %d",
-                              g_tintedShown, g_tintOtherShown, g_hookedFrame ? "" : " -- no world frame hook: off", g_deckLightsUsed);
-                ui::Text(g_api, line);
-                std::snprintf(line, sizeof(line), "storm clouds and lightning (Storm Peaks): %u draws took the deck's colour %.2f %.2f %.2f (x%.2f where you see it)%s",
-                              g_stormTintedShown, g_stormColour[0], g_stormColour[1], g_stormColour[2], g_deckShade,
-                              !g_hookedBatches ? " -- no M2 batch hooks: they fog like the rest" : (g_fogModeGuarded ? "" : " -- batch fog modes not read: told by their colour"));
-            }
-            else
-                std::snprintf(line, sizeof(line), "cloud deck: none here (no CloudBase for this place)");
-            ui::Text(g_api, line);
+            std::vector<std::string> lines;
+            DeckLines(lines);
+            for (const std::string& l : lines) ui::Text(g_api, l.c_str());
         }
     }
 

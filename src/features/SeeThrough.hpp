@@ -63,6 +63,9 @@
 //    found in the texture (GlassLead.cdbc's rows over its designs or the whole texture: env/GlassModel LeadMask), and the
 //    gate passes the inside of a thick wall round a window's opening (env/SeeThroughModel kReveal) and, from inside, the
 //    lining of a deep opening up to the building's outer glass behind it (OuterBehind, kLiningMargin).
+//  - Frosted glass (2026-10-22, Phase B): a frosted window opens only with SeeThroughFrostBlur over 0 and the blur able to
+//    run; behind its glass the frame's blurred copy of what's there (SeeThroughDraw's FrostCapture, once a frame before the
+//    first frosted batch, then FrostDraw where the glass is in front), the glass over it at the opacity.
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
@@ -70,6 +73,8 @@
 #include "wxl/PluginApi.h"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace wxl_livingazeroth::seethrough
 {
@@ -83,6 +88,8 @@ namespace wxl_livingazeroth::seethrough
                                     // each, as a door is); off by default, not tied to `enabled`
         float stainedTint = 0.8f;   // SeeThroughStainedTint: with SeeThroughRedraw 1, how much stained glass colours what's seen
                                     // through it (0..1; SeeThroughDraw's tint pass; 0 none: the glass only blended over it)
+        float frostBlur = 0.5f;     // SeeThroughFrostBlur: with SeeThroughRedraw 1, how soft frosted glass makes what's seen through
+                                    // it (0..1; SeeThroughDraw's FrostCapture; 0: frosted windows stay shut, as before)
     };
     Settings& Config();
 
@@ -106,4 +113,25 @@ namespace wxl_livingazeroth::seethrough
     /// The panel's section (the lights panel, under the glass) and one status line for the log.
     void DrawPanelSection(const WXL_Api* api);
     const char* StatusLine();
+    /// The section's status lines (everything under its controls), as the panel draws them (debug/Snapshot writes them).
+    void StatusLines(std::vector<std::string>& out);
+
+    // --- a snapshot's (debug/Snapshot, 2026-10-22) ----------------------------------------------------------------
+    /// A group the walks visited last frame (from outside or inside) and its windows' states.
+    struct WalkedGroup
+    {
+        std::string wmo;            // its path
+        uint32_t group = 0;
+        bool  inside = false;       // walked from inside (its room's own windows)
+        float distance = 0.0f;      // the camera to the group's box, yd
+        float cam[3] = {};          // the camera in the WMO's space (s_camPosLocal)
+        float model[16] = {};       // its placement (s_mapObjToWorld: row vectors, row-major)
+        std::vector<uint32_t> open, shut;   // its windows' ordinals
+    };
+    /// Last frame's walked groups, nearest the camera first.
+    void LastWalked(std::vector<WalkedGroup>& out);
+    /// The building the camera is in (the client's s_viewerMapObjDef: any WMO, in the table or not): its path, the
+    /// placed instance's m_invMat (world -> its space, row vectors) and its groups' flags and boxes (MOGI). False when
+    /// the camera is in none or it can't be read.
+    bool ViewerBuilding(std::string& wmo, float invMat[16], std::vector<uint32_t>& flags, std::vector<float>& boxes);
 }

@@ -52,10 +52,16 @@ namespace wxl_livingazeroth::debug
             ui::Text(g_api, line);
             std::snprintf(line, sizeof(line), "day-night colours: %s (%u frames shaded); bolt models: %s", storm::BandStatus(), st.bandFrames, storm::BoltStatus());
             ui::Text(g_api, line);
+            std::snprintf(line, sizeof(line), "darker nights: %.2f now (NightDarkness %.2f x night %.2f x city %.2f x frost %.2f x indoors %.2f); the ambient %.0f%% "
+                          "of the client's, the sky's top %.0f%%, the fog %.0f%%", st.night.total, s.nightDarkness, st.night.night, st.night.city,
+                          st.night.snow, st.night.indoor, 100.0f * (1.0f - st.night.total * storm::NightWeight(1)),
+                          100.0f * (1.0f - st.night.total * storm::NightWeight(2)), 100.0f * (1.0f - st.night.total * storm::NightWeight(storm::kFogBand)));
+            ui::Text(g_api, line);
 
             g_api->UiSeparator();
             g_api->UiCheckbox("storms##storm", &s.enabled);
             g_api->UiSliderFloat("darkness in full storm##storm", &s.darkness, 0.0f, 1.0f);
+            g_api->UiSliderFloat("darker nights (0 = the client's)##storm", &s.nightDarkness, 0.0f, 1.0f);
             g_api->UiCheckbox("flashes in the clouds (light and medium rain too)##storm", &s.flashes);
             g_api->UiSliderFloat("flash strength##storm", &s.flashStrength, 0.0f, 2.0f);
             g_api->UiSliderFloat("how often (x)##storm", &s.frequency, 0.1f, 4.0f);

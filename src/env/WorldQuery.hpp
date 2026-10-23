@@ -17,6 +17,7 @@ namespace wxl_livingazeroth::world
 
         uint32_t areaChain[kMaxAreaChain] = {}; // most specific first: sub-area, zone, ...
         int      areaCount = 0;
+        uint32_t areaFlags = 0;            // AreaTable's Flags of every area of the chain, or'ed (a capital city's: Storm's nights)
 
         bool     outdoors = true;          // the client's verdict (gates fog/sky/outdoor light)
         int      playerTerrainType = -1;   // TerrainType ID the client says the player stands on (-1 = none)

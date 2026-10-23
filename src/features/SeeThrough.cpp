@@ -9,6 +9,7 @@
 #include "SeeThroughDraw.hpp"
 
 #include "game/Gx.hpp"
+#include "../debug/Snapshot.hpp"
 #include "../debug/UiText.hpp"
 
 #include <windows.h>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -42,6 +44,14 @@ namespace wxl_livingazeroth::seethrough
         SceneDrawFn g_origScene = nullptr;
         const WXL_Api* g_api = nullptr;
         Settings g_settings;
+
+        // Frosted glass's blurred copy (SeeThroughDraw's FrostCapture; 2026-10-22): made the first time a frosted batch is
+        // redrawn, again after a device reset; failed for good where it can't be made here (frosted windows then stay shut).
+        FrostBuffer g_frost;
+
+        // Whether frosted glass's windows may open: its blur asked for (SeeThroughFrostBlur), per pixel, and able to run.
+        bool FrostOn() { return g_settings.frostBlur > 0.0f && g_settings.redraw != 0 && !g_frost.failed; }
+
         bool g_hookedWalk = false, g_hookedDraw = false, g_hookedScene = false;
         int g_guards = 0;                 // 0 unchecked, 1 hold, 2 differ (g_guardWhy)
         const char* g_guardWhy = "";
@@ -58,6 +68,7 @@ namespace wxl_livingazeroth::seethrough
             unsigned blind = 0;      // shut: the room not seen through the window from here (SeesRoom)
             unsigned opaque = 0;     // redrawn opaque: the batch's shader without the redraw (or its glass off)
             unsigned stained = 0, tintedSplit = 0, tintedWhole = 0;     // stained glass redrawn per pixel; tinted (SeeThroughDraw)
+            unsigned frosted = 0, frostDrawn = 0, frostCopies = 0, frostShut = 0;   // frosted glass redrawn; over the blurred copy; copies; kept shut
             const char* untinted = nullptr;                             // ... and why one wasn't (the last's)
             // From inside (SeeThroughFromInside): the rooms walked with windows of their own, the ways out added (windows
             // opened), shut (`insideBlind` of them: the street not seen through it), far or over the budget; after the
@@ -67,7 +78,7 @@ namespace wxl_livingazeroth::seethrough
             int outdoors = -1;       // -1 no walk from inside seen, 0 no outdoors (the frustum view's depth < 0), 1 drawn
             // Each window on the screen and facing the camera: open, or why it's shut (the panel's list, so an in-game check
             // says what happened: "see-through windows don't seem to work anymore now", the user, 2026-10-21).
-            enum Why : uint8_t { kOpen, kFake, kFar, kBudget, kUnloaded, kNoMesh, kBlind, kNotReached };
+            enum Why : uint8_t { kOpen, kFake, kFar, kBudget, kUnloaded, kNoMesh, kBlind, kNotReached, kFrostOff };
             struct Note
             {
                 uint32_t ordinal = 0;
@@ -221,6 +232,7 @@ namespace wxl_livingazeroth::seethrough
             bool whitelisted = false;
             uint32_t see = 0;                     // SeeThroughBuildings.cdbc's Flags (kSeeFromOutside, kSeeFromInside)
             char name[40] = "";                   // its WMO's file name, for the panel
+            std::string file;                     // its path (a snapshot's: LastWalked)
             std::vector<GroupInfo> groups;
             RootWindows windows;
             RootWindows inside;                   // its interior groups' own windows (from inside)
@@ -264,6 +276,7 @@ namespace wxl_livingazeroth::seethrough
                     if (*c == '\\' || *c == '/') stem = c + 1;
                 std::snprintf(e.name, sizeof(e.name), "%s", stem);
                 if (char* dot = std::strrchr(e.name, '.')) *dot = 0;
+                e.file = path;
             }
             e.groups.resize(count);
             if (!ReadGroupInfos(static_cast<const uint8_t*>(infos), count, e.groups.data()))
@@ -305,6 +318,7 @@ namespace wxl_livingazeroth::seethrough
             std::vector<uint8_t> states;   // per window of the group (RootWindows::Group's order)
             unsigned opened = 0;
             float cam[3] = {}, eye[3] = {};   // the client's camera in the WMO's space (the walk's) and the view's eye (world)
+            float model[16] = {};             // its placement (s_mapObjToWorld; a snapshot's: LastWalked)
             bool haveCam = false;
             bool inside = false;           // an interior group walked from inside: its own windows (RootEntry::inside)
             const SeeWindow* Windows(uint32_t& count) const
@@ -314,6 +328,7 @@ namespace wxl_livingazeroth::seethrough
             }
         };
         std::unordered_map<uint64_t, GroupFrame> g_frame;
+        std::unordered_map<uint64_t, GroupFrame> g_lastFrame;   // last frame's, for a snapshot (LastWalked; Update swaps them)
         unsigned g_budget = kMaxOpenPerFrame;
 
         uint64_t Key(const void* instance, uint32_t group)
@@ -620,6 +635,7 @@ namespace wxl_livingazeroth::seethrough
                 return;
             }
             for (int k = 0; k < 3; ++k) { f.cam[k] = cam[k]; f.eye[k] = eye[k]; }
+            std::memcpy(f.model, model, sizeof(f.model));
             f.haveCam = true;
             std::vector<WindowPlan> plan;
             PlanWindows(windows, count, cam, r->groups[group].lo, r->groups[group].hi, FromCRect(crect), model, eye, viewProj, g_budget, plan);
@@ -649,7 +665,8 @@ namespace wxl_livingazeroth::seethrough
                     const bool lineOfSight = g_settings.redraw != 0;
                     const int buildingState = lineOfSight ? (BuildingOf(*r, root, r->Near(r->windows, &windows[i]), building) ? 1 : 0) : -1;
                     const std::vector<SightPoints>* points = lineOfSight ? PointsOf(*r, root, group, windows, count) : nullptr;
-                    if (lineOfSight && buildingState != 1) why = Counts::kNoMesh;
+                    if (windows[i].kind == glass::kFrosted && !FrostOn()) { ++g_now.frostShut; why = Counts::kFrostOff; }
+                    else if (lineOfSight && buildingState != 1) why = Counts::kNoMesh;
                     else if (lineOfSight && !SeenThrough(instance, group, i, windows[i], cam, building, points, sight, held)) { ++g_now.blind; why = Counts::kBlind; }
                     else
                     {
@@ -729,6 +746,7 @@ namespace wxl_livingazeroth::seethrough
                 !ReadFloats(reinterpret_cast<uintptr_t>(rect), 4, crect))
                 return;
             for (int k = 0; k < 3; ++k) { f.cam[k] = cam[k]; f.eye[k] = eye[k]; }
+            std::memcpy(f.model, model, sizeof(f.model));
             f.haveCam = true;
             std::vector<WindowPlan> plan;
             PlanInside(windows, count, cam, FromCRect(crect), model, eye, viewProj, g_insideBudget, plan);
@@ -742,6 +760,14 @@ namespace wxl_livingazeroth::seethrough
                     continue;
                 }
                 if (p.state != kShut) continue;   // not seen from this reach
+                if (p.candidate && windows[i].kind == glass::kFrosted && !FrostOn())
+                {
+                    f.states[i] = kShut;
+                    ++g_now.insideShut;
+                    ++g_now.frostShut;
+                    NoteWindow(g_now, windows[i].ordinal, Counts::kFrostOff, nullptr, false, true);
+                    continue;
+                }
                 if (!p.candidate)
                 {
                     f.states[i] = kShut;
@@ -1271,6 +1297,15 @@ namespace wxl_livingazeroth::seethrough
             const bool perPixel = g_settings.redraw != 0;
             __try
             {
+                // frosted glass: the frame's blurred copy of what's behind the glass, before any glass is drawn again
+                if (perPixel && FrostOn())
+                    for (size_t i = 0; i < n; ++i)
+                    {
+                        const glass::Material* m = entries[i].state ? glass::MaterialAt(entries[i].material) : nullptr;
+                        if (!m || m->kind != glass::kFrosted) continue;
+                        g_now.frostCopies += FrostCapture(dev, g_frost, g_settings.frostBlur) ? 1 : 0;
+                        break;
+                    }
                 for (size_t i = 0; i < n; ++i)
                 {
                     const Deferral::Entry& e = entries[i];
@@ -1338,7 +1373,13 @@ namespace wxl_livingazeroth::seethrough
                         in.tint = std::clamp(g_settings.stainedTint, 0.0f, 1.0f);
                         if (!in.tintShader) g_now.untinted = "its shader wasn't made";
                     }
+                    if (m && m->kind == glass::kFrosted)
+                    {
+                        ++g_now.frosted;
+                        in.frost = g_frost.ready ? &g_frost : nullptr;
+                    }
                     const PerPixelDrawn drawn = DrawPerPixel(dev, e, in, g_split);
+                    g_now.frostDrawn += drawn.frosted ? 1 : 0;
                     g_now.tintedSplit += drawn.tinted == 1 ? 1 : 0;
                     g_now.tintedWhole += drawn.tinted == 2 ? 1 : 0;
                     if (drawn.untinted) g_now.untinted = drawn.untinted;
@@ -1456,8 +1497,9 @@ namespace wxl_livingazeroth::seethrough
         g_now = Counts{};
         g_deferral.ResetCounts();
         g_deferral.EndLoop();
+        g_lastFrame.swap(g_frame);   // (last frame's walks kept a frame for a snapshot: LastWalked)
         g_frame.clear();
-        if (g_roots.size() > 2048) g_roots.clear();   // only here: nothing of this frame points at them now
+        if (g_roots.size() > 2048) { g_roots.clear(); g_lastFrame.clear(); }   // only here: nothing of this frame points at them now
         g_budget = kMaxOpenPerFrame;
         g_insideBudget = kMaxInsidePerFrame;
         g_meshBuilds = 0;
@@ -1487,6 +1529,9 @@ namespace wxl_livingazeroth::seethrough
         Release(left);
         g_replayShaders.clear();
         ReleaseTint();
+        const bool failed = g_frost.failed;
+        g_frost.Release();
+        g_frost.failed = failed;
     }
 
     void BeginGroupDraw(const void* root, int group, const void* instanceArg)
@@ -1566,6 +1611,8 @@ namespace wxl_livingazeroth::seethrough
         if (g_settings.redraw)
         {
             api->UiSliderFloat("stained glass's colour over what's seen through it (SeeThroughStainedTint)##sttint", &g_settings.stainedTint, 0.0f, 1.0f);
+            api->UiSliderFloat("frosted glass's blur of what's seen through it (SeeThroughFrostBlur; 0: frosted windows stay shut)##stfrost",
+                               &g_settings.frostBlur, 0.0f, 1.0f);
             api->UiCheckbox("debug view (not saved): the redraw's pixels by what the shader decided: magenta an open window's glass (through "
                             "grey to green as it's less glass), green its lead and frame (opaque), cyan a shut window, yellow no window "
                             "found##stdebug", &g_debugView);
@@ -1573,12 +1620,20 @@ namespace wxl_livingazeroth::seethrough
         api->UiCheckbox("from inside: the street through the room's own windows where it's really seen through them, as through an open "
                         "door, the glass drawn over it the same way (SeeThroughFromInside; the same buildings; it doesn't need the "
                         "first box)##stinside", &g_settings.fromInside);
-        ui::Text(api, StatusLine());
+        std::vector<std::string> lines;
+        StatusLines(lines);
+        for (const std::string& l : lines) ui::Text(api, l.c_str());
+        snapshot::DrawButton(api, "##snapst");
+    }
+
+    void StatusLines(std::vector<std::string>& out)
+    {
+        out.emplace_back(StatusLine());
         char line[800];
         std::snprintf(line, sizeof(line), "Last frame: %u exterior groups walked, %u windows opened, %u shut (fake, far, unloaded or over budget; "
                       "%u of them: the room not seen through it from here), %u rooms added",
                       g_last.groups, g_last.opened, g_last.shut, g_last.blind, g_last.groupsAdded);
-        ui::Text(api, line);
+        out.emplace_back(line);
         if (g_settings.fromInside)
         {
             // what the walk from inside did: the ways out it found (the client's doors and openings) and the windows added to
@@ -1591,27 +1646,34 @@ namespace wxl_livingazeroth::seethrough
                           g_last.insideGroups, g_last.insideOpened, g_last.insideShut, g_last.insideBlind, g_last.insideFar, g_last.ways, own,
                           g_last.outdoors < 0 ? "- (the camera isn't in a building)" : g_last.outdoors ? "drawn through them"
                                                                                        : "not drawn (no way out on the screen)");
-            ui::Text(api, line);
+            out.emplace_back(line);
         }
         std::snprintf(line, sizeof(line), "Glass batches: %u in opened groups, %u kept opaque, %u deferred, %u drawn over the room (%u opaque: no redraw "
                       "in their shader); %u drawn as they were", g_last.glassBatches, g_last.kept, g_last.deferred, g_last.redrawn, g_last.opaque, g_last.passed);
-        ui::Text(api, line);
+        out.emplace_back(line);
         std::snprintf(line, sizeof(line), "Faults: %u%s%s; captures failed %u, target changed %u, dropped %u", g_faults, g_faulted ? " (off: " : "",
                       g_faulted ? g_faultWhere : "", g_last.captureFailed, g_last.targetMoved, g_last.dropped);
         if (g_faulted) std::strncat(line, ")", sizeof(line) - std::strlen(line) - 1);
-        ui::Text(api, line);
+        out.emplace_back(line);
         if (g_settings.redraw)
         {
             std::snprintf(line, sizeof(line), "Lead masks (the per-pixel redraw's, from GlassLead.cdbc's panes): %u built, %u not%s%s", g_leadBuilt,
                           g_leadFailed, g_leadFailed ? ": " : "", g_leadWhy);
-            ui::Text(api, line);
+            out.emplace_back(line);
             std::snprintf(line, sizeof(line), "Stained glass's tint (SeeThroughStainedTint %.2f): %u stained batches redrawn, %u tinted over their open "
                           "windows (split), %u over the batch where its glass is in front (whole, by the depth the opaque draw wrote)%s%s; its shader %s%s; "
                           "the depth surface %s (%s stencil)", g_settings.stainedTint, g_last.stained, g_last.tintedSplit, g_last.tintedWhole,
                           g_last.untinted ? "; not tinted: " : "", g_last.untinted ? g_last.untinted : "",
                           g_tintShader ? "made" : g_tintTried ? "not made: " : "not needed yet", g_tintShader ? "" : g_tintWhy,
                           DepthFormatName(g_depthFormat), HasStencil(g_depthFormat) ? "a" : "no");
-            ui::Text(api, line);
+            out.emplace_back(line);
+            std::snprintf(line, sizeof(line), "Frosted glass's blur (SeeThroughFrostBlur %.2f): %s; %u frosted batches redrawn, %u over the blurred copy; "
+                          "%u windows of frosted glass kept shut", g_settings.frostBlur,
+                          g_settings.frostBlur <= 0.0f ? "off (frosted windows stay shut)"
+                          : g_frost.failed ? "can't run here" : g_last.frostCopies ? "the scene copied at a quarter and blurred this frame"
+                          : "no frosted glass redrawn last frame", g_last.frosted, g_last.frostDrawn, g_last.frostShut);
+            if (g_frost.why[0]) { std::strncat(line, "; ", sizeof(line) - std::strlen(line) - 1); std::strncat(line, g_frost.why, sizeof(line) - std::strlen(line) - 1); }
+            out.emplace_back(line);
         }
         // what the redraw set and read back (once a second)
         if (g_probeShown.valid)
@@ -1623,7 +1685,7 @@ namespace wxl_livingazeroth::seethrough
                           q.mode ? "per pixel" : "the whole glass", q.glassOn, q.hasReplay, q.b11, q.c219[0], q.c219[1], q.c219[2], q.c219[3], q.c28[0],
                           q.c28[1], q.c28[2], q.c28[3], q.c33[0], q.test, q.func, q.ref, q.blend, q.srcBlend, q.destBlend, q.alphaTest, q.zWrite, q.zFunc,
                           DepthFormatName(q.depth), q.atoc, q.multisample, q.shader);
-            ui::Text(api, line);
+            out.emplace_back(line);
         }
         if (g_lookupShown.valid)
         {
@@ -1638,19 +1700,19 @@ namespace wxl_livingazeroth::seethrough
                           d[5][3], d[3][0], d[3][1], d[3][2], d[4][0] != 0.0f ? 1.0f / d[4][0] : 0.0f, d[5][0], d[5][1], d[5][2], d[0][3], d[1][3], d[2][3],
                           q.haveCam ? "" : "(none) ", q.cam[0], q.cam[1], q.cam[2], d[6][0], d[6][1], d[6][2], q.eye[0], q.eye[1], q.eye[2], q.tableAtDraw,
                           q.glassTable, !q.applied ? "not read" : same ? "the state block put them back" : "the state block didn't put them all back (put back from the capture)");
-            ui::Text(api, line);
+            out.emplace_back(line);
             std::snprintf(line, sizeof(line), "The redraw split by window: %s (%u triangles open, %u the rest); the client's index buffer %s",
                           q.split ? "yes" : "no: whole, the lookup alone", q.open, q.rest,
                           q.indices == 1 ? "holds the batch's own indices" : q.indices == 0 ? "differs from the batch's (drawn whole)"
                           : q.indices == -1 ? "can't be read (write-only: drawn whole)" : "not checked (nothing open to split)");
-            ui::Text(api, line);
+            out.emplace_back(line);
         }
         // each window on the screen and facing the camera last frame: open, or why not
         if (g_last.replayFirst >= 0.0f)
         {
             std::snprintf(line, sizeof(line), "The redraw: open windows from ordinal %.0f, bits 0x%04X (a shut window's glass and fake room as the client draws them)",
                           g_last.replayFirst, g_last.replayBits);
-            ui::Text(api, line);
+            out.emplace_back(line);
         }
         for (unsigned i = 0; i < g_last.noteCount; ++i)
         {
@@ -1678,13 +1740,15 @@ namespace wxl_livingazeroth::seethrough
             }
             static const char* const kWhy[] = { "open", "shut: fake (nothing modelled behind it)", "shut: too far", "shut: over the frame's budget",
                                                 "shut: its room's group not loaded", "shut: its room's surfaces not read yet (one room a frame)",
-                                                "shut: its room isn't seen through it from here", "shut: the walk didn't reach its room" };
+                                                "shut: its room isn't seen through it from here", "shut: the walk didn't reach its room",
+                                                "shut: frosted glass, its blur off (SeeThroughFrostBlur 0, the whole-glass redraw, or it can't run here)" };
             static const char* const kWhyInside[] = { "open: a way out, the street behind its glass", "-", "shut: too far (40 yd)", "shut: over the frame's budget",
                                                       "-", "shut: the room's or the building's surfaces not all read yet (one a frame)",
-                                                      "shut: the street isn't seen through it from here", "-" };
+                                                      "shut: the street isn't seen through it from here", "-",
+                                                      "shut: frosted glass, its blur off (SeeThroughFrostBlur 0, the whole-glass redraw, or it can't run here)" };
             std::snprintf(line, sizeof(line), "  %s%s group %u window %u: %s%s", n.inside ? "from inside, " : "", n.building, n.group, n.ordinal,
                           (n.inside ? kWhyInside : kWhy)[n.why], rays);
-            ui::Text(api, line);
+            out.emplace_back(line);
         }
     }
 
@@ -1701,5 +1765,59 @@ namespace wxl_livingazeroth::seethrough
                       "batches deferred, %u redrawn; faults %u", g_status, state, static_cast<unsigned>(glass::SeeThroughBuildings()), g_last.opened,
                       g_last.insideOpened, g_last.deferred, g_last.redrawn, g_faults);
         return line;
+    }
+
+    void LastWalked(std::vector<WalkedGroup>& out)
+    {
+        out.clear();
+        for (const auto& [key, f] : g_lastFrame)
+        {
+            if (!f.root || !f.haveCam || f.group >= f.root->groups.size()) continue;
+            WalkedGroup w;
+            w.wmo = f.root->file;
+            w.group = f.group;
+            w.inside = f.inside;
+            w.distance = DistanceToBox(f.cam, f.root->groups[f.group].lo, f.root->groups[f.group].hi);
+            std::memcpy(w.cam, f.cam, sizeof(w.cam));
+            std::memcpy(w.model, f.model, sizeof(w.model));
+            uint32_t count = 0;
+            const SeeWindow* windows = f.Windows(count);
+            for (uint32_t i = 0; windows && i < count && i < f.states.size(); ++i)
+                if (f.states[i] == kOpened) w.open.push_back(windows[i].ordinal);
+                else if (f.states[i] == kShut) w.shut.push_back(windows[i].ordinal);
+            out.push_back(std::move(w));
+        }
+        std::sort(out.begin(), out.end(), [](const WalkedGroup& a, const WalkedGroup& b) { return a.distance < b.distance; });
+    }
+
+    bool ViewerBuilding(std::string& wmo, float invMat[16], std::vector<uint32_t>& flags, std::vector<float>& boxes)
+    {
+        wmo.clear();
+        flags.clear();
+        boxes.clear();
+        const void* viewer = nullptr;
+        const void* owner = nullptr;
+        const void* infos = nullptr;
+        uint32_t count = 0;
+        char path[260];
+        if (!ReadPtr(client::kViewerMapObjDef, viewer) || !viewer || !ReadPtr(reinterpret_cast<uintptr_t>(viewer) + client::kDefOwner, owner) || !owner ||
+            !ReadPath(static_cast<const uint8_t*>(owner), path) || !path[0] ||
+            !ReadFloats(reinterpret_cast<uintptr_t>(viewer) + client::kDefInvMat, 16, invMat))
+            return false;
+        wmo = path;
+        const auto* r = static_cast<const uint8_t*>(owner);
+        std::vector<GroupInfo> groups;
+        if (ReadPtr(reinterpret_cast<uintptr_t>(r + client::kRootGroupInfo), infos) && infos &&
+            ReadU32(reinterpret_cast<uintptr_t>(r + client::kRootGroupCount), count) && count && count <= client::kMaxGroups)
+        {
+            groups.resize(count);
+            if (ReadGroupInfos(static_cast<const uint8_t*>(infos), count, groups.data()))
+                for (const GroupInfo& g : groups)
+                {
+                    flags.push_back(g.flags);
+                    boxes.insert(boxes.end(), { g.lo[0], g.lo[1], g.lo[2], g.hi[0], g.hi[1], g.hi[2] });
+                }
+        }
+        return true;
     }
 }

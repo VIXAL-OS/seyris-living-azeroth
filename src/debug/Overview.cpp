@@ -2,6 +2,7 @@
 
 #include "DepthView.hpp"
 #include "Pages.hpp"
+#include "Snapshot.hpp"
 #include "../env/ClientWeather.hpp"
 #include "../env/Climate.hpp"
 #include "../env/Fields.hpp"
@@ -38,6 +39,8 @@ namespace wxl_livingazeroth::debug
         {
             const world::Snapshot& s = world::Current();
             char line[320];
+            snapshot::DrawButton(g_api, "##snapov");
+            g_api->UiSeparator();
             if (!s.inWorld) { ui::Text(g_api, "Not in the world."); return; }
 
             // Where: names and the IDs table rows need.

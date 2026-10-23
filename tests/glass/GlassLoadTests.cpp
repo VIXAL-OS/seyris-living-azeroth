@@ -418,7 +418,8 @@ namespace
         // SeeThroughBuildings.cdbc (2026-10-22): the see-through windows' buildings as the reader gives them, by their WMO's
         // path in any case: the inns, the two-storey houses, the mage towers, the farmhouses and Redridge's prison camp
         // headquarters, from outside and from inside; not Stormwind, a barn, a smithy or the inn's closed variant. Since
-        // 2026-10-22 the stained glass's too: the chapel from outside and inside, Northrend's town hall from outside only.
+        // 2026-10-22 the stained glass's too: the chapel from outside and inside, Northrend's town hall from outside only; and
+        // the frosted glass's (Phase B): the dwarven house from both, the zeppelin house from inside only.
         auto see = [](const char* wmo) { return gl::SeeThroughFlags(gl::PathHash(wmo)); };
         const uint32_t seeInn = see("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo");
         const uint32_t seeHouse = see("world\\wmo\\azeroth\\buildings\\duskwood_humantwostory\\duskwood_humantwostory.wmo");
@@ -426,14 +427,17 @@ namespace
         const uint32_t seeFarm = see("world\\wmo\\buildings\\oldstrat_farm.wmo");
         const uint32_t seeChapel = see("World\\wmo\\Azeroth\\Buildings\\Chapel\\RedridgeChapel.wmo");
         const uint32_t seeHall = see("world\\wmo\\northrend\\buildings\\human\\nd_human_townhall\\nd_human_townhall.wmo");
+        const uint32_t seeHovel = see("World\\WMO\\KhazModan\\Buildings\\Dwarven_2story_Hovel\\Snow_2story\\Snow_2story.wmo");
+        const uint32_t seeZeppelin = see("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo");
         const uint32_t seeNone = see("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo") | see("world\\wmo\\azeroth\\buildings\\human_barn_silo\\barn.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireblacksmith\\goldshireblacksmith.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo");
         std::snprintf(line, sizeof(line), "%s: SeeThroughBuildings.cdbc: %zu buildings; the inn's flags %u, a two-storey house's %u, a mage tower's %u, a "
-                      "farmhouse's %u, the chapel's %u, Northrend's town hall's %u; Stormwind, a barn, a smithy, the closed inn %u", via, gl::SeeThroughBuildings(),
-                      seeInn, seeHouse, seeTower, seeFarm, seeChapel, seeHall, seeNone);
-        Check(gl::SeeThroughBuildings() == 33 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 && seeNone == 0 &&
-              status.find("SeeThroughBuildings.cdbc: 33 buildings") != std::string::npos, line);
+                      "farmhouse's %u, the chapel's %u, Northrend's town hall's %u, the dwarven house's %u, the zeppelin house's %u; Stormwind, a barn, a "
+                      "smithy, the closed inn %u", via, gl::SeeThroughBuildings(), seeInn, seeHouse, seeTower, seeFarm, seeChapel, seeHall, seeHovel, seeZeppelin,
+                      seeNone);
+        Check(gl::SeeThroughBuildings() == 47 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 &&
+              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && status.find("SeeThroughBuildings.cdbc: 47 buildings") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).
         const std::string rooms = gl::RoomLine(), windows = gl::WindowLine();

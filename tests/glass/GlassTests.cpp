@@ -77,6 +77,7 @@
 #include "features/GlassShaftShaders.hpp"
 #include "features/ModelIce.hpp"
 #include "features/SeeThroughDraw.hpp"
+#include "debug/SnapshotView.hpp"
 #include "render/ShaderPatch.hpp"
 #include "RoomHarness.hpp"
 
@@ -97,6 +98,8 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <cctype>
+#include <list>
 #include <map>
 #include <regex>
 #include <set>
@@ -4230,6 +4233,9 @@ namespace
         int minOpen, minShut;       // (a): pixels at least
         float tint;                 // the tint's strength (0: no tint pass)
         float focal = 120.0f;       // the camera's (pixels of the 192 x 192 target)
+        bool frost = false;         // frosted glass: the frame's blurred copy behind it (FrostCapture; check (f), its sheets)
+        float softness = 0.5f;      // the blur's (SeeThroughFrostBlur)
+        bool report = false;        // a snapshot's (SnapshotScenes): the checks printed, not counted; split only with both halves
     };
 
     // `inside` (SeeThroughFromInside, 2026-10-21: "windows should be see-through from the inside as well"): the same sequence
@@ -4267,11 +4273,162 @@ namespace
         };
     }
 
+    // Frosted glass (2026-10-22, Phase B: "the real room softly blurred behind frosted panes"): a dwarven house in Dun
+    // Morogh's style (snow_2story: Kharanos), from the street (its shell's mm_irnfg_swindows_01, window 2 open, 3 shut beside
+    // it) and from inside (its room's own frosted glass: 5 open, 4 shut, the street behind), placed turned 33 degrees.
+    // No GlassLead rows: the light's mask.
+    std::vector<SeqScene> FrostedScenes()
+    {
+        const char* hovel = "world\\wmo\\khazmodan\\buildings\\dwarven_2story_hovel\\snow_2story\\snow_2story.wmo";
+        const char* frosted = "dungeons\\textures\\windows\\mm_irnfg_swindows_01.blp";
+        SeqScene out = { "frosted glass, a dwarven house from the street", "hovel_out_", "the room", hovel, 0, 10, frosted, false, { 2 }, 4, 33.0f,
+                         { -5600.0f, -480.0f, 396.0f }, { 5.0f, 2.6f, 0.5f }, -1, { -3.29f, 2.6f, 1.28f }, 100, 100, 0.0f, 120.0f, true };
+        SeqScene in = { "frosted glass, a dwarven house from inside", "hovel_in_", "the street", hovel, 1, 10, frosted, true, { 5 }, 2, 33.0f,
+                        { -5600.0f, -480.0f, 396.0f }, { -10.0f, 4.0f, 0.5f }, -1, { -4.13f, 4.0f, 1.28f }, 100, 100, 0.0f, 120.0f, true };
+        return { out, in };
+    }
+
+    // A snapshot's view (GLASS_SNAPSHOT: a file the snapshot key wrote, debug/Snapshot; 2026-10-22: "make the WARP
+    // sweep/sequence harness able to load a snapshot file as its viewpoint, so a reported view can be reproduced
+    // directly"): the game's sequence from its camera in its WMO's space (its placement, its field of view), one scene per
+    // glass batch of its group (the root's MOMT textures with a GlassMaterials row, their BLP in GLASS_TEXTURES), its
+    // windows open and shut as the snapshot says, stained glass tinted and frosted glass blurred as its settings were; the
+    // views and the sheets dumped (GLASS_DUMP: snap_<material>_), the checks printed, not counted.
+    std::vector<std::string> RootTextures(const std::filesystem::path& scan, const std::string& wmo)
+    {
+        std::string flat = wmo;
+        std::replace(flat.begin(), flat.end(), '\\', '#');
+        const std::vector<uint8_t> g = ReadBytes(scan / flat);
+        std::vector<char> motx;
+        std::vector<uint32_t> offsets;
+        for (size_t at = 0; at + 8 <= g.size();)
+        {
+            uint32_t size;
+            std::memcpy(&size, &g[at + 4], 4);
+            const std::string tag = { static_cast<char>(g[at + 3]), static_cast<char>(g[at + 2]), static_cast<char>(g[at + 1]), static_cast<char>(g[at]) };
+            if (at + 8 + size > g.size()) break;
+            if (tag == "MOTX") motx.assign(g.begin() + static_cast<std::ptrdiff_t>(at + 8), g.begin() + static_cast<std::ptrdiff_t>(at + 8 + size));
+            if (tag == "MOMT")
+                for (size_t m = 0; m + 0x40 <= size; m += 0x40)
+                {
+                    uint32_t o;
+                    std::memcpy(&o, &g[at + 8 + m + 0x0C], 4);
+                    offsets.push_back(o);
+                }
+            at += 8 + size;
+        }
+        std::vector<std::string> out;
+        for (const uint32_t o : offsets)
+        {
+            std::string t = o < motx.size() ? std::string(&motx[o], strnlen(&motx[o], motx.size() - o)) : std::string();
+            std::transform(t.begin(), t.end(), t.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+            out.push_back(t);
+        }
+        return out;
+    }
+
+    std::vector<SeqScene> SnapshotScenes(const std::filesystem::path& data, const char* file)
+    {
+        namespace sn = wxl_livingazeroth::snapshot;
+        std::vector<SeqScene> scenes;
+        static std::list<std::string> keep;   // the scenes' strings
+        auto hold = [](std::string s) { keep.push_back(std::move(s)); return keep.back().c_str(); };
+        std::ifstream f(file, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        sn::WmoView v;
+        const char* scan = std::getenv("GLASS_SCAN");
+        const char* textures = TexturesFolder();
+        if (!sn::ParseView(text, v)) { std::printf("skip  the snapshot %s: no WMO view in it\n", file); return scenes; }
+        if (!scan || !textures) { std::printf("skip  the snapshot's view (GLASS_SCAN and GLASS_TEXTURES not both set)\n"); return scenes; }
+        if (v.group < 0) { std::printf("skip  the snapshot's view: no group of %s known (the camera in none of its boxes)\n", v.wmo.c_str()); return scenes; }
+        std::string wmo = v.wmo;
+        std::transform(wmo.begin(), wmo.end(), wmo.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+        auto setting = [&](const char* key, float fallback) {
+            const size_t at = text.find(key);
+            return at == std::string::npos ? fallback : static_cast<float>(std::atof(text.c_str() + at + std::strlen(key)));
+        };
+        const float tint = setting("SeeThroughStainedTint ", 0.8f), blur = setting("SeeThroughFrostBlur ", 0.5f);
+        std::printf("the snapshot %s: %s group %d (from %s), placed turned %.1f degrees (tilt %.1f) at %.1f %.1f %.1f, the camera at %.2f %.2f %.2f "
+                    "looking %.3f %.3f %.3f, fov %.1f degrees; open %s, shut %s\n", file, wmo.c_str(), v.group, v.inside ? "inside" : "outside", v.yaw, v.tilt,
+                    v.origin[0], v.origin[1], v.origin[2], v.cam[0], v.cam[1], v.cam[2], v.forward[0], v.forward[1], v.forward[2], v.fov * 180.0f / 3.14159265f,
+                    sn::Ordinals(v.open).c_str(), sn::Ordinals(v.shut).c_str());
+        if (v.tilt > 1.0f) std::printf("  (the placement leans %.1f degrees: the harness places it upright, turned by its yaw)\n", v.tilt);
+        Table mt0, wt;
+        if (!ReadTable(data / "GlassMaterials.cdbc", mt0) || !ReadTable(data / "GlassWindows.cdbc", wt)) { std::printf("skip  the snapshot's view: the tables\n"); return scenes; }
+        const std::vector<std::string> materials = RootTextures(scan, wmo);
+        // the group's batches' materials, in its MOBA's order, each once
+        std::string flat = wmo.substr(0, wmo.size() - 4);
+        std::replace(flat.begin(), flat.end(), '\\', '#');
+        char suffix[16];
+        std::snprintf(suffix, sizeof(suffix), "_%03d.wmo", v.group);
+        const std::vector<uint8_t> g = ReadBytes(std::filesystem::path(scan) / (flat + suffix));
+        std::vector<uint8_t> used;
+        for (size_t at = 0; at + 8 <= g.size();)
+        {
+            uint32_t size;
+            std::memcpy(&size, &g[at + 4], 4);
+            if (at + 8 + size > g.size()) break;
+            if (g[at + 3] == 'M' && g[at + 2] == 'O' && g[at + 1] == 'G' && g[at] == 'P')
+                for (size_t a = at + 8 + 0x44; a + 8 <= at + 8 + size;)
+                {
+                    uint32_t s;
+                    std::memcpy(&s, &g[a + 4], 4);
+                    if (g[a + 3] == 'M' && g[a + 2] == 'O' && g[a + 1] == 'B' && g[a] == 'A')
+                        for (size_t b = 0; b + 24 <= s; b += 24)
+                            if (std::find(used.begin(), used.end(), g[a + 8 + b + 23]) == used.end()) used.push_back(g[a + 8 + b + 23]);
+                    a += 8 + s;
+                }
+            at += 8 + size;
+        }
+        const uint32_t path = gl::PathHash(wmo.c_str());
+        size_t windows = 0;
+        for (const auto& r : wt.rows)
+            if (gl::PathHash(&wt.strings[r[1]]) == path && r[2] == static_cast<uint32_t>(v.group)) ++windows;
+        for (const uint8_t material : used)
+        {
+            const std::string texture = material < materials.size() ? materials[material] : std::string();
+            gl::Material m;
+            if (texture.empty() || !MaterialRow(mt0, texture, m)) continue;
+            std::string blp = texture;
+            std::replace(blp.begin(), blp.end(), '\\', '#');
+            if (!std::filesystem::exists(std::filesystem::path(textures) / blp))
+            { std::printf("skip  the snapshot's glass batch of material %u: %s not in GLASS_TEXTURES\n", material, texture.c_str()); continue; }
+            SeqScene s{};
+            s.label = hold("the snapshot's view, material " + std::to_string(material) + " (" + texture + ")");
+            s.prefix = hold("snap_" + std::to_string(material) + "_");
+            s.behind = v.inside ? "the street" : "the room";
+            s.wmo = hold(wmo);
+            s.group = v.group;
+            s.material = material;
+            s.texture = hold(texture);
+            s.inside = v.inside;
+            s.open = v.open;
+            s.windows = windows;
+            s.yaw = v.yaw;
+            for (int k = 0; k < 3; ++k) { s.origin[k] = v.origin[k]; s.spot[k] = v.cam[k]; s.look[k] = v.cam[k] + 10.0f * v.forward[k]; }
+            s.lookAt = -1;
+            s.minOpen = s.minShut = -1;
+            s.tint = m.kind == gl::kStained ? tint : 0.0f;
+            s.focal = v.fov > 0.1f && v.fov < 3.0f ? 96.0f / std::tan(v.fov * 0.5f) : 120.0f;
+            s.frost = m.kind == gl::kFrosted && blur > 0.0f;
+            s.softness = blur;
+            s.report = true;
+            scenes.push_back(s);
+        }
+        if (scenes.empty()) std::printf("skip  the snapshot's view: no glass batch of group %d with a GlassMaterials row\n", v.group);
+        return scenes;
+    }
+
     void SequenceScene(const std::filesystem::path& shaders, const std::filesystem::path& data, const SeqScene& sc)
     {
         namespace mi = wxl_livingazeroth::modelice;
         namespace sp = wxl_livingazeroth::shaderpatch;
         namespace st = wxl_livingazeroth::seethrough;
+        // (a snapshot's scene: its checks printed, not counted)
+        auto Check = [&sc](bool ok, const std::string& what) {
+            if (sc.report) std::printf("%s  %s\n", ok ? "info" : "INFO (would fail)", what.c_str());
+            else ::Check(ok, what);
+        };
         const char* const label = sc.label;
         const char* const behind = sc.behind;
         const bool inside = sc.inside;
@@ -4340,17 +4497,20 @@ namespace
         float first = 0.0f;
         uint32_t bits = 0;
         st::OpenBits(bw, see.data(), states.data(), states.size(), first, bits);
-        if (!bw.valid || open.empty() || rest.empty() || innWindows.size() != sc.windows || bw.strays != 0 || bw.windows.size() != innWindows.size() ||
-            (sc.lookAt >= 0 && !lookAt))
+        const bool canSplit = !open.empty() && !rest.empty();
+        if (!bw.valid || (!sc.report && (!canSplit || innWindows.size() != sc.windows || bw.strays != 0)) || (open.empty() && rest.empty()) ||
+            bw.windows.size() != innWindows.size() || (sc.lookAt >= 0 && !lookAt))
         { Check(false, std::string(label) + ": the batch's windows (the model's)"); return; }
-        // the lead mask
+        // the lead mask (a texture without GlassLead rows: none, the light's mask, as the runtime does)
         std::string flat = texture;
         std::replace(flat.begin(), flat.end(), '\\', '#');
         const std::vector<uint8_t> blp = ReadBytes(std::filesystem::path(textures) / flat);
         std::vector<float> texRgb;
         std::vector<uint8_t> leadMask;
         uint32_t tw = 0, th = 0;
-        if (!wxl_livingazeroth::blp::DecodeTop(blp.data(), blp.size(), texRgb, tw, th) || !gl::LeadMask(texRgb.data(), tw, th, m, LeadRuleOf(lt, texture), leadMask))
+        const gl::LeadRule leadRule = LeadRuleOf(lt, texture);
+        if (!wxl_livingazeroth::blp::DecodeTop(blp.data(), blp.size(), texRgb, tw, th) ||
+            (!leadRule.rects.empty() && !gl::LeadMask(texRgb.data(), tw, th, m, leadRule, leadMask)))
         { Check(false, std::string(label) + ": the lead mask"); return; }
 
         Warp w;
@@ -4379,6 +4539,8 @@ namespace
             FAILED(d->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
         { Check(false, std::string(label) + ": WARP resources " + why.substr(0, 120)); return; }
         IDirect3DTexture9* leadTex = nullptr;
+        st::FrostBuffer frostBuf;
+        if (!leadMask.empty())
         {
             UINT levels = 1;
             for (uint32_t sz = std::max(tw, th); sz > 1; sz >>= 1) ++levels;
@@ -4500,8 +4662,10 @@ namespace
         st::SplitBuffer buf;
         std::string lost;
         int tinted = 0;
+        bool frosted = false;
         auto run = [&](Through through, bool split, bool debug, std::vector<uint32_t>& img, D3DCOLOR backdrop = D3DCOLOR_ARGB(255, 0, 0, 255),
-                       float tint = 0.0f, bool checkerBack = false) -> bool {
+                       float tint = 0.0f, bool checkerBack = false, bool frost = false) -> bool {
+            split = split && canSplit;   // (a snapshot's batch with nothing open, or nothing shut: whole)
             d->SetRenderTarget(0, target);
             d->SetDepthStencilSurface(depth);
             D3DVIEWPORT9 vp{ 0, 0, kS, kS, 0.0f, 1.0f };
@@ -4521,6 +4685,8 @@ namespace
                 d->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF); d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
                 d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Q));
             }
+            // frosted glass: the frame's blurred copy (the room drawn, no glass yet), as the redraw makes it first
+            if (frost) st::FrostCapture(d, frostBuf, sc.softness);
             // the client's draw
             d->SetVertexShader(nullptr); d->SetPixelShader(ps); d->SetVertexDeclaration(decl);
             d->SetStreamSource(0, vb, 0, sizeof(Vtx)); d->SetIndices(ib);
@@ -4587,8 +4753,10 @@ namespace
             st::PerPixel pp;
             pp.opacity = 0.35f; pp.debug = debug; pp.lead = leadTex; pp.split = split;
             pp.tintShader = tint > 0.0f ? tintShader : nullptr; pp.tint = tint;
+            pp.frost = frost && frostBuf.ready ? &frostBuf : nullptr;
             const st::PerPixelDrawn drawn = st::DrawPerPixel(d, e, pp, buf);
             tinted = drawn.tinted;
+            frosted = drawn.frosted;
             d->EndScene();
             static_cast<IDirect3DStateBlock9*>(e.state)->Release();
             D3DLOCKED_RECT lr{};
@@ -4708,6 +4876,48 @@ namespace
             Check(tok && glass > 50 && changed * 10 >= glass * 7 && spreadAfter > spreadBefore * 1.2 && moved == 0 && kept > 50 && tintWhole == 2 &&
                   tintSplit == 1 && splitApart * 100 <= drawnPx * 2, line);
         }
+        // (f) frosted glass (2026-10-22, Phase B): over the room's checker, with its blurred copy against without, drawn whole
+        // and split: the open windows' glass pixels softened (the mean step between neighbouring pixels of the open glass at
+        // most half of the sharp view's); their lead and frame and the shut windows not a level apart; drawn both ways
+        if (sc.frost)
+        {
+            std::vector<uint32_t> sharp, soft, softSplit;
+            bool fok = ok && run(kWithConstants, false, false, sharp, D3DCOLOR_ARGB(255, 0, 0, 255), 0.0f, true);
+            fok = fok && run(kWithConstants, false, false, soft, D3DCOLOR_ARGB(255, 0, 0, 255), 0.0f, true, true);
+            const bool frostWhole = frosted;
+            fok = fok && run(kWithConstants, true, false, softSplit, D3DCOLOR_ARGB(255, 0, 0, 255), 0.0f, true, true);
+            const bool frostSplit = frosted;
+            auto ch = [](uint32_t px, int k) { return static_cast<int>((px >> (16 - 8 * k)) & 0xFF); };
+            auto glassAt = [&](int x, int y) { const uint32_t px = a[static_cast<size_t>(y) * kS + x]; return kind(px) == 1 && ((px >> 8) & 0xFF) < 100; };
+            double stepSharp = 0, stepSoft = 0;
+            int pairs = 0, kept = 0, moved = 0;
+            for (int y = 0; fok && y < kS; ++y)
+                for (int x = 0; x < kS; ++x)
+                {
+                    const size_t p = static_cast<size_t>(y) * kS + x;
+                    const int k = kind(a[p]), red = (a[p] >> 16) & 0xFF, green = (a[p] >> 8) & 0xFF;
+                    if ((k == 1 && green == 255 && red == 0) || k == 2)
+                    {
+                        ++kept;
+                        int most = 0;
+                        for (int q = 0; q < 3; ++q) most = std::max(most, std::abs(ch(sharp[p], q) - ch(soft[p], q)));
+                        moved += most > 1 ? 1 : 0;
+                    }
+                    if (x + 1 < kS && glassAt(x, y) && glassAt(x + 1, y))
+                    {
+                        ++pairs;
+                        for (int q = 0; q < 3; ++q)
+                        {
+                            stepSharp += std::abs(ch(sharp[p], q) - ch(sharp[p + 1], q));
+                            stepSoft += std::abs(ch(soft[p], q) - ch(soft[p + 1], q));
+                        }
+                    }
+                }
+            std::snprintf(line, sizeof(line), "%s: (f) the frost: the open glass's mean step between neighbouring pixels %.1f sharp, %.1f over the blurred copy "
+                          "(%d pairs); %d of %d lead, frame and shut-window pixels moved; drawn whole %s, split %s", label, pairs ? stepSharp / (3 * pairs) : 0.0,
+                          pairs ? stepSoft / (3 * pairs) : 0.0, pairs, moved, kept, frostWhole ? "over it" : "NOT over it", frostSplit ? "over it" : "NOT over it");
+            Check(fok && pairs > 50 && stepSoft * 2 <= stepSharp && moved == 0 && kept > 50 && frostWhole && frostSplit, line);
+        }
         if (const char* dump = std::getenv("GLASS_DUMP"))
         {
             auto save = [&](const std::string& name, const std::vector<uint32_t>& im) {
@@ -4727,12 +4937,14 @@ namespace
                 setTime(night);
                 const std::string when = night ? "night" : "day";
                 if (run(kWithConstants, false, true, im, D3DCOLOR_ARGB(255, 0, 0, 255), 0.0f, true)) save(pre + "sheet_" + when + "_debug.ppm", im);
-                if (run(kWithConstants, false, false, im, D3DCOLOR_ARGB(255, 0, 0, 255), sc.tint, true)) save(pre + "sheet_" + when + "_plain.ppm", im);
-                if (sc.tint > 0.0f && run(kWithConstants, false, false, im, D3DCOLOR_ARGB(255, 0, 0, 255), 0.0f, true)) save(pre + "sheet_" + when + "_untinted.ppm", im);
+                if (run(kWithConstants, false, false, im, D3DCOLOR_ARGB(255, 0, 0, 255), sc.tint, true, sc.frost)) save(pre + "sheet_" + when + "_plain.ppm", im);
+                if ((sc.tint > 0.0f || sc.frost) && run(kWithConstants, false, false, im, D3DCOLOR_ARGB(255, 0, 0, 255), 0.0f, true))
+                    save(pre + "sheet_" + when + "_untinted.ppm", im);
             }
             setTime(false);
         }
         buf.Release();
+        frostBuf.Release();
         for (IUnknown* u : std::initializer_list<IUnknown*>{ ps, other, target, depth, readback, glassTex, white, backTex, tintShader, leadTex, decl, vb, ib, otherIb })
             if (u) u->Release();
     }
@@ -5970,7 +6182,7 @@ int main(int argc, char** argv)
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
-    // replay, lead, inn, sequence, inside, stained, tint)
+    // replay, lead, inn, sequence, inside, stained, tint, frosted)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -5997,9 +6209,14 @@ int main(int argc, char** argv)
     if (warp && run("inn")) InnRedrawTests(args[0], args[1]);
     if (warp && run("sequence")) SequenceTests(args[0], args[1]);
     if (warp && run("inside")) SequenceTests(args[0], args[1], true);
+    if (warp && run("frosted"))
+        for (const SeqScene& sc : FrostedScenes()) SequenceScene(args[0], args[1], sc);
     if (warp && run("stained"))
         for (const SeqScene& sc : StainedScenes()) SequenceScene(args[0], args[1], sc);
     if (warp && run("tint")) TintTests();
+    // a snapshot's view (GLASS_SNAPSHOT=<the file>; GLASS_ONLY's part "snapshot")
+    if (const char* snap = std::getenv("GLASS_SNAPSHOT"); snap && warp && run("snapshot"))
+        for (const SeqScene& sc : SnapshotScenes(args[1], snap)) SequenceScene(args[0], args[1], sc);
     if (const char* preview = std::getenv("GLASS_PREVIEW")) Preview(preview);
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;

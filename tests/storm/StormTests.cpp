@@ -580,6 +580,36 @@ int main(int argc, char** argv)
             CHECK(fw::ScaleFor(std::nanf("")).push == 1.0f && fw::ScaleFor(-1.0f).fill == 1.0f && Near(fw::ScaleFor(5.0f).push, fw::kPushInFullMix, 1e-6f));
         });
 
+        Test("darker nights (2026-10-22): the night's share, the place's (a city, frost, indoors); the bands darker by their "
+             "weights, the ambient most, the fog least, the sun not at all; 0 or day: exactly as they were", []
+        {
+            // the share: the setting x the night x the place's
+            const st::NightShare full = st::NightShade(0.35f, 0.0f, false, 15.0f, 1.0f);
+            CHECK(Near(full.total, 0.35f, 1e-6f) && full.night == 1.0f && full.city == 1.0f && full.snow == 1.0f && full.indoor == 1.0f);
+            CHECK(st::NightShade(0.35f, 1.0f, false, 15.0f, 1.0f).total == 0.0f);                           // day
+            CHECK(Near(st::NightShade(0.35f, 0.5f, false, 15.0f, 1.0f).total, 0.175f, 1e-6f));              // dusk
+            CHECK(Near(st::NightShade(0.35f, 0.0f, true, 15.0f, 1.0f).total, 0.35f * st::kNightCityShare, 1e-6f));
+            CHECK(Near(st::NightShade(0.35f, 0.0f, false, -10.0f, 1.0f).total, 0.35f * st::kNightSnowShare, 1e-6f));
+            CHECK(Near(st::NightShade(0.35f, 0.0f, false, -1.0f, 1.0f).snow, 0.75f, 1e-6f));                // halfway down
+            CHECK(Near(st::NightShade(0.35f, 0.0f, false, 15.0f, 0.0f).total, 0.35f * st::kNightIndoorShare, 1e-6f));
+            CHECK(st::NightShade(0.0f, 0.0f, false, 15.0f, 1.0f).total == 0.0f);
+            CHECK(st::NightShade(std::nanf(""), std::nanf(""), false, std::nanf(""), std::nanf("")).total == 0.0f);
+            CHECK(st::NightShade(5.0f, -3.0f, false, 15.0f, 1.0f).total == 1.0f);                            // clamped
+            // the bands: 0 leaves them bit for bit; at 0.35 the ambient 65% of itself, the fog 82.5%, the sun as it was
+            const uint32_t ambient = Argb(0xFF, 60, 80, 100), fog = Argb(0xFF, 40, 50, 70), sun = Argb(0xFF, 200, 180, 150);
+            st::Shade none{};
+            CHECK(st::Identity(none));
+            st::Shade night;
+            night.night = 0.35f;
+            CHECK(!st::Identity(night));
+            CHECK(st::ShadeBand(ambient, 1, night) == Argb(0xFF, 39, 52, 65));
+            CHECK(st::ShadeBand(fog, st::kFogBand, night) == Argb(0xFF, 33, 41, 58));
+            CHECK(st::ShadeBand(sun, 9, night) == sun && st::NightWeight(9) == 0.0f && st::NightWeight(10) == 0.0f);
+            CHECK(st::NightWeight(1) == 1.0f && st::NightWeight(st::kFogBand) == 0.5f && st::NightWeight(-1) == 0.0f && st::NightWeight(18) == 0.0f);
+            for (int band = 0; band < st::kBandCount; ++band) CHECK(Sum(st::ShadeBand(ambient, band, night)) <= Sum(ambient));
+            static_assert(st::kAreaCapital == 0x100 && st::kAreaSlaveCapital == 0x8, "AreaTable's capital flags");
+        });
+
         Test("colours: no shade leaves them exactly; the storm darkens the sky most; a flash brightens; alpha kept", []
         {
             const uint32_t sky = Argb(0x80, 100, 150, 220), light = Argb(0xFF, 200, 190, 170), sun = Argb(0xFF, 255, 240, 200);

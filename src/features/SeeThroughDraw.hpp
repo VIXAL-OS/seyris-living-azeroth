@@ -20,6 +20,14 @@
 //    open windows' triangles; whole: over the batch's. In game (2026-10-22, Northshire Abbey) the client's index buffer
 //    can't be read, so the redraw is whole, and the first build's whole tint went through the stencil, which the client's
 //    depth surface may not have: "0 tinted over their open windows, 0 through the stencil". The depth needs neither.
+//  - Frosted glass (2026-10-22, Phase B: "the real room softly blurred behind frosted panes"): before the first frosted
+//    batch is drawn again, the render target as it is then (the rooms and the street drawn, no glass yet) is copied at a
+//    quarter of its size (FrostCapture; a multisampled target resolved first) and blurred there, two separable Gaussian
+//    passes of kFrostTaps (its own pixel shader, FrostBlurText), once a frame. Each frosted batch's open windows then get
+//    that copy where the glass is in front of what's behind it, as the tint is drawn (after the opaque draw, depth tested
+//    LESS; FrostCompositeText: the copy at the pixel's place, vPos), and the glass over it at the opacity. The stock
+//    shaders untouched; the copy's two textures a sixteenth of the target each; off (frosted windows kept shut) where its
+//    textures or shaders can't be made.
 #pragma once
 
 #include "../env/SeeThroughModel.hpp"
@@ -47,6 +55,7 @@ namespace wxl_livingazeroth::seethrough
         bool split = true;                  // draw split by window when the entry has its triangles
         IDirect3DPixelShader9* tintShader = nullptr;   // stained glass's tint pass (CreateTintShader; null, or no lead mask: none)
         float tint = 0.0f;                  // its strength (SeeThroughStainedTint; 0: none)
+        const struct FrostBuffer* frost = nullptr;   // frosted glass: the frame's blurred copy (FrostCapture'd), drawn behind its glass
     };
 
     struct PerPixelDrawn
@@ -56,7 +65,37 @@ namespace wxl_livingazeroth::seethrough
         uint32_t open = 0, rest = 0;        // triangles drawn open and shut (split)
         int tinted = 0;                     // the tint: 0 none, 1 over the open windows' triangles, 2 over the batch's (whole)
         const char* untinted = nullptr;     // why not, when a tint was asked for
+        bool frosted = false;               // the blurred copy drawn behind its glass
     };
+
+    constexpr int kFrostScale = 4;          // the copy: the target at a quarter of its width and height
+    constexpr int kFrostTaps = 9;           // each blur pass's taps (a Gaussian, sigma two taps)
+    constexpr int kFrostSampler = 14;       // the composite's sampler (its texture and states put back after)
+    /// The frame's blurred copy of what's behind the glass (features/SeeThrough's, made again after a device reset).
+    struct FrostBuffer
+    {
+        IDirect3DTexture9* blurred = nullptr;   // the copy at a quarter, blurred (the vertical pass's target)
+        IDirect3DTexture9* ping = nullptr;      // the horizontal pass's target
+        IDirect3DSurface9* resolved = nullptr;  // a multisampled target resolved here first
+        IDirect3DPixelShader9* blur = nullptr;
+        IDirect3DPixelShader9* composite = nullptr;
+        UINT width = 0, height = 0;             // the target's
+        D3DFORMAT format = D3DFMT_UNKNOWN;      // the target's (the copy's)
+        bool ready = false;                     // copied and blurred this frame
+        bool failed = false;                    // can't be made here: frosted windows stay shut (`why`)
+        char why[120] = "";
+        void Release();
+    };
+    /// Copies the render target into `f` at a quarter and blurs it: the taps `softness` (0..1) apart, 0.5 .. 3.5 of the
+    /// copy's texels (sigma 2 taps: about 4 .. 28 of the target's pixels). False (and f.why, f.failed when it can't ever) on
+    /// failure. The device's state is put back (a state block, the render target and depth surface apart); the viewport is
+    /// the target's whole.
+    bool FrostCapture(IDirect3DDevice9* dev, FrostBuffer& f, float softness);
+    /// The blur pass's pixel shader (ps_3_0: c223.xy the step in uv) and the composite's (c223.xy 1 / the target's size).
+    const char* FrostBlurText();
+    const char* FrostCompositeText();
+    /// The blur's weights, centre first (normalized: the centre and twice the others sum to 1).
+    constexpr float kFrostWeights[5] = { 0.20416f, 0.18017f, 0.12383f, 0.06629f, 0.02762f };
 
     /// The device's state at a batch's draw into `e` (e.state: a D3DSBT_ALL state block) and, apart, every pixel shader
     /// float constant (e.ps; the vertex shader's too, e.vs, up to kVertexConstants, the same way: no harm if they come

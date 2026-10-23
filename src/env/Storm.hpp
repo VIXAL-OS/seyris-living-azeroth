@@ -58,6 +58,9 @@ namespace wxl_livingazeroth::storm
         float boltRange = 900.0f;    // yd: strikes farther away get no bolt
         int   scorch = 0;            // a scorch mark on the terrain where a near strike lands (experimental)
         float scorchSeconds = 45.0f; // how long it takes to fade
+        // Darker nights (2026-10-22: Lumenveil's queue #1), through the same day-night colours: the night's ambient, sky,
+        // clouds and water darker so lamps and lit windows matter (StormModel NightShade, Shade::night). 0 = the client's.
+        float nightDarkness = 0.35f; // 0..1 at full night (less in cities, where it's freezing, and indoors)
     };
     Settings& Config();
 
@@ -89,6 +92,7 @@ namespace wxl_livingazeroth::storm
         float storminess = 0.0f;  // smoothed, 0..1
         float darkness = 0.0f, skyFlash = 0.0f, sceneFlash = 0.0f; // this frame's shade
         float day = 1.0f;         // the sky's day, 0..1, as the fog's storm treatment takes it
+        NightShare night;         // the night's darkening this frame and its parts (StormModel NightShade)
         uint32_t fogIn = 0, fogOut = 0; // the fog band (0xAARRGGBB) as the client made it and as we left it (0: not shaded)
         float snow = 0.0f;        // the snow treatment's share this frame (the client's weather set share while it snows)
         float fogEndIn = 0.0f, fogEndOut = 0.0f;     // the zone fog's end (yd) as the client made it and as we left it

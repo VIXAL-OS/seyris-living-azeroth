@@ -667,7 +667,11 @@ the gate opens from most street views with few flips (the survey of 2026-10-22: 
 houses, the mage towers, the farmhouses, Redridge's prison camp headquarters; 24), and since stained glass
 (2026-10-22) the chapel (Lakeshire's, Tyr's Hand's, New Hearthglen's), Northshire Abbey and New Hearthglen's,
 Northrend's human barracks (two), its town hall, the Isle of Conquest's keep and Valgarde's inn (from
-outside only) and Wintergarde's small house: 33. A WMO not here keeps its windows as they are. Every placement of a WMO
+outside only) and Wintergarde's small house: 33; and since frosted glass (2026-10-22, its blur:
+`SeeThroughFrostBlur`) the dwarven houses (Thelsamar's and Dun Morogh's: Kharanos, Amberstill), the Taunka's
+longhouse, the orcs' medium huts (Kargath, Stonard), their great halls (from outside only), their two-storey
+and zeppelin houses (from inside only: Durotar's, Grom'gol's) and the vrykul longhouses (clear and leaded
+glass; from outside only): 47. A WMO not here keeps its windows as they are. Every placement of a WMO
 counts, on every map.
 
 | Field | Meaning |

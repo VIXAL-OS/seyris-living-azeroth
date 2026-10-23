@@ -1,5 +1,6 @@
 #include "Config.hpp"
 
+#include "debug/Snapshot.hpp"
 #include "debug/WindView.hpp"
 #include "env/Fields.hpp"
 #include "env/Fog.hpp"
@@ -23,6 +24,8 @@
 #include "features/Windows.hpp"
 #include "render/PostAA.hpp"
 #include "wxl_seyris/SettingsApi.hpp"
+
+#include <cmath>
 
 namespace wxl_livingazeroth::config
 {
@@ -165,6 +168,11 @@ namespace wxl_livingazeroth::config
         shelter::SetLeeEnabled(Bool(s, "WindLee", "Walls and cliffs cast a wind shadow on their downwind side.", shelter::LeeEnabled()));
 
         debug::SetShowArrows(Bool(s, "DebugWindArrows", "Debug: draw the wind as arrows around the player.", debug::ShowArrows()));
+        {
+            snapshot::Settings& k = snapshot::Config();
+            const float key = Float(s, "SnapshotKey", "The key that writes a snapshot for a bug report: where you are, the camera (in the nearest building's own space too), the time, the server's weather and ours, the settings that matter, the frame rate and the see-through, fog and storm panels' status, to Logs\\la-snapshots\\<date>-<time>.txt in the game folder, announced in chat. A Windows virtual-key code: 122 = F11, 123 = F12, 0 = no key (the overview page has a button too). The key still reaches the game.", static_cast<float>(k.key));
+            k.key = std::isfinite(key) && key >= 0.0f && key < 256.0f ? static_cast<int>(key + 0.5f) : 0;
+        }
 
         // Ground fog renderer. Where fog forms and its kinds' values come from FogSettings.cdbc.
         {
@@ -227,6 +235,7 @@ namespace wxl_livingazeroth::config
             storm::Settings& t = storm::Config();
             t.enabled = In(s, f, "Enabled", "Rain builds up into storms: light and medium rain darken the sky and bring gusts, haze and the odd flash in the clouds; heavy rain brings strikes with thunder.", t.enabled);
             t.darkness = In(s, f, "Darkness", "How much darker the sky and the light get in full storm, 0..1 (less in lighter rain).", t.darkness);
+            t.nightDarkness = In(s, f, "NightDarkness", "How much darker nights are, 0..1 at full night, so lamps and lit windows matter: the night's ambient light, sky, clouds and water darker, the fog a little, through the client's own day-night colours (half as much in capital cities and where it's freezing, under a third indoors). Storms on or off. 0 = the client's nights exactly.", t.nightDarkness);
             t.flashes = In(s, f, "Flashes", "Flashes in the clouds (the sky brightens, no bolt), from light rain on.", t.flashes);
             t.flashStrength = In(s, f, "FlashStrength", "Your multiplier on every flash's brightness.", t.flashStrength);
             t.frequency = In(s, f, "Frequency", "Your multiplier on how often flashes and strikes come (1 = about one a minute in light rain, every 10-20 s in heavy rain).", t.frequency);
@@ -331,6 +340,7 @@ namespace wxl_livingazeroth::config
             st.redraw = In(s, f, "SeeThroughRedraw", "With SeeThroughWindows: how the glass is drawn over the room. 1 = per pixel: every pane's glass at SeeThroughOpacity, lit and shaded alike, the lead, frame, tracery and shutters opaque (the window texture's own lead mask, built from it as the game loads), and a window opens only where its room is really seen through it (not over its ceiling or through its walls), a shut window keeping its glass and fake room; the lights panel has its debug view. 0 = the whole glass at SeeThroughOpacity, its lead and frame too, every window with a room behind it open (as on 2026-10-20).", st.redraw);
             st.opacity = In(s, f, "SeeThroughOpacity", "With SeeThroughWindows: how much the glass covers the room behind it (0.35 = the glass 35%, the room 65%; 1 = opaque, 0 = clear). The glass keeps its own look, its reflections and tint, but not its fake room; with SeeThroughRedraw 1 its lead, frame and tracery stay opaque.", st.opacity);
             st.stainedTint = In(s, f, "SeeThroughStainedTint", "With SeeThroughRedraw 1: how much stained glass colours what's seen through it, the room from outside or the street from inside (0.8 = most of the way to the glass's own colours, as light through coloured glass; 0 = none: the glass only laid over it at SeeThroughOpacity).", st.stainedTint);
+            st.frostBlur = In(s, f, "SeeThroughFrostBlur", "With SeeThroughRedraw 1: how soft frosted glass makes what's seen through it, the room from outside or the street from inside (0.5 = a soft blur, about 16 pixels at 1080p; 1 = softer). The frame's view is copied at a quarter of its size once and blurred, and drawn behind the frosted glass of the open windows. 0 = frosted windows stay shut, as before.", st.frostBlur);
             st.fromInside = In(s, f, "SeeThroughFromInside", "Experimental: from inside a building (the same buildings), the street seen through the room's own windows, as the game shows it through an open door. Each window of a room you're in or look into that faces you, within 40 yards, opens as a way out where the street is really seen through it (its line of sight leaves by the building's own window glass, not through a wall or the roof), and its glass is drawn again over what's outside (SeeThroughRedraw and SeeThroughOpacity say how). It doesn't need SeeThroughWindows. 0 = off: from inside the windows as before.", st.fromInside);
             g.darkRoomLight = In(s, f, "DarkRoomLight", "At night a room whose lamp is out isn't a black void: the moon's and the night's cool light at its window, its furniture dim shapes and its corners darker, this share of a lit room's light (0.12; underground the city's warm ambient). The window's glow and light stay off. 0 = dark rooms black, as before.", g.darkRoomLight);
         }

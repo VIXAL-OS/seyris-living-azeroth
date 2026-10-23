@@ -34,6 +34,14 @@ walks. Left out: the Scarlet cathedral (Tyr's Hand's, New Hearthglen's: 16 of it
 views), the Scarlet Monastery's outside (14%), Northrend's other human houses (1 and 8%), Silvermoon's houses (19 to 36%, a
 window changing more than twice on a walk), the night elves' houses and Sporeggar's huts (not churches; 67% and 0%).
 
+Frosted glass (2026-10-22, "Phase B"): the WMOs with frosted glass over windows with rooms (40), surveyed the same way:
+the dwarven houses (55% of street views, from inside 97%), the Taunka's longhouse (49%, 87%), the orcs' medium huts (100%,
+57%), great halls (53%, outside) and two-storey and zeppelin houses (inside only: 77, 78%), and the vrykul longhouses
+(their glass clear and leaded; 47%, outside). Left out: the iron dwarves' buildings (64 and 35%, a window changing more
+than twice on 4 of 42 walks), the winter orcs' (0 .. 12%), the tuskarr's huts and the draenei's towers (0%: their rooms
+never seen), the dwarven inns, barracks, smithies and guard towers (no room behind their windows), Ironforge, Dalaran and
+the Exodar (each a city's one WMO).
+
 Inputs: <scan> (waterfall-scan's out folder: wmo-windows/ roots and groups, as gen_glass.py) and the data folder with
 GlassWindows.cdbc. Nothing here opens an MPQ.
 Usage:  python see_through_survey.py <scan> [data dir] [--wmo <path>]   (--wmo: one WMO's windows, one per line)
@@ -109,6 +117,25 @@ SEE_THROUGH = [
     # ... and the inn (Valgarde's, Westguard Keep's): its ground-floor window from 79% of street views, its four upper ones
     # never (their rays meet the roof from inside), no flicker; from outside only (from inside 7%)
     (r"world\wmo\northrend\buildings\human\nd_human_inn\nd_human_inn.wmo", "the inn (Valgarde, Westguard Keep)", FROM_OUTSIDE),
+    # frosted glass (2026-10-22, Phase B; its windows open only over the blurred copy, features/SeeThrough SeeThroughFrostBlur):
+    # the dwarven houses, 4 windows, 55% of street views, from inside 97%; the Taunka's longhouse, 49%, 87%; the orcs'
+    # medium huts, every street view, from inside 57%; their great halls from outside (53%; no windows of their rooms);
+    # their two-storey houses and zeppelin houses from inside only (77, 78%; from the street 15 and 3%: their rooms behind
+    # thick walls). And the vrykul longhouses (clear and leaded glass, not frosted), from outside (47%; from inside 7%).
+    (r"world\wmo\khazmodan\buildings\dwarven_2story_hovel\mud_2story\mud_2story.wmo", "the dwarven house (Thelsamar, Dun Modr)"),
+    (r"world\wmo\khazmodan\buildings\dwarven_2story_hovel\snow_2story\snow_2story.wmo", "the dwarven house, Dun Morogh's (Kharanos, Amberstill)"),
+    (r"world\wmo\northrend\buildings\wintertauren_longhouse\wintertauren_snow_longhouse_b.wmo", "the Taunka's longhouse (Camp Tunka'lo)"),
+    (r"world\wmo\kalimdor\buildings\orcmedium\orcmedium.wmo", "the orcs' hut (Kargath)"),
+    (r"world\wmo\kalimdor\buildings\orcmedium\swamporcmedium.wmo", "the orcs' hut, the swamp's (Stonard)"),
+    (r"world\wmo\kalimdor\buildings\orcgreathall\blackrockorcgreathall.wmo", "the orcs' great hall, Blackrock's", FROM_OUTSIDE),
+    (r"world\wmo\kalimdor\buildings\orcgreathall\swamporcgreathall.wmo", "the orcs' great hall, the swamp's (Stonard)", FROM_OUTSIDE),
+    (r"world\wmo\kalimdor\buildings\orctwostory\orctwostory.wmo", "the orcs' two-storey house (Ratchet, the Barrens)", FROM_INSIDE),
+    (r"world\wmo\kalimdor\buildings\orctwostory\blackrockorctwostory.wmo", "the orcs' two-storey house, Blackrock's", FROM_INSIDE),
+    (r"world\wmo\kalimdor\buildings\orczeppelinhouse\orczeppelinhouse.wmo", "the zeppelin house (Durotar)", FROM_INSIDE),
+    (r"world\wmo\kalimdor\buildings\orczeppelinhouse\orczeppelinhouse_durotar01.wmo", "the zeppelin house, Durotar's", FROM_INSIDE),
+    (r"world\wmo\kalimdor\buildings\orczeppelinhouse\orczeppelinhouse_gromgol.wmo", "the zeppelin house, Grom'gol's", FROM_INSIDE),
+    (r"world\wmo\northrend\buildings\vrykul\nd_vrykul_longhouse.wmo", "the vrykul longhouse (Skorn)", FROM_OUTSIDE),
+    (r"world\wmo\northrend\buildings\vrykul\nd_vrykul_longhousesnow.wmo", "the vrykul longhouse, snowed (Brunnhildar, Valkyrion)", FROM_OUTSIDE),
 ]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s"]   # ID Wmo Flags Comment
 

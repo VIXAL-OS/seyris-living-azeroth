@@ -594,6 +594,11 @@ namespace wxl_livingazeroth::storm
         g_snowDistance = snowing && std::isfinite(s.snowDistance) && s.snowDistance > 0.0f ? s.snowDistance : 0.0f;
         g_shade.sky = sky * s.flashStrength;
         g_shade.scene = scene * s.flashStrength * g_outdoors;
+        // Darker nights, storms on or off: the night's share (the sky's day) x the place's (a city, frost, indoors)
+        const bool city = (snap.areaFlags & (kAreaCapital | kAreaSlaveCapital)) != 0;
+        const float temperature = snap.inWorld ? climate::Temperature(climate::Here()).total : 20.0f;
+        g_status.night = NightShade(snap.inWorld ? s.nightDarkness : 0.0f, g_shade.day, city, temperature, g_outdoors);
+        g_shade.night = g_status.night.total;
 
         // The cracks and rumbles, after the sound's travel time (one a frame; dropped if long overdue: a loading screen).
         for (size_t i = 0; i < g_sounds.size(); ++i)

@@ -739,3 +739,93 @@ from inside: the inns 84 .. 85% (82 .. 83%), the two-storey houses 98 .. 99%, th
 chapel 91% (71%), Northrend's barracks 82% (41%; its narrow upper windows, a foot wide, still change more than twice on 4 of
 36 walks, at the slant along the room's far wall). A window with no outer glass behind it keeps the old rule. **The tint** now
 goes by the depth (above).
+
+## 11. Frosted glass (2026-10-22)
+
+"Phase B, frosted glass: the real room softly blurred behind frosted panes ... dwarven buildings such as
+Kharanos/Thelsamar, vrykul longhouses, draenei/Exodar crystal windows, and Dalaran's frosted panes outside Dalaran's city
+WMO if it's separate. From outside and from inside. A blur of what's behind the glass within the window's screen rect
+(e.g. copy the region after the room/street is drawn, blur it, composite under the frosted glass), cost-capped ... and
+off where it can't run; keep the stock shaders untouched (own pass like the tint)."
+
+**Which.** 40 WMOs outside the dungeons' folders have frosted glass (GlassMaterials kind 3) over windows with a room
+behind them. The same survey as sections 9 and 10 (the street sweep, high and close, walks past each front, from inside
+each room's own windows from eyes all over it, walks inside); the main ones (`tools/see_through_survey.py`'s header and
+`SEE_THROUGH` keep the reasons):
+
+| WMO | windows with a room | street views open | from most, never | high and close | walks flickering | inside: windows, eyes open | walks inside flickering |
+|---|---|---|---|---|---|---|---|
+| mud_2story, snow_2story (the dwarven house) | 4 | 55% | 2, 0 | 17% | 0 of 24 | 2, 97% | 0 of 12 |
+| wintertauren_snow_longhouse_b (the Taunka's) | 4 | 49% | 0, 0 | 36% | 0 of 24 | 4, 87% | 0 of 12 |
+| orcmedium, swamporcmedium | 5 | 100% | 5, 0 | 99% | 0 of 30 | 11, 57% | 0 of 12 |
+| blackrockorcgreathall, swamporcgreathall | 10 | 53% | 4, 0 | 38% | 0 of 60 | none in its rooms | |
+| orctwostory, blackrockorctwostory | 11 | 15% | 0, 0 | 13% | 0 of 66 | 11, 77% | 0 of 12 |
+| orczeppelinhouse (three) | 10 | 3% | 0, 7 | 3% | 0 of 60 | 11, 78% | 0 of 12 |
+| nd_vrykul_longhouse, its snowed twin | 13 | 47% | 7, 5 | 48% | 0 of 78 | 6, 7% | 0 of 12 |
+| nd_irondwarf_smallbuilding | 7 | 64% | 4, 0 | 55% | 4 of 42 | 4, 40% | 0 of 12 |
+| nd_irondwarf_roundbuilding | 8 | 35% | 0, 0 | 59% | 0 of 48 | 16, 47% | 1 of 12 |
+| nd_winterorc_barracks | 33 | 12% | 2, 17 | 7% | 0 of 198 | 14, 29% | 0 of 24 |
+| nd_winterorc_fortress | 395 | 0% | 0, 317 | 0% | 0 of 1902 | 279, 18% | 16 of 24 |
+| orcmagetower (four) | 30 | 2% | 0, 22 | 2% | 1 of 180 | none | |
+| draenitower01, lo_tower01 | 8 | 0% | 0, 6 | 0% | 0 of 48 | 6, 0% | 0 of 12 |
+| nd_tuskarr_hut01, hut03, hut06 | 10 .. 30 | 0% | 0, all | 0% | 0 | 0 .. 18, 0 .. 33% | |
+| dwarven guard towers, Taunka lofts (six) | 1 | 0% | | | | none | |
+
+**Chosen, 14** (SeeThroughBuildings.cdbc, 47 rows now): the dwarven houses (Thelsamar's `mud_2story`, Dun Morogh's
+`snow_2story`: Kharanos, Amberstill), from outside and inside; the Taunka's longhouse (Camp Tunka'lo), both; the orcs'
+medium huts (Kargath, Stonard), both; their great halls (Blackrock's, the swamp's: Stonard) from outside only (their
+rooms have no windows of their own); their two-storey houses and zeppelin houses (Ratchet, Durotar, Grom'gol) from inside
+only (77, 78% of eyes; from the street 15 and 3%: their rooms stand behind thick walls); and the vrykul longhouses (Skorn,
+Brunnhildar, Valkyrion) from outside only (47%; from inside 7%). The vrykul longhouses' glass is clear and leaded, not
+frosted: they come in with the frosted survey, as the user named them. **Left out**: the iron dwarves' buildings (64 and
+35%, a window changing more than twice on 4 of 42 walks), the winter orcs' (0 .. 12%; their fortress's rooms change more
+than twice on 16 of 24 walks inside), the orcs' mage towers and barracks (2% and 0%), the tuskarr's huts and the draenei's
+towers (0%: their rooms are never seen through the glass), the destroyed Taunka longhouse (a ruin), the dwarven inns,
+barracks, smithies and guard towers (no room behind their windows), and Ironforge, Dalaran and the Exodar: each a city's
+one WMO, Dalaran's frosted panes included (no separate building of its own with them).
+
+**The blur.** A frosted window opens like any other (the walk, the gate, the budget), and its glass is drawn again over
+what's behind it, but not over the sharp room: once a frame, before the first frosted batch's redraw, the frame as drawn
+so far (the room, or from inside the street) is copied at a quarter of its size (`StretchRect`, resolved first if the
+target is multisampled) and blurred, two separable 9-tap Gaussian passes in a pixel shader of its own (`FrostBlurText`;
+the taps 0.5 + 3 x `SeeThroughFrostBlur` quarter-size pixels apart: about 16 pixels at 1080p at 0.5), the device's state
+kept in a `D3DSBT_ALL` state block and the render target and depth surface put back by hand. Then, after the batch's
+opaque draw and before its glass is blended, the copy is drawn where the open glass is in front (`FrostDraw`: the batch's
+triangles and vertex shader again, depth tested LESS, as the tint), its pixel at the screen position (vPos) from the copy
+(s14, `FrostCompositeText`), no blending; the glass is then blended over it at `SeeThroughOpacity` as before. Split by
+window, over the open windows' triangles; whole, over the batch's. The stock WMO shaders are untouched.
+
+The caps: one copy and blur a frame however many frosted windows are open, at a sixteenth of the pixels; none in a frame
+without a frosted batch redrawn; the composite only where the open glass is (the depth test). The copy is the whole
+frame, not each window's rectangle: one copy and two passes serve every window, where rectangles would take a copy and
+two passes each (not measured against each other yet). The windows are capped by the frame's budget as before. Where it can't
+run (its textures or shaders not made: off for the session; the target not copied this frame: that frame's frosted
+glass over the sharp room) frosted windows stay shut, and the lights panel's frosted line says how many were redrawn, how
+many over the copy, how many kept shut and why.
+
+**Proofs (WARP).** The sequence harness's frosted scenes: the dwarven house (snow_2story) from the street (its shell's
+`mm_irnfg_swindows_01`, window 2 open, 3 shut) and from inside (its room's own frosted glass: 5 open, 4 shut, the street
+behind), placed turned 33 degrees. Each passes the harness's checks (a) to (d) as the other scenes do, and (f): over a
+room's checker, the open glass's mean step between neighbouring pixels 11.4 sharp, 3.1 over the blurred copy from the
+street (10.1 and 2.5 from inside); not one of the lead, frame and shut-window pixels a level apart (1,201 and 2,109);
+drawn whole and split over the copy. (A first build moved 38 shut-window pixels: the blur left sampler 0's addressing at
+CLAMP; the state block fixed it.) Contact sheets: by day and at night, the debug view, frosted and sharp, whole and close.
+
+**Only the game can confirm**: the blur's look and cost at the game's resolution, from outside and inside; the chosen
+buildings' gates on their real placements (Kharanos, Thelsamar, Kargath, Stonard, Camp Tunka'lo, Durotar).
+
+## 12. A snapshot's view (2026-10-22)
+
+The snapshot key (`SnapshotKey`, debug/Snapshot; Lumenveil's queue #10) writes the camera in the nearest WMO's own space:
+the building the camera is in (the client's `s_viewerMapObjDef`, by its instance's `m_invMat`; any WMO, its group the
+smallest box round the camera, an interior one first), or the nearest group the see-through walks visited last frame (its
+`s_camPosLocal` and `s_mapObjToWorld`, with its windows' states). The lines (`debug/SnapshotView`: `wmo`, `wmo group`,
+`wmo placement`, `wmo camera`, `wmo camera forward`, `wmo open windows`, `camera fov`) are what the harnesses read back:
+`GLASS_SNAPSHOT=<file>` draws the game's sequence on WARP from that camera, one scene per glass batch of its group (its
+material's texture and kind from the root's MOMT and GlassMaterials; stained glass tinted, frosted glass blurred as the
+snapshot's settings were), its windows open and shut as the snapshot says, the checks printed rather than counted and the
+views dumped (`GLASS_DUMP`, `snap_<material>_`); `SEETHROUGH_SNAPSHOT=<file>` surveys its building with the probe at its
+camera, each window facing it from the snapshot's side and what its rays meet. Two files placing the camera as the
+frosted house's inside scene and the chapel's street scene do give those scenes' pixels again (1,580 open, 1,040 shut;
+641 and 1,677), and the probe's verdicts. Only a snapshot from the game can confirm the camera's and the building's
+spaces line up there (the file names how it found the building).

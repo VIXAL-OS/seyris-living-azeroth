@@ -105,7 +105,19 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   inside its outer ones): the shell met from behind within it is passed, so the nave's windows no longer come and go as
   you walk about it ("it does flicker between fake rooms and outside"); and the tint goes by the depth the redraw's opaque
   draw writes, needing neither the client's index buffer nor a stencil, which the game's depth surface lacked (22 October
-  2026).
+  2026). Frosted glass (22 October 2026): the room or the street behind it softly blurred (`SeeThroughFrostBlur`: the
+  frame copied at a quarter of its size once a frame and blurred in a pass of its own, laid behind the open windows'
+  frosted glass by the depth; frosted windows stay shut where it can't run), and 14 more WMOs: the dwarven houses
+  (Kharanos, Thelsamar), the Taunka's longhouse, the orcs' huts, great halls, two-storey and zeppelin houses, and the
+  vrykul longhouses, 47 in all.
+- **Darker nights** (22 October 2026): the night's ambient light, sky, clouds and water darker so lamps and lit windows
+  matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
+  day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital
+  cities and where it's freezing, under a third indoors.
+- **Snapshot key** (22 October 2026): one key (`SnapshotKey`, F11) or a panel button writes where you are, the camera
+  (in the nearest building's own space too), the time, the weather, the settings that matter, the frame rate and the
+  panels' status to `Logs\la-snapshots\` in the game folder, for bug reports; the glass and see-through test harnesses
+  draw a snapshot's view again (`GLASS_SNAPSHOT`, `SEETHROUGH_SNAPSHOT`).
 - **Glass** (20 October 2026): the human window textures' fourth quadrant, a smithy's forge mouth (four glowing fire
   slots), is no longer glass: no glass look, no room behind it, no lights out (`GlassMaterials.cdbc` `NotGlassU`,
   `NotGlassV`; `tools/gen_glass.py` `NOT_GLASS`). Goldshire's, Darkshire's, Lakeshire's, Westfall's and New Hearthglen's

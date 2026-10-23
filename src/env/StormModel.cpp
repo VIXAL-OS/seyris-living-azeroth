@@ -298,7 +298,28 @@ namespace wxl_livingazeroth::storm
 
     bool Identity(const Shade& s)
     {
-        return s.dark <= 0.0f && s.desat <= 0.0f && s.sky <= 0.0f && s.scene <= 0.0f && !(s.fog > 0.0f) && !(s.snow > 0.0f);
+        return s.dark <= 0.0f && s.desat <= 0.0f && s.sky <= 0.0f && s.scene <= 0.0f && !(s.fog > 0.0f) && !(s.snow > 0.0f) && !(s.night > 0.0f);
+    }
+
+    float NightWeight(int band)
+    {
+        // 0 direct light (the moon's), 1 ambient, 2..7 the sky top to horizon, 8 the fog, 9..10 the sun, 11..13 the
+        // clouds, 14..17 the water
+        static constexpr float kNight[kBandCount] = { 0.7f, 1.0f, 0.85f, 0.85f, 0.8f, 0.75f, 0.7f, 0.6f, 0.5f, 0.0f, 0.0f,
+                                                      0.7f, 0.7f, 0.7f, 0.6f, 0.6f, 0.6f, 0.6f };
+        return band >= 0 && band < kBandCount ? kNight[band] : 0.0f;
+    }
+
+    NightShare NightShade(float setting, float day, bool city, float temperature, float outdoors)
+    {
+        NightShare n;
+        n.night = std::isfinite(day) ? 1.0f - Clamp01(day) : 0.0f;
+        n.city = city ? kNightCityShare : 1.0f;
+        const float cold = std::isfinite(temperature) ? Clamp01((kNightWarm - temperature) / (kNightWarm - kNightCold)) : 0.0f;
+        n.snow = 1.0f - (1.0f - kNightSnowShare) * cold;
+        n.indoor = kNightIndoorShare + (1.0f - kNightIndoorShare) * (std::isfinite(outdoors) ? Clamp01(outdoors) : 1.0f);
+        n.total = (std::isfinite(setting) ? Clamp01(setting) : 0.0f) * n.night * n.city * n.snow * n.indoor;
+        return n;
     }
 
     namespace
@@ -385,6 +406,11 @@ namespace wxl_livingazeroth::storm
             const float grey = Clamp01(s.desat * w.dark);
             const float luma = Luma(c);
             for (int k = 0; k < 3; ++k) base[k] = (c[k] + (luma - c[k]) * grey) * keep;
+        }
+        if (s.night > 0.0f)
+        {
+            const float keep = 1.0f - Clamp01(s.night * NightWeight(band));
+            for (float& v : base) v *= keep;
         }
         if (s.snow > 0.0f) SnowLift(c, SnowWeight(band), s, base);
         const float add = 255.0f * kFlashGain * ((s.sky > 0.0f ? s.sky : 0.0f) * w.sky + (s.scene > 0.0f ? s.scene : 0.0f) * w.scene);

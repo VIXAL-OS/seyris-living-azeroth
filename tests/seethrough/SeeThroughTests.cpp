@@ -36,6 +36,7 @@
 #include "env/GlassModel.hpp"
 #include "env/GlassRooms.hpp"
 #include "env/SeeThroughModel.hpp"
+#include "debug/SnapshotView.hpp"
 #include "debug/UiText.hpp"
 #include "features/Glass.hpp"
 #include "wxl_seyris/CdbcApi.hpp"
@@ -50,6 +51,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -375,6 +377,12 @@ namespace
         return api;
     }
 
+    // The survey's probe: an eye in the WMO's space (SEETHROUGH_PROBE "x y z", or a snapshot's camera: SEETHROUGH_SNAPSHOT,
+    // 2026-10-22): what each window facing it sees from there, from inside (its room's own) and from outside.
+    bool g_haveProbe = false;
+    float g_probe[3] = {};
+    int g_probeSides = 3;   // 1 from outside, 2 from inside (a snapshot's: its walk's side), 3 both (SEETHROUGH_PROBE)
+
     // --- a survey of buildings (SEETHROUGH_SURVEY: a file of WMO paths, one a line; 2026-10-22, more buildings) ----------
     // Each WMO from the map scan's files with the loaded GlassWindows: its windows with rooms behind them; from outside the
     // street sweep, high and close views, and slow walks past each of its fronts (the held verdict's changes); from inside
@@ -575,6 +583,21 @@ namespace
                                   hopen, hviews, 100 * rays[0] / all, 100 * rays[1] / all, 100 * rays[2] / all);
                     row.lines.push_back(line);
                 }
+                // (the probe from outside: this window, facing it within kRange, as the walk from outside decides it)
+                if (g_haveProbe && (g_probeSides & 1) && st::Facing(w[i], g_probe))
+                {
+                    const float d[3] = { g_probe[0] - w[i].center[0], g_probe[1] - w[i].center[1], g_probe[2] - w[i].center[2] };
+                    if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= st::kRange * st::kRange)
+                    {
+                        st::Sight s;
+                        st::LookIn(w[i], g_probe, around.data(), around.size(), sp, s);
+                        char line[240];
+                        std::snprintf(line, sizeof(line), "    probe (%.2f %.2f %.2f) from outside: group %3u window %4u (room %3d): %s; %d see a room from inside, "
+                                      "%d against or nothing, %d the outside", g_probe[0], g_probe[1], g_probe[2], g, w[i].ordinal, w[i].interior,
+                                      st::SightOpen(s, false) ? "open" : "shut", s.front, s.back, s.none);
+                        row.lines.push_back(line);
+                    }
+                }
             }
             // walks past each front of the group (its windows with rooms facing within 30 degrees of each other): 8 and 14 yd
             // out, 3, 7 and 12 yd up, to 60 degrees aside, 7 yd a second, a frame each 1/60 s
@@ -700,10 +723,10 @@ namespace
                 }
             }
             // (SEETHROUGH_PROBE "x y z": what each of the room's windows facing that eye, within kInsideRange, sees from there)
-            if (const char* probe = std::getenv("SEETHROUGH_PROBE"))
+            if (g_haveProbe && (g_probeSides & 2))
             {
-                float eye[3] = {};
-                if (std::sscanf(probe, "%f %f %f", &eye[0], &eye[1], &eye[2]) == 3)
+                const float* eye = g_probe;
+                if (eye)
                     for (uint32_t i = 0; i < n; ++i)
                     {
                         const float d[3] = { eye[0] - w[i].center[0], eye[1] - w[i].center[1], eye[2] - w[i].center[2] };
@@ -940,6 +963,47 @@ int main(int argc, char** argv)
         api.UiTextWrapped = nullptr;
         wxl_livingazeroth::ui::Text(&api, "a line");
         CHECK(wrapped == 1 && plain == 2 && !wxl_livingazeroth::ui::HasTextWrapped(nullptr));
+    });
+
+    // --- a snapshot's view (2026-10-22, debug/SnapshotView) ------------------------------------------------------------
+    Test("snapshot view: its lines read back as written (the first building's; \"wmo camera\" not \"wmo camera forward\"); the "
+         "placement's yaw, tilt and origin; a point and a direction into the WMO's space and back; none, a bad file", [] {
+        namespace sn = wxl_livingazeroth::snapshot;
+        // a placement turned 33 degrees at (-5600, -480, 396), as the frosted scenes'
+        const float a = 33.0f * 3.14159265f / 180.0f;
+        const float model[16] = { std::cos(a), std::sin(a), 0, 0, -std::sin(a), std::cos(a), 0, 0, 0, 0, 1, 0, -5600.0f, -480.0f, 396.0f, 1 };
+        float inv[16], back[16];
+        CHECK(sn::Invert(model, inv) && sn::Invert(inv, back));
+        for (int i = 0; i < 16; ++i) CHECK(std::fabs(back[i] - model[i]) < 1e-3f);
+        sn::WmoView v;
+        v.wmo = "World\\wmo\\KhazModan\\Buildings\\Dwarven_2story_Hovel\\Snow_2story\\Snow_2story.wmo";
+        v.group = 1;
+        v.inside = true;
+        sn::Placement(model, v.yaw, v.tilt, v.origin);
+        CHECK(std::fabs(v.yaw - 33.0f) < 1e-3f && v.tilt < 0.01f && v.origin[0] == -5600.0f && v.origin[2] == 396.0f);
+        const float world[3] = { -5590.0f, -470.0f, 400.0f }, worldDir[3] = { 0.0f, 1.0f, 0.0f };
+        float local[3], dir[3], again[3];
+        sn::Apply(inv, world, 1.0f, local);
+        sn::Apply(model, local, 1.0f, again);
+        for (int k = 0; k < 3; ++k) CHECK(std::fabs(again[k] - world[k]) < 1e-3f);
+        sn::Apply(inv, worldDir, 0.0f, dir);   // world +y, 33 degrees on from the WMO's x: (sin 33, cos 33, 0) in its space
+        CHECK(std::fabs(dir[0] - std::sin(a)) < 1e-5f && std::fabs(dir[1] - std::cos(a)) < 1e-5f && std::fabs(dir[2]) < 1e-6f);
+        for (int k = 0; k < 3; ++k) { v.cam[k] = local[k]; v.forward[k] = dir[k]; }
+        v.up[2] = 1.0f;
+        v.open = { 5 };
+        v.shut = { 4, 6 };
+        const std::string text = "Living Azeroth snapshot\n\nCamera\n" + sn::FovLine(0.9f) + "\nThe nearest WMO\n" + sn::FormatView(v) +
+                                 "wmo how: a test\nwmo: World\\wmo\\another.wmo\nwmo camera: 1 2 3\nwmo camera forward: 1 0 0\n";
+        sn::WmoView r;
+        CHECK(sn::ParseView(text, r));
+        CHECK(r.wmo == v.wmo && r.group == 1 && r.inside && std::fabs(r.yaw - 33.0f) < 1e-3f && r.origin[1] == -480.0f && std::fabs(r.fov - 0.9f) < 1e-3f);
+        for (int k = 0; k < 3; ++k) CHECK(std::fabs(r.cam[k] - v.cam[k]) < 2e-3f && std::fabs(r.forward[k] - v.forward[k]) < 2e-4f);
+        CHECK(r.open == std::vector<uint32_t>{ 5 } && (r.shut == std::vector<uint32_t>{ 4, 6 }) && r.up[2] == 1.0f);
+        CHECK(!sn::ParseView("wmo: none (the camera is in no building)\ncamera fov: 50 degrees\n", r) && r.wmo.empty());
+        CHECK(!sn::ParseView("wmo: a.wmo\nwmo camera: 1 2\n", r));
+        CHECK(sn::Ordinals({}) == "none" && sn::Ordinals({ 3, 9 }) == "3, 9");
+        const float flat[16] = {};
+        CHECK(!sn::Invert(flat, inv));
     });
 
     // --- the room behind a window ----------------------------------------------------------------------------------
@@ -1838,7 +1902,8 @@ int main(int argc, char** argv)
             // the see-through buildings (SeeThroughBuildings.cdbc, 2026-10-22; before, the inn alone, hard-coded): the inn by
             // any case, from outside and inside; not its closed variant, Stormwind or nothing
             std::printf("  SeeThroughBuildings.cdbc: %zu buildings\n", gl::SeeThroughBuildings());
-            CHECK(gl::SeeThroughBuildings() == 33);   // (2026-10-22, stained glass: 24 before)
+            CHECK(gl::SeeThroughBuildings() == 47);   // (2026-10-22: 24, with stained glass 33, with frosted glass 47)
+            CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo")) == st::kSeeFromInside);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\chapel\\redridgechapel.wmo")) == 3);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\northrend\\buildings\\human\\nd_human_townhall\\nd_human_townhall.wmo")) == st::kSeeFromOutside);
             CHECK(gl::SeeThroughFlags(gl::PathHash(kInn)) == (st::kSeeFromOutside | st::kSeeFromInside));
@@ -2402,6 +2467,8 @@ int main(int argc, char** argv)
                 CHECK(beyond > 0 && inside == beyond);
             });
         else std::printf("SKIP the scan's inn (no wmo-windows folder given)\n");
+        if (const char* probe = std::getenv("SEETHROUGH_PROBE"))
+            g_haveProbe = std::sscanf(probe, "%f %f %f", &g_probe[0], &g_probe[1], &g_probe[2]) == 3;
         // the survey of buildings (SEETHROUGH_SURVEY: a file of WMO paths, one a line; # a comment): printed, not checked
         if (const char* list = std::getenv("SEETHROUGH_SURVEY"); list && !scan.empty())
         {
@@ -2416,6 +2483,27 @@ int main(int argc, char** argv)
                 if (!SurveyBuilding(scan, line, gl::Windows().All(), row)) { std::printf("  %s: not in the scan\n", line.c_str()); continue; }
                 PrintSurveyRow(row);
                 std::fflush(stdout);
+            }
+        }
+        // a snapshot's view (SEETHROUGH_SNAPSHOT: a file the snapshot key wrote, debug/Snapshot): its building surveyed with
+        // the probe at its camera, what each window facing it sees from there; printed, not checked
+        if (const char* file = std::getenv("SEETHROUGH_SNAPSHOT"); file && !scan.empty())
+        {
+            std::ifstream f(file, std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            wxl_livingazeroth::snapshot::WmoView v;
+            if (!wxl_livingazeroth::snapshot::ParseView(text, v)) std::printf("the snapshot %s: no WMO view in it\n", file);
+            else
+            {
+                for (int k = 0; k < 3; ++k) g_probe[k] = v.cam[k];
+                g_haveProbe = true;
+                g_probeSides = v.inside ? 2 : 1;
+                std::printf("the snapshot %s: %s group %d (from %s), the camera at %.2f %.2f %.2f looking %.3f %.3f %.3f; open %s, shut %s\n", file,
+                            v.wmo.c_str(), v.group, v.inside ? "inside" : "outside", v.cam[0], v.cam[1], v.cam[2], v.forward[0], v.forward[1], v.forward[2],
+                            wxl_livingazeroth::snapshot::Ordinals(v.open).c_str(), wxl_livingazeroth::snapshot::Ordinals(v.shut).c_str());
+                SurveyRow row;
+                if (!SurveyBuilding(scan, v.wmo, gl::Windows().All(), row)) std::printf("  %s: not in the scan\n", v.wmo.c_str());
+                else PrintSurveyRow(row);
             }
         }
     }

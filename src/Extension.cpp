@@ -26,6 +26,7 @@
 #include "debug/FogProbe.hpp"
 #include "debug/Overview.hpp"
 #include "debug/Pages.hpp"
+#include "debug/Snapshot.hpp"
 #include "env/ClientWeather.hpp"
 #include "env/Fog.hpp"
 #include "env/FogSettings.hpp"
@@ -195,6 +196,8 @@ namespace
             prof::Scope scope(prof::kOursCoverFill);
             wxl_livingazeroth::cover::Update(dt, snap);
         }
+        // The snapshot key (after seethrough::Update: last frame's walks and counts are whole).
+        wxl_livingazeroth::snapshot::Update(dt);
     }
 
     // Main thread, before the client tears the world down for a loading screen: no background work
@@ -284,6 +287,9 @@ int __cdecl WXL_Load(const WXL_Api* api)
 
     // Surface cover spike: draws at the end of the world scene (before anti-aliasing's pass).
     wxl_livingazeroth::cover::Install(api);
+
+    // The snapshot key (debug/Snapshot): the window's messages.
+    wxl_livingazeroth::snapshot::Install(api);
 
     // Read-only addon functions (docs/lua-api.md): registered with every script context the client builds.
     wxl_livingazeroth::envlua::Register();

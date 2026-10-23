@@ -37,6 +37,7 @@ namespace wxl_livingazeroth::world
         constexpr uintptr_t kAreaMinId   = 0x00AD3144;
         constexpr uintptr_t kAreaIdTable = 0x00AD3154;
         constexpr size_t    kAreaParentField = 0x08;
+        constexpr size_t    kAreaFlagsField = 0x10;
 
         // GetZoneText / GetSubZoneText return these char* globals (disassembly of 0x515570/0x5155D0).
         constexpr uintptr_t kZoneText    = 0x00BD0788;
@@ -101,6 +102,8 @@ namespace wxl_livingazeroth::world
                 uint32_t area = 0;
                 if (reinterpret_cast<QueryAreaIdFn>(wo::kMapAreaIdQuery)(location, &area) && area)
                     s.areaCount = AreaChain(area, s.areaChain, kMaxAreaChain);
+                for (int i = 0; i < s.areaCount; ++i)
+                    if (const uint8_t* r = AreaRecord(s.areaChain[i])) s.areaFlags |= *reinterpret_cast<const uint32_t*>(r + kAreaFlagsField);
                 s.outdoors = reinterpret_cast<OutdoorsFn>(wo::kOutdoorsQuery)(location) != 0;
             }
 

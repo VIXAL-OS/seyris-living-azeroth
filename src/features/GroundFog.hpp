@@ -13,6 +13,9 @@
 
 #include "wxl/PluginApi.h"
 
+#include <string>
+#include <vector>
+
 namespace wxl_livingazeroth::groundfog
 {
     struct Settings
@@ -74,6 +77,8 @@ namespace wxl_livingazeroth::groundfog
     /// the collapsed sections (look, quality, units, lights, colour test), and the diagnostics.
     void DrawStatusLine();
     void DrawMainControls();
+    /// The status line and, with the cloud deck on, its lines, as the panel draws them (debug/Snapshot writes them).
+    void StatusLines(std::vector<std::string>& out);
     void DrawPanelSection();
     void DrawDiagnostics();
 
