@@ -814,6 +814,33 @@ CLAMP; the state block fixed it.) Contact sheets: by day and at night, the debug
 **Only the game can confirm**: the blur's look and cost at the game's resolution, from outside and inside; the chosen
 buildings' gates on their real placements (Kharanos, Thelsamar, Kargath, Stonard, Camp Tunka'lo, Durotar).
 
+**In game, 2026-10-23, Kharanos** (the dwarven house, `snow_2story`, from inside, day, light snow: "it can't see outside
+even though it should be able to"; the windows plain warm frosted glass). Its snapshot (F11): group 1 walked from inside,
+windows 4 and 5 open as ways out (nine rays each see the street), the blur made, "1 frosted batches redrawn, 1 over the
+blurred copy", but "Glass batches: 2 in opened groups, 0 kept opaque, 1 deferred ... 1 drawn as they were", and "open windows
+from ordinal 4, bits 0x0001". The room's glass is two batches of one material: MOBA 8 (21 triangles, both windows' panes)
+and MOBA 21 (2 triangles at window 4's edge). The harness drew the snapshot's view with every window open and the street
+through all 850 of the open glass pixels, so the game's draw differed from the harness's. MOBA 8 is the group's last
+**transition batch** (MOGP transBatchCount 9: batches 0 .. 8), and the client's interior batch loop (Wmo.IntRender,
+0x7AC9F0, read with dumpbin from Wow.exe) draws a transition batch twice over the same range: lit as the exterior batches
+with Gx blending mode 9 (SrcAlphaOpaque, x the vertex colour's alpha), then as the interior ones with mode 7
+(InvSrcAlphaAdd, + x 1 - that alpha); other batches once, with their material's mode. The deferral took only an opaque or
+alpha-keyed draw, so the first draw (mode 9) passed and the client drew both windows' glass as it always does; the one batch
+deferred was MOBA 21, whose bits the panel showed (it showed the last batch's). Now a pending batch's mode-9 draw is drawn
+with the colour and depth writes off and the next draw of the same range, mode 7, is the one deferred (`Deferral::OnDraw`'s
+`Silent`): the glass is redrawn from the interior-lit draw's state, the per-pixel redraw setting its own blending as for any
+batch. Its frame and shut windows take the interior lighting alone, not the client's mix by vertex alpha: the house's glass
+vertices' alpha is 0 for most and at most 93 of 255, so the mix was nearly all interior already. The panel now lists each
+redrawn batch (its range, its open windows' bits, whether it's a transition batch, frosted over the copy or not) and each
+draw of a pending batch (its range, its Gx blending mode, deferred, silenced, or drawn as the client drew it and why).
+glass_tests' sequence harness draws a transition batch's pair as the client does: the dwarven house from inside (MOBA 8)
+passes (a) to (f) as before, and (g): the Deferral silences the first draw and defers the second; through the open glass
+the street shows at 421 of 421 pixels, and at 0 when the pair is drawn as the client drew it. The snapshot's view gives the
+same: 850 of 850, 0 before. From outside (the user's second snapshot: group 0, an exterior group drawn once, deferred, bits
+0x0003, over the copy) nothing was missing: the room's own panes stand 0.87 yd behind the outer ones and face into the room
+(their winding, against the outer panes' facing out), so from outside the client culls them; the harness draws the room
+through 1,823 of 1,823 of the open glass pixels from that camera.
+
 ## 12. A snapshot's view (2026-10-22)
 
 The snapshot key (`SnapshotKey`, debug/Snapshot; Lumenveil's queue #10) writes the camera in the nearest WMO's own space:

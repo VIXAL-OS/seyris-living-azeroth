@@ -4163,25 +4163,29 @@ namespace
         std::vector<float> pos, nrm, uv;
         std::vector<uint16_t> idx;
         uint32_t start = 0, count = 0, minIndex = 0, maxIndex = 0;
+        int batch = -1;             // its MOBA index
+        bool trans = false;         // a transition batch (its index under MOGP's transBatchCount): the client draws it twice
     };
 
     // A WMO's group `group` from the scan (its file <wmo>_NNN.wmo, its backslashes as '#') and its first batch of material `material`
     // (the inn's 4 and 5: the shell's mm_elwynn_wnd_ext__01; 5 and 21: the kitchen's own glass, mm_elwynn_wnd_int__01, seen
-    // from inside).
-    bool ReadGroup(const std::filesystem::path& scan, const std::string& wmo, InnGroup& out, int group, uint8_t material)
+    // from inside), or its MOBA batch `batch` (>= 0); whether it's a transition batch (2026-10-23).
+    bool ReadGroup(const std::filesystem::path& scan, const std::string& wmo, InnGroup& out, int group, uint8_t material, int batch = -1)
     {
         std::string flat = wmo.substr(0, wmo.size() - 4);
         std::replace(flat.begin(), flat.end(), '\\', '#');
         char suffix[16];
         std::snprintf(suffix, sizeof(suffix), "_%03d.wmo", group);
         const std::vector<uint8_t> g = ReadBytes(scan / (flat + suffix));
-        bool batch = false;
+        bool found = false;
         for (size_t at = 0; at + 8 <= g.size();)
         {
             uint32_t size;
             std::memcpy(&size, &g[at + 4], 4);
             const std::string tag = { static_cast<char>(g[at + 3]), static_cast<char>(g[at + 2]), static_cast<char>(g[at + 1]), static_cast<char>(g[at]) };
             if (at + 8 + size > g.size()) break;
+            uint16_t transCount = 0;
+            if (tag == "MOGP" && size >= 0x2A) std::memcpy(&transCount, &g[at + 8 + 0x28], 2);   // MOGP's transBatchCount
             if (tag == "MOGP")
                 for (size_t a = at + 8 + 0x44; a + 8 <= at + 8 + size;)
                 {
@@ -4194,20 +4198,22 @@ namespace
                     else if (t == "MONR") { out.nrm.resize(s / 4); std::memcpy(out.nrm.data(), p, out.nrm.size() * 4); }
                     else if (t == "MOTV" && out.uv.empty()) { out.uv.resize(s / 4); std::memcpy(out.uv.data(), p, out.uv.size() * 4); }
                     else if (t == "MOBA")
-                        for (size_t b = 0; !batch && b + 24 <= s; b += 24)
-                            if (p[b + 23] == material)
+                        for (size_t b = 0; !found && b + 24 <= s; b += 24)
+                            if (batch >= 0 ? static_cast<int>(b / 24) == batch : p[b + 23] == material)
                             {
                                 uint16_t c, lo, hi;
                                 std::memcpy(&out.start, p + b + 12, 4);
                                 std::memcpy(&c, p + b + 16, 2); std::memcpy(&lo, p + b + 18, 2); std::memcpy(&hi, p + b + 20, 2);
                                 out.count = c; out.minIndex = lo; out.maxIndex = hi;
-                                batch = true;
+                                out.batch = static_cast<int>(b / 24);
+                                out.trans = b / 24 < transCount;
+                                found = true;
                             }
                     a += 8 + s;
                 }
             at += 8 + size;
         }
-        return batch && !out.idx.empty() && out.pos.size() == out.nrm.size() && out.uv.size() / 2 == out.pos.size() / 3 &&
+        return found && !out.idx.empty() && out.pos.size() == out.nrm.size() && out.uv.size() / 2 == out.pos.size() / 3 &&
                out.start + out.count <= out.idx.size();
     }
 
@@ -4236,6 +4242,7 @@ namespace
         bool frost = false;         // frosted glass: the frame's blurred copy behind it (FrostCapture; check (f), its sheets)
         float softness = 0.5f;      // the blur's (SeeThroughFrostBlur)
         bool report = false;        // a snapshot's (SnapshotScenes): the checks printed, not counted; split only with both halves
+        int batch = -1;             // its MOBA index (a snapshot's: every glass batch of the group), -1: the first of `material`
     };
 
     // `inside` (SeeThroughFromInside, 2026-10-21: "windows should be see-through from the inside as well"): the same sequence
@@ -4356,13 +4363,14 @@ namespace
         Table mt0, wt;
         if (!ReadTable(data / "GlassMaterials.cdbc", mt0) || !ReadTable(data / "GlassWindows.cdbc", wt)) { std::printf("skip  the snapshot's view: the tables\n"); return scenes; }
         const std::vector<std::string> materials = RootTextures(scan, wmo);
-        // the group's batches' materials, in its MOBA's order, each once
+        // the group's batches (MOBA index, material), every glass one (2026-10-23: a group may have two of one material, Kharanos's
+        // house's room a transition batch and an interior one)
         std::string flat = wmo.substr(0, wmo.size() - 4);
         std::replace(flat.begin(), flat.end(), '\\', '#');
         char suffix[16];
         std::snprintf(suffix, sizeof(suffix), "_%03d.wmo", v.group);
         const std::vector<uint8_t> g = ReadBytes(std::filesystem::path(scan) / (flat + suffix));
-        std::vector<uint8_t> used;
+        std::vector<std::pair<int, uint8_t>> used;
         for (size_t at = 0; at + 8 <= g.size();)
         {
             uint32_t size;
@@ -4374,8 +4382,7 @@ namespace
                     uint32_t s;
                     std::memcpy(&s, &g[a + 4], 4);
                     if (g[a + 3] == 'M' && g[a + 2] == 'O' && g[a + 1] == 'B' && g[a] == 'A')
-                        for (size_t b = 0; b + 24 <= s; b += 24)
-                            if (std::find(used.begin(), used.end(), g[a + 8 + b + 23]) == used.end()) used.push_back(g[a + 8 + b + 23]);
+                        for (size_t b = 0; b + 24 <= s; b += 24) used.emplace_back(static_cast<int>(b / 24), g[a + 8 + b + 23]);
                     a += 8 + s;
                 }
             at += 8 + size;
@@ -4384,7 +4391,7 @@ namespace
         size_t windows = 0;
         for (const auto& r : wt.rows)
             if (gl::PathHash(&wt.strings[r[1]]) == path && r[2] == static_cast<uint32_t>(v.group)) ++windows;
-        for (const uint8_t material : used)
+        for (const auto& [batchIndex, material] : used)
         {
             const std::string texture = material < materials.size() ? materials[material] : std::string();
             gl::Material m;
@@ -4394,8 +4401,9 @@ namespace
             if (!std::filesystem::exists(std::filesystem::path(textures) / blp))
             { std::printf("skip  the snapshot's glass batch of material %u: %s not in GLASS_TEXTURES\n", material, texture.c_str()); continue; }
             SeqScene s{};
-            s.label = hold("the snapshot's view, material " + std::to_string(material) + " (" + texture + ")");
-            s.prefix = hold("snap_" + std::to_string(material) + "_");
+            s.label = hold("the snapshot's view, batch " + std::to_string(batchIndex) + ", material " + std::to_string(material) + " (" + texture + ")");
+            s.prefix = hold("snap_" + std::to_string(batchIndex) + "_");
+            s.batch = batchIndex;
             s.behind = v.inside ? "the street" : "the room";
             s.wmo = hold(wmo);
             s.group = v.group;
@@ -4451,7 +4459,7 @@ namespace
         { Check(false, std::string(label) + ": the patched variant: " + why.substr(0, 200)); return; }
         const int vP = std::stoi(mp[1].str()), vN = std::stoi(mn[1].str()), vT = std::stoi(mt[1].str());
         InnGroup grp;
-        if (!ReadGroup(scan, sc.wmo, grp, sc.group, sc.material)) { Check(false, std::string(label) + ": its group from the scan"); return; }
+        if (!ReadGroup(scan, sc.wmo, grp, sc.group, sc.material, sc.batch)) { Check(false, std::string(label) + ": its group from the scan"); return; }
         Table mt0, wt, lt;
         if (!ReadTable(data / "GlassMaterials.cdbc", mt0) || !ReadTable(data / "GlassWindows.cdbc", wt) || !ReadTable(data / "GlassLead.cdbc", lt))
         { Check(false, std::string(label) + ": the tables read"); return; }
@@ -4498,8 +4506,9 @@ namespace
         uint32_t bits = 0;
         st::OpenBits(bw, see.data(), states.data(), states.size(), first, bits);
         const bool canSplit = !open.empty() && !rest.empty();
-        if (!bw.valid || (!sc.report && (!canSplit || innWindows.size() != sc.windows || bw.strays != 0)) || (open.empty() && rest.empty()) ||
-            bw.windows.size() != innWindows.size() || (sc.lookAt >= 0 && !lookAt))
+        // (a snapshot's batch may hold some of the group's windows: Kharanos's house's MOBA 21, window 4's edge)
+        if (!bw.valid || (!sc.report && (!canSplit || innWindows.size() != sc.windows || bw.strays != 0 || bw.windows.size() != innWindows.size())) ||
+            (open.empty() && rest.empty()) || bw.windows.empty() || (sc.lookAt >= 0 && !lookAt))
         { Check(false, std::string(label) + ": the batch's windows (the model's)"); return; }
         // the lead mask (a texture without GlassLead rows: none, the light's mask, as the runtime does)
         std::string flat = texture;
@@ -4718,6 +4727,15 @@ namespace
             d->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); d->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); d->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
             d->SetRenderState(D3DRS_FOGENABLE, FALSE); d->SetRenderState(D3DRS_COLORWRITEENABLE, 0);
             d->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+            if (grp.trans)
+            {
+                // a transition batch (2026-10-23): the client's exterior-lit draw (SrcAlphaOpaque) silenced, then its interior-lit
+                // one (InvSrcAlphaAdd) deferred, its state the one captured: the redraw must set its own blending
+                d->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+                d->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA); d->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+                d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, args.minIndex, args.vertices, args.startIndex, args.primitives);
+                d->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_INVSRCALPHA); d->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+            }
             d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, args.minIndex, args.vertices, args.startIndex, args.primitives);
             // the capture
             st::Deferral::Entry e;
@@ -4917,6 +4935,65 @@ namespace
                           "(%d pairs); %d of %d lead, frame and shut-window pixels moved; drawn whole %s, split %s", label, pairs ? stepSharp / (3 * pairs) : 0.0,
                           pairs ? stepSoft / (3 * pairs) : 0.0, pairs, moved, kept, frostWhole ? "over it" : "NOT over it", frostSplit ? "over it" : "NOT over it");
             Check(fok && pairs > 50 && stepSoft * 2 <= stepSharp && moved == 0 && kept > 50 && frostWhole && frostSplit, line);
+        }
+        // (g) a transition batch (2026-10-23, Kharanos's house from inside: "it can't see outside even though it should be able
+        // to"): the runtime's Deferral silences its exterior-lit draw (Gx mode 9) and defers its interior-lit one (7); before,
+        // the pair passed and the client drew the glass over what's behind it: through the open windows' glass, over a blue
+        // and then a red backdrop, no pixel changed
+        if (grp.trans)
+        {
+            st::Deferral dd;
+            dd.BeginBatch(true, grp.start, grp.count, first, bits, 1);
+            const st::Deferral::Draw v1 = dd.OnDraw(true, st::client::kPrimTriangles, grp.start, grp.count, st::client::kBlendTransExterior);
+            const st::Deferral::Draw v2 = dd.OnDraw(true, st::client::kPrimTriangles, grp.start, grp.count, st::client::kBlendTransInterior);
+            // the client's pair over the backdrop, nothing redrawn (the rule before)
+            auto clientPair = [&](D3DCOLOR backdrop, std::vector<uint32_t>& img) -> bool {
+                d->SetRenderTarget(0, target);
+                d->SetDepthStencilSurface(depth);
+                d->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, backdrop, 1.0f, 0);
+                if (FAILED(d->BeginScene())) return false;
+                d->SetVertexShader(nullptr); d->SetPixelShader(ps); d->SetVertexDeclaration(decl);
+                d->SetStreamSource(0, vb, 0, sizeof(Vtx)); d->SetIndices(ib);
+                d->SetTexture(0, glassTex);
+                rooms.Bind(d);
+                const BOOL off = FALSE, on = TRUE;
+                for (UINT b = 0; b < 16; ++b) d->SetPixelShaderConstantB(b, &off, 1);
+                d->SetPixelShaderConstantB(gl::kSwitch, &on, 1);
+                d->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF); d->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+                d->SetRenderState(D3DRS_ZWRITEENABLE, TRUE); d->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+                d->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA); d->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+                d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, args.minIndex, args.vertices, args.startIndex, args.primitives);
+                d->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+                d->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_INVSRCALPHA); d->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+                d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, args.minIndex, args.vertices, args.startIndex, args.primitives);
+                d->EndScene();
+                D3DLOCKED_RECT lr{};
+                if (FAILED(d->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&lr, nullptr, D3DLOCK_READONLY))) return false;
+                img.resize(static_cast<size_t>(kS) * kS);
+                for (int row = 0; row < kS; ++row) std::memcpy(&img[static_cast<size_t>(row) * kS], static_cast<const uint8_t*>(lr.pBits) + row * lr.Pitch, kS * 4);
+                readback->UnlockRect();
+                return true;
+            };
+            std::vector<uint32_t> blueBefore, redBefore;
+            const bool bok = clientPair(D3DCOLOR_ARGB(255, 0, 0, 255), blueBefore) && clientPair(D3DCOLOR_ARGB(255, 255, 0, 0), redBefore);
+            int before = 0, now = 0, glassPx = 0;
+            for (size_t p = 0; bok && ok && p < a.size(); ++p)
+            {
+                const int k = kind(a[p]), green = (a[p] >> 8) & 0xFF;
+                if (k != 1 || green >= 100) continue;
+                ++glassPx;
+                auto shows = [](uint32_t blue, uint32_t red) {
+                    return static_cast<int>((red >> 16) & 0xFF) - static_cast<int>((blue >> 16) & 0xFF) > 40 &&
+                           static_cast<int>(blue & 0xFF) - static_cast<int>(red & 0xFF) > 40;
+                };
+                before += shows(blueBefore[p], redBefore[p]) ? 1 : 0;
+                now += shows(plain[p], plainRed[p]) ? 1 : 0;
+            }
+            std::snprintf(line, sizeof(line), "%s: (g) a transition batch (MOBA %d, the client's two draws): the Deferral %s its exterior-lit draw and %s its "
+                          "interior-lit one; what's behind shows through %d of %d open windows' glass pixels now, %d drawn as the client drew the pair "
+                          "(as before 2026-10-23)", label, grp.batch, v1 == st::Deferral::Draw::Silent ? "silences" : "does NOT silence",
+                          v2 == st::Deferral::Draw::Defer ? "defers" : "does NOT defer", now, glassPx, before);
+            Check(bok && v1 == st::Deferral::Draw::Silent && v2 == st::Deferral::Draw::Defer && glassPx > 50 && now * 10 >= glassPx * 8 && before == 0, line);
         }
         if (const char* dump = std::getenv("GLASS_DUMP"))
         {

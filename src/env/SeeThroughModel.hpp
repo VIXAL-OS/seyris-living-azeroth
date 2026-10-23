@@ -83,6 +83,13 @@ namespace wxl_livingazeroth::seethrough
         // Gx render states (the client's cache: render/GxState.hpp)
         constexpr int kRsBlendingMode = 6, kRsDepthWrite = 15, kRsColorWrite = 16;
         constexpr uint32_t kPrimTriangles = 3, kD3dTriangleList = 4;
+        // The interior batch loop (Wmo.IntRender 0x7AC9F0) draws a transition batch (its index under MOGP's
+        // transBatchCount, the group object's +0x5C) twice over the same range: lit as the exterior batches with the Gx
+        // blending mode 9 (GxBlend_SrcAlphaOpaque, x its vertex colour's alpha: 0x7ACCB0 .. 0x7ACD1D), then as the
+        // interior ones with mode 7 (GxBlend_InvSrcAlphaAdd, + x 1 - that alpha: 0x7ACDF7 .. 0x7ACE62); every other batch
+        // once, with its material's mode (0x7ACF6F .. 0x7ACFDE). Kharanos's dwarven house's room glass is one: "it can't
+        // see outside even though it should be able to" (the user, 2026-10-23).
+        constexpr uint32_t kBlendTransExterior = 9, kBlendTransInterior = 7;
         // MOGP flags the walk from outside never enters (exterior 0x8, 0x10000)
         constexpr uint32_t kSkippedGroups = 0x10008, kExteriorGroup = 0x8;
         // From inside (SeeThroughFromInside): the client's ways out of the camera's building. Its walk from inside
@@ -594,10 +601,17 @@ namespace wxl_livingazeroth::seethrough
             float first = 0.0f;        // its open windows (OpenBits: Captured takes BeginBatch's)
             uint32_t bits = 0;
             uint32_t material = 0;     // its glass material (features/Glass: index + 1; its lead mask), BeginBatch's
+            uint32_t batchStart = 0, batchCount = 0;   // its MOBA range, BeginBatch's (the panel's)
+            bool trans = false;        // a transition batch's interior-lit draw (its exterior-lit one silenced)
             std::vector<uint16_t> open, rest;   // its triangles split by window (SplitByWindow), BeginBatch's; empty: unsplit
             std::vector<float> ps, vs;          // the pixel and vertex shaders' float constants at its draw (SeeThroughDraw's)
         };
-        enum class Draw { Pass, Defer };
+        /// Pass: drawn as the client draws it. Defer: drawn with the writes off and its state captured for the redraw.
+        /// Silent: drawn with the writes off, not captured (a transition batch's exterior-lit draw: its interior-lit one,
+        /// next, is the one deferred; both would put the client's glass over what's behind it).
+        enum class Draw { Pass, Defer, Silent };
+        /// Why the pending batch's draw was drawn as it was (the panel's: a batch that didn't go see-through, and why).
+        enum class Why : uint8_t { kNone, kNotTriangles, kRange, kBlending, kFull, kTransSecond };
         /// A batch passed the loop's cull test: `deferrable` (Deferrable, a glass batch of an opened group) with its
         /// range (MOBA's first index and count), its open windows (OpenBits) and its glass material, else a batch to draw
         /// as it is. Any earlier pending batch is dropped.
@@ -605,10 +619,14 @@ namespace wxl_livingazeroth::seethrough
         /// The pending batch's triangles split by window (SplitByWindow), after BeginBatch; Captured hands them over.
         void SplitPending(std::vector<uint16_t> open, std::vector<uint16_t> rest) { m_open = std::move(open); m_rest = std::move(rest); }
         /// The batch loop ended (nothing pending past it).
-        void EndLoop() { m_pending = false; }
+        void EndLoop() { m_pending = false; m_transFirst = false; }
         /// A device draw: defer it when it's the pending batch's (indexed triangles, the same range), the client draws it
-        /// opaque or alpha-keyed (blending mode 0 or 1), and there's room; else draw it. Once per batch.
+        /// opaque or alpha-keyed (blending mode 0 or 1), and there's room; else draw it. Once per batch; a transition
+        /// batch's pair (mode 9, then 7: client::kBlendTransExterior, kBlendTransInterior) as one: the first Silent, the
+        /// second deferred (before 2026-10-23 the pair passed: the client's glass over the street from inside).
         Draw OnDraw(bool indexed, uint32_t primitive, uint32_t start, uint32_t count, uint32_t blendingMode);
+        /// The last OnDraw's reason when it passed the pending batch's draw (kNone: it didn't, or nothing was pending).
+        Why LastWhy() const { return m_why; }
         /// The deferred draw's state was captured (`entry`; its open windows the pending batch's).
         void Captured(const Entry& entry);
         void CaptureFailed() { ++m_failed; }
@@ -618,15 +636,19 @@ namespace wxl_livingazeroth::seethrough
         bool Pending() const { return m_pending; }
         unsigned Failed() const { return m_failed; }
         unsigned Passed() const { return m_passed; }   // pending batches drawn as they are (another blending, full, ...)
-        void ResetCounts() { m_failed = m_passed = 0; }
+        unsigned Silenced() const { return m_silenced; }   // transition batches' exterior-lit draws silenced
+        void ResetCounts() { m_failed = m_passed = m_silenced = 0; }
 
     private:
         bool m_pending = false;
         uint32_t m_start = 0, m_count = 0;
         float m_first = 0.0f;
         uint32_t m_bits = 0, m_material = 0;
+        bool m_transFirst = false;   // the pending batch's exterior-lit draw silenced: its interior-lit one is next
+        bool m_trans = false;        // the deferred draw was a transition batch's second (Captured's)
+        Why m_why = Why::kNone;
         std::vector<uint16_t> m_open, m_rest;
         std::vector<Entry> m_entries;
-        unsigned m_failed = 0, m_passed = 0;
+        unsigned m_failed = 0, m_passed = 0, m_silenced = 0;
     };
 }

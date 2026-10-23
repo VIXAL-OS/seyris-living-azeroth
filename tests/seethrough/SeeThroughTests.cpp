@@ -1816,6 +1816,49 @@ int main(int argc, char** argv)
         CHECK(st::OpenBit(3.0f, now, 1.0f - 1.0f / 1048576.0f) && st::OpenBit(14.0f, now, 1.0f - 1.0f / 1048576.0f) && !st::OpenBit(9.0f, now));
     });
 
+    Test("Deferral, a transition batch (2026-10-23, Kharanos's house from inside: \"it can't see outside even though it should be "
+         "able to\"): the client draws it twice, its exterior-lit draw (Gx mode 9) silenced and its interior-lit one (7) deferred, as "
+         "one batch; why a pending batch's draw was drawn as it was", [] {
+        st::Deferral d;
+        using D = st::Deferral::Draw;
+        using W = st::Deferral::Why;
+        CHECK(st::client::kBlendTransExterior == 9 && st::client::kBlendTransInterior == 7);
+        // the house's room glass: MOBA 8 (a transition batch, both windows), then MOBA 21 (an interior one, window 4's edge)
+        d.BeginBatch(true, 2910, 63, 4.0f, 0x3u, 11);
+        CHECK(d.OnDraw(true, 3, 2910, 63, 9) == D::Silent && d.Pending() && d.Silenced() == 1 && d.LastWhy() == W::kNone);
+        CHECK(d.OnDraw(true, 3, 2910, 63, 7) == D::Defer && !d.Pending() && d.Passed() == 0);
+        st::Deferral::Entry e;
+        d.Captured(e);
+        d.BeginBatch(true, 10590, 6, 4.0f, 0x1u, 11);
+        CHECK(d.OnDraw(true, 3, 10590, 6, 0) == D::Defer);
+        d.Captured(e);
+        auto all = d.Take();
+        CHECK(all.size() == 2 && all[0].trans && all[0].batchStart == 2910 && all[0].batchCount == 63 && all[0].bits == 0x3u && !all[1].trans &&
+              all[1].batchStart == 10590 && all[1].bits == 0x1u);
+        // a second draw that isn't its interior-lit one: drawn, and why; mode 7 alone: blended, drawn
+        d.BeginBatch(true, 2910, 63);
+        CHECK(d.OnDraw(true, 3, 2910, 63, 9) == D::Silent && d.OnDraw(true, 3, 2910, 63, 2) == D::Pass && d.LastWhy() == W::kTransSecond);
+        d.BeginBatch(true, 2910, 63);
+        CHECK(d.OnDraw(true, 3, 2910, 63, 7) == D::Pass && d.LastWhy() == W::kBlending);
+        // another range, not indexed triangles: why
+        d.BeginBatch(true, 2910, 63);
+        CHECK(d.OnDraw(true, 3, 0, 63, 0) == D::Pass && d.LastWhy() == W::kRange);
+        d.BeginBatch(true, 2910, 63);
+        CHECK(d.OnDraw(false, 3, 2910, 63, 0) == D::Pass && d.LastWhy() == W::kNotTriangles);
+        // full: the pair drawn as the client draws it, neither silenced
+        for (unsigned i = 0; i < st::kMaxDeferred; ++i) d.Captured(e);
+        d.BeginBatch(true, 2910, 63);
+        CHECK(d.OnDraw(true, 3, 2910, 63, 9) == D::Pass && d.LastWhy() == W::kFull && d.OnDraw(true, 3, 2910, 63, 7) == D::Pass);
+        all = d.Take();
+        // the loop's end drops a silenced batch's second draw; nothing pending: drawn, no reason
+        d.BeginBatch(true, 2910, 63);
+        CHECK(d.OnDraw(true, 3, 2910, 63, 9) == D::Silent);
+        d.EndLoop();
+        CHECK(!d.Pending() && d.OnDraw(true, 3, 2910, 63, 7) == D::Pass && d.LastWhy() == W::kNone);
+        d.ResetCounts();
+        CHECK(d.Silenced() == 0 && d.Passed() == 0);
+    });
+
     Test("Deferral: the pending batch's one draw is deferred (its range, opaque or alpha-keyed); everything else drawn", [] {
         st::Deferral d;
         using D = st::Deferral::Draw;
@@ -1835,7 +1878,7 @@ int main(int argc, char** argv)
         // another batch's draw (a texture missing: the client skipped this one's): drawn, counted
         d.BeginBatch(true, 300, 30);
         CHECK(d.OnDraw(true, 3, 330, 30, 0) == D::Pass && d.Passed() == 1);
-        // blended (a transition batch's two passes), or not indexed: drawn
+        // blended (mode 2: alpha), or not indexed: drawn (a transition batch's pair: the test above)
         d.BeginBatch(true, 300, 30);
         CHECK(d.OnDraw(true, 3, 300, 30, 2) == D::Pass && d.Passed() == 2);
         d.BeginBatch(true, 300, 30);

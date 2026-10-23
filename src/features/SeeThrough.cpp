@@ -92,9 +92,32 @@ namespace wxl_livingazeroth::seethrough
             static constexpr unsigned kNotes = 48;
             Note notes[kNotes];
             unsigned noteCount = 0;
-            float replayFirst = -1.0f;   // the last deferred batch's open windows: from this ordinal, these bits
-            uint32_t replayBits = 0;
+            // Each pending glass batch's draws (2026-10-23, Kharanos: one deferred, one "drawn as they were", and the panel
+            // couldn't say which or why): the device draw's range and Gx blending mode, and what came of it.
+            enum Verdict : uint8_t { kDrawnAsIs, kDeferred, kSilenced };
+            struct DrawNote { uint32_t start = 0, count = 0, blending = 0; Verdict verdict = kDrawnAsIs; Deferral::Why why = Deferral::Why::kNone; };
+            static constexpr unsigned kDrawNotes = 12;
+            DrawNote draws[kDrawNotes];
+            unsigned drawCount = 0;
+            unsigned silenced = 0;   // transition batches' exterior-lit draws silenced (their interior-lit ones deferred)
+            // Each redrawn batch: its MOBA range, its open windows (from this ordinal, these bits), a transition batch's or
+            // not, and its kind (frosted, stained).
+            struct Redrawn { uint32_t start = 0, count = 0, bits = 0; float first = 0.0f; bool trans = false; uint32_t kind = 0; bool frost = false; };
+            static constexpr unsigned kRedrawn = 12;
+            Redrawn redrawnList[kRedrawn];
+            unsigned redrawnCount = 0;
         };
+
+        void NoteDraw(Counts& c, const uint32_t* batch, uint32_t blending, Counts::Verdict verdict, Deferral::Why why)
+        {
+            if (c.drawCount >= Counts::kDrawNotes) return;
+            Counts::DrawNote& d = c.draws[c.drawCount++];
+            d.start = batch[1];
+            d.count = batch[2];
+            d.blending = blending;
+            d.verdict = verdict;
+            d.why = why;
+        }
 
         const char* g_noteBuilding = "";   // the building and group the walk is at (Walk, WalkInside), for the notes
         uint32_t g_noteGroup = 0;
@@ -996,15 +1019,35 @@ namespace wxl_livingazeroth::seethrough
             return ok;
         }
 
+        // A transition batch's exterior-lit draw: the client's, with its colour and depth writes off (no pixel, no depth),
+        // the writes put back for its interior-lit draw (the one deferred).
+        void DrawQuietly(void* device, void* edx, uint32_t* batch, int indexed, int& drawn, uint32_t colour, uint32_t depth)
+        {
+            __try
+            {
+                gxstate::Force(client::kRsColorWrite, 0);
+                gxstate::Force(client::kRsDepthWrite, 0);
+                drawn = 1;
+                g_origDraw(device, edx, batch, indexed);
+            }
+            __finally
+            {
+                gxstate::Force(client::kRsColorWrite, colour);
+                gxstate::Force(client::kRsDepthWrite, depth);
+            }
+        }
+
         // The draw with the client's colour and depth writes off (its own cache, so its flush sends them: no pixel and no
         // depth from the glass), the state captured after it, the writes put back for the next draw.
         void DeferDraw(void* device, void* edx, uint32_t* batch, int indexed, int& drawn)
         {
             uint32_t blending = 99;
             gxstate::Read(client::kRsBlendingMode, blending);
-            if (g_deferral.OnDraw(indexed != 0, batch[0], batch[1], batch[2], blending) == Deferral::Draw::Pass)
+            const Deferral::Draw verdict = g_deferral.OnDraw(indexed != 0, batch[0], batch[1], batch[2], blending);
+            if (verdict == Deferral::Draw::Pass)
             {
                 ++g_now.passed;
+                NoteDraw(g_now, batch, blending, Counts::kDrawnAsIs, g_deferral.LastWhy());
                 drawn = 1;
                 g_origDraw(device, edx, batch, indexed);
                 return;
@@ -1012,12 +1055,22 @@ namespace wxl_livingazeroth::seethrough
             uint32_t colour = 0, depth = 0;
             if (!gxstate::Read(client::kRsColorWrite, colour) || !gxstate::Read(client::kRsDepthWrite, depth))
             {
+                // (a transition batch's exterior-lit draw drawn after all: its interior-lit one isn't deferred either)
+                if (verdict == Deferral::Draw::Silent) g_deferral.EndLoop();
                 g_deferral.CaptureFailed();
                 ++g_now.captureFailed;
                 drawn = 1;
                 g_origDraw(device, edx, batch, indexed);
                 return;
             }
+            if (verdict == Deferral::Draw::Silent)
+            {
+                ++g_now.silenced;
+                NoteDraw(g_now, batch, blending, Counts::kSilenced, Deferral::Why::kNone);
+                DrawQuietly(device, edx, batch, indexed, drawn, colour, depth);
+                return;
+            }
+            NoteDraw(g_now, batch, blending, Counts::kDeferred, Deferral::Why::kNone);
             Deferral::Entry e{};
             const bool ok = DrawSilently(device, edx, batch, indexed, drawn, colour, depth, e);
             if (ok)
@@ -1379,6 +1432,13 @@ namespace wxl_livingazeroth::seethrough
                         in.frost = g_frost.ready ? &g_frost : nullptr;
                     }
                     const PerPixelDrawn drawn = DrawPerPixel(dev, e, in, g_split);
+                    if (g_now.redrawnCount < Counts::kRedrawn)
+                    {
+                        Counts::Redrawn& r = g_now.redrawnList[g_now.redrawnCount++];
+                        r.start = e.batchStart; r.count = e.batchCount; r.first = e.first; r.bits = e.bits; r.trans = e.trans;
+                        r.kind = m ? m->kind : 0;
+                        r.frost = drawn.frosted;
+                    }
                     g_now.frostDrawn += drawn.frosted ? 1 : 0;
                     g_now.tintedSplit += drawn.tinted == 1 ? 1 : 0;
                     g_now.tintedWhole += drawn.tinted == 2 ? 1 : 0;
@@ -1585,8 +1645,6 @@ namespace wxl_livingazeroth::seethrough
         if (deferrable && g_settings.redraw)
         {
             OpenBits(*b, g_draw.windows, g_draw.frame->states.data(), g_draw.frame->states.size(), first, bits);
-            g_now.replayFirst = first;
-            g_now.replayBits = bits;
         }
         g_deferral.BeginBatch(deferrable, start, count, first, bits, glassMaterial);
         if (deferrable && g_settings.redraw)
@@ -1648,8 +1706,9 @@ namespace wxl_livingazeroth::seethrough
                                                                                        : "not drawn (no way out on the screen)");
             out.emplace_back(line);
         }
-        std::snprintf(line, sizeof(line), "Glass batches: %u in opened groups, %u kept opaque, %u deferred, %u drawn over the room (%u opaque: no redraw "
-                      "in their shader); %u drawn as they were", g_last.glassBatches, g_last.kept, g_last.deferred, g_last.redrawn, g_last.opaque, g_last.passed);
+        std::snprintf(line, sizeof(line), "Glass batches: %u in opened groups, %u kept opaque, %u deferred (%u of them transition batches, their "
+                      "exterior-lit draw silenced), %u drawn over the room (%u opaque: no redraw in their shader); %u drawn as they were", g_last.glassBatches,
+                      g_last.kept, g_last.deferred, g_last.silenced, g_last.redrawn, g_last.opaque, g_last.passed);
         out.emplace_back(line);
         std::snprintf(line, sizeof(line), "Faults: %u%s%s; captures failed %u, target changed %u, dropped %u", g_faults, g_faulted ? " (off: " : "",
                       g_faulted ? g_faultWhere : "", g_last.captureFailed, g_last.targetMoved, g_last.dropped);
@@ -1708,10 +1767,30 @@ namespace wxl_livingazeroth::seethrough
             out.emplace_back(line);
         }
         // each window on the screen and facing the camera last frame: open, or why not
-        if (g_last.replayFirst >= 0.0f)
+        // each glass batch redrawn: its range, its open windows (the shader's: from this ordinal, these bits), a transition
+        // batch's interior-lit draw or not; and each pending batch's draws: deferred, silenced, or drawn as the client drew
+        // them and why (2026-10-23: from inside Kharanos's house "1 deferred ... 1 drawn as they were", the room's glass a
+        // transition batch the client draws twice)
+        for (unsigned i = 0; i < g_last.redrawnCount; ++i)
         {
-            std::snprintf(line, sizeof(line), "The redraw: open windows from ordinal %.0f, bits 0x%04X (a shut window's glass and fake room as the client draws them)",
-                          g_last.replayFirst, g_last.replayBits);
+            const Counts::Redrawn& r = g_last.redrawnList[i];
+            std::snprintf(line, sizeof(line), "Redrawn: the glass batch at %u (+%u), open windows from ordinal %.0f, bits 0x%04X%s%s%s", r.start, r.count, r.first,
+                          r.bits, r.trans ? "; a transition batch: its interior-lit draw (its exterior-lit one silenced)" : "",
+                          r.kind == glass::kFrosted ? (r.frost ? "; frosted, over the blurred copy" : "; frosted, NOT over the blurred copy") : "",
+                          r.kind == glass::kStained ? "; stained" : "");
+            out.emplace_back(line);
+        }
+        for (unsigned i = 0; i < g_last.drawCount; ++i)
+        {
+            const Counts::DrawNote& d = g_last.draws[i];
+            static const char* const kWhyPassed[] = { "", "not indexed triangles", "another range than the batch's (a draw the client put between)",
+                                                      "blended (its Gx blending mode isn't opaque or alpha-keyed)", "the frame's deferred draws full",
+                                                      "a transition batch's second draw not its interior-lit one" };
+            const unsigned why = static_cast<unsigned>(d.why);
+            std::snprintf(line, sizeof(line), "Draw of a pending glass batch: %u (+%u), Gx blending mode %u: %s%s", d.start, d.count, d.blending,
+                          d.verdict == Counts::kDeferred ? "deferred" : d.verdict == Counts::kSilenced ? "silenced (a transition batch's exterior-lit draw)"
+                                                                                                          : "drawn as the client drew it: ",
+                          d.verdict == Counts::kDrawnAsIs && why < sizeof(kWhyPassed) / sizeof(kWhyPassed[0]) ? kWhyPassed[why] : "");
             out.emplace_back(line);
         }
         for (unsigned i = 0; i < g_last.noteCount; ++i)

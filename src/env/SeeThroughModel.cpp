@@ -962,20 +962,36 @@ namespace wxl_livingazeroth::seethrough
         m_first = first;
         m_bits = bits;
         m_material = material;
+        m_transFirst = false;
         m_open.clear();
         m_rest.clear();
     }
 
     Deferral::Draw Deferral::OnDraw(bool indexed, uint32_t primitive, uint32_t start, uint32_t count, uint32_t blendingMode)
     {
+        m_why = Why::kNone;
         if (!m_pending) return Draw::Pass;
-        m_pending = false;   // one draw a batch
-        if (!indexed || primitive != client::kPrimTriangles || start != m_start || count != m_count || blendingMode > 1 ||
-            m_entries.size() >= kMaxDeferred)
+        const bool triangles = indexed && primitive == client::kPrimTriangles;
+        const bool same = triangles && start == m_start && count == m_count;
+        const bool full = m_entries.size() >= kMaxDeferred;
+        // a transition batch's exterior-lit draw: silenced, still pending for its interior-lit one
+        if (same && !full && !m_transFirst && blendingMode == client::kBlendTransExterior)
         {
+            m_transFirst = true;
+            ++m_silenced;
+            return Draw::Silent;
+        }
+        m_pending = false;   // one draw a batch (a transition batch's: its second)
+        const bool second = m_transFirst;
+        m_transFirst = false;
+        const bool blending = second ? blendingMode == client::kBlendTransInterior : blendingMode <= 1;
+        if (!same || full || !blending)
+        {
+            m_why = !triangles ? Why::kNotTriangles : !same ? Why::kRange : full ? Why::kFull : second ? Why::kTransSecond : Why::kBlending;
             ++m_passed;
             return Draw::Pass;
         }
+        m_trans = second;
         return Draw::Defer;
     }
 
@@ -985,6 +1001,9 @@ namespace wxl_livingazeroth::seethrough
         m_entries.back().first = m_first;
         m_entries.back().bits = m_bits;
         m_entries.back().material = m_material;
+        m_entries.back().batchStart = m_start;
+        m_entries.back().batchCount = m_count;
+        m_entries.back().trans = m_trans;
         m_entries.back().open = std::move(m_open);
         m_entries.back().rest = std::move(m_rest);
     }

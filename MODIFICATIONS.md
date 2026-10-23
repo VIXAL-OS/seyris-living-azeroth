@@ -109,7 +109,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   frame copied at a quarter of its size once a frame and blurred in a pass of its own, laid behind the open windows'
   frosted glass by the depth; frosted windows stay shut where it can't run), and 14 more WMOs: the dwarven houses
   (Kharanos, Thelsamar), the Taunka's longhouse, the orcs' huts, great halls, two-storey and zeppelin houses, and the
-  vrykul longhouses, 47 in all.
+  vrykul longhouses, 47 in all. From inside, a room's glass the client draws as a transition batch (twice: lit as the
+  outside, then as the inside, blended by its vertex alpha) is redrawn too: before, it stayed the client's glass, as in
+  Kharanos's dwarven houses (23 October 2026).
 - **Darker nights** (22 October 2026): the night's ambient light, sky, clouds and water darker so lamps and lit windows
   matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
   day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital
