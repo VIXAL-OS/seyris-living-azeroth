@@ -25,6 +25,13 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
     sand and the dry muddy shores have ground effects of TerrainType Dirt or Soggy, where the client puts no print
     down, so their rims never formed. Where the cover there is sand, the footstep's print goes down as on sand
     (`SurfaceCoverSandPrints`).
+  - No cover inside buildings (23 October 2026): the cover is drawn right after the terrain, before the buildings, so
+    where a building's floor lies within its depth over the terrain it showed through the floor, and only while a way
+    out was on screen (Everlook's observatory and igloos, Tanaris's goblin houses). Where the terrain lies inside a
+    building's room (its interior groups' boxes, and under a surface of that room) the cover now stays out, from every
+    angle; the band outside the walls where a foundation lies under the terrain keeps its cover (`features/CoverRooms.hpp`,
+    `features/SurfaceCoverRooms.cpp`, the buildings noted by the hook on `Wmo.RenderGroup`). The surface cover's status
+    lines go into the snapshot (F11) too.
 - **Clear ice** on icy ground, ice models and WMO ice, with styles for frozen waterfalls, shoreline floes, glaciers and
   sea ice.
 - **Fields:** the shore pass runs on a background worker thread.

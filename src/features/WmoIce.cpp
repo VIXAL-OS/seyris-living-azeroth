@@ -468,7 +468,8 @@ namespace wxl_livingazeroth::wmoice
         }
 
         // Around one placed instance's group (both loops run inside): which building it is, for the rooms behind its
-        // glass (features/Glass). Only for roots with glass.
+        // glass (features/Glass; only for roots with glass), the windows opened in it (features/SeeThrough) and the
+        // rooms the surface cover keeps out of (features/SurfaceCoverRooms).
         void __fastcall hkRenderGroup(void* root, void* edx, int group, void* instanceArg, void* list)
         {
             bool began = false;
@@ -485,6 +486,7 @@ namespace wxl_livingazeroth::wmoice
                     began = true;
                 }
             seethrough::BeginGroupDraw(root, group, instanceArg);   // which instance's group: its opened windows
+            cover::NoteBuilding(root, instanceArg);                 // the surface cover keeps out of its rooms
             g_origGroup(root, edx, group, instanceArg, list);
             seethrough::EndGroupDraw();
             if (began) glass::EndInstance();

@@ -41,6 +41,7 @@ namespace wxl_livingazeroth::cover::detail
     {
         char line[384];
         g_api->UiCheckbox("Draw the cover", &g_settings.enabled);
+        g_api->UiCheckbox("No cover inside buildings (it showed through floors near the terrain from some angles)", &g_settings.keepOutOfRooms);
         static const char* const coverage[] = { "Everywhere (test: nothing painted, fallen snow anywhere)", "From SurfaceCover.cdbc" };
         g_api->UiCombo("Where", &g_settings.coverage, coverage, 2);
         g_api->UiSliderInt("Levels (40 / 80 / 160 / 320 / 640 yd)", &g_settings.levels, 1, kMaxLevels);
@@ -140,7 +141,28 @@ namespace wxl_livingazeroth::cover::detail
             ui::Text(g_api, line);
         }
         std::vector<std::string> lines;
+        Status(lines);
+
+        static char status[64] = "";
+        if (g_api->UiButton("Copy status to clipboard"))
+        {
+            std::string text;
+            for (const std::string& l : lines) text += l + "\r\n";
+            std::snprintf(status, sizeof(status), CopyToClipboard(text) ? "copied" : "clipboard unavailable");
+        }
+        if (status[0]) { g_api->UiSameLine(); ui::Text(g_api, status); }
+        for (const std::string& l : lines) ui::Text(g_api, l.c_str());
+    }
+
+    void Status(std::vector<std::string>& lines)
+    {
+        char line[384];
         auto add = [&lines, &line]() { lines.emplace_back(line); };
+        static const char* const where[] = { "everywhere (test)", "SurfaceCover.cdbc" };
+        std::snprintf(line, sizeof(line), "settings: draw %s, where %s, levels %d, draw point %s, trenches %d, no cover inside buildings %d, depth x%.2f, fill budget %.1f ms",
+                      g_settings.enabled ? "on" : "off", where[g_settings.coverage == 0 ? 0 : 1], g_settings.levels,
+                      g_settings.drawPoint ? "end of the scene" : "after the terrain", g_settings.stamp, g_settings.keepOutOfRooms, g_settings.depthMul,
+                      g_settings.fillBudgetMs); add();
         if (const char* why = g_settings.enabled ? g_inactive : "switched off") { std::snprintf(line, sizeof(line), "not drawing: %s", why); add(); }
         const int levels = ActiveLevels();
         for (int k = 0; k < levels; ++k)
@@ -275,15 +297,11 @@ namespace wxl_livingazeroth::cover::detail
                           : g_shadowMode == 1 ? "on (one map: quality 1-2)"
                           : (g_settings.shadows ? "off (no layout we know: shadow quality off, or the client unbinds them)" : "off (switched off)")); add();
         }
-
-        static char status[64] = "";
-        if (g_api->UiButton("Copy status to clipboard"))
-        {
-            std::string text;
-            for (const std::string& l : lines) text += l + "\r\n";
-            std::snprintf(status, sizeof(status), CopyToClipboard(text) ? "copied" : "clipboard unavailable");
-        }
-        if (status[0]) { g_api->UiSameLine(); ui::Text(g_api, status); }
-        for (const std::string& l : lines) ui::Text(g_api, l.c_str());
+        RoomLines(lines);
     }
+}
+
+namespace wxl_livingazeroth::cover
+{
+    void StatusLines(std::vector<std::string>& out) { detail::Status(out); }
 }

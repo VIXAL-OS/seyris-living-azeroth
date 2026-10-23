@@ -13,6 +13,7 @@
 #include "../features/Glass.hpp"
 #include "../features/GroundFog.hpp"
 #include "../features/SeeThrough.hpp"
+#include "../features/SurfaceCover.hpp"
 
 #include "engine/events/Event.hpp"
 #include "game/Camera.hpp"
@@ -395,6 +396,11 @@ namespace wxl_livingazeroth::snapshot
             t("");
             t("Glass");
             t("%s", glass::StatusLine());
+            t("");
+            t("Surface cover panel");
+            lines.clear();
+            cover::StatusLines(lines);
+            for (const std::string& l : lines) t("%s", l.c_str());
         }
 
         std::wstring GameFolder()

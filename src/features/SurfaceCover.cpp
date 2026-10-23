@@ -399,6 +399,7 @@ namespace wxl_livingazeroth::cover
                 ClearCellCache();
                 g_hereLayersValid = g_hereValid = false;
                 for (Level& L : g_levels) { L.haveGrid = false; L.jobActive = false; }
+                ClearRooms();
                 g_lastMap = -1;
             }
             g_wasInWorld = false;
@@ -434,6 +435,8 @@ namespace wxl_livingazeroth::cover
         }
 
         ++g_frame;
+        // The buildings the scene drew since the last frame: their rooms keep no cover (SurfaceCoverRooms.cpp).
+        UpdateRooms(snap, refill);
         const int levels = ActiveLevels();
         // Nothing within the outermost level's reach (no cover, no ground fallen snow could settle
         // on while it snows): the finer levels rest -- no recentres, no re-sampling -- and only the
@@ -490,6 +493,12 @@ namespace wxl_livingazeroth::cover
             const bool hidden = g_levels[k].jobHidden;
             const double deadline = hidden ? end : now + (end - now) / (jobs - n);
             WorkFill(g_levels[k], k == 0, deadline);
+        }
+        // Rows under buildings that came, moved or went, on a budget of their own (a new building's floor clears within
+        // a few frames however busy the fills are).
+        {
+            const double now = grassperf::Now();
+            WorkRooms(now + (g_settings.fillBudgetMs > 0.5f ? g_settings.fillBudgetMs : 0.5f));
         }
 
         // New snow values (fallen snow, painted snow melting): one level re-folds its depth per frame.

@@ -1,4 +1,5 @@
 #include "SurfaceCoverInternal.hpp"
+#include "CoverRooms.hpp"
 
 #include "GrassPerf.hpp"
 #include "GroundMaterialTable.hpp"
@@ -411,6 +412,19 @@ namespace wxl_livingazeroth::cover::detail
             t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
             slopeF = ToByte(t * t * (3.0f - 2.0f * t));
         }
+        // None inside a building's room (features/CoverRooms.hpp): drawn before the WMOs, it poked through floors lying
+        // within its depth over the terrain. The look stays (bare neighbours borrow it), the cover and its snow go.
+        const bool inRoom = ok && InRoom(x, y, z, L.cell > rooms::kMinMargin ? L.cell : rooms::kMinMargin);
+        if (inRoom)
+        {
+            b.covered = 0.0f; b.depth = 0.0f; b.snowShare = 0.0f; b.paintedSnow = 0.0f; b.ripple = 0.0f; b.wetGate = 0.0f;
+        }
+        if (inRoom != (L.inRoom[s] != 0))
+        {
+            L.roomCells += inRoom ? 1 : -1;
+            L.inRoom[s] = inRoom ? 1 : 0;
+            changed |= kDirtyCover;
+        }
         // The cover's base: the terrain, moved by the rows' ZOffset (below the terrain only what
         // rises above it shows, e.g. trench rims through grass).
         const float base = ok ? z + (b.hasLook ? b.zOffset : 0.0f) : kHole;
@@ -471,6 +485,7 @@ namespace wxl_livingazeroth::cover::detail
         const bool wholeRows = i1 - i0 + 1 >= kFilled;
         for (int j = j0; j <= j1; ++j)
         {
+            RowRooms(L, i0, i1, j);
             uint8_t row = 0;
             for (int i = i0; i <= i1; ++i)
             {

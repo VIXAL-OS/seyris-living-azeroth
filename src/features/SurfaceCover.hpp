@@ -10,6 +10,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "wxl/PluginApi.h"
 
@@ -89,6 +90,13 @@ namespace wxl_livingazeroth::cover
     /// is at terrainZ (yd): its top there as the near level draws it (trenches included), 0 where none
     /// is drawn (no cover, thinner than drawn, outside the near level, or PrintsOnCover() is false).
     float DrawnCoverAbove(float x, float y, float terrainZ);
+    /// A placed WMO's group being drawn (features/WmoIce's hook on the group draw, Wmo.RenderGroup: its root and the
+    /// instance + 0xB0 the client hands over). The cover keeps out of its rooms (features/CoverRooms.hpp); the building is
+    /// read on the next update. Cheap: once per drawn group.
+    void NoteBuilding(const void* root, const void* instanceArg);
+    /// The surface cover's status lines (the panel's, and the rooms kept clear), for the snapshot.
+    void StatusLines(std::vector<std::string>& out);
+
     /// The stock fog the terrain stage left on the device, as last read there (only while the cover
     /// draws in that pass with scene lighting on): VS c12 = (x, y, exponent, 0) with fog =
     /// min(pow(max(viewZ * x + y, 0), exponent), 1), and PS c2 = the fog colour. False if never read.

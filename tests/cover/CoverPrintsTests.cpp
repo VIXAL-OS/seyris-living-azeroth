@@ -3,11 +3,16 @@
 // the client's, and that the trench depth the prints follow is the one the cover uploads. No game.
 // Also (2026-10-18) the footstep's print on sand the client counts as dirt: its guards, and the TerrainType it
 // goes down with, over a TerrainType storage laid out like the client's.
+// Also (2026-10-23) no cover inside buildings (features/CoverRooms.hpp): its guards, the rule on a made-up building (its
+// box, then its roof map; the band outside its walls, a cellar, a coarser level's margin), and with --wmo (the map scan's
+// WMO files) Everlook's observatory replayed at the F11 snapshot's spot (20261023-161327, where the snow showed indoors).
 //
-// Usage:  cover_prints_tests <Wow.exe> [<another copy of the 12340 client, e.g. the launcher's exe>]
+// Usage:  cover_prints_tests <Wow.exe> [<another copy of the 12340 client, e.g. the launcher's exe>] [--wmo <the map scan's
+//         wmo-windows folder>]
 #include "features/CoverBlend.hpp"
 #include "features/CoverPrints.hpp"
 #include "features/CoverRipples.hpp"
+#include "features/CoverRooms.hpp"
 
 #include <windows.h>
 
@@ -22,6 +27,7 @@
 namespace cp = wxl_livingazeroth::coverprints;
 namespace blend = wxl_livingazeroth::cover::blend;
 namespace rp = wxl_livingazeroth::cover::ripples;
+namespace rooms = wxl_livingazeroth::cover::rooms;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__)); } while (false)
 
@@ -127,6 +133,32 @@ namespace
 
     float Z(const FakePrint& p, uint32_t k) { return cp::ReadFloat(p.vertices.data() + k * cp::kVertexSize + cp::kVertexZ); }
 
+    // --- WMO files (the map scan's wmo-windows folder: '\\' as '#') ---
+    std::vector<uint8_t> ReadFile(const std::string& path)
+    {
+        std::vector<uint8_t> out;
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) throw std::runtime_error("can't open " + path);
+        for (int c; (c = std::fgetc(f)) != EOF;) out.push_back(static_cast<uint8_t>(c));
+        std::fclose(f);
+        return out;
+    }
+
+    // The chunks in [at, end): tag (as the file's four bytes read little-endian: 'MOGI' == 0x4D4F4749), data, size.
+    template <class F> void Chunks(const std::vector<uint8_t>& b, size_t at, size_t end, F f)
+    {
+        while (at + 8 <= end)
+        {
+            uint32_t tag, size;
+            std::memcpy(&tag, b.data() + at, 4);
+            std::memcpy(&size, b.data() + at + 4, 4);
+            if (at + 8 + size > end) break;
+            f(tag, at + 8, static_cast<size_t>(size));
+            at += 8 + size;
+        }
+    }
+    constexpr uint32_t kMOGI = 0x4D4F4749, kMOGP = 0x4D4F4750, kMOVT = 0x4D4F5654, kMOVI = 0x4D4F5649;
+
     // The trench depth as SurfaceCover.cpp uploaded it before CoverBlend.hpp had it.
     float OldUpload(float cover, float rimCell, float rimMul, float rim, float press, uint8_t stiff, float k)
     {
@@ -138,15 +170,45 @@ namespace
 int main(int argc, char** argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-    if (argc < 2) { std::printf("usage: cover_prints_tests <Wow.exe> [<another copy>]\n"); return 2; }
+    std::vector<const char*> exes;
+    std::string wmoFolder;
+    for (int a = 1; a < argc; ++a)
+        if (std::strcmp(argv[a], "--wmo") == 0 && a + 1 < argc) wmoFolder = argv[++a];
+        else exes.push_back(argv[a]);
+    if (exes.empty()) { std::printf("usage: cover_prints_tests <Wow.exe> [<another copy>] [--wmo <the map scan's wmo-windows folder>]\n"); return 2; }
     try
     {
-        for (int a = 1; a < argc; ++a)
+        for (const char* exe : exes)
         {
-            const std::string name = std::string("guards against ") + argv[a];
+            const std::string roomsName = std::string("no cover inside buildings: guards against ") + exe;
+            Test(roomsName.c_str(), [&]
+            {
+                const Image im = LoadImage(exe);
+                const cp::Guard* bad = cp::FirstMismatchIn(rooms::kGuards, [&](uintptr_t va, uint32_t size) { return im.At(va, size); });
+                if (bad) throw std::runtime_error(std::string("differs: ") + bad->what);
+                for (const cp::Guard& g : rooms::kGuards)
+                {
+                    CHECK(g.size <= sizeof(g.bytes));
+                    Image changed = im;
+                    auto* at = static_cast<uint8_t*>(const_cast<void*>(changed.At(g.address, g.size)));
+                    CHECK(at);
+                    at[g.size - 1] ^= 0x01;
+                    CHECK(cp::FirstMismatchIn(rooms::kGuards, [&](uintptr_t va, uint32_t size) { return changed.At(va, size); }) == &g);
+                }
+                // The group draw the WMO pass calls is the one features/WmoIce hooks (Wmo.RenderGroup, 0x7ABF50).
+                int32_t rel;
+                std::memcpy(&rel, im.At(0x007967AB, 4), 4);
+                CHECK(0x007967AA + 5 + rel == 0x007ABF50);
+                std::printf("  %zu guards, %zu bytes\n", sizeof(rooms::kGuards) / sizeof(rooms::kGuards[0]),
+                            [] { size_t n = 0; for (const cp::Guard& g : rooms::kGuards) n += g.size; return n; }());
+            });
+        }
+        for (const char* exe : exes)
+        {
+            const std::string name = std::string("guards against ") + exe;
             Test(name.c_str(), [&]
             {
-                const Image im = LoadImage(argv[a]);
+                const Image im = LoadImage(exe);
                 CHECK(im.base == cp::kClientImageBase && im.timestamp == cp::kClientTimestamp);
                 const cp::Guard* bad = cp::FirstMismatch([&](uintptr_t va, uint32_t size) { return im.At(va, size); });
                 if (bad) throw std::runtime_error(std::string("differs: ") + bad->what);
@@ -162,10 +224,10 @@ int main(int argc, char** argv)
                 std::printf("  %zu guards, %zu bytes\n", sizeof(cp::kGuards) / sizeof(cp::kGuards[0]),
                             [] { size_t n = 0; for (const cp::Guard& g : cp::kGuards) n += g.size; return n; }());
             });
-            const std::string stepName = std::string("footstep print guards against ") + argv[a];
+            const std::string stepName = std::string("footstep print guards against ") + exe;
             Test(stepName.c_str(), [&]
             {
-                const Image im = LoadImage(argv[a]);
+                const Image im = LoadImage(exe);
                 const cp::Guard* bad = cp::FirstMismatchIn(cp::kStepGuards, [&](uintptr_t va, uint32_t size) { return im.At(va, size); });
                 if (bad) throw std::runtime_error(std::string("differs: ") + bad->what);
                 for (const cp::Guard& g : cp::kStepGuards)
@@ -562,6 +624,211 @@ int main(int argc, char** argv)
             CHECK(cp::PrintingTerrainType([&](uintptr_t at, uint32_t size) { return unloaded.Read(at, size); }) == -1);
             CHECK(!cp::TerrainTypePrints(7, [](uintptr_t, uint32_t) -> const void* { return nullptr; }));
         });
+
+        Test("no cover inside buildings: a room's box, then its roof map; the band outside its walls and a cellar keep their cover", []
+        {
+            // MOGI: a room, an always-drawn interior group, an exterior group, an inside-out box.
+            const uint32_t flags[4] = { 0x2000 | 0x1, 0x2000 | 0x10000, 0x8, 0x2000 };
+            const float boxes[24] = { -5, -5, -1, 5, 5, 4, -50, -50, -50, 50, 50, 50, -9, -9, -1, 9, 9, 9, 1, 1, 1, 0, 0, 0 };
+            const std::vector<rooms::Box> list = rooms::RoomsOf(flags, boxes, 4);
+            CHECK(list.size() == 1 && list[0].group == 0 && list[0].roofState == rooms::RoofState::Pending);
+            CHECK(rooms::IsRoom(0x2000) && !rooms::IsRoom(0x12000) && !rooms::IsRoom(0x8));
+            const float c = std::cos(0.5235988f), sn = std::sin(0.5235988f); // turned 30 degrees
+            const float axes[9] = { c, sn, 0, -sn, c, 0, 0, 0, 1 };
+            const float scaled[9] = { 2 * c, 2 * sn, 0, -2 * sn, 2 * c, 0, 0, 0, 2 };
+            const float mirrored[9] = { c, sn, 0, -sn, c, 0, 0, 0, -1 };
+            CHECK(rooms::IsRotation(axes) && !rooms::IsRotation(scaled) && !rooms::IsRotation(mirrored));
+            rooms::Building b;
+            std::memcpy(b.axes, axes, sizeof(axes));
+            b.origin[0] = 100.0f; b.origin[1] = 200.0f; b.origin[2] = 50.0f;
+            b.rooms = list;
+            CHECK(rooms::Bounds(b));
+            CHECK(b.lo[2] == 50.0f - 2.0f && b.hi[2] == 54.0f);   // a yard under the box
+            {
+                const float p[3] = { 4.8f, -1.0f, 0.3f };
+                float w[3], back[3];
+                rooms::ToWorld(b, p, w);
+                rooms::ToLocal(b, w[0], w[1], w[2], back);
+                CHECK(std::fabs(back[0] - p[0]) < 1e-4f && std::fabs(back[1] - p[1]) < 1e-4f && std::fabs(back[2] - p[2]) < 1e-4f);
+                CHECK(w[0] > b.lo[0] && w[0] < b.hi[0] && w[1] > b.lo[1] && w[1] < b.hi[1]);
+            }
+            // The terrain at (lx, ly, lz) of the building's space, asked in the world.
+            auto at = [&b](float lx, float ly, float lz, float margin = rooms::kMinMargin)
+            {
+                const float q[3] = { lx, ly, lz };
+                float w[3];
+                rooms::ToWorld(b, q, w);
+                return rooms::RoomAt(b, w[0], w[1], w[2], margin);
+            };
+            // Its box alone (the roof map not read yet): the middle, the band outside the walls, the margin, a yard under.
+            CHECK(at(0, 0, 0) == 0);
+            CHECK(at(4.8f, 0, 0) == 0);
+            CHECK(at(5.2f, 0, 0) == 0 && at(5.3f, 0, 0) == -1);
+            CHECK(at(0, 0, -1.9f) == 0 && at(0, 0, -2.1f) == -1);
+            CHECK(at(0, 0, 3.9f) == 0 && at(0, 0, 4.1f) == -1);   // terrain over the box's top: a mountain over a hall
+            // Its group's triangles: a floor 0.2 over the terrain (within 4 yd of the middle), a roof at 3.5 (within 4.5), a
+            // wall (upright: seen from below it is nothing), the foundation's skirt under the terrain (x 4.5 .. 5).
+            std::vector<float> v;
+            std::vector<uint16_t> ix;
+            auto quad = [&](float x0, float y0, float x1, float y1, float z0, float z1)
+            {
+                const uint16_t n = static_cast<uint16_t>(v.size() / 3);
+                v.insert(v.end(), { x0, y0, z0, x1, y0, z1, x1, y1, z1, x0, y1, z0 });
+                ix.insert(ix.end(), { n, static_cast<uint16_t>(n + 1), static_cast<uint16_t>(n + 2), n, static_cast<uint16_t>(n + 2), static_cast<uint16_t>(n + 3) });
+            };
+            quad(-4, -4, 4, 4, 0.2f, 0.2f);
+            quad(-4.5f, -4.5f, 4.5f, 4.5f, 3.5f, 3.5f);
+            quad(4.5f, -5, 5, 5, -0.5f, -0.5f);
+            {
+                const uint16_t n = static_cast<uint16_t>(v.size() / 3);
+                v.insert(v.end(), { -4.2f, -4, 0, -4.2f, 4, 0, -4.2f, 4, 3.5f });
+                ix.insert(ix.end(), { n, static_cast<uint16_t>(n + 1), static_cast<uint16_t>(n + 2) });
+            }
+            ix.insert(ix.end(), { 0, 1, 60000 });   // an index past the vertices: skipped
+            rooms::Box& room = b.rooms[0];
+            room.roof = rooms::BuildRoof(room, v.data(), static_cast<uint32_t>(v.size() / 3), ix.data(), static_cast<uint32_t>(ix.size()));
+            room.roofState = rooms::RoofState::Built;
+            CHECK(room.roof.cell == rooms::kRoofCell && !room.roof.top.empty());
+            CHECK(at(0, 0, 0) == 0);          // under the floor
+            CHECK(at(0, 0, 0.3f) == 0);       // through the floor, under the roof
+            CHECK(at(-4.3f, 2, 0) == 0);      // under the eaves (the roof is wider than the floor), past the wall
+            CHECK(at(4.6f, 0, 0) == 0);       // the roof grown by the margin: the cover's last triangle ends past the wall
+            CHECK(at(4.8f, 0, 0) == -1);      // the band outside the walls: only the skirt, under the terrain -- cover stays
+            CHECK(at(4.8f, 0, -0.6f) == 0);   // terrain under the skirt: a surface over it
+            CHECK(at(0, 0, 3.6f) == -1);      // terrain over the roof (inside the box): nothing of the room above it
+            // A coarser level's margin (its cell): its vertex a cell past the roof's edge is kept clear too, not further.
+            CHECK(at(5.4f, 0, 0, 1.0f) == 0 && at(5.4f, 0, 0) == -1);
+            CHECK(at(5.9f, 0, 0, 1.0f) == -1);
+            // Over the rooms a row of samples meets: the same answers; a row past the room's world bounds meets none of them.
+            {
+                const uint16_t only[1] = { 0 };
+                const float q[3] = { 4.6f, 0.0f, 0.0f };
+                float w[3];
+                rooms::ToWorld(b, q, w);
+                CHECK(rooms::RoomAt(b, w[0], w[1], w[2], rooms::kMinMargin, only, 1) == 0 && rooms::RoomAt(b, w[0], w[1], w[2], rooms::kMinMargin, only, 0) == -1);
+                CHECK(rooms::RowMeets(room, w[1], w[0] - 1.0f, w[0] + 1.0f, rooms::kMinMargin));
+                CHECK(!rooms::RowMeets(room, b.hi[1] + 1.0f, b.lo[0], b.hi[0], rooms::kMinMargin));
+                CHECK(!rooms::RowMeets(room, w[1], b.hi[0] + 1.0f, b.hi[0] + 9.0f, rooms::kMinMargin));
+            }
+            // A cellar: a room under the yard, its box's top half a yard over the terrain, its ceiling under it.
+            rooms::Building cellar = b;
+            cellar.rooms.assign(1, rooms::Box{});
+            rooms::Box& under = cellar.rooms[0];
+            under.lo[0] = -5; under.lo[1] = -5; under.lo[2] = -10; under.hi[0] = 5; under.hi[1] = 5; under.hi[2] = 0.5f;
+            CHECK(rooms::Bounds(cellar));
+            auto atCellar = [&cellar](float lx, float ly, float lz)
+            {
+                const float q[3] = { lx, ly, lz };
+                float w[3];
+                rooms::ToWorld(cellar, q, w);
+                return rooms::RoomAt(cellar, w[0], w[1], w[2], rooms::kMinMargin);
+            };
+            CHECK(atCellar(0, 0, 0) == 0);    // its box alone takes the yard
+            v.clear(); ix.clear();
+            quad(-5, -5, 5, 5, -10, -10);
+            quad(-5, -5, 5, 5, -0.3f, -0.3f);
+            under.roof = rooms::BuildRoof(under, v.data(), static_cast<uint32_t>(v.size() / 3), ix.data(), static_cast<uint32_t>(ix.size()));
+            under.roofState = rooms::RoofState::Built;
+            CHECK(atCellar(0, 0, 0) == -1);   // its roof map gives it back
+            CHECK(atCellar(0, 0, -0.5f) == 0);
+            // A room a kilometre across gets coarser cells: at most about kMaxRoofCells of them.
+            rooms::Box big;
+            big.lo[0] = -500; big.lo[1] = -500; big.lo[2] = 0; big.hi[0] = 500; big.hi[1] = 500; big.hi[2] = 10;
+            const rooms::Roof r = rooms::BuildRoof(big, v.data(), static_cast<uint32_t>(v.size() / 3), ix.data(), static_cast<uint32_t>(ix.size()));
+            CHECK(r.cell > 1.9f && static_cast<size_t>(r.w) * r.h < rooms::kMaxRoofCells * 101 / 100);
+            CHECK(rooms::RoofAbove(r, 0, 0, -1.0f, 0) && !rooms::RoofAbove(r, 0, 0, 0.0f, 0) && !rooms::RoofAbove(r, 400, 400, -20.0f, 0));
+            std::printf("  roof map %d x %d cells of %.2f yd; a kilometre-wide room's: %d x %d of %.2f yd\n", room.roof.w, room.roof.h, room.roof.cell, r.w, r.h, r.cell);
+        });
+
+        if (!wmoFolder.empty())
+            Test("no cover inside buildings: Everlook's observatory at the F11 snapshot's spot (20261023-161327)", [&]
+            {
+                // The placement as the snapshot read it (yaw -90, origin 6785.147 -4669.514 725.670), the root's MOGI and its
+                // room's triangles from the map scan's WMO files.
+                const std::string stem = wmoFolder + "\\world#wmo#kalimdor#buildings#goblinhut#kl_goblin_ice_observatory";
+                const std::vector<uint8_t> root = ReadFile(stem + ".wmo");
+                std::vector<uint32_t> flags;
+                std::vector<float> boxes;
+                Chunks(root, 0, root.size(), [&](uint32_t tag, size_t at, size_t size)
+                {
+                    if (tag != kMOGI) return;
+                    for (size_t k = 0; k + 32 <= size; k += 32)
+                    {
+                        uint32_t f;
+                        float box[6];
+                        std::memcpy(&f, root.data() + at + k, 4);
+                        std::memcpy(box, root.data() + at + k + 4, 24);
+                        flags.push_back(f);
+                        boxes.insert(boxes.end(), box, box + 6);
+                    }
+                });
+                rooms::Building b;
+                b.rooms = rooms::RoomsOf(flags.data(), boxes.data(), flags.size());
+                CHECK(flags.size() == 2 && b.rooms.size() == 1 && b.rooms[0].group == 0);
+                const float axes[9] = { 0, -1, 0, 1, 0, 0, 0, 0, 1 };   // yaw -90: its x along the world's -y
+                std::memcpy(b.axes, axes, sizeof(axes));
+                b.origin[0] = 6785.147f; b.origin[1] = -4669.514f; b.origin[2] = 725.670f;
+                CHECK(rooms::Bounds(b));
+                {
+                    // The snapshot's "wmo camera": the camera in the building's space.
+                    float local[3];
+                    rooms::ToLocal(b, 6784.730f, -4664.930f, 732.090f, local);
+                    CHECK(std::fabs(local[0] + 4.584f) < 0.01f && std::fabs(local[1] + 0.417f) < 0.01f && std::fabs(local[2] - 6.420f) < 0.01f);
+                }
+                // The terrain at points of the map scan's ADTs (gen_glass.Terrain, scratchpad cover\replay_points.py): where the
+                // player stood (the floor 0.52 yd over the terrain: the player's z was 723.890), under the camera (0.65), where
+                // the room's surface lies 0 .. 0.3 yd over it, where it lies higher (> 1 yd), and outside.
+                const float inside[][3] = {
+                    { 6774.970f, -4665.090f, 723.368f }, { 6784.730f, -4664.930f, 723.237f },
+                    { 6767.353f, -4674.106f, 723.538f }, { 6770.093f, -4679.586f, 723.375f }, { 6770.093f, -4660.406f, 723.707f },
+                    { 6771.463f, -4659.036f, 723.724f }, { 6774.203f, -4659.036f, 723.799f },
+                    { 6767.353f, -4682.326f, 723.082f }, { 6770.093f, -4683.696f, 723.143f }, { 6781.053f, -4657.666f, 723.721f },
+                    { 6785.163f, -4667.256f, 723.226f }, { 6789.273f, -4672.736f, 723.343f },
+                };
+                const float outside[][3] = { { 6805.000f, -4669.500f, 721.699f }, { 6785.100f, -4695.000f, 721.275f } };
+                for (const auto& q : inside) CHECK(rooms::RoomAt(b, q[0], q[1], q[2], rooms::kMinMargin) == 0);
+                for (const auto& q : outside) CHECK(rooms::RoomAt(b, q[0], q[1], q[2], rooms::kMinMargin) == -1);
+                // Its roof map from group 0's triangles (MOGP's MOVT and MOVI): the same answers.
+                const std::vector<uint8_t> group = ReadFile(stem + "_000.wmo");
+                std::vector<float> v;
+                std::vector<uint16_t> ix;
+                Chunks(group, 0, group.size(), [&](uint32_t tag, size_t at, size_t size)
+                {
+                    if (tag != kMOGP) return;
+                    Chunks(group, at + 0x44, at + size, [&](uint32_t sub, size_t p, size_t n)
+                    {
+                        if (sub == kMOVT && v.empty()) { v.resize(n / 4); std::memcpy(v.data(), group.data() + p, v.size() * 4); }
+                        if (sub == kMOVI && ix.empty()) { ix.resize(n / 2); std::memcpy(ix.data(), group.data() + p, ix.size() * 2); }
+                    });
+                });
+                CHECK(!v.empty() && !ix.empty());
+                rooms::Box& room = b.rooms[0];
+                room.roof = rooms::BuildRoof(room, v.data(), static_cast<uint32_t>(v.size() / 3), ix.data(), static_cast<uint32_t>(ix.size()));
+                room.roofState = rooms::RoofState::Built;
+                for (const auto& q : inside) CHECK(rooms::RoomAt(b, q[0], q[1], q[2], rooms::kMinMargin) == 0);
+                for (const auto& q : outside) CHECK(rooms::RoomAt(b, q[0], q[1], q[2], rooms::kMinMargin) == -1);
+                // And every cell of the map inside the box: terrain 0.3 yd under the room's highest surface there is kept clear.
+                size_t cells = 0, inBox = 0, kept = 0;
+                for (int j = 0; j < room.roof.h; ++j)
+                    for (int i = 0; i < room.roof.w; ++i)
+                    {
+                        const float top = room.roof.top[static_cast<size_t>(j) * room.roof.w + i];
+                        if (top == rooms::kNoRoof) continue;
+                        ++cells;
+                        const float lx = room.roof.x0 + (i + 0.5f) * room.roof.cell, ly = room.roof.y0 + (j + 0.5f) * room.roof.cell;
+                        if (lx < room.lo[0] || lx > room.hi[0] || ly < room.lo[1] || ly > room.hi[1] || top - 0.3f < room.lo[2] - rooms::kBelow ||
+                            top - 0.3f > room.hi[2])
+                            continue;
+                        ++inBox;
+                        const float q[3] = { lx, ly, top - 0.3f };
+                        float w[3];
+                        rooms::ToWorld(b, q, w);
+                        kept += rooms::RoomAt(b, w[0], w[1], w[2], rooms::kMinMargin) == 0 ? 1 : 0;
+                    }
+                CHECK(inBox > 1000 && kept == inBox);
+                std::printf("  %zu vertices, %zu triangles; roof map %d x %d, %zu cells with a surface, %zu of them in the box, all kept clear\n",
+                            v.size() / 3, ix.size() / 3, room.roof.w, room.roof.h, cells, inBox);
+            });
 
         std::printf("%u test groups passed\n", g_passed);
         return 0;

@@ -8,6 +8,7 @@
 //   SurfaceCoverCamera.cpp    the 3rd-person camera kept above the cover
 //   SurfaceCoverLift.cpp      models at units' feet (Base attachment) lifted onto the cover
 //   SurfaceCoverPanel.cpp     the debug panel
+//   SurfaceCoverRooms.cpp     no cover inside buildings (features/CoverRooms.hpp): the buildings drawn, their rooms
 // Design and history: orchestration docs/r&d/immersion/deformable-surfaces.md.
 #pragma once
 
@@ -112,6 +113,9 @@ namespace wxl_livingazeroth::cover::detail
         // Mud ruts (moisture-gated covers) fill in this much faster in heavy rain: 0.75 = in a quarter of their relax
         // time (blend::RainRelaxShare). 0 = rain changes nothing.
         float rainFill = 0.75f;
+        // No cover where the terrain lies inside a building's room (features/CoverRooms.hpp): drawn before the WMOs, the
+        // cover poked through floors lying within its depth over the terrain, seen only while a way out was on screen.
+        int   keepOutOfRooms = 1;
     };
 
     struct Level
@@ -187,6 +191,12 @@ namespace wxl_livingazeroth::cover::detail
         int   coverCells = 0;           // cells with cover of their own (depth or painted snow), kept as they're sampled
         int   snowCells = 0;            // cells where fallen snow could settle (snow share)
         unsigned holes = 0;
+        // Cells inside a building's room (SurfaceCoverRooms.cpp): sampled without cover. And the rows to re-sample where a
+        // building came, moved or the setting changed (world cells of this level; clamped to the grid when worked).
+        std::vector<uint8_t> inRoom = std::vector<uint8_t>(kTex * kTex, 0);
+        int    roomCells = 0;
+        std::vector<Segment> redo;
+        size_t redoPos = 0;
         double   fillMs = 0, firstFillMs = 0;
         IDirect3DTexture9* baseTex = nullptr;
         IDirect3DTexture9* coverTex = nullptr;
@@ -386,6 +396,24 @@ namespace wxl_livingazeroth::cover::detail
     extern const char* kRippleHlsl;
     extern const char* kPsMainHlsl;
 
+    // --- rooms (SurfaceCoverRooms.cpp): no cover inside buildings ---------------------------------------------------
+    /// Once per frame before the fills: the buildings the scene drew since the last frame (cover::NoteBuilding), read
+    /// from the client; where one came, moved or went, its rooms' rows are queued for re-sampling. refill: every level
+    /// is about to be sampled afresh (the queues are dropped).
+    void UpdateRooms(const world::Snapshot& snap, bool refill);
+    /// Leaving the world: every building is forgotten.
+    void ClearRooms();
+    /// Works the levels' re-sampling queues until the deadline (levels without a fill job running).
+    void WorkRooms(double deadline);
+    /// Before each row SampleRect samples: the buildings it can meet. Then whether the terrain at (x, y, z) lies in one
+    /// of their rooms (margin: yd around the boxes).
+    void RowRooms(const Level& L, int i0, int i1, int j);
+    bool InRoom(float x, float y, float z, float margin);
+    /// The status lines for the panel and the snapshot.
+    void RoomLines(std::vector<std::string>& out);
+
     // --- panel (SurfaceCoverPanel.cpp) ----------------------------------------------------------
     void __cdecl Panel(void* user);
+    /// The panel's status lines (the snapshot writes them too).
+    void Status(std::vector<std::string>& lines);
 }
