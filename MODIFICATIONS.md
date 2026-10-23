@@ -113,6 +113,11 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   vrykul longhouses, 47 in all. From inside, a room's glass the client draws as a transition batch (twice: lit as the
   outside, then as the inside, blended by its vertex alpha) is redrawn too: before, it stayed the client's glass, as in
   Kharanos's dwarven houses (23 October 2026).
+- **See-through windows between rooms** (23 October 2026, experimental): inside Ironforge, whose whole city is one
+  building of rooms and indoor streets, a shop's or a room's frosted window onto a hall (and two halls' onto their rooms)
+  opens onto the room beyond it from inside where that room is seen through it, the client's walk going on into it
+  through the window, the glass drawn again over it (`SeeThroughBetweenRooms`; `SeeThroughBuildings.cdbc` rows can now
+  name one group of a WMO: 13 of Ironforge's, chosen by a survey of every window's views and walks).
 - **Darker nights** (22 October 2026): the night's ambient light, sky, clouds and water darker so lamps and lit windows
   matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
   day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital

@@ -187,6 +187,16 @@ namespace wxl_livingazeroth::seethrough
          {0x68, 0x8C, 0xF5, 0xAD, 0x00, 0xD9, 0x1D, 0x80, 0x87, 0xCD, 0x00, 0xE8, 0x35, 0xFD, 0xFF, 0xFF}},
         {"scene render: the world view's depth gates the sky; the exterior views' count", 0x0079AC41, 19,
          {0xD8, 0x1D, 0x80, 0xF5, 0xAD, 0x00, 0xDF, 0xE0, 0xF6, 0xC4, 0x41, 0x74, 0x76, 0x39, 0x1D, 0xEC, 0xD0, 0xCD, 0x00}},
+        // Between rooms (2026-10-23, Phase C): the walk keeps its interior argument (cleared for a group with 0x48) in a
+        // global the interior batch loop reads when it draws (put back after a window's walk into a room), and a group's
+        // name (the panel's) where GetGroupName reads it.
+        {"portal walk: its interior argument into s_curInteriorWalk (0xCFBEB8)", 0x007AC0A3, 28,
+         {0x8B, 0x45, 0x18, 0x3B, 0xC6, 0x74, 0x0A, 0xF6, 0xC1, 0x48, 0x74, 0x05, 0x33, 0xC0, 0x89, 0x45, 0x18, 0x39, 0x35, 0xC0,
+          0xBE, 0xCF, 0x00, 0xA3, 0xB8, 0xBE, 0xCF, 0x00}},
+        {"interior batch loop: its lighting by s_curInteriorWalk", 0x007ACA65, 5, {0xA1, 0xB8, 0xBE, 0xCF, 0x00}},
+        {"GetGroupName: a loaded group's name at +0xD8", 0x007AEAEF, 22,
+         {0x8B, 0x84, 0x81, 0xF8, 0x01, 0x00, 0x00, 0xF6, 0x80, 0x98, 0x01, 0x00, 0x00, 0x01, 0x74, 0x0A, 0x8B, 0x80, 0xD8, 0x00,
+          0x00, 0x00}},
     };
 
     /// The first guard of `guards` whose bytes differ (read through `read(address, size)`, a pointer to that many bytes or
@@ -209,6 +219,11 @@ namespace wxl_livingazeroth::seethrough
     /// pick: 2026-10-22, "more buildings"), by WMO path, each with its Flags: from outside (the room behind its windows),
     /// from inside (the street through them). Before 2026-10-22 one hard-coded entry: Goldshire's Lion's Pride Inn.
     constexpr uint32_t kSeeFromOutside = 0x1, kSeeFromInside = 0x2;
+    /// Between rooms (2026-10-23, Phase C: "windows between two interiors: Ironforge first, the whole city is interior
+    /// groups; shop windows face indoor streets"): a window of an interior group that looks into another interior group (a
+    /// shop's from the street, the street's from the shop) opens onto it, as a window onto a room from outside does. The
+    /// table's rows may name a group (its Group column, -1 or missing: the whole WMO), so a city takes it street by street.
+    constexpr uint32_t kSeeBetween = 0x4;
 
     /// How far the camera may be from an exterior group's box, and from the window's middle (yd), for a window to open
     /// (the window's own distance since 2026-10-22: a city's one exterior group can hold the camera in its box).
@@ -486,6 +501,13 @@ namespace wxl_livingazeroth::seethrough
     /// A WMO's interior groups' windows (GlassWindows rows without Flags 0x1: a room's own glass), by group then ordinal;
     /// no room behind them (interior -1).
     RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, size_t groupCount);
+    /// The same with the root's MOGI (`groups`, `count`): a window of a group `between` flags (kSeeBetween) gets the room
+    /// beyond it (RoomBeyond) as its `interior` (-1: none, a fake), counted real or fake; the other groups' windows as above.
+    RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count,
+                            const std::vector<uint8_t>& between);
+    /// The interior group beyond an interior group's window (its normal points out of its own group): the smallest box (not
+    /// its own group's, not an exterior or skipped one) holding a point kProbes past its middle along its normal; -1: none.
+    int RoomBeyond(const SeeWindow& w, const GroupInfo* groups, size_t count);
     /// Whether the camera (WMO space) is inside a window's plane (its normal points out of the building) by kFacing.
     bool FacingIn(const SeeWindow& w, const float camLocal[3]);
     /// How far (yd) the camera may be from a window's middle for the street to open through it, and how many a frame.

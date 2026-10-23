@@ -4295,6 +4295,18 @@ namespace
         return { out, in };
     }
 
+    // Between rooms (2026-10-23, Phase C: "a window to another interior group opens as a portal into that group ... with
+    // the glass redrawn over it"): Ironforge's smithy (group 47, InteriorSmithA01) from inside, 4 yd from its window 588 onto
+    // the hall (group 8), the smithy's own frosted glass (mm_irnfg_windows_01, MOBA 4: its five windows) with 588 and 589
+    // open, the three upper ones shut (out of view from there); the hall behind (the checker), blurred.
+    std::vector<SeqScene> BetweenScenes()
+    {
+        SeqScene s = { "between rooms, Ironforge's smithy from inside onto the hall", "if_smithy_", "the hall",
+                       "world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo", 47, 35, "dungeons\\textures\\windows\\mm_irnfg_windows_01.blp", true,
+                       { 588, 589 }, 5, 0.0f, { -4981.0f, -881.0f, 502.0f }, { -201.62f, 190.40f, 1.5f }, 588, { 0, 0, 0 }, 500, -1, 0.0f, 120.0f, true };
+        return { s };
+    }
+
     // A snapshot's view (GLASS_SNAPSHOT: a file the snapshot key wrote, debug/Snapshot; 2026-10-22: "make the WARP
     // sweep/sequence harness able to load a snapshot file as its viewpoint, so a reported view can be reproduced
     // directly"): the game's sequence from its camera in its WMO's space (its placement, its field of view), one scene per
@@ -6325,7 +6337,7 @@ int main(int argc, char** argv)
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
-    // replay, lead, inn, sequence, inside, stained, tint, frosted)
+    // replay, lead, inn, sequence, inside, stained, tint, frosted, between, snapshot)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -6357,6 +6369,8 @@ int main(int argc, char** argv)
     if (warp && run("stained"))
         for (const SeqScene& sc : StainedScenes()) SequenceScene(args[0], args[1], sc);
     if (warp && run("tint")) TintTests();
+    if (warp && run("between"))
+        for (const SeqScene& sc : BetweenScenes()) SequenceScene(args[0], args[1], sc);
     // a snapshot's view (GLASS_SNAPSHOT=<the file>; GLASS_ONLY's part "snapshot")
     if (const char* snap = std::getenv("GLASS_SNAPSHOT"); snap && warp && run("snapshot"))
         for (const SeqScene& sc : SnapshotScenes(args[1], snap)) SequenceScene(args[0], args[1], sc);

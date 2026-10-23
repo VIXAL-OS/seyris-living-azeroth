@@ -671,15 +671,18 @@ outside only) and Wintergarde's small house: 33; and since frosted glass (2026-1
 `SeeThroughFrostBlur`) the dwarven houses (Thelsamar's and Dun Morogh's: Kharanos, Amberstill), the Taunka's
 longhouse, the orcs' medium huts (Kargath, Stonard), their great halls (from outside only), their two-storey
 and zeppelin houses (from inside only: Durotar's, Grom'gol's) and the vrykul longhouses (clear and leaded
-glass; from outside only): 47. A WMO not here keeps its windows as they are. Every placement of a WMO
+glass; from outside only): 47; and since between rooms (2026-10-23, Phase C: `SeeThroughBetweenRooms`) 13 of
+Ironforge's groups, one row each (the Group column): its shops' and rooms' windows onto its halls, and two halls' onto
+their rooms. A WMO not here keeps its windows as they are. Every placement of a WMO
 counts, on every map.
 
 | Field | Meaning |
 |---|---|
 | ID | row id |
 | Wmo | the WMO's path (case and slashes don't matter) |
-| Flags | 0x1 from outside (its windows open onto the room behind them), 0x2 from inside (its rooms' own windows open onto the street); 0 = neither (as if the row weren't there) |
-| Comment | which building; never read |
+| Flags | 0x1 from outside (its windows open onto the room behind them), 0x2 from inside (its rooms' own windows open onto the street), 0x4 between rooms (an interior group's windows open onto the interior group beyond them: Ironforge's shops and halls); 0 = none (as if the row weren't there) |
+| Comment | which building (or group); never read |
+| Group | -1: the whole WMO; else this group of it alone (a group's flags are the WMO's and its own). A file without the column: every row the whole WMO's |
 
 ## CrystalMaterials.cdbc — `CrystalMaterials.xml`
 

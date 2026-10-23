@@ -195,6 +195,21 @@ namespace wxl_livingazeroth::snapshot
             v.fov = c.fovY;
         }
 
+        // Between rooms (2026-10-23): each open window's room beyond it ("way out" from inside onto the street, "the room"
+        // from outside).
+        std::string Rooms(const seethrough::WalkedGroup& w)
+        {
+            if (w.open.empty()) return "none";
+            std::string out;
+            for (size_t i = 0; i < w.open.size(); ++i)
+            {
+                const int room = i < w.rooms.size() ? w.rooms[i] : -1;
+                out += (i ? ", " : "") + std::to_string(w.open[i]) + " -> " +
+                       (room >= 0 ? "group " + std::to_string(room) : w.inside ? std::string("the street") : std::string("its room"));
+            }
+            return out;
+        }
+
         void Where(Text& t, const world::Snapshot& s)
         {
             t("Where");
@@ -297,12 +312,13 @@ namespace wxl_livingazeroth::snapshot
             {
                 t.Raw(FormatView(v));
                 t("wmo how: %s", how.c_str());
+                if (primary) t("wmo rooms beyond the open windows: %s", Rooms(*primary).c_str());
             }
             for (const auto& w : walked)
             {
                 if (&w == primary) continue;
-                t("also walked last frame: %s group %u from %s, %.1f yd from its box; open %s; shut %s", w.wmo.c_str(), w.group, w.inside ? "inside" : "outside",
-                  w.distance, Ordinals(w.open).c_str(), Ordinals(w.shut).c_str());
+                t("also walked last frame: %s group %u from %s, %.1f yd from its box; open %s (onto %s); shut %s", w.wmo.c_str(), w.group,
+                  w.inside ? "inside" : "outside", w.distance, Ordinals(w.open).c_str(), Rooms(w).c_str(), Ordinals(w.shut).c_str());
             }
             if (inBuilding && (!primary || _stricmp(primary->wmo.c_str(), viewer.c_str()) != 0))
                 t("the camera's building (the client's): %s", viewer.c_str());
@@ -341,8 +357,8 @@ namespace wxl_livingazeroth::snapshot
             t("");
             t("Settings");
             const seethrough::Settings& st = seethrough::Config();
-            t("see-through: SeeThroughWindows %d, SeeThroughFromInside %d, SeeThroughRedraw %d, SeeThroughOpacity %.2f, SeeThroughStainedTint %.2f, "
-              "SeeThroughFrosted %d, SeeThroughFrostBlur %.2f", st.enabled, st.fromInside, st.redraw, st.opacity, st.stainedTint, st.frosted, st.frostBlur);
+            t("see-through: SeeThroughWindows %d, SeeThroughFromInside %d, SeeThroughBetweenRooms %d, SeeThroughRedraw %d, SeeThroughOpacity %.2f, SeeThroughStainedTint %.2f, "
+              "SeeThroughFrosted %d, SeeThroughFrostBlur %.2f", st.enabled, st.fromInside, st.betweenRooms, st.redraw, st.opacity, st.stainedTint, st.frosted, st.frostBlur);
             const groundfog::Settings& g = groundfog::Config();
             t("fog: on %d, with Modern Water %d, density x%.2f, brightness x%.2f, max distance %.0f yd, far fog %d, half resolution %d, steps %d, "
               "cloud deck %d", g.enabled, g.withModernWater, g.densityScale, g.brightness, g.maxDistance, g.farFog, g.halfResolution, g.steps, g.cloudDeck);

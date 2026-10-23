@@ -137,13 +137,42 @@ SEE_THROUGH = [
     (r"world\wmo\northrend\buildings\vrykul\nd_vrykul_longhouse.wmo", "the vrykul longhouse (Skorn)", FROM_OUTSIDE),
     (r"world\wmo\northrend\buildings\vrykul\nd_vrykul_longhousesnow.wmo", "the vrykul longhouse, snowed (Brunnhildar, Valkyrion)", FROM_OUTSIDE),
 ]
-SEE_THROUGH_COLUMNS = ["u", "s", "u", "s"]   # ID Wmo Flags Comment
+# Between rooms (2026-10-23, Phase C: "windows between two interiors: Ironforge first (the whole city is interior groups;
+# shop windows face indoor streets)"): a group's windows that look into another interior group open onto it from inside
+# (features/SeeThrough SeeThroughBetweenRooms, env/SeeThroughModel RoomBeyond). One row per group (the table's Group column),
+# so a city goes street by street. From seethrough_tests' survey with SEETHROUGH_BETWEEN (its eyes in the group within 20 yd
+# of a window, LookIn into the room beyond; walks through the group, the verdict held): Ironforge's 818 room windows, 500 of
+# them onto another room, open from 30% of the eyes, 64 of 804 walks changing a window more than twice. Taken: the groups
+# whose windows open from 35% of their eyes or more with no window changing more than twice on any walk (13 of 64); the
+# Commons (group 65, 73 windows onto the shops round it, 31%, 4 flickers), the Great Forge's ring (60, 17%), the Military
+# and Mystic Wards' halls (61, 97, 37: 23 .. 48%, 1 .. 8 flickers) and the rest left out until in-game snapshots say more.
+FROM_BETWEEN = 0x4
+IF = r"world\wmo\khazmodan\cities\ironforge\ironforge.wmo"
+SEE_THROUGH_GROUPS = [
+    # (wmo, group, comment): the group's name (MOGN) and the rooms its windows look into
+    (IF, 12, "Ironforge: the hall by the Hall of Explorers (12), onto its rooms 22 and 28 (43%)"),
+    (IF, 21, "Ironforge: L_guilds02, onto the hall 61 (66%)"),
+    (IF, 24, "Ironforge: a room off the hall 97 (56%)"),
+    (IF, 27, "Ironforge: R_library, onto the hall 61 (65%)"),
+    (IF, 31, "Ironforge: T_warriors, onto the Forlorn Cavern 78 (54%)"),
+    (IF, 32, "Ironforge: the Military Ward's room, onto the hall 16 (36%)"),
+    (IF, 45, "Ironforge: Interior_F302, onto 79 (39%)"),
+    (IF, 47, "Ironforge: InteriorSmithA01 (the smithy), onto the halls 8 and 16 (68%)"),
+    (IF, 48, "Ironforge: a room off the hall 8 (65%)"),
+    (IF, 51, "Ironforge: Interior_H112, onto the hall 16 (38%)"),
+    (IF, 55, "Ironforge: Interior_F303, onto the hall 95 (41%)"),
+    (IF, 75, "Ironforge: the rogues' room, onto the hall 95 (36%)"),
+    (IF, 78, "Ironforge: the Forlorn Cavern's hall (78), onto T_warriors 31 (42%)"),
+]
+SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO)
 
 
 def see_through_table():
     """SeeThroughBuildings.cdbc's rows: every SEE_THROUGH building, from outside and from inside unless its entry says
-    (a third member: its Flags)."""
-    return [[i + 1, entry[0], entry[2] if len(entry) > 2 else FROM_OUTSIDE | FROM_INSIDE, entry[1]] for i, entry in enumerate(SEE_THROUGH)]
+    (a third member: its Flags), the whole WMO (Group -1); then every SEE_THROUGH_GROUPS group, between rooms."""
+    rows = [[i + 1, entry[0], entry[2] if len(entry) > 2 else FROM_OUTSIDE | FROM_INSIDE, entry[1], -1] for i, entry in enumerate(SEE_THROUGH)]
+    rows += [[len(rows) + i + 1, wmo, FROM_BETWEEN, comment, group] for i, (wmo, group, comment) in enumerate(SEE_THROUGH_GROUPS)]
+    return rows
 
 
 def frame(n):
@@ -291,7 +320,7 @@ def main():
     if args and args[0] == "--table":
         data = Path(args[1]) if len(args) > 1 else Path(__file__).resolve().parent.parent / "data"
         rows = see_through_table()
-        print(f"{len(rows)} see-through buildings")
+        print(f"{len(rows)} rows: {len(SEE_THROUGH)} buildings, {len(SEE_THROUGH_GROUPS)} groups between rooms")
         gg.write(data / "SeeThroughBuildings.cdbc", io.build(SEE_THROUGH_COLUMNS, [tuple(r) for r in rows]))
         return
     only = None

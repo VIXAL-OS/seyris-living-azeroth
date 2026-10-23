@@ -3,4 +3,5 @@
     <Field Name="Wmo" Type="string" />
     <Field Name="Flags" Type="int" />
     <Field Name="Comment" Type="string" />
+    <Field Name="Group" Type="int" />
   </Table>

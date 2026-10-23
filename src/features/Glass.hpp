@@ -266,6 +266,10 @@ namespace wxl_livingazeroth::glass
     /// 0 when it isn't there; and how many buildings the table names.
     uint32_t SeeThroughFlags(uint32_t pathHash);
     size_t SeeThroughBuildings();
+    /// The Flags for one group of a WMO (2026-10-23, between rooms: a row may name a group): the whole WMO's rows' and that
+    /// group's; and how many group rows the table has.
+    uint32_t SeeThroughGroupFlags(uint32_t pathHash, uint32_t group);
+    size_t SeeThroughGroupRows();
     const char* TextureOf(uint32_t indexPlusOne);
     /// The window table's texture on the device (s13's for every glass batch; null: none yet), for the see-through panel.
     const void* TableTexture();

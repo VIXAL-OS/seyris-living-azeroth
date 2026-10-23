@@ -874,3 +874,86 @@ camera, each window facing it from the snapshot's side and what its rays meet. T
 frosted house's inside scene and the chapel's street scene do give those scenes' pixels again (1,580 open, 1,040 shut;
 641 and 1,677), and the probe's verdicts. Only a snapshot from the game can confirm the camera's and the building's
 spaces line up there (the file names how it found the building).
+
+## 13. Between rooms: Ironforge (2026-10-23)
+
+"Phase C: windows between two interiors: Ironforge first (the whole city is interior groups; shop windows face indoor
+streets), then the Exodar if it fits. A new walk case: from an interior group (the street or the shop), a window to
+another interior group opens as a portal into that group ... with the glass redrawn over it. Respect the frame budget
+(Ironforge's Commons have many windows), and the existing guards ... make the table able to say interior→interior per
+building/group so Dalaran's shops (Phase D) can reuse it."
+
+**The city.** Ironforge is one WMO of 104 groups, all interior but its outer facade (group 0, 190 windows onto the
+mountain). Its other 818 windows (GlassWindows, every one frosted: `mm_irnfg_windows_01` and `_02`) are in the halls and
+streets (MOGP 0xA000) and the shops and rooms off them (0x2000), most of them glazed on both sides (a window record in
+the hall's group and one in the shop's). An interior group's window's normal points out of its group (the inner panes': `FacingIn`, the camera on its other side), so the room beyond
+it is the one past its middle along its normal: `RoomBeyond`, the smallest interior box (not its own group's, not an
+exterior or skipped one) holding a point 1 or 2 yd out. 500 of the 818 have one (318 face rock or a wall: fake). None of
+the city's glass batches is a transition batch (section 11's pair doesn't arise here).
+
+**The walk.** From inside the client walks from the camera's group through portals (s_interiorPass 1), and
+`WalkInside` sees every group it reaches. A window of such a group with a room beyond it (its group marked between rooms),
+facing the camera, on the screen within the walk's rectangle and in range (40 yd), within the frame's budget from inside
+(16, shared with the ways out), opens where that room is seen through it as from outside (`LookIn`: the rays through its
+glass meet the room's own surfaces from inside; the dormer, roof and back-face rules as they are), the client's walk
+going on into the room through the window's rectangle (`OpenWindow`, as from outside), and its glass is deferred and
+drawn again over what's behind it, frosted over the blurred copy. The client's walk keeps its last argument (whether the
+walk is an interior one, cleared for a group with 0x48) in a global, s_curInteriorWalk (0xCFBEB8), that the interior
+batch loop reads when it draws (0x7ACA65, into its lighting setup's argument): the walk into the room passes the client's
+own value and the global is put back after it, so the frame's last walk is never ours. Guards (the checks at install against the running image):
+the walk's write of that global (0x7AC0A3), the loop's read (0x7ACA65), and GetGroupName's group name at +0xD8 (the
+panel's names). Nothing else of the client's is new.
+
+**The table.** SeeThroughBuildings gets a fifth column, `Group`: -1 (or a file without the column) the whole WMO, else
+that group's own row; a group's flags are the WMO's and its own. The new flag 0x4 (`kSeeBetween`) marks a group whose
+windows open onto the rooms beyond them; Dalaran's shops (Phase D) take rows the same way.
+
+**The survey** (seethrough_tests, `SEETHROUGH_BETWEEN`: every interior group's windows get the room beyond them): eyes in
+the window's own group within 20 yd of a window, on its floor at 1.8, 3 and 4.5 yd, looking through it (`LookIn`), and
+walks through the group, the verdict held as the runtime holds it. The city in all: 30% of the eyes open, 64 of 804 walks
+changing a window more than twice. By group (the line it prints; the names its MOGN gives):
+
+| group | name | windows onto rooms (fake) | eyes open | changes on the walks (at most for one) | windows changing more than twice in a walk | onto |
+|---|---|---|---|---|---|---|
+| 12 | Ironforge (a hall) | 8 (13) | 43% | 38 (8) | 0 | 22, 28 |
+| 21 | L_guilds02 | 4 | 66% | 20 (9) | 0 | 61 |
+| 24 | Ironforge (a room) | 4 | 56% | 30 (13) | 0 | 97 |
+| 27 | R_library | 4 | 65% | 30 (10) | 0 | 61 |
+| 31 | T_warriors | 4 | 54% | 40 (13) | 0 | 78 |
+| 32 | The Military Ward | 5 | 36% | 53 (18) | 0 | 16 |
+| 45 | Interior_F302 | 2 | 39% | 15 (8) | 0 | 79 |
+| 47 | InteriorSmithA01 | 5 | 68% | 36 (9) | 0 | 8, 16 |
+| 48 | Ironforge (a room) | 2 | 65% | 10 (8) | 0 | 8 |
+| 51 | Interior_H112 | 2 | 38% | 21 (11) | 0 | 16 |
+| 55 | Interior_F303 | 2 | 41% | 22 (12) | 0 | 95 |
+| 75 | Rogue | 5 | 36% | 45 (15) | 0 | 95 |
+| 78 | The Forlorn Cavern (a hall) | 4 (9) | 42% | 17 (6) | 0 | 31 |
+| 65 | Interior_K306 (the Commons) | 73 (33) | 31% | 108 (7) | 4 | 26, 29, 66 .. 89 |
+| 60 | The Great Forge's ring | 28 (1) | 17% | 44 (16) | 3 | 11, 18, 19, 64, 103 |
+| 61 | Interior_F33 | 26 (12) | 23% | 117 (21) | 8 | 20, 21, 23, 27, 62 |
+| 37 | Interior_D | 20 (14) | 48% | 98 (10) | 1 | 30, 38, 39, 58, 80 |
+| 8 | Ironforge (a hall) | 13 (5) | 56% | 60 (13) | 5 | 9, 47, 48, 49 |
+| 102 | The Military Ward | 7 | 19% | 103 (23) | 8 | 63 |
+
+**Chosen, 13 groups** (the table's rows, 60 now: the 47 buildings and these): those whose windows open from 35% of their
+eyes or more with no window changing more than twice on any walk, the shops and rooms of the first part of the table
+(mostly from inside them onto the halls, two halls onto their rooms). Left out for now: the Commons (73 windows onto the
+shops round it, 31%, four windows flickering on its walks), the Great Forge's ring, the Military and Mystic Wards' halls
+and the other halls (17 .. 56%, one to eight flickers), the rooms seen from 2 to 30%; in-game snapshots (F11) from them
+can say more. **The Exodar doesn't fit**: no Exodar WMO has a row in GlassWindows or GlassBuildings (its windows aren't
+glass materials: crystal), so it has no windows to open.
+
+**Proofs (WARP).** glass_tests' "between" part: the smithy (group 47) from inside, 4 yd from its window 588 onto the hall
+(group 8), its own frosted glass (MOBA 4, its five windows), 588 and 589 open, the upper three shut: (a) to (f) as the other
+scenes, the hall through 1,737 of 1,737 open glass pixels (its share 58% on average), none of the 3,366 lead and frame
+pixels, the glass's step between pixels 9.4 sharp, 1.8 over the blurred copy, the copy alone where the diagnostic shows it.
+seethrough_tests: `RoomBeyond` and the marked groups' windows (a synthetic street and shop), the table's group rows
+through the real reader (glass_load_tests too: the city 0x4, the smithy's group 0x4, the Commons' none, the inn's
+group 5 the inn's 0x3), and the survey's probe from the same eye: the smithy's five windows open, nine rays each seeing
+the hall. The panel lists each window opened between rooms with its group's and its room's names ("between rooms,
+IRONFORGE group 47 InteriorSmithA01 window 588: open (onto group 8 ...)") and counts them; a snapshot's walked groups say
+the room each open window opened onto.
+
+**Only the game can confirm**: the walk into a room from inside (the client's interior walk taking ours), the rooms'
+lighting with the global put back, and how the chosen groups look; snapshots from the Commons would tell whether it can
+join.

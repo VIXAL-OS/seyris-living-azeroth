@@ -69,6 +69,11 @@
 //    over 0); behind its glass the frame's blurred copy of what's there (SeeThroughDraw's FrostCapture, once a frame before
 //    the first frosted batch, then FrostDraw where the glass is in front), the glass over it at the opacity; with
 //    SeeThroughFrostBlur 0 no copy, the room as through clear glass (env/SeeThroughModel PlanFrost).
+//  - Between rooms (2026-10-23, Phase C; SeeThroughBetweenRooms, the table's 0x4 for a WMO or one group of it): from
+//    inside, a window of an interior group looking into another interior group (env/SeeThroughModel RoomBeyond: Ironforge's
+//    shop windows from its streets, and back) opens onto it as a window onto a room does from outside: where the room is
+//    seen through it (LookIn), the client's walk goes on into that room through the window's rectangle (OpenWindow, with
+//    the walk's own interior argument and its lighting global put back after), and the glass is drawn again over it.
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
@@ -91,6 +96,8 @@ namespace wxl_livingazeroth::seethrough
                                     // each, as a door is); off by default, not tied to `enabled`
         float stainedTint = 0.8f;   // SeeThroughStainedTint: with SeeThroughRedraw 1, how much stained glass colours what's seen
                                     // through it (0..1; SeeThroughDraw's tint pass; 0 none: the glass only blended over it)
+        int   betweenRooms = 1;     // SeeThroughBetweenRooms (2026-10-23, Phase C): with SeeThroughFromInside, a window from one
+                                    // room or indoor street into another (Ironforge's shops) opens onto it (the table's 0x4)
         int   frosted = 1;          // SeeThroughFrosted: with SeeThroughRedraw 1, frosted glass goes see-through (2026-10-23); 0:
                                     // its windows stay shut, the fake rooms as before
         float frostBlur = 0.5f;     // SeeThroughFrostBlur: how soft frosted glass makes what's seen through it (0..1;
@@ -125,6 +132,7 @@ namespace wxl_livingazeroth::seethrough
     /// A group the walks visited last frame (from outside or inside) and its windows' states.
     struct WalkedGroup
     {
+        std::vector<int> rooms;     // between rooms (2026-10-23): the room each open window opened onto (-1: a way out), as `open`
         std::string wmo;            // its path
         uint32_t group = 0;
         bool  inside = false;       // walked from inside (its room's own windows)

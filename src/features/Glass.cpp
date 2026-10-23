@@ -111,14 +111,15 @@ namespace wxl_livingazeroth::glass
         };
         constexpr WXL_SeyrisCdbcDefinition kLeadDef = { "GlassLead", kLeadFile, kLeadFields, 9 };
         // The buildings whose windows go see-through (features/SeeThrough; tools/see_through_survey.py --table, its
-        // SEE_THROUGH list; 2026-10-22): one row per WMO, its Flags (0x1 from outside, 0x2 from inside). Optional: without
-        // it no building's windows open.
+        // SEE_THROUGH list; 2026-10-22): one row per WMO, its Flags (0x1 from outside, 0x2 from inside, 0x4 between rooms),
+        // or (Group, 2026-10-23: -1 or missing the whole WMO) one per group of it. Optional: without it no building's windows
+        // open.
         constexpr const char* kSeeThroughFile = "DBFilesClient\\SeeThroughBuildings.cdbc";
         constexpr WXL_SeyrisCdbcField kSeeThroughFields[] = {
             {"ID", 0, WXL_CDBC_FIELD_VALUE}, {"Wmo", 1, WXL_CDBC_FIELD_STRING}, {"Flags", 2, WXL_CDBC_FIELD_VALUE},
-            {"Comment", 3, WXL_CDBC_FIELD_STRING},
+            {"Comment", 3, WXL_CDBC_FIELD_STRING}, {"Group", 4, WXL_CDBC_FIELD_VALUE},
         };
-        constexpr WXL_SeyrisCdbcDefinition kSeeThroughDef = { "SeeThroughBuildings", kSeeThroughFile, kSeeThroughFields, 4 };
+        constexpr WXL_SeyrisCdbcDefinition kSeeThroughDef = { "SeeThroughBuildings", kSeeThroughFile, kSeeThroughFields, 5 };
 
         // Each kind's look (features/GlassShader's constants): the room behind it (x the settings' shares by day and
         // night), the glass's thickness (yd), saturation seen from inside, the reflection at grazing (Fresnel's
@@ -159,7 +160,9 @@ namespace wxl_livingazeroth::glass
         std::vector<Material> g_materials;
         std::vector<std::string> g_texturePaths;   // each material's texture, as GlassMaterials has it
         std::vector<LeadRule> g_lead;              // each material's lead rule (GlassLead.cdbc; no rectangles: none)
-        std::unordered_map<uint32_t, uint32_t> g_seeThrough;   // SeeThroughBuildings.cdbc: a WMO's PathHash -> its Flags
+        std::unordered_map<uint32_t, uint32_t> g_seeThrough;   // SeeThroughBuildings.cdbc: a WMO's PathHash -> its Flags (any group's too)
+        std::unordered_map<uint32_t, uint32_t> g_seeThroughWhole;   // ... its whole-WMO rows' alone
+        std::unordered_map<uint64_t, uint32_t> g_seeThroughGroup;   // (PathHash << 32 | group) -> a group's row's
         std::unordered_map<std::string, uint32_t> g_byTexture;
         std::unordered_map<uint32_t, uint32_t> g_materialById;   // GlassMaterials ID -> index + 1
         PaneIndex g_panes;
@@ -1045,18 +1048,25 @@ namespace wxl_livingazeroth::glass
 
         // The see-through windows' buildings (their WMOs' paths, from outside and from inside).
         g_seeThrough.clear();
+        g_seeThroughWhole.clear();
+        g_seeThroughGroup.clear();
         err[0] = 0;
         if (void* t = cdbcload::LoadAppendOnly(cdbc, kSeeThroughDef, err, sizeof(err)))
         {
             unsigned unnamed = 0;
+            const bool groups = cdbcload::Has(cdbc, t, "Group");   // (a file before 2026-10-23: every row the whole WMO's)
             for (uint32_t i = 0, n = cdbc->RowCount(t); i < n; ++i)
             {
                 const void* row = cdbc->RowAt(t, i);
                 if (!row) continue;
                 const uint32_t path = PathHash(cdbc->GetString(t, row, "Wmo"));
                 const uint32_t flags = cdbc->Value(t, row, "Flags", 0);
+                const uint32_t group = groups ? cdbc->Value(t, row, "Group", 0) : 0xFFFFFFFFu;
                 if (!path) { ++unnamed; continue; }
-                if (flags) g_seeThrough[path] = flags;
+                if (!flags) continue;
+                g_seeThrough[path] |= flags;
+                if (group == 0xFFFFFFFFu) g_seeThroughWhole[path] |= flags;
+                else g_seeThroughGroup[(static_cast<uint64_t>(path) << 32) | group] |= flags;
             }
             cdbc->Release(t);
             char line[160];
@@ -1292,6 +1302,16 @@ namespace wxl_livingazeroth::glass
     }
 
     size_t SeeThroughBuildings() { return g_seeThrough.size(); }
+
+    uint32_t SeeThroughGroupFlags(uint32_t pathHash, uint32_t group)
+    {
+        if (!pathHash) return 0;
+        const auto whole = g_seeThroughWhole.find(pathHash);
+        const auto one = g_seeThroughGroup.find((static_cast<uint64_t>(pathHash) << 32) | group);
+        return (whole == g_seeThroughWhole.end() ? 0u : whole->second) | (one == g_seeThroughGroup.end() ? 0u : one->second);
+    }
+
+    size_t SeeThroughGroupRows() { return g_seeThroughGroup.size(); }
 
     const LeadRule* LeadOf(uint32_t indexPlusOne)
     {

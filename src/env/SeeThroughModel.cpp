@@ -81,8 +81,10 @@ namespace wxl_livingazeroth::seethrough
 
     namespace
     {
-        // A WMO's exterior windows (each with the room behind it) or its interior groups' (`inside`: none behind them).
-        RootWindows Build(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count, bool inside)
+        // A WMO's exterior windows (each with the room behind it) or its interior groups' (`inside`: none behind them, but a
+        // group `between` flags: the room beyond each window).
+        RootWindows Build(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count, bool inside,
+                          const std::vector<uint8_t>* between = nullptr)
         {
             RootWindows r;
             r.path = path;
@@ -100,7 +102,8 @@ namespace wxl_livingazeroth::seethrough
                 s.halfWidth = w.halfWidth;
                 s.halfHeight = w.halfHeight;
                 s.thickness = w.thickness;
-                s.interior = inside ? -1 : InteriorBehind(s.center, s.normal, groups, count);
+                const bool beyond = inside && between && groups && w.group < between->size() && (*between)[w.group];
+                s.interior = beyond ? RoomBeyond(s, groups, count) : inside ? -1 : InteriorBehind(s.center, s.normal, groups, count);
                 s.outer = inside ? OuterBehind(s, path, all) : 0.0f;
                 r.windows.push_back(s);
             }
@@ -112,7 +115,8 @@ namespace wxl_livingazeroth::seethrough
                 auto& slot = r.byGroup[r.windows[i].group];
                 if (!slot.second) slot.first = i;
                 ++slot.second;
-                if (!inside) (r.windows[i].interior >= 0 ? r.real : r.fake) += 1;
+                const bool beyond = inside && between && r.windows[i].group < between->size() && (*between)[r.windows[i].group];
+                if (!inside || beyond) (r.windows[i].interior >= 0 ? r.real : r.fake) += 1;
             }
             return r;
         }
@@ -142,6 +146,36 @@ namespace wxl_livingazeroth::seethrough
     RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, size_t groupCount)
     {
         return Build(path, all, nullptr, groupCount, true);
+    }
+
+    RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count,
+                            const std::vector<uint8_t>& between)
+    {
+        return Build(path, all, groups, count, true, &between);
+    }
+
+    int RoomBeyond(const SeeWindow& w, const GroupInfo* groups, size_t count)
+    {
+        if (!groups || !Finite3(w.center) || !Finite3(w.normal)) return -1;
+        for (const float depth : kProbes)
+        {
+            const float p[3] = { w.center[0] + w.normal[0] * depth, w.center[1] + w.normal[1] * depth, w.center[2] + w.normal[2] * depth };
+            int best = -1;
+            float volume = 0.0f;
+            for (size_t i = 0; i < count; ++i)
+            {
+                const GroupInfo& g = groups[i];
+                if (i == w.group || (g.flags & client::kSkippedGroups)) continue;
+                bool inside = true;
+                for (int k = 0; k < 3 && inside; ++k)
+                    inside = p[k] >= g.lo[k] - kBoxMargin && p[k] <= g.hi[k] + kBoxMargin;
+                if (!inside) continue;
+                const float v = (g.hi[0] - g.lo[0]) * (g.hi[1] - g.lo[1]) * (g.hi[2] - g.lo[2]);
+                if (best < 0 || v < volume) { best = static_cast<int>(i); volume = v; }
+            }
+            if (best >= 0) return best;
+        }
+        return -1;
     }
 
     namespace
