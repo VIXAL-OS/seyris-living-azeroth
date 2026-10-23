@@ -50,7 +50,8 @@ namespace wxl_livingazeroth::seethrough
         FrostBuffer g_frost;
 
         // Whether frosted glass's windows may open: its blur asked for (SeeThroughFrostBlur), per pixel, and able to run.
-        bool FrostOn() { return g_settings.frostBlur > 0.0f && g_settings.redraw != 0 && !g_frost.failed; }
+        FrostPlan Frost() { return PlanFrost(g_settings.frosted != 0, g_settings.redraw != 0, g_settings.frostBlur, g_frost.failed); }
+        bool FrostOn() { return Frost().opens; }
 
         bool g_hookedWalk = false, g_hookedDraw = false, g_hookedScene = false;
         int g_guards = 0;                 // 0 unchecked, 1 hold, 2 differ (g_guardWhy)
@@ -1388,7 +1389,7 @@ namespace wxl_livingazeroth::seethrough
                 // frosted glass: the frame's blurred copy of what's behind the glass, before any glass is drawn again
                 // (when: after the world's model scene's first pass, after this many of the frame's WMO batch draws and the
                 // opened rooms'; none with the panel's "show the room unblurred")
-                if (perPixel && FrostOn() && !g_frostUnblurred)
+                if (perPixel && Frost().copies && !g_frostUnblurred)
                     for (size_t i = 0; i < n; ++i)
                     {
                         const glass::Material* m = entries[i].state ? glass::MaterialAt(entries[i].material) : nullptr;
@@ -1469,7 +1470,7 @@ namespace wxl_livingazeroth::seethrough
                     if (m && m->kind == glass::kFrosted)
                     {
                         ++g_now.frosted;
-                        in.frost = g_frost.ready && !g_frostUnblurred ? &g_frost : nullptr;
+                        in.frost = Frost().copies && g_frost.ready && !g_frostUnblurred ? &g_frost : nullptr;
                         in.frostOnly = g_frostShowCopy != 0;
                     }
                     const PerPixelDrawn drawn = DrawPerPixel(dev, e, in, g_split);
@@ -1721,7 +1722,9 @@ namespace wxl_livingazeroth::seethrough
         if (g_settings.redraw)
         {
             api->UiSliderFloat("stained glass's colour over what's seen through it (SeeThroughStainedTint)##sttint", &g_settings.stainedTint, 0.0f, 1.0f);
-            api->UiSliderFloat("frosted glass's blur of what's seen through it (SeeThroughFrostBlur; 0: frosted windows stay shut)##stfrost",
+            api->UiCheckbox("frosted glass see-through (SeeThroughFrosted; off: frosted windows stay shut, their fake rooms as before)##stfrosted",
+                            &g_settings.frosted);
+            api->UiSliderFloat("frosted glass's blur of what's seen through it (SeeThroughFrostBlur; 0: none, as through clear glass)##stfrost",
                                &g_settings.frostBlur, 0.0f, 1.0f);
             api->UiCheckbox("frosted glass, diagnostic (not saved): show the blurred copy alone in the open frosted glass, no glass over it "
                             "(what the copy holds behind the window)##stfrostcopy", &g_frostShowCopy);
@@ -1782,11 +1785,14 @@ namespace wxl_livingazeroth::seethrough
                           g_tintShader ? "made" : g_tintTried ? "not made: " : "not needed yet", g_tintShader ? "" : g_tintWhy,
                           DepthFormatName(g_depthFormat), HasStencil(g_depthFormat) ? "a" : "no");
             out.emplace_back(line);
-            std::snprintf(line, sizeof(line), "Frosted glass's blur (SeeThroughFrostBlur %.2f): %s; %u frosted batches redrawn, %u over the blurred copy; "
-                          "%u windows of frosted glass kept shut", g_settings.frostBlur,
-                          g_settings.frostBlur <= 0.0f ? "off (frosted windows stay shut)"
-                          : g_frost.failed ? "can't run here" : g_last.frostCopies ? "the scene copied at a quarter and blurred this frame"
-                          : "no frosted glass redrawn last frame", g_last.frosted, g_last.frostDrawn, g_last.frostShut);
+            const FrostPlan fp = Frost();
+            std::snprintf(line, sizeof(line), "Frosted glass (SeeThroughFrosted %d, its blur SeeThroughFrostBlur %.2f): %s; %u frosted batches redrawn, %u "
+                          "over the blurred copy; %u windows of frosted glass kept shut", g_settings.frosted, g_settings.frostBlur,
+                          !g_settings.frosted ? "off (frosted windows stay shut, their fake rooms as before)"
+                          : !fp.opens ? "its blur can't run here (frosted windows stay shut; with the blur at 0 they'd open unblurred)"
+                          : !fp.copies ? "no blur (as through clear glass)"
+                          : g_last.frostCopies ? "the scene copied at a quarter and blurred this frame" : "no frosted glass redrawn last frame",
+                          g_last.frosted, g_last.frostDrawn, g_last.frostShut);
             if (g_frost.why[0]) { std::strncat(line, "; ", sizeof(line) - std::strlen(line) - 1); std::strncat(line, g_frost.why, sizeof(line) - std::strlen(line) - 1); }
             out.emplace_back(line);
             if (g_last.copied || g_last.roomBatches)
@@ -1884,11 +1890,11 @@ namespace wxl_livingazeroth::seethrough
             static const char* const kWhy[] = { "open", "shut: fake (nothing modelled behind it)", "shut: too far", "shut: over the frame's budget",
                                                 "shut: its room's group not loaded", "shut: its room's surfaces not read yet (one room a frame)",
                                                 "shut: its room isn't seen through it from here", "shut: the walk didn't reach its room",
-                                                "shut: frosted glass, its blur off (SeeThroughFrostBlur 0, the whole-glass redraw, or it can't run here)" };
+                                                "shut: frosted glass, its see-through off (SeeThroughFrosted 0, the whole-glass redraw, or its blur can't run here)" };
             static const char* const kWhyInside[] = { "open: a way out, the street behind its glass", "-", "shut: too far (40 yd)", "shut: over the frame's budget",
                                                       "-", "shut: the room's or the building's surfaces not all read yet (one a frame)",
                                                       "shut: the street isn't seen through it from here", "-",
-                                                      "shut: frosted glass, its blur off (SeeThroughFrostBlur 0, the whole-glass redraw, or it can't run here)" };
+                                                      "shut: frosted glass, its see-through off (SeeThroughFrosted 0, the whole-glass redraw, or its blur can't run here)" };
             std::snprintf(line, sizeof(line), "  %s%s group %u window %u: %s%s", n.inside ? "from inside, " : "", n.building, n.group, n.ordinal,
                           (n.inside ? kWhyInside : kWhy)[n.why], rays);
             out.emplace_back(line);

@@ -65,9 +65,10 @@
 //    found in the texture (GlassLead.cdbc's rows over its designs or the whole texture: env/GlassModel LeadMask), and the
 //    gate passes the inside of a thick wall round a window's opening (env/SeeThroughModel kReveal) and, from inside, the
 //    lining of a deep opening up to the building's outer glass behind it (OuterBehind, kLiningMargin).
-//  - Frosted glass (2026-10-22, Phase B): a frosted window opens only with SeeThroughFrostBlur over 0 and the blur able to
-//    run; behind its glass the frame's blurred copy of what's there (SeeThroughDraw's FrostCapture, once a frame before the
-//    first frosted batch, then FrostDraw where the glass is in front), the glass over it at the opacity.
+//  - Frosted glass (2026-10-22, Phase B): a frosted window opens with SeeThroughFrosted (2026-10-23; before, with the blur
+//    over 0); behind its glass the frame's blurred copy of what's there (SeeThroughDraw's FrostCapture, once a frame before
+//    the first frosted batch, then FrostDraw where the glass is in front), the glass over it at the opacity; with
+//    SeeThroughFrostBlur 0 no copy, the room as through clear glass (env/SeeThroughModel PlanFrost).
 //  - Guards: the client's code it relies on (kGuards) checked once at install against the running image; every hook body
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
@@ -90,8 +91,10 @@ namespace wxl_livingazeroth::seethrough
                                     // each, as a door is); off by default, not tied to `enabled`
         float stainedTint = 0.8f;   // SeeThroughStainedTint: with SeeThroughRedraw 1, how much stained glass colours what's seen
                                     // through it (0..1; SeeThroughDraw's tint pass; 0 none: the glass only blended over it)
-        float frostBlur = 0.5f;     // SeeThroughFrostBlur: with SeeThroughRedraw 1, how soft frosted glass makes what's seen through
-                                    // it (0..1; SeeThroughDraw's FrostCapture; 0: frosted windows stay shut, as before)
+        int   frosted = 1;          // SeeThroughFrosted: with SeeThroughRedraw 1, frosted glass goes see-through (2026-10-23); 0:
+                                    // its windows stay shut, the fake rooms as before
+        float frostBlur = 0.5f;     // SeeThroughFrostBlur: how soft frosted glass makes what's seen through it (0..1;
+                                    // SeeThroughDraw's FrostCapture; 0: no blur, as through clear glass, 2026-10-23)
     };
     Settings& Config();
 

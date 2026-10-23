@@ -342,7 +342,7 @@ namespace wxl_livingazeroth::snapshot
             t("Settings");
             const seethrough::Settings& st = seethrough::Config();
             t("see-through: SeeThroughWindows %d, SeeThroughFromInside %d, SeeThroughRedraw %d, SeeThroughOpacity %.2f, SeeThroughStainedTint %.2f, "
-              "SeeThroughFrostBlur %.2f", st.enabled, st.fromInside, st.redraw, st.opacity, st.stainedTint, st.frostBlur);
+              "SeeThroughFrosted %d, SeeThroughFrostBlur %.2f", st.enabled, st.fromInside, st.redraw, st.opacity, st.stainedTint, st.frosted, st.frostBlur);
             const groundfog::Settings& g = groundfog::Config();
             t("fog: on %d, with Modern Water %d, density x%.2f, brightness x%.2f, max distance %.0f yd, far fog %d, half resolution %d, steps %d, "
               "cloud deck %d", g.enabled, g.withModernWater, g.densityScale, g.brightness, g.maxDistance, g.farFog, g.halfResolution, g.steps, g.cloudDeck);

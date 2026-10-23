@@ -107,7 +107,8 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   draw writes, needing neither the client's index buffer nor a stencil, which the game's depth surface lacked (22 October
   2026). Frosted glass (22 October 2026): the room or the street behind it softly blurred (`SeeThroughFrostBlur`: the
   frame copied at a quarter of its size once a frame and blurred in a pass of its own, laid behind the open windows'
-  frosted glass by the depth; frosted windows stay shut where it can't run), and 14 more WMOs: the dwarven houses
+  frosted glass by the depth; frosted windows stay shut where it can't run; `SeeThroughFrosted` turns it off, and the blur at
+  0 shows the room as through clear glass, 23 October), and 14 more WMOs: the dwarven houses
   (Kharanos, Thelsamar), the Taunka's longhouse, the orcs' huts, great halls, two-storey and zeppelin houses, and the
   vrykul longhouses, 47 in all. From inside, a room's glass the client draws as a transition batch (twice: lit as the
   outside, then as the inside, blended by its vertex alpha) is redrawn too: before, it stayed the client's glass, as in

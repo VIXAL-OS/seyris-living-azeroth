@@ -1816,6 +1816,17 @@ int main(int argc, char** argv)
         CHECK(st::OpenBit(3.0f, now, 1.0f - 1.0f / 1048576.0f) && st::OpenBit(14.0f, now, 1.0f - 1.0f / 1048576.0f) && !st::OpenBit(9.0f, now));
     });
 
+    Test("PlanFrost (2026-10-23, \"if I set the blur to exactly 0 it doesn't work, any value above 0 does\"): frosted windows "
+         "open with SeeThroughFrosted and the per-pixel redraw; over the blurred copy with the blur above 0 (shut if it can't run), "
+         "at 0 as through clear glass", [] {
+        const st::FrostPlan on = st::PlanFrost(true, true, 0.5f, false), zero = st::PlanFrost(true, true, 0.0f, false);
+        CHECK(on.opens && on.copies && zero.opens && !zero.copies);
+        CHECK(!st::PlanFrost(true, true, 0.5f, true).opens && st::PlanFrost(true, true, 0.0f, true).opens && !st::PlanFrost(true, true, 0.0f, true).copies);
+        CHECK(!st::PlanFrost(false, true, 0.5f, false).opens && !st::PlanFrost(false, true, 0.0f, false).opens && !st::PlanFrost(true, false, 0.5f, false).opens);
+        const st::FrostPlan nan = st::PlanFrost(true, true, std::nanf(""), false), neg = st::PlanFrost(true, true, -1.0f, false);
+        CHECK(nan.opens && !nan.copies && neg.opens && !neg.copies);
+    });
+
     Test("Deferral, a transition batch (2026-10-23, Kharanos's house from inside: \"it can't see outside even though it should be "
          "able to\"): the client draws it twice, its exterior-lit draw (Gx mode 9) silenced and its interior-lit one (7) deferred, as "
          "one batch; why a pending batch's draw was drawn as it was", [] {

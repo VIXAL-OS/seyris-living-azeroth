@@ -882,6 +882,15 @@ namespace wxl_livingazeroth::seethrough
         return opened;
     }
 
+    FrostPlan PlanFrost(bool frosted, bool perPixel, float blur, bool blurFailed)
+    {
+        FrostPlan p;
+        const bool blurs = std::isfinite(blur) && blur > 0.0f;
+        p.opens = frosted && perPixel && (!blurs || !blurFailed);
+        p.copies = p.opens && blurs;
+        return p;
+    }
+
     bool DeferrableWhole(const BatchWindows& b, const uint8_t* states, size_t stateCount)
     {
         if (!Deferrable(b, states, stateCount)) return false;

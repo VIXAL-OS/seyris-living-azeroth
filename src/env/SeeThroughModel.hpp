@@ -549,6 +549,12 @@ namespace wxl_livingazeroth::seethrough
     /// The same for the whole-glass redraw (SeeThroughRedraw 0, as on 2026-10-20): every window it covers open or unseen too
     /// (its glass goes see-through as one, so a shut window would show the void behind it).
     bool DeferrableWhole(const BatchWindows& b, const uint8_t* states, size_t stateCount);
+    /// Frosted glass (2026-10-23: "if I set the blur to exactly 0 it doesn't work, any value above 0 does"): its windows open
+    /// with SeeThroughFrosted on (`frosted`) and the per-pixel redraw; with the blur (SeeThroughFrostBlur) above 0 over the
+    /// frame's blurred copy (`copies`), unless the blur can't run here (then shut, as before), at 0 as through clear glass (no
+    /// copy). Off: shut, the client's fake rooms as before.
+    struct FrostPlan { bool opens = false, copies = false; };
+    FrostPlan PlanFrost(bool frosted, bool perPixel, float blur, bool blurFailed);
     /// The per-pixel redraw split by window (SeeThroughDraw): its open windows' triangles (`open`, kOpened) and the rest
     /// (shut, unseen and strays), as vertex indices (the batch's own, MOVI's), so the open ones are drawn see-through
     /// whatever the shader's window lookup finds: in game it found none (every pixel the debug view's yellow, 2026-10-21).
