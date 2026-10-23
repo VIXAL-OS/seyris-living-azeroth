@@ -4673,7 +4673,7 @@ namespace
         int tinted = 0;
         bool frosted = false;
         auto run = [&](Through through, bool split, bool debug, std::vector<uint32_t>& img, D3DCOLOR backdrop = D3DCOLOR_ARGB(255, 0, 0, 255),
-                       float tint = 0.0f, bool checkerBack = false, bool frost = false) -> bool {
+                       float tint = 0.0f, bool checkerBack = false, bool frost = false, bool frostOnly = false) -> bool {
             split = split && canSplit;   // (a snapshot's batch with nothing open, or nothing shut: whole)
             d->SetRenderTarget(0, target);
             d->SetDepthStencilSurface(depth);
@@ -4772,6 +4772,7 @@ namespace
             pp.opacity = 0.35f; pp.debug = debug; pp.lead = leadTex; pp.split = split;
             pp.tintShader = tint > 0.0f ? tintShader : nullptr; pp.tint = tint;
             pp.frost = frost && frostBuf.ready ? &frostBuf : nullptr;
+            pp.frostOnly = frostOnly;
             const st::PerPixelDrawn drawn = st::DrawPerPixel(d, e, pp, buf);
             tinted = drawn.tinted;
             frosted = drawn.frosted;
@@ -4838,18 +4839,29 @@ namespace
         // their lead and frame (opaque green), not the shut windows (a pixel at a window's edge aside). A pixel shows what's
         // behind when it changes with the backdrop (blue, then red; from inside the glass's own look is sky-blue by day)
         int glassBlue = 0, glassPx = 0, leadBlue = 0, leadPx = 0, shutBlue = 0, shutPx = 0;
+        double shareSum = 0.0, glassLum = 0.0;   // (2026-10-23) how much of what's behind shows through the open glass (0..1), the glass's own light
+        int shareMin = 255;
         for (size_t p = 0; ok && p < plain.size(); ++p)
         {
             const int k = kind(a[p]), red = (a[p] >> 16) & 0xFF, green = (a[p] >> 8) & 0xFF;
             const int dr = static_cast<int>((plainRed[p] >> 16) & 0xFF) - static_cast<int>((plain[p] >> 16) & 0xFF);
             const int db = static_cast<int>(plain[p] & 0xFF) - static_cast<int>(plainRed[p] & 0xFF);
             const bool blue = dr > 40 && db > 40;
+            if (k == 1 && green < 100)
+            {
+                shareSum += std::min(dr, db) / 255.0;
+                shareMin = std::min(shareMin, std::min(dr, db));
+                // the glass's own light there (what's behind black: red and green over the blue backdrop, blue over the red)
+                glassLum += (0.2126 * ((plain[p] >> 16) & 0xFF) + 0.7152 * ((plain[p] >> 8) & 0xFF) + 0.0722 * (plainRed[p] & 0xFF)) / 255.0;
+            }
             if (k == 1 && green < 100) { ++glassPx; glassBlue += blue ? 1 : 0; }
             if (k == 1 && green == 255 && red == 0) { ++leadPx; leadBlue += blue ? 1 : 0; }
             if (k == 2) { ++shutPx; shutBlue += blue ? 1 : 0; }
         }
-        std::snprintf(line, sizeof(line), "%s: (d) the plain view: %s through %d of %d open windows' glass pixels, %d of %d of their lead "
-                      "and frame, %d of %d shut windows'", label, behind, glassBlue, glassPx, leadBlue, leadPx, shutBlue, shutPx);
+        std::snprintf(line, sizeof(line), "%s: (d) the plain view: %s through %d of %d open windows' glass pixels (its share there %.0f%% on "
+                      "average, %.0f%% at least, over the glass's own light, luminance %.2f), %d of %d of their lead and frame, %d of %d shut windows'",
+                      label, behind, glassBlue, glassPx, glassPx ? 100.0 * shareSum / glassPx : 0.0, glassPx ? 100.0 * shareMin / 255.0 : 0.0,
+                      glassPx ? glassLum / glassPx : 0.0, leadBlue, leadPx, shutBlue, shutPx);
         Check(ok && glassPx > sc.minOpen / 2 && glassBlue * 10 >= glassPx * 8 && leadBlue * 100 <= leadPx && shutBlue * 100 <= shutPx, line);
         // (e) stained glass's tint (2026-10-22: "the coloured glass should stay coloured over the room (tint, not just
         // blend)"): over a grey backdrop, tinted against not, drawn whole (by the depth the opaque draw wrote) and
@@ -4935,6 +4947,60 @@ namespace
                           "(%d pairs); %d of %d lead, frame and shut-window pixels moved; drawn whole %s, split %s", label, pairs ? stepSharp / (3 * pairs) : 0.0,
                           pairs ? stepSoft / (3 * pairs) : 0.0, pairs, moved, kept, frostWhole ? "over it" : "NOT over it", frostSplit ? "over it" : "NOT over it");
             Check(fok && pairs > 50 && stepSoft * 2 <= stepSharp && moved == 0 && kept > 50 && frostWhole && frostSplit, line);
+            // the panel's "show the blurred copy" (2026-10-23, Kharanos from outside: "I looked outside and saw only frosted
+            // glass"): the open glass the copy alone, each pixel the blurred texture sampled there (bilinear, as the
+            // composite's), no glass over it; the lead, frame and shut windows as with the glass
+            std::vector<uint32_t> copyOnly;
+            bool cok = fok && run(kWithConstants, false, false, copyOnly, D3DCOLOR_ARGB(255, 0, 0, 255), 0.0f, true, true, true);
+            const UINT qw = std::max(1u, frostBuf.width / st::kFrostScale), qh = std::max(1u, frostBuf.height / st::kFrostScale);
+            std::vector<uint32_t> quarterPx(static_cast<size_t>(qw) * qh);
+            IDirect3DSurface9 *level = nullptr, *sys = nullptr;
+            D3DLOCKED_RECT qr{};
+            cok = cok && frostBuf.blurred && SUCCEEDED(frostBuf.blurred->GetSurfaceLevel(0, &level)) &&
+                  SUCCEEDED(d->CreateOffscreenPlainSurface(qw, qh, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &sys, nullptr)) &&
+                  SUCCEEDED(d->GetRenderTargetData(level, sys)) && SUCCEEDED(sys->LockRect(&qr, nullptr, D3DLOCK_READONLY));
+            if (cok)
+            {
+                for (UINT y = 0; y < qh; ++y) std::memcpy(&quarterPx[static_cast<size_t>(y) * qw], static_cast<const uint8_t*>(qr.pBits) + y * qr.Pitch, qw * 4);
+                sys->UnlockRect();
+            }
+            if (sys) sys->Release();
+            if (level) level->Release();
+            auto sample = [&](float u, float v, int k) {
+                const float x = u * qw - 0.5f, y = v * qh - 0.5f;
+                const int x0 = std::clamp(static_cast<int>(std::floor(x)), 0, static_cast<int>(qw) - 1), y0 = std::clamp(static_cast<int>(std::floor(y)), 0, static_cast<int>(qh) - 1);
+                const int x1 = std::min(x0 + 1, static_cast<int>(qw) - 1), y1 = std::min(y0 + 1, static_cast<int>(qh) - 1);
+                const float fx = std::clamp(x - std::floor(x), 0.0f, 1.0f), fy = std::clamp(y - std::floor(y), 0.0f, 1.0f);
+                auto at = [&](int xx, int yy) { return static_cast<float>(ch(quarterPx[static_cast<size_t>(yy) * qw + xx], k)); };
+                return (at(x0, y0) * (1 - fx) + at(x1, y0) * fx) * (1 - fy) + (at(x0, y1) * (1 - fx) + at(x1, y1) * fx) * fy;
+            };
+            int copyPx = 0, copyOff = 0, copyMoved = 0, copyKept = 0;
+            for (int y = 0; cok && y < kS; ++y)
+                for (int x = 0; x < kS; ++x)
+                {
+                    const size_t p = static_cast<size_t>(y) * kS + x;
+                    const int k = kind(a[p]), red = (a[p] >> 16) & 0xFF, green = (a[p] >> 8) & 0xFF;
+                    if (k == 1 && green < 100)
+                    {
+                        ++copyPx;
+                        int most = 0;
+                        for (int q = 0; q < 3; ++q)
+                            most = std::max(most, std::abs(ch(copyOnly[p], q) - static_cast<int>(std::lround(sample((x + 0.5f) / kS, (y + 0.5f) / kS, q)))));
+                        copyOff += most > 3 ? 1 : 0;
+                    }
+                    if ((k == 1 && green == 255 && red == 0) || k == 2)
+                    {
+                        ++copyKept;
+                        int most = 0;
+                        for (int q = 0; q < 3; ++q) most = std::max(most, std::abs(ch(copyOnly[p], q) - ch(soft[p], q)));
+                        copyMoved += most > 1 ? 1 : 0;
+                    }
+                }
+            std::snprintf(line, sizeof(line), "%s: (f) the panel's \"show the blurred copy\": %d of %d open glass pixels the copy's own (within 3 levels of "
+                          "its texel there), %d of %d lead, frame and shut-window pixels moved from the frosted view", label, copyPx - copyOff, copyPx,
+                          copyMoved, copyKept);
+            // (a lead pixel at a window's edge the glass's own draw also covers may move: one in 2,109 from inside)
+            Check(cok && copyPx > 50 && copyOff * 100 <= copyPx && copyMoved * 500 <= copyKept, line);
         }
         // (g) a transition batch (2026-10-23, Kharanos's house from inside: "it can't see outside even though it should be able
         // to"): the runtime's Deferral silences its exterior-lit draw (Gx mode 9) and defers its interior-lit one (7); before,

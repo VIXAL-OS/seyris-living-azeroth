@@ -132,6 +132,10 @@ namespace wxl_livingazeroth::seethrough
     };
     /// Last frame's walked groups, nearest the camera first.
     void LastWalked(std::vector<WalkedGroup>& out);
+    /// The blurred copy (frosted glass's) read back: its mean colour over the frame and within each open frosted window's
+    /// screen rectangle last frame, and when it was taken (after how many of the frame's WMO batch draws, how many of them
+    /// the opened rooms'); and the panel's diagnostics. A device read: a snapshot's, not every frame's.
+    void CopyLines(std::vector<std::string>& out);
     /// The building the camera is in (the client's s_viewerMapObjDef: any WMO, in the table or not): its path, the
     /// placed instance's m_invMat (world -> its space, row vectors) and its groups' flags and boxes (MOGI). False when
     /// the camera is in none or it can't be read.

@@ -106,7 +106,23 @@ namespace wxl_livingazeroth::seethrough
             static constexpr unsigned kRedrawn = 12;
             Redrawn redrawnList[kRedrawn];
             unsigned redrawnCount = 0;
+            // Frosted glass (2026-10-23, Kharanos from outside: "I looked outside and saw only frosted glass", the harness
+            // showing the room): the frame's WMO batch draws and the opened rooms' (the groups the walk from outside added
+            // through a window) in all, and how many of each had been drawn when the blurred copy was taken; and each open
+            // frosted window's screen rectangle (clip space, y up), for a snapshot's look at what the copy holds there.
+            unsigned wmoBatches = 0, roomBatches = 0, copyWmo = 0, copyRoom = 0;
+            bool copied = false;
+            struct OpenRect { uint32_t ordinal = 0; bool inside = false; Rect rect; };
+            static constexpr unsigned kOpenRects = 8;
+            OpenRect openRects[kOpenRects];
+            unsigned openRectCount = 0;
         };
+
+        void NoteRect(Counts& c, uint32_t ordinal, bool inside, const Rect& r)
+        {
+            if (c.openRectCount >= Counts::kOpenRects) return;
+            c.openRects[c.openRectCount++] = Counts::OpenRect{ ordinal, inside, r };
+        }
 
         void NoteDraw(Counts& c, const uint32_t* batch, uint32_t blending, Counts::Verdict verdict, Deferral::Why why)
         {
@@ -580,6 +596,19 @@ namespace wxl_livingazeroth::seethrough
             return Held(instance, group, index, sight, held);
         }
 
+        // The rooms the walk from outside opened this frame (their instance and group: Key), and whether the group being
+        // drawn is one (BeginGroupDraw): the frame's room batches (Counts::roomBatches).
+        std::vector<uint64_t> g_roomKeys;
+        bool g_drawingRoom = false;
+        void NoteRoom(const void* instance, uint32_t room)
+        {
+            const uint64_t k = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 16) ^ room;
+            if (g_roomKeys.size() < 64 && std::find(g_roomKeys.begin(), g_roomKeys.end(), k) == g_roomKeys.end()) g_roomKeys.push_back(k);
+        }
+        // The panel's frosted glass diagnostics (not saved): the blurred copy alone in the open frosted glass (no glass over
+        // it), and frosted glass redrawn as clear glass is (no blur: the room as it is behind it).
+        int g_frostShowCopy = 0, g_frostUnblurred = 0;
+
         // The group render callback while our walk runs: notes the room reached, then the client's (the sort table's).
         RenderCallbackFn g_savedCallback = nullptr;
         uint32_t g_target = 0xFFFFFFFFu;
@@ -698,6 +727,11 @@ namespace wxl_livingazeroth::seethrough
                         FrustumRect(p.clip, frustum);
                         opened = OpenWindow(root, room, group, clip, frustum);
                         why = opened ? Counts::kOpen : Counts::kNotReached;
+                        if (opened)
+                        {
+                            NoteRoom(instance, room);
+                            if (windows[i].kind == glass::kFrosted) NoteRect(g_now, windows[i].ordinal, false, p.clip);
+                        }
                     }
                 }
                 NoteWindow(g_now, windows[i].ordinal, why, &sight, held);
@@ -818,6 +852,7 @@ namespace wxl_livingazeroth::seethrough
                 {
                     PortalView view = ViewOf(p.screen, p.depth);
                     AddWayOut(view);
+                    if (windows[i].kind == glass::kFrosted) NoteRect(g_now, windows[i].ordinal, true, p.screen);
                     f.states[i] = kOpened;
                     ++f.opened;
                     ++g_now.insideOpened;
@@ -1351,11 +1386,16 @@ namespace wxl_livingazeroth::seethrough
             __try
             {
                 // frosted glass: the frame's blurred copy of what's behind the glass, before any glass is drawn again
-                if (perPixel && FrostOn())
+                // (when: after the world's model scene's first pass, after this many of the frame's WMO batch draws and the
+                // opened rooms'; none with the panel's "show the room unblurred")
+                if (perPixel && FrostOn() && !g_frostUnblurred)
                     for (size_t i = 0; i < n; ++i)
                     {
                         const glass::Material* m = entries[i].state ? glass::MaterialAt(entries[i].material) : nullptr;
                         if (!m || m->kind != glass::kFrosted) continue;
+                        g_now.copied = true;
+                        g_now.copyWmo = g_now.wmoBatches;
+                        g_now.copyRoom = g_now.roomBatches;
                         g_now.frostCopies += FrostCapture(dev, g_frost, g_settings.frostBlur) ? 1 : 0;
                         break;
                     }
@@ -1429,7 +1469,8 @@ namespace wxl_livingazeroth::seethrough
                     if (m && m->kind == glass::kFrosted)
                     {
                         ++g_now.frosted;
-                        in.frost = g_frost.ready ? &g_frost : nullptr;
+                        in.frost = g_frost.ready && !g_frostUnblurred ? &g_frost : nullptr;
+                        in.frostOnly = g_frostShowCopy != 0;
                     }
                     const PerPixelDrawn drawn = DrawPerPixel(dev, e, in, g_split);
                     if (g_now.redrawnCount < Counts::kRedrawn)
@@ -1559,6 +1600,7 @@ namespace wxl_livingazeroth::seethrough
         g_deferral.EndLoop();
         g_lastFrame.swap(g_frame);   // (last frame's walks kept a frame for a snapshot: LastWalked)
         g_frame.clear();
+        g_roomKeys.clear();
         if (g_roots.size() > 2048) { g_roots.clear(); g_lastFrame.clear(); }   // only here: nothing of this frame points at them now
         g_budget = kMaxOpenPerFrame;
         g_insideBudget = kMaxInsidePerFrame;
@@ -1597,6 +1639,13 @@ namespace wxl_livingazeroth::seethrough
     void BeginGroupDraw(const void* root, int group, const void* instanceArg)
     {
         g_draw = DrawCtx{};
+        g_drawingRoom = false;
+        if (!g_roomKeys.empty() && instanceArg && group >= 0)
+        {
+            const void* at = static_cast<const uint8_t*>(instanceArg) - client::kDefInvMat;
+            const uint64_t k = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(at)) << 16) ^ static_cast<uint32_t>(group);
+            g_drawingRoom = std::find(g_roomKeys.begin(), g_roomKeys.end(), k) != g_roomKeys.end();
+        }
         if (g_frame.empty() || !Active() || !instanceArg || group < 0) return;
         const void* instance = static_cast<const uint8_t*>(instanceArg) - client::kDefInvMat;
         const auto it = g_frame.find(Key(instance, static_cast<uint32_t>(group)));
@@ -1614,11 +1663,14 @@ namespace wxl_livingazeroth::seethrough
     void EndGroupDraw()
     {
         g_draw = DrawCtx{};
+        g_drawingRoom = false;
         g_deferral.EndLoop();
     }
 
     void Batch(const void* group, const void* record, uint32_t glassMaterial)
     {
+        ++g_now.wmoBatches;
+        g_now.roomBatches += g_drawingRoom ? 1 : 0;
         const bool glass = glassMaterial != 0;
         if (!g_draw.frame)
         {
@@ -1671,6 +1723,10 @@ namespace wxl_livingazeroth::seethrough
             api->UiSliderFloat("stained glass's colour over what's seen through it (SeeThroughStainedTint)##sttint", &g_settings.stainedTint, 0.0f, 1.0f);
             api->UiSliderFloat("frosted glass's blur of what's seen through it (SeeThroughFrostBlur; 0: frosted windows stay shut)##stfrost",
                                &g_settings.frostBlur, 0.0f, 1.0f);
+            api->UiCheckbox("frosted glass, diagnostic (not saved): show the blurred copy alone in the open frosted glass, no glass over it "
+                            "(what the copy holds behind the window)##stfrostcopy", &g_frostShowCopy);
+            api->UiCheckbox("frosted glass, diagnostic (not saved): show the room unblurred (frosted glass redrawn as clear glass is: is the "
+                            "room behind it at all?)##stfrostsharp", &g_frostUnblurred);
             api->UiCheckbox("debug view (not saved): the redraw's pixels by what the shader decided: magenta an open window's glass (through "
                             "grey to green as it's less glass), green its lead and frame (opaque), cyan a shut window, yellow no window "
                             "found##stdebug", &g_debugView);
@@ -1733,6 +1789,14 @@ namespace wxl_livingazeroth::seethrough
                           : "no frosted glass redrawn last frame", g_last.frosted, g_last.frostDrawn, g_last.frostShut);
             if (g_frost.why[0]) { std::strncat(line, "; ", sizeof(line) - std::strlen(line) - 1); std::strncat(line, g_frost.why, sizeof(line) - std::strlen(line) - 1); }
             out.emplace_back(line);
+            if (g_last.copied || g_last.roomBatches)
+            {
+                std::snprintf(line, sizeof(line), "The blurred copy: taken after the world's model scene's first pass, after %u of the frame's %u WMO batch "
+                              "draws, %u of the opened rooms' %u%s%s%s", g_last.copyWmo, g_last.wmoBatches, g_last.copyRoom, g_last.roomBatches,
+                              !g_last.copied ? " (not taken last frame)" : g_last.copyRoom < g_last.roomBatches ? " (some of the rooms drawn AFTER it)" : "",
+                              g_frostShowCopy ? "; showing the copy alone" : "", g_frostUnblurred ? "; showing the room unblurred (no copy)" : "");
+                out.emplace_back(line);
+            }
         }
         // what the redraw set and read back (once a second)
         if (g_probeShown.valid)
@@ -1898,5 +1962,73 @@ namespace wxl_livingazeroth::seethrough
                 }
         }
         return true;
+    }
+
+    void CopyLines(std::vector<std::string>& out)
+    {
+        char line[400];
+        std::snprintf(line, sizeof(line), "frosted glass diagnostics: show the blurred copy %s, show the room unblurred %s", g_frostShowCopy ? "on" : "off",
+                      g_frostUnblurred ? "on" : "off");
+        out.emplace_back(line);
+        if (!g_frost.blurred || !g_frost.width || !g_frost.height)
+        {
+            out.emplace_back("the blurred copy: none (no frosted glass redrawn over it yet)");
+            return;
+        }
+        if (g_frost.format != D3DFMT_A8R8G8B8 && g_frost.format != D3DFMT_X8R8G8B8)
+        {
+            std::snprintf(line, sizeof(line), "the blurred copy: format %d, not read", static_cast<int>(g_frost.format));
+            out.emplace_back(line);
+            return;
+        }
+        auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+        const UINT w = std::max(1u, g_frost.width / kFrostScale), h = std::max(1u, g_frost.height / kFrostScale);
+        IDirect3DSurface9 *level = nullptr, *sys = nullptr;
+        D3DLOCKED_RECT lr{};
+        if (!dev || FAILED(g_frost.blurred->GetSurfaceLevel(0, &level)) || !level ||
+            FAILED(dev->CreateOffscreenPlainSurface(w, h, g_frost.format, D3DPOOL_SYSTEMMEM, &sys, nullptr)) || !sys ||
+            FAILED(dev->GetRenderTargetData(level, sys)) || FAILED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY)))
+        {
+            out.emplace_back("the blurred copy: not read back");
+            if (level) level->Release();
+            if (sys) sys->Release();
+            return;
+        }
+        // the mean colour (0..1) over a clip-space rectangle (y up), the copy's rows top down
+        auto mean = [&](float x0, float y0, float x1, float y1, float rgb[3]) {
+            const int px0 = std::clamp(static_cast<int>((x0 + 1.0f) * 0.5f * w), 0, static_cast<int>(w) - 1);
+            const int px1 = std::clamp(static_cast<int>((x1 + 1.0f) * 0.5f * w), px0, static_cast<int>(w) - 1);
+            const int py0 = std::clamp(static_cast<int>((1.0f - y1) * 0.5f * h), 0, static_cast<int>(h) - 1);
+            const int py1 = std::clamp(static_cast<int>((1.0f - y0) * 0.5f * h), py0, static_cast<int>(h) - 1);
+            double sum[3] = {};
+            unsigned count = 0;
+            for (int y = py0; y <= py1; ++y)
+                for (int x = px0; x <= px1; ++x)
+                {
+                    const uint32_t c = *reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(lr.pBits) + static_cast<size_t>(y) * lr.Pitch + 4u * x);
+                    sum[0] += (c >> 16) & 0xFF; sum[1] += (c >> 8) & 0xFF; sum[2] += c & 0xFF;
+                    ++count;
+                }
+            for (int k = 0; k < 3; ++k) rgb[k] = count ? static_cast<float>(sum[k] / count / 255.0) : 0.0f;
+            return count;
+        };
+        float rgb[3];
+        mean(-1.0f, -1.0f, 1.0f, 1.0f, rgb);
+        std::snprintf(line, sizeof(line), "the blurred copy (%ux%u, last taken after %u of %u WMO batch draws, %u of the opened rooms' %u): the frame's mean "
+                      "colour %.3f %.3f %.3f", w, h, g_last.copyWmo, g_last.wmoBatches, g_last.copyRoom, g_last.roomBatches, rgb[0], rgb[1], rgb[2]);
+        out.emplace_back(line);
+        for (unsigned i = 0; i < g_last.openRectCount; ++i)
+        {
+            const Counts::OpenRect& o = g_last.openRects[i];
+            const unsigned n = mean(o.rect.minX, o.rect.minY, o.rect.maxX, o.rect.maxY, rgb);
+            std::snprintf(line, sizeof(line), "the blurred copy within frosted window %u's screen rectangle (%s; clip %.3f %.3f .. %.3f %.3f, %u of its pixels): "
+                          "mean colour %.3f %.3f %.3f, luminance %.3f", o.ordinal, o.inside ? "from inside" : "from outside", o.rect.minX, o.rect.minY,
+                          o.rect.maxX, o.rect.maxY, n, rgb[0], rgb[1], rgb[2], 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2]);
+            out.emplace_back(line);
+        }
+        if (!g_last.openRectCount) out.emplace_back("the blurred copy: no frosted window open last frame");
+        sys->UnlockRect();
+        sys->Release();
+        level->Release();
     }
 }

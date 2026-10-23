@@ -420,6 +420,7 @@ namespace wxl_livingazeroth::seethrough
             }
             // frosted glass: the blurred copy behind the open windows' glass; stained glass: what's behind it x its colour
             if (frost) out.frosted = FrostDraw(dev, e.args, 0, openTris, *in.frost);
+            if (frost && in.frostOnly && out.frosted) { out.drawn = ok; return out; }   // (the copy alone: the panel's diagnostic)
             if (tint) { if (TintDraw(dev, e.args, 0, openTris, in)) out.tinted = 1; else out.untinted = "its draw failed"; }
             // the open windows' glass over the room, no depth
             dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
@@ -437,6 +438,7 @@ namespace wxl_livingazeroth::seethrough
         // frosted glass: the blurred copy where the batch's glass is in front (the open windows' glass); stained glass: what's
         // behind it there x its colour
         if (frost) out.frosted = FrostDraw(dev, e.args, e.args.startIndex, e.args.primitives, *in.frost);
+        if (frost && in.frostOnly && out.frosted) { out.drawn = ok; return out; }   // (the copy alone: the panel's diagnostic)
         if (tint) { if (TintDraw(dev, e.args, e.args.startIndex, e.args.primitives, in)) out.tinted = 2; else out.untinted = "its draw failed"; }
         dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
         setDraw(-1.0f);

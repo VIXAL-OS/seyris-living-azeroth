@@ -841,6 +841,24 @@ same: 850 of 850, 0 before. From outside (the user's second snapshot: group 0, a
 (their winding, against the outer panes' facing out), so from outside the client culls them; the harness draws the room
 through 1,823 of 1,823 of the open glass pixels from that camera.
 
+**From outside, 2026-10-23**: "I looked outside and saw only frosted glass", at the same house, while its snapshot says
+windows 2 and 3 open (nine rays each see the room), "1 frosted batches redrawn, 1 over the blurred copy" and two rooms
+added, and the harness draws the room through all 1,823 open glass pixels from that camera. What the harness can't tell is
+what the game's copy holds behind the window, and whether the room's group is drawn into it at all. Two things in the
+harness's numbers argue that a dim room may simply not read through it: through the open glass the room's share is 62% on
+average (31% at the least: the glass's lighter texels), over the glass's own light, luminance 0.35 by day from the street
+(the other scenes' 0.29 .. 0.43). A room behind it at a luminance of 0.1 adds about 0.06 to the window; its furniture's
+differences, a few hundredths more, blurred over 16 pixels at 1080p; a sharp room reads at that contrast, a blurred one
+hardly. Not settled without the game. So, not saved, two panel checkboxes under the blur's slider: **show the blurred
+copy** (the copy alone in the open frosted glass, no glass over it: what the copy holds there) and **show the room
+unblurred** (frosted glass redrawn as clear glass is: whether the room is there at all). glass_tests (f) checks the first:
+every open glass pixel the copy's own texel there, within 3 levels, the lead, frame and shut windows as before (one edge
+pixel aside, from inside). And the panel and the snapshot say when the copy was taken: after the world's model scene's
+first pass, after how many of the frame's WMO batch draws and how many of the opened rooms' (the groups the walk from
+outside added through a window, counted as their batches pass the cull test), so a room drawn after the copy, or not at
+all, shows; a snapshot also reads the copy back and gives its mean colour over the frame and within each open frosted
+window's screen rectangle (a dark warm room or the bright day behind the house).
+
 ## 12. A snapshot's view (2026-10-22)
 
 The snapshot key (`SnapshotKey`, debug/Snapshot; Lumenveil's queue #10) writes the camera in the nearest WMO's own space:

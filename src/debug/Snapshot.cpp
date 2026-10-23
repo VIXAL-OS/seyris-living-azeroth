@@ -363,6 +363,9 @@ namespace wxl_livingazeroth::snapshot
             t("See-through panel");
             seethrough::StatusLines(lines);
             for (const std::string& l : lines) t("%s", l.c_str());
+            lines.clear();
+            seethrough::CopyLines(lines);
+            for (const std::string& l : lines) t("%s", l.c_str());
             t("");
             t("Fog panel");
             lines.clear();

@@ -56,6 +56,7 @@ namespace wxl_livingazeroth::seethrough
         IDirect3DPixelShader9* tintShader = nullptr;   // stained glass's tint pass (CreateTintShader; null, or no lead mask: none)
         float tint = 0.0f;                  // its strength (SeeThroughStainedTint; 0: none)
         const struct FrostBuffer* frost = nullptr;   // frosted glass: the frame's blurred copy (FrostCapture'd), drawn behind its glass
+        bool frostOnly = false;             // the panel's "show the blurred copy" (2026-10-23): the copy alone in the open glass, no glass over it
     };
 
     struct PerPixelDrawn
