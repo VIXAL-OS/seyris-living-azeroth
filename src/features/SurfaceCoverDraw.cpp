@@ -259,7 +259,7 @@ namespace wxl_livingazeroth::cover::detail
                 return fail("props textures failed");
 
         g_vs = static_cast<IDirect3DVertexShader9*>(Compile(dev, kVsHlsl, "vs_3_0", false));
-        g_ps = static_cast<IDirect3DPixelShader9*>(Compile(dev, (std::string(kPsHlsl) + kRippleHlsl + kPsMainHlsl).c_str(), "ps_3_0", true));
+        g_ps = static_cast<IDirect3DPixelShader9*>(Compile(dev, (LampKneeDefines() + kPsHlsl + kRippleHlsl + kPsMainHlsl).c_str(), "ps_3_0", true));
         if (!g_vs || !g_ps) return fail("shader compile failed (see the log)");
         g_decalPs = static_cast<IDirect3DPixelShader9*>(Compile(dev, kDecalPsHlsl, "ps_3_0", true)); // without it, no decals on the cover
         return true;

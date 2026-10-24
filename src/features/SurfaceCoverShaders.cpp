@@ -1,5 +1,9 @@
 #include "SurfaceCoverInternal.hpp"
 
+#include "../env/Lights.hpp"
+
+#include <cstdio>
+
 namespace wxl_livingazeroth::cover::detail
 {
     // VS: c0..c3 view-projection columns; c4 = (patch first cell i, j, cell size, 1 / texture
@@ -458,6 +462,11 @@ float4 main(float3 n : TEXCOORD0, float2 d : TEXCOORD1, float2 rel : TEXCOORD2, 
     // a ring), on the brightest channel with all three scaled alike so the flame's hue stays. The knee
     // starts at the sun's own level (at least 0.8): without lamps this is the sun's lighting as before.
     float3 sunLit = lit * (0.7 + 0.3 * shade);
+    // Our summed light through the knee every shader applies first (lights::LampKnee: many small flames together, a
+    // ring of candles, a warm glow and not a blowout; LAMP_KNEE_* put in front of this source from env/Lights).
+    float lampPeak = max(lamps.r, max(lamps.g, lamps.b));
+    float lampOver = max(lampPeak - LAMP_KNEE_START, 0);
+    lamps *= (lampPeak - lampOver + LAMP_KNEE_ROOM * (1 - exp(-lampOver / LAMP_KNEE_ROOM))) / max(lampPeak, 0.001);
     float3 total = sunLit + lamps;
     float peak = max(total.r, max(total.g, total.b));
     float knee = max(0.8, max(sunLit.r, max(sunLit.g, sunLit.b)));
@@ -558,4 +567,11 @@ float4 main(float2 d : TEXCOORD1, float2 rel : TEXCOORD2, float3 vpos : TEXCOORD
     return c;
 }
 )";
+
+    std::string LampKneeDefines()
+    {
+        char d[160];
+        std::snprintf(d, sizeof(d), "#define LAMP_KNEE_START %.9g\n#define LAMP_KNEE_ROOM %.9g\n", lights::kLampKneeStart, lights::kLampKneeRoom);
+        return d;
+    }
 }

@@ -40,7 +40,8 @@ namespace wxl_livingazeroth::modellights
         //  world -> view, row-vector convention, gfx::SceneMatrices)  t5  debug-view weights
         //  t6  K1 (1/W, 1/H, lights per cell, 0)   t7  K2 (1, 0, 0.5, 2/3)
         //  t8  K3 (0.7, 0.03, 1/ln2, 0.05)         t9  K4 (0.8, 0.001, 0.25, 1 / lights per cell)
-        //  t10 K5 (scale of ours on baked-light WMO surfaces, 0, 0, 0)
+        //  t10 K5 (scale of ours on baked-light WMO surfaces, the knee on our sum: its start, its room, 1 / room;
+        //       lights::LampKnee)
         //  t11 the grid (world x, y of cell 0's corner, 1 / cell size, cells per side)
         //  rows 1..: the cells' entries, row-major: cell c's k-th light at linear texel c * perCell + k,
         //        each (u, v of the light's first texel, 1, 0); (0, 0, 0, 0) ends a cell's list.
@@ -259,6 +260,37 @@ namespace wxl_livingazeroth::modellights
                 "      endif\n";
         }
 
+        // Our summed light r31 through the knee every shader applies to it (lights::LampKnee: above the start its brightest
+        // channel goes smoothly toward start + room, all three scaled alike): `k` holds t10 (.y start, .z room, .w 1 / room),
+        // `a` is a free temp; r10 = K2 (1, 0, ..), r11.z = 1 / ln 2, r12.y = 0.001.
+        std::string OursKnee(const std::string& k, const std::string& a)
+        {
+            return
+                "    max " + a + ".x, r31.x, r31.y\n"
+                "    max " + a + ".x, " + a + ".x, r31.z\n"
+                "    add " + a + ".y, " + a + ".x, -" + k + ".y\n"
+                "    max " + a + ".y, " + a + ".y, r10.y\n"
+                "    mul " + a + ".z, " + a + ".y, " + k + ".w\n"
+                "    mul " + a + ".z, " + a + ".z, -r11.z\n"
+                "    exp " + a + ".z, " + a + ".z\n"
+                "    add " + a + ".z, r10.x, -" + a + ".z\n"
+                "    mul " + a + ".z, " + a + ".z, " + k + ".z\n"
+                "    add " + a + ".w, " + a + ".x, -" + a + ".y\n"
+                "    add " + a + ".w, " + a + ".w, " + a + ".z\n"
+                "    max " + a + ".x, " + a + ".x, r12.y\n"
+                "    rcp " + a + ".x, " + a + ".x\n"
+                "    mul " + a + ".w, " + a + ".w, " + a + ".x\n"
+                "    mul r31.xyz, r31, " + a + ".w\n";
+        }
+
+        // t10 (K5) into `r` (r27 the address, from c1).
+        std::string LoadK5(const std::string& r)
+        {
+            std::string s = "    mov r27, c1\n";
+            for (int k = 0; k < 10; ++k) s += "    add r27.x, r27.x, r27.z\n";
+            return s + "    texldl " + r + ", r27, s0\n";
+        }
+
         // Lit WMO surfaces are exteriors (interiors draw with the baked-light variants): a light inside
         // an indoor group (4th texel r23.w = 1, set only while the panel's switch is on) stays off them,
         // like off the terrain, so a chimney or cellar torch doesn't light the outside walls.
@@ -375,6 +407,7 @@ namespace wxl_livingazeroth::modellights
                 "      mad r31.xyz, r25, r20.x, r31\n"
                 "      add r28.z, r28.z, r10.x\n"
                 "    endrep\n"
+                + LoadK5("r21") + OursKnee("r21", "r22") +
                 "    mov r17.x, r13.w\n"
                 "    mov r17.y, r14.w\n"
                 "    mov r17.z, r15.w\n"
@@ -618,6 +651,7 @@ namespace wxl_livingazeroth::modellights
                 "    add r27.x, r27.x, r27.z\n"
                 "    add r27.x, r27.x, r27.z\n"
                 "    texldl r22, r27, s0\n"
+                + OursKnee("r22", "r23") +
                 "    mul r18.xyz, r31, r22.x\n"
                 "    mul r18.xyz, r18, r10.z\n"
                 "    add r21.xyz, r18, -r17\n"
@@ -880,6 +914,9 @@ namespace wxl_livingazeroth::modellights
                     0.8f, 0.001f, 0.25f, grid.perCell > 0 ? 1.0f / perCell : 0.0f };
                 std::memcpy(t + 6 * 4, k, sizeof(k));
                 t[10 * 4] = cfg.bakedAdd;
+                t[10 * 4 + 1] = lights::kLampKneeStart;
+                t[10 * 4 + 2] = lights::kLampKneeRoom;
+                t[10 * 4 + 3] = 1.0f / lights::kLampKneeRoom;
                 const float g[4] = { grid.originX, grid.originY, 1.0f / grid.cellSize, static_cast<float>(grid.cells) };
                 std::memcpy(t + 11 * 4, g, sizeof(g));
             }
@@ -950,6 +987,14 @@ namespace wxl_livingazeroth::modellights
         if (!device || !EnsureTexture(device)) return;
         if (g_active) Fill(false); // stock lighting until the next Prepare (and on screens without a world)
         Bind(device);
+    }
+
+    bool EditVertexForTests(const std::string& family, std::string& src, std::string& why)
+    {
+        g_family = family;
+        const bool ok = EditVertex(src, why);
+        g_family.clear();
+        return ok;
     }
 
     const char* StatusLine()

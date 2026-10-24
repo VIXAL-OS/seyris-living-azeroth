@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
@@ -326,6 +327,7 @@ namespace wxl_livingazeroth::lights
             bool  moving;   // attached (follows a model): never baked
             bool  window;   // a window's light (WindowLights.cdbc): ranks below the others in a full cell
             float night;    // the night factor its colour carries (night-only lights), else 1
+            unsigned flames; // separate flames merged into it (lights of different models): FlameClusterScale
         };
 
         double g_time = 0.0;
@@ -1002,6 +1004,7 @@ namespace wxl_livingazeroth::lights
                 c.moving = false;
                 c.window = true;
                 c.weight = 1.0f;
+                c.flames = 1;
                 cands.push_back(c);
             }
         }
@@ -1113,6 +1116,7 @@ namespace wxl_livingazeroth::lights
             const float dx = c.pos[0] - eye[0], dy = c.pos[1] - eye[1], dz = c.pos[2] - eye[2];
             if (dx * dx + dy * dy + dz * dz > range * range) continue;
             c.weight = 1.0f;
+            c.flames = 1;
             if (!s.table) c.night = 1.0f;
             cands.push_back(c);
         }
@@ -1181,6 +1185,8 @@ namespace wxl_livingazeroth::lights
                     cands[a].pos[k] += (cands[b].pos[k] - cands[a].pos[k]) * share;
                     cands[a].color[k] += cands[b].color[k];
                 }
+                // (another model's light: another flame; a model's own lights at one flame are one)
+                if (cands[b].model != cands[a].model || !cands[a].model) cands[a].flames += cands[b].flames;
                 cands[a].radius = std::max(cands[a].radius, cands[b].radius);
                 cands[a].scale = std::max(cands[a].scale, cands[b].scale);
                 cands[a].bake = cands[a].bake || cands[b].bake;
@@ -1192,6 +1198,19 @@ namespace wxl_livingazeroth::lights
             }
         }
         g_stats.merged = merged;
+        // Separate small flames merged together: sqrt(N) of their summed colour (kSmallFlameRadius, FlameClusterScale).
+        g_stats.flameClusters = 0;
+        g_stats.clusteredFlames = 0;
+        for (Candidate& c : cands)
+        {
+            if (c.weight <= 0.0f || c.flames <= 1) continue;
+            const float radius = (c.radius > 0.0f ? c.radius : g_settings.radius) * c.scale;
+            const float keep = FlameClusterScale(c.flames, radius);
+            if (keep >= 1.0f) continue;
+            for (int k = 0; k < 3; ++k) c.color[k] *= keep;
+            ++g_stats.flameClusters;
+            g_stats.clusteredFlames += c.flames;
+        }
         const double tMerge = grassperf::Now();
         g_stats.mergeMs = tMerge - tCand;
 
@@ -1289,5 +1308,100 @@ namespace wxl_livingazeroth::lights
             return disc < 0.0f ? -1.0f : (-b + std::sqrt(disc)) / (2.0f * c);
         }
         return b > 1e-6f ? (k - a) / b : -1.0f;
+    }
+
+    LightAt SumAt(const float pos[3], const float* normal)
+    {
+        LightAt out;
+        const Grid& g = g_grid;
+        if (!pos || g.cells <= 0 || g.perCell <= 0) return out;
+        // The pixel's cell as the shaders find it: clamped to the grid (a light past its radius adds nothing).
+        const int cx = std::clamp(static_cast<int>(std::floor((pos[0] - g.originX) / g.cellSize)), 0, g.cells - 1);
+        const int cy = std::clamp(static_cast<int>(std::floor((pos[1] - g.originY) / g.cellSize)), 0, g.cells - 1);
+        const size_t cell = static_cast<size_t>(cy) * g.cells + cx;
+        out.listed = g.count[cell];
+        auto light = [&](const ActiveLight& l, float& distance) {
+            const float dv[3] = { l.pos[0] - pos[0], l.pos[1] - pos[1], l.pos[2] - pos[2] };
+            const float d2 = dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2];
+            const float d = std::sqrt(d2);
+            distance = d;
+            if (!(l.radius > 0.0f) || d >= l.radius) return 0.0f;
+            const float t = d / l.radius;
+            const float win = std::pow((1.0f - t * t) * (1.0f - t * t), l.falloff);
+            const float inv = d > 1e-3f ? 1.0f / d : 0.0f;
+            const float dir[3] = { dv[0] * inv, dv[1] * inv, dv[2] * inv };
+            const float wrap = normal ? std::clamp((normal[0] * dir[0] + normal[1] * dir[1] + normal[2] * dir[2] + 0.5f) / 1.5f, 0.0f, 1.0f) : 1.0f;
+            const float cone = std::clamp((-(dir[0] * l.spotDir[0] + dir[1] * l.spotDir[1] + dir[2] * l.spotDir[2]) - l.cosOuter) * l.spotScale, 0.0f, 1.0f);
+            const float de = std::sqrt(d2 + 1.0f);
+            return win * wrap * cone / (de * (0.7f + 0.03f * de));
+        };
+        for (const ActiveLight& l : g_active)
+        {
+            const float dv[3] = { l.pos[0] - pos[0], l.pos[1] - pos[1], l.pos[2] - pos[2] };
+            out.inRange += dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2] < l.radius * l.radius ? 1u : 0u;
+        }
+        for (unsigned k = 0; k < out.listed; ++k)
+        {
+            const unsigned index = g.index[cell * g.perCell + k];
+            if (index >= g_active.size()) continue;
+            const ActiveLight& l = g_active[index];
+            float distance = 0.0f;
+            const float a = light(l, distance);
+            if (!(a > 0.0f)) continue;
+            ++out.reaching;
+            for (int c = 0; c < 3; ++c) out.sum[c] += l.color[c] * a;
+            LightAt::Top top;
+            top.index = index;
+            top.light = a * std::fmax(l.color[0], std::fmax(l.color[1], l.color[2]));
+            top.distance = distance;
+            std::memcpy(top.color, l.color, sizeof(top.color));
+            top.model = l.model ? ModelPath(l.model) : (l.window ? "(a window)" : "");
+            out.strongest.push_back(top);
+            std::sort(out.strongest.begin(), out.strongest.end(), [](const LightAt::Top& x, const LightAt::Top& y) { return x.light > y.light; });
+            if (out.strongest.size() > 3) out.strongest.pop_back();
+        }
+        std::memcpy(out.kneed, out.sum, sizeof(out.kneed));
+        LampKnee(out.kneed);
+        return out;
+    }
+
+    void SnapshotLines(std::vector<std::string>& out)
+    {
+        char line[700];
+        const Settings& s = g_settings;
+        std::snprintf(line, sizeof(line), "our lights: %s; radius %.1f yd, brightness %.2f, range %.0f yd, cells of %.0f yd with up to %d lights, merge closer than %.2f yd, "
+                      "flicker %.2f (speed %.2f), on models %d (the client's up to 4 replaced %d), WMO interiors x%.2f, indoor lights off the outside %d, baked occlusion %d",
+                      s.enabled ? "on" : "off", s.radius, s.brightness, s.range, s.cellSize, s.maxPerCell, s.mergeDistance, s.flicker, s.flickerSpeed, s.models,
+                      s.modelStockOff, s.bakedAdd, s.indoorSkipsTerrain, s.bakeEnabled);
+        out.emplace_back(line);
+        const Stats st = g_stats;
+        std::snprintf(line, sizeof(line), "this frame: %u drawn (at most %d; %u past it dropped), %u in range, %u merged (%u of them separate small flames, in %u lights at "
+                      "sqrt(N) of their colour); the grid's busiest cell %u lights, %u cells over the limit (%u entries left out); %u table lights in range, %u indoor",
+                      st.active, kMaxPool, st.poolDropped, st.inRange, st.merged, st.clusteredFlames, st.flameClusters, st.busiestCell, st.fullCells,
+                      st.droppedFromCells, st.tableLights, st.indoor);
+        out.emplace_back(line);
+        std::snprintf(line, sizeof(line), "every shader's knee on our summed light: above %.2f its brightest channel goes toward %.2f (one torch passes it only within a yard of its flame)",
+                      kLampKneeStart, kLampKneeStart + kLampKneeRoom);
+        out.emplace_back(line);
+        const world::Snapshot& snap = world::Current();
+        if (!snap.inWorld) return;
+        float eye[3] = { snap.playerPos[0], snap.playerPos[1], snap.playerPos[2] };
+        wxl::game::camera::GetPosition(eye);
+        const float feet[3] = { snap.playerPos[0], snap.playerPos[1], snap.playerPos[2] + 0.05f }, up[3] = { 0.0f, 0.0f, 1.0f };
+        auto spot = [&](const char* what, const float p[3], const float* normal) {
+            const LightAt a = SumAt(p, normal);
+            std::snprintf(line, sizeof(line), "%s (%.1f %.1f %.1f%s): its cell lists %u lights, %u reach it (%u of all drawn are within their radius); our light %.2f %.2f %.2f, "
+                          "after the knee %.2f %.2f %.2f", what, p[0], p[1], p[2], normal ? ", facing up" : ", every way", a.listed, a.reaching, a.inRange,
+                          a.sum[0], a.sum[1], a.sum[2], a.kneed[0], a.kneed[1], a.kneed[2]);
+            out.emplace_back(line);
+            for (const LightAt::Top& t : a.strongest)
+            {
+                std::snprintf(line, sizeof(line), "  %.2f from %s (colour %.2f %.2f %.2f, %.1f yd away)", t.light, t.model.empty() ? "?" : t.model.c_str(), t.color[0], t.color[1],
+                              t.color[2], t.distance);
+                out.emplace_back(line);
+            }
+        };
+        spot("at the player's feet", feet, up);
+        spot("at the camera", eye, nullptr);
     }
 }

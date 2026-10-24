@@ -11,6 +11,8 @@
 
 #include <d3d9.h>
 
+#include <string>
+
 namespace wxl_livingazeroth::modellights
 {
     /// Registers the vertex-shader patch. From WXL_Load, before shaderpatch::Install().
@@ -38,6 +40,10 @@ namespace wxl_livingazeroth::modellights
     void EndFrame();
 
     const char* StatusLine();
+
+    /// Tests: the vertex-shader edit the shader patcher runs, on a disassembled vs_3_0 source of the vertex set `family`
+    /// (e.g. "MapObjDiffuse_T1", "Diffuse_T1": WMO families start with "MapObj"). False with the reason.
+    bool EditVertexForTests(const std::string& family, std::string& src, std::string& why);
 
     /// Debug view on lit models: 0 off, 1 our lights only, 2 count check (flat red = the vertex's
     /// cell's light count / the lights per cell), 3 world stripes (the vertex position taken back to world space; they must stay fixed

@@ -132,6 +132,11 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
   day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital
   cities and where it's freezing, under a third indoors.
+- **Many small flames together** (23 October 2026): a ring of candles no longer blows the floor out to yellow-white
+  (Felwood's Shadow Hold: 223 candles round a pit). Separate small flames merged together keep the square root of their
+  summed light, and every shader (terrain, surface cover, models, WMOs, WMO interiors) compresses our summed light
+  smoothly above a knee, the hue kept; one light, and Goldshire's inn and Ironforge, stay within a few percent of before.
+  The snapshot (F11) also writes the lights' settings and counts and the light at the player's feet and at the camera.
 - **Snapshot key** (22 October 2026): one key (`SnapshotKey`, F11) or a panel button writes where you are, the camera
   (in the nearest building's own space too), the time, the weather, the settings that matter, the frame rate and the
   panels' status to `Logs\la-snapshots\` in the game folder, for bug reports; the glass and see-through test harnesses

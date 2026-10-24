@@ -46,13 +46,15 @@ namespace wxl_livingazeroth::terrainlights
         // grid: a light past its radius adds 0), entries from cell x lights per cell, each pointing
         // at its light's first texel; an empty entry or the cell's capacity ends the loop.
         // c213 = (4, 7.999, 2, 0.25), c214 = (0, 1, 2, 3): the occlusion lookup's steps.
-        char d[448];
+        // c185 = (the knee on our summed light: its start, its room, 1 / room, 0; lights::LampKnee, as every shader).
+        char d[512];
         std::snprintf(d, sizeof(d),
+                      "    def c185, %.9g, %.9g, %.9g, 0\n"
                       "    def c207, %.9g, 0, %.9g, 0\n    def c208, 2, -1, 0.666666687, 0\n"
                       "    def c209, 0.7, 1.44269502, 0.05, 0.03\n    def c210, 1.5, 0, 0, 0\n    def c211, 0.8, 0.001, 0, 0\n"
                       "    def c213, 4, 7.99900007, 2, 0.25\n    def c214, 0, 1, 2, 3\n"
                       "    defi i0, %d, 0, 0, 0\n    dcl_2d s13\n",
-                      1.0 / kWidth, 0.5 / kWidth, lights::kMaxPerCellCap);
+                      lights::kLampKneeStart, lights::kLampKneeRoom, 1.0 / lights::kLampKneeRoom, 1.0 / kWidth, 0.5 / kWidth, lights::kMaxPerCellCap);
         defs = d;
         return
             // The ground's normal (moisture texture red/green), toward up near and beyond the grid's edge.
@@ -168,6 +170,23 @@ namespace wxl_livingazeroth::terrainlights
             "\n      mad r23.xyz, r19, r16.x, r23"
             "\n      add r22.x, r22.x, c202.x"
             "\n    endrep"
+            // Our sum through the knee every shader applies (lights::LampKnee): above c185.x its brightest channel goes
+            // smoothly toward c185.x + c185.y, all three scaled alike (r16, r17 free after the loop).
+            "\n    max r16.x, r23.x, r23.y"
+            "\n    max r16.x, r16.x, r23.z"
+            "\n    add r16.y, r16.x, -c185.x"
+            "\n    max r16.y, r16.y, c202.y"
+            "\n    mul r16.z, r16.y, c185.z"
+            "\n    mul r16.z, r16.z, -c209.y"
+            "\n    exp r16.z, r16.z"
+            "\n    add r16.z, c202.x, -r16.z"
+            "\n    mul r16.z, r16.z, c185.y"
+            "\n    add r16.w, r16.x, -r16.y"
+            "\n    add r16.w, r16.w, r16.z"
+            "\n    max r16.x, r16.x, c211.y"
+            "\n    rcp r17.x, r16.x"
+            "\n    mul r16.w, r16.w, r17.x"
+            "\n    mul r23.xyz, r23, r16.w"
             // l = min(2 v0, 1) (the stock lighting); t = l + lamps, added like the client's own lights;
             // above a knee (max(0.8, brightest channel of l)) the brightest channel of t is compressed
             // smoothly (knee + room (1 - e^(-over / room))) and all three scaled alike, so the flame's

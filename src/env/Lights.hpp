@@ -7,7 +7,9 @@
 
 #include "WorldQuery.hpp"
 
+#include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace wxl_livingazeroth::lights
@@ -82,6 +84,40 @@ namespace wxl_livingazeroth::lights
         int   bakeEnabled = 1;        // apply baked occlusion at all
     };
 
+    // --- many small flames together (2026-10-23, Felwood's Shadow Hold: "ABSURDLY bright candle ring in here") -------------
+    // 223 candles round a pit (DoodadLightAssignment: Candle, 0.76 x FFCC50, 9.5 yd) came to 69 lights after merging
+    // (summed: one of them seven candles' worth), 10 .. 20 reaching each spot of the floor, 16 listed by its cell; their
+    // sum (up to 9.7 x a candle's colour) ran into the knee every shader folds the light into, which tops out at twice the
+    // texture: 45% of the floor within 6 yd of a candle sat at it, saturated yellow-white. Two changes, both leaving one
+    // light as it was:
+    //  - Merging: separate small flames (lights of different models, each reaching kSmallFlameRadius or less) merged
+    //    together keep sqrt(N) of their summed colour (N flames: the energy grows as sqrt N, not N), a model's own lights
+    //    at one flame still sum. (Shadow Hold's brightest merged light: 2.6 candles, not 7.)
+    //  - Every shader (the terrain's, the surface cover's, the M2s' and lit WMOs', the WMO interiors' fill) compresses
+    //    our summed light before folding it in: above kLampKneeStart the brightest channel goes smoothly toward
+    //    kLampKneeStart + kLampKneeRoom (LampKnee), the three scaled alike so the hue stays. One torch passes the start
+    //    only within a yard of its flame, a candle within a third of a yard. Offline (scratchpad candles\compare.py, the
+    //    surfaces round every light): Shadow Hold's floor at most 1.3 x the texture (was 2, 78% of it at 1.9 or more);
+    //    Goldshire's inn and Ironforge's Great Forge and Stonefire Tavern within 2.5% of before everywhere.
+    constexpr float kLampKneeStart = 1.0f, kLampKneeRoom = 0.3f;
+    constexpr float kSmallFlameRadius = 10.0f;   // yd: Candle 9.5, Skull candle 5, the inn lanterns 6 .. 8; torches 17 .. 21
+
+    /// Our summed light at a surface (rgb, the shaders' units: one torch at a yard ~0.6) after the knee the shaders apply.
+    inline void LampKnee(float rgb[3], float start = kLampKneeStart, float room = kLampKneeRoom)
+    {
+        const float peak = std::fmax(rgb[0], std::fmax(rgb[1], rgb[2]));
+        if (!(peak > start) || !(room > 0.0f)) return;
+        const float over = peak - start;
+        const float shaped = start + room * (1.0f - std::exp(-over / room));
+        for (int k = 0; k < 3; ++k) rgb[k] *= shaped / peak;
+    }
+
+    /// The share of a merged light's summed colour it keeps: 1 / sqrt(flames) for separate small flames, else 1.
+    inline float FlameClusterScale(unsigned flames, float radius)
+    {
+        return flames > 1 && radius > 0.0f && radius <= kSmallFlameRadius ? 1.0f / std::sqrt(static_cast<float>(flames)) : 1.0f;
+    }
+
     constexpr int kOccSide = 8;                       // directions per side of a light's octahedral tile
     constexpr int kOccCells = kOccSide * kOccSide;    // 64 distances per light
     Settings& Config();
@@ -144,6 +180,7 @@ namespace wxl_livingazeroth::lights
     {
         unsigned models = 0, modelsInRange = 0, modelLights = 0, fromClient = 0, fromWorldMatrix = 0,
                  fileColor = 0, merged = 0, inRange = 0, active = 0;
+        unsigned flameClusters = 0, clusteredFlames = 0;                    // merged lights of separate small flames, and those flames
         unsigned busiestCell = 0, fullCells = 0, droppedFromCells = 0, poolDropped = 0; // the grid
         unsigned tableLights = 0, suppressedModels = 0, attachFallbacks = 0; // DoodadLightAssignment
         unsigned attachedModels = 0, attachedAtRest = 0;                     // models hanging on another, of those not animated
@@ -193,4 +230,23 @@ namespace wxl_livingazeroth::lights
     /// `header` is the model's parsed M2 header.
     bool AttachmentPosition(const void* header, uint32_t attachType, int32_t attachIndex, const float offset[3], float out[3]);
     Stats GetStats();
+
+    /// Our light at a point as the shaders sum it (the light grid's cell there, its lights' colours this frame, the size
+    /// ~1 yd falloff, the window to the radius, the spot cone; facing `normal` with wrapped Lambert, or every way when
+    /// null; baked occlusion and the indoor rule left out): the snapshot's (F11) report.
+    struct LightAt
+    {
+        unsigned listed = 0;     // lights its cell lists
+        unsigned reaching = 0;   // of those, within their radius of the point
+        unsigned inRange = 0;    // of all drawn lights, within their radius of the point (the cell may have left some out)
+        float sum[3] = {};       // summed
+        float kneed[3] = {};     // after LampKnee
+        struct Top { unsigned index = 0; float light = 0.0f, distance = 0.0f; float color[3] = {}; std::string model; };
+        std::vector<Top> strongest; // the three strongest there
+    };
+    LightAt SumAt(const float pos[3], const float* normal);
+
+    /// The lights' lines for the snapshot: the settings, this frame's counts, the grid, and SumAt at the player's feet
+    /// (facing up) and at the camera.
+    void SnapshotLines(std::vector<std::string>& out);
 }

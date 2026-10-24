@@ -305,6 +305,8 @@ namespace wxl_livingazeroth::cover::detail
     // --- GPU and drawing (SurfaceCoverDraw.cpp, SurfaceCoverShaders.cpp) ------------------------
     extern const char* kVsHlsl;
     extern const char* kPsHlsl;
+    /// In front of the pixel shader's source: the knee on our summed light (lights::kLampKnee*, as every shader has it).
+    std::string LampKneeDefines();
     extern const char* kDecalPsHlsl;
     extern bool  g_tintSupported;
     // The terrain's lighting and fog as last read (for the panel): VS c12 fog, c24 sun direction

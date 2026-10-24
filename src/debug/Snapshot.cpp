@@ -6,14 +6,17 @@
 #include "../env/Climate.hpp"
 #include "../env/Fog.hpp"
 #include "../env/FogSettings.hpp"
+#include "../env/Lights.hpp"
 #include "../env/Regional.hpp"
 #include "../env/SeeThroughModel.hpp"
 #include "../env/Storm.hpp"
 #include "../env/WorldQuery.hpp"
 #include "../features/Glass.hpp"
 #include "../features/GroundFog.hpp"
+#include "../features/ModelLights.hpp"
 #include "../features/SeeThrough.hpp"
 #include "../features/SurfaceCover.hpp"
+#include "../features/TerrainLights.hpp"
 
 #include "engine/events/Event.hpp"
 #include "game/Camera.hpp"
@@ -396,6 +399,13 @@ namespace wxl_livingazeroth::snapshot
             t("");
             t("Glass");
             t("%s", glass::StatusLine());
+            t("");
+            t("Lights panel");
+            lines.clear();
+            lights::SnapshotLines(lines);
+            for (const std::string& l : lines) t("%s", l.c_str());
+            t("%s", terrainlights::StatusLine());
+            t("%s", modellights::StatusLine());
             t("");
             t("Surface cover panel");
             lines.clear();

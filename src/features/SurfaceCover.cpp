@@ -209,7 +209,7 @@ namespace wxl_livingazeroth::cover
             { if (code) code->Release(); cleanup(); return "rim shader failed: " + why; }
             code->Release();
             // The cover's whole pixel shader, as the game compiles it (only there otherwise): it must still compile.
-            const std::string whole = std::string(kPsHlsl) + kRippleHlsl + kPsMainHlsl;
+            const std::string whole = LampKneeDefines() + kPsHlsl + kRippleHlsl + kPsMainHlsl;
             code = nullptr;
             err = nullptr;
             const HRESULT wholeHr = compile(whole.c_str(), whole.size(), nullptr, nullptr, nullptr, "main", "ps_3_0", 0, 0, &code, &err);
