@@ -884,22 +884,25 @@ namespace wxl_livingazeroth::modellights
             g_gridOn = true;
         }
 
-        // Writes the header (row 0): valid when the model lights are on, else all zero (stock).
-        void Fill(bool active)
+        // Writes the header (row 0): valid when the model lights are on, else all zero (stock). The scene view and the
+        // camera are the client's (gfx::SceneMatrices, camera::GetPosition), or the tests' when given.
+        void Fill(bool active, const float* testView = nullptr, const float* testCamera = nullptr)
         {
             int pitch = 0;
             float* t = LockRows(0, 1, pitch);
             if (!t) return;
             std::memset(t, 0, kWidth * 4 * sizeof(float));
             float V[16], P[16];
-            if (active && (!g_gridOn || !wxl::game::gfx::SceneMatrices(V, P))) active = false;
+            if (testView) std::memcpy(V, testView, sizeof(V));
+            if (active && (!g_gridOn || (!testView && !wxl::game::gfx::SceneMatrices(V, P)))) active = false;
             if (active)
             {
                 const lights::Grid& grid = lights::CellGrid();
                 const lights::Settings& cfg = lights::Config();
                 g_stockOff = cfg.modelStockOff != 0;
                 t[0] = g_stockOff ? 1.0f : 0.0f; t[3] = 1.0f;
-                wxl::game::camera::GetPosition(&t[4]);
+                if (testCamera) std::memcpy(&t[4], testCamera, 3 * sizeof(float));
+                else wxl::game::camera::GetPosition(&t[4]);
                 t[7] = OccRow() + 0.5f; // t1.w: the occlusion region's first row (+ texel centre)
                 for (int col = 0; col < 3; ++col)
                     for (int row = 0; row < 4; ++row) t[(2 + col) * 4 + row] = V[row * 4 + col];
@@ -958,6 +961,16 @@ namespace wxl_livingazeroth::modellights
         Fill(cfg.enabled && cfg.models);
         Bind(device);
         return g_gridOn;
+    }
+
+    bool PrepareForTests(IDirect3DDevice9* device, const float view[16], const float camera[3])
+    {
+        if (!device || !EnsureTexture(device)) { g_gridOn = false; g_active = false; return false; }
+        const lights::Settings& cfg = lights::Config();
+        FillGrid(cfg.enabled && lights::CellGrid().cells > 0);
+        Fill(cfg.enabled && cfg.models, view, camera);
+        Bind(device);
+        return g_active;
     }
 
     IDirect3DTexture9* Texture() { return g_texture; }

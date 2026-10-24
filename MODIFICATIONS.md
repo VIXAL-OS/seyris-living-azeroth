@@ -160,6 +160,17 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   `TreeShadowsRate`; the 160-yard map too with `TreeShadowsFar`), every client byte it relies on checked first
   (`env/TreeShadowModel.hpp`, `features/TreeShadows.cpp`); its status in the panel, the 30-second log line and the
   snapshot; `tests/treeshadows`.
+- **Spell lights** (24 October 2026, experimental, off by default): spells, glowing projectiles and weapon enchants light
+  what's round them through our point lights (the terrain, the cover, models and buildings), in the effect's own colours
+  (its own light, else its particles', ribbons' and geometry's as they look, leant toward its school's colour), as big
+  and bright as the effect, following it every frame and fading out with it (`[LivingAzeroth.SpellLights]`). The spell
+  visuals are found read only, every frame: the M2 scene's newest models at the head of its list, the client's missile
+  lists and the light scan's walk, by their files (`SpellVisualEffectName.dbc`, `ItemVisualEffects.dbc`) and creation
+  flags; every client instruction it relies on is checked first. Merged and overlapping spell lights keep the square
+  root of their summed light (the candle ring's rule), so an area spell's field doesn't wash the ground out, and a cap
+  (the nearest and brightest 24) keeps raids cheap: about 0.6 ms a frame with 300 spell visuals near, 0.2 ms in a
+  dungeon pull. Its status in the lights panel, the log line, the snapshot and the frame profiler;
+  `tests/spelllights`. From Lumenveil's list, the idea only (its code is GPL v2).
 - **Snapshot key** (22 October 2026): one key (`SnapshotKey`, F11) or a panel button writes where you are, the camera
   (in the nearest building's own space too), the time, the weather, the settings that matter, the frame rate and the
   panels' status to `Logs\la-snapshots\` in the game folder, for bug reports; the glass and see-through test harnesses
@@ -172,6 +183,6 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   WarcraftXL core has `UiTextWrapped` (core v1.1.272 appended it to the extension API; `debug/UiText.hpp` checks the
   table's `structSize` first), else they're drawn as before. The lines themselves are unchanged.
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
-  see-through windows, tree shadows.
+  see-through windows, tree shadows, spell lights.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

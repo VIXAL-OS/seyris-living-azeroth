@@ -56,6 +56,7 @@ namespace wxl_livingazeroth::prof
         kOursShafts,      // this module: sun shafts (features/SunShafts), at the weather render's entry
         kOursGlassShafts, // this module: coloured shafts through window glass (features/GlassShafts), right after
         kOursTreeShadows, // this module: the near trees' shadow map drawn again (features/TreeShadows), inside the shadow update
+        kOursSpellLights, // this module: spell lights (features/SpellLights): finding spell visuals, their colours, merge and cap, inside the lights
         // Inside the grass pass, CPU only (see CpuOnly): their GPU time stays with the grass row.
         kDetailBake,      // the client's re-bake of a layer (stock path only)
         kOursGrassWind,   // this module: wind grid + actors, once per frame

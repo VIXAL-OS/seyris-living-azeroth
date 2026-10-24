@@ -22,6 +22,10 @@ namespace wxl_livingazeroth::modellights
     /// `gridOn` = fill the cells and lights (our lights in use); true when they are.
     bool Prepare(IDirect3DDevice9* device, bool gridOn);
 
+    /// Tests: Prepare with the scene view (camera-relative world -> view, row vectors, gfx::SceneMatrices' V) and the
+    /// camera given instead of read from the client. True when the header is valid.
+    bool PrepareForTests(IDirect3DDevice9* device, const float view[16], const float camera[3]);
+
     /// The shared texture (row 0 header, then the cells' entries, then the lights), for the terrain.
     IDirect3DTexture9* Texture();
 

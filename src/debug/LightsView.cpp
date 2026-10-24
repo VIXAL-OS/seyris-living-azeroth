@@ -11,6 +11,7 @@
 #include "../features/Crystal.hpp"
 #include "../features/Glass.hpp"
 #include "../features/SeeThrough.hpp"
+#include "../features/SpellLights.hpp"
 #include "../features/Windows.hpp"
 #include "../render/M2Effects.hpp"
 #include "ShaderDump.hpp"
@@ -231,6 +232,7 @@ namespace wxl_livingazeroth::debug
                 ui::Text(g_api, bakeLine);
             }
             windows::DrawPanelSection(g_api);
+            spelllights::DrawPanelSection(g_api);
             glass::DrawPanelSection(g_api);
             seethrough::DrawPanelSection(g_api);
             g_api->UiSliderFloat("merge lights closer than (yd)", &cfg.mergeDistance, 0.0f, 3.0f);

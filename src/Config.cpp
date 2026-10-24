@@ -21,6 +21,7 @@
 #include "features/TreeShadows.hpp"
 #include "features/Glass.hpp"
 #include "features/SeeThrough.hpp"
+#include "features/SpellLights.hpp"
 #include "features/SunShafts.hpp"
 #include "features/Windows.hpp"
 #include "render/PostAA.hpp"
@@ -361,6 +362,21 @@ namespace wxl_livingazeroth::config
             g.darkRoomLight = In(s, f, "DarkRoomLight", "At night a room whose lamp is out isn't a black void: the moon's and the night's cool light at its window, its furniture dim shapes and its corners darker, this share of a lit room's light (0.12; underground the city's warm ambient). The window's glow and light stay off. 0 = dark rooms black, as before.", g.darkRoomLight);
         }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass);
+        // Spell lights: spells, projectiles and enchants light what's round them, through our lights.
+        {
+            const char* f = kSectionSpellLights;
+            spelllight::Settings& l = spelllights::Config();
+            l.enabled = In(s, f, "Enabled", "Experimental: spells light what's round them through our point lights (the ground, the snow, models and buildings): missiles in flight and their impacts, spell effects on characters and on the ground, and weapon enchants' glows, in the effect's own colours (its own light where it has one, else its particles' colours and textures), as big and bright as the effect, following it and fading out with it. Needs our point lights on (the lights panel).", l.enabled);
+            l.brightness = In(s, f, "Brightness", "Your multiplier on every spell light's brightness.", l.brightness);
+            l.radius = In(s, f, "Radius", "How far a spell light reaches for an effect about a yard across, in yards; bigger effects (a ground spell) reach up to 2.4 times as far, a weapon enchant half as far.", l.radius);
+            l.maxLights = Whole(s, f, "MaxLights", "At most this many spell lights in a frame, the nearest and brightest first (0 .. 64): keeps raids and battlegrounds cheap.", l.maxLights);
+            l.range = In(s, f, "Range", "Spell lights farther than this from the camera (yards) are left out.", l.range);
+            l.mergeDistance = In(s, f, "MergeDistance", "Spell lights closer together than this (yards) merge into one with the square root of their summed light, so an area spell's dozens of pieces glow together instead of blowing the ground out to white.", l.mergeDistance);
+            l.enchants = In(s, f, "Enchants", "Weapon enchants' glows light what's round them too, weakly (EnchantStrength).", l.enchants);
+            l.enchantStrength = In(s, f, "EnchantStrength", "Your multiplier on the weapon enchants' light (they're small and always on).", l.enchantStrength);
+            l.maxLights = l.maxLights < 0 ? 0 : (l.maxLights > spelllight::kMaxLightsCap ? spelllight::kMaxLightsCap : l.maxLights);
+        }
+
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass, kSectionSpellLights);
     }
 }

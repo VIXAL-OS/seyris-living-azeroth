@@ -118,6 +118,88 @@ namespace wxl_livingazeroth::blp
         return true;
     }
 
+    /// The colour a BLP2 file glows with (features/SpellLights: a particle's or a spell model's texture): the mean of its
+    /// texels near 32 pixels across (the level AverageColour reads), each weighted by its brightest channel, so the black
+    /// round an additive flare doesn't wash its hue out (0..1, as stored). `brightness` gets the texels' mean brightest
+    /// channel (how much of the texture shines). The formats AverageColour reads; false if the bytes aren't such a file or
+    /// nothing in it shines.
+    inline bool GlowColour(const uint8_t* file, size_t size, float out[3], float* brightness = nullptr)
+    {
+        constexpr size_t kHeader = 148 + 1024;
+        if (!file || size < kHeader || std::memcmp(file, "BLP2", 4) != 0) return false;
+        auto u32 = [&](size_t at) { uint32_t v; std::memcpy(&v, file + at, 4); return v; };
+        const uint8_t compression = file[8], alphaDepth = file[9], alphaType = file[10], hasMips = file[11];
+        const uint32_t width = u32(12), height = u32(16);
+        if (!width || !height || width > 4096 || height > 4096) return false;
+        int level = 0;
+        const int levels = hasMips ? 16 : 1;
+        for (int m = 1; m < levels; ++m)
+        {
+            if (!u32(20 + 4 * m) || !u32(84 + 4 * m)) break;
+            if (std::max(width >> (m - 1), height >> (m - 1)) <= 32) break;
+            level = m;
+        }
+        const uint32_t w = std::max(width >> level, 1u), h = std::max(height >> level, 1u);
+        const uint32_t offset = u32(20 + 4 * level), length = u32(84 + 4 * level);
+        if (!length || offset + static_cast<size_t>(length) > size) return false;
+        const uint8_t* src = file + offset;
+        double sum[3] = {}, weight = 0.0, peakSum = 0.0, count = 0.0;
+        auto add = [&](float r, float g, float b)
+        {
+            const float p = std::max(r, std::max(g, b));
+            sum[0] += r * p; sum[1] += g * p; sum[2] += b * p;
+            weight += p; peakSum += p; count += 1.0;
+        };
+        if (compression == 2)
+        {
+            const bool dxt1 = alphaType != 1 && alphaType != 7;
+            const uint32_t block = dxt1 ? 8 : 16, across = (w + 3) / 4, down = (h + 3) / 4;
+            bool shortMip = false;
+            for (uint32_t by = 0; by < down && !shortMip; ++by)
+                for (uint32_t bx = 0; bx < across; ++bx)
+                {
+                    const size_t at = (static_cast<size_t>(by) * across + bx) * block;
+                    if (at + block > length) { shortMip = true; break; }
+                    float rgb[16][3];
+                    bool opaque[16];
+                    DecodeColourBlock(src + at + (dxt1 ? 0 : 8), dxt1, rgb, opaque);
+                    for (int t = 0; t < 16; ++t)
+                    {
+                        const uint32_t x = bx * 4 + t % 4, y = by * 4 + t / 4;
+                        if (x < w && y < h && opaque[t]) add(rgb[t][0], rgb[t][1], rgb[t][2]);
+                    }
+                }
+        }
+        else if (compression == 1 || compression == 3)
+        {
+            const size_t texels = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < texels; ++i)
+            {
+                uint32_t c;
+                if (compression == 3)
+                {
+                    if ((i + 1) * 4 > length) break;
+                    std::memcpy(&c, src + i * 4, 4);
+                }
+                else
+                {
+                    if (i >= length) break;
+                    c = u32(148 + 4 * static_cast<size_t>(src[i]));
+                    if ((alphaDepth == 1 && texels + i / 8 < length && !((src[texels + i / 8] >> (i % 8)) & 1)) ||
+                        (alphaDepth == 8 && texels + i < length && src[texels + i] == 0))
+                        continue;
+                }
+                add(((c >> 16) & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, (c & 0xFF) / 255.0f);
+            }
+        }
+        else
+            return false;
+        if (brightness) *brightness = count > 0.0 ? static_cast<float>(peakSum / count) : 0.0f;
+        if (weight <= 1e-6) return false;
+        for (int k = 0; k < 3; ++k) out[k] = static_cast<float>(sum[k] / weight);
+        return true;
+    }
+
     /// A BLP2 file's top level as RGB (0..1, as stored: three floats a texel, rows top down; alpha left out), its size
     /// in w and h: what the see-through redraw's lead mask is built from (env/GlassModel LeadMask). The same formats as
     /// AverageColour; false if the bytes aren't such a file or the level is cut short.

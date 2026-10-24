@@ -159,6 +159,22 @@ namespace wxl_livingazeroth::lights
     /// pool has room, outdoors, unbaked; at most 8 a frame. Call before Update each frame it should shine.
     void AddTransient(const float pos[3], const float color[3], float radius);
 
+    /// A light of a moving source for this frame only (features/SpellLights: spells, projectiles, weapon enchants): world
+    /// position, colour (already at this frame's strength), radius, the model it follows, and whether it is inside an
+    /// indoor WMO group (0 no, 1 yes; -1: Update tests it). Merged with the scene's lights (closer than the merge distance)
+    /// and put in the grid like them; never flickers, never baked.
+    struct FrameLight
+    {
+        float pos[3];
+        float color[3];
+        float radius;
+        const void* model;
+        int   indoor;
+    };
+
+    /// Tests: Update's merge, drawn list and grid over `frame` alone, from `eye` (no scan, no client reads).
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame);
+
     /// The lights to draw this frame (at most kMaxPool), in a stable order between scans (so the
     /// grid only changes when the scan or the camera's cell does).
     const std::vector<ActiveLight>& Active();
@@ -190,6 +206,7 @@ namespace wxl_livingazeroth::lights
         double   candMs = 0.0, mergeMs = 0.0, activeMs = 0.0, gridMs = 0.0;   // this frame's steps (scanMs: the last scan)
         double   scanMs = 0.0;                                                // the last scan pass, all its slices
         unsigned scanFrames = 0, scanRestarts = 0;                            // the frames it took; times it went back to the head
+        unsigned frameLights = 0, spellModelsLeft = 0;                        // this frame's FrameLights (spell lights); models the scan left to them
     };
 
     /// Every model the client's M2 scene holds near a point: map doodads, WMO doodads, game objects

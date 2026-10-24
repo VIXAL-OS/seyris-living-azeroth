@@ -59,6 +59,14 @@ only add what stock data can't express, and every feature can be switched off.
   second) while a tree or bush casts into it, so those shadows sway with the trees; the 160-yard map can follow too
   (`TreeShadowsFar`, off by default). Quality 5 does this for every shadow itself, at a much higher cost.
 
+**Spell lights** (experimental, off by default; `Enabled` in the ini's `LivingAzeroth.SpellLights` section, F9 "lights"
+panel)
+- Spells, glowing projectiles and weapon enchants light what's round them through our point lights: the ground, the
+  snow, models and buildings, in the effect's own colours (a Fireball orange, a Frostbolt blue, a Holy Light gold).
+- As big and bright as the effect, following it every frame and fading out with it.
+- An area spell's dozens of pieces share their glow instead of washing the ground out; the nearest and brightest 24 a
+  frame keep raids cheap.
+
 **Anti-aliasing**
 - Our own FXAA pass on the world, drawn before the interface (on by default, `AntiAliasing` in the
   ini). It runs while the client's multisampling is off, which the readable scene depth needs

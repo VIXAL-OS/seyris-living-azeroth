@@ -3,7 +3,7 @@
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
 sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]`, `[LivingAzeroth.Windows]`,
-`[LivingAzeroth.Shafts]` and `[LivingAzeroth.Glass]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
+`[LivingAzeroth.Shafts]`, `[LivingAzeroth.Glass]` and `[LivingAzeroth.SpellLights]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
 The ini sets what each launch starts with. The debug panels (F9) still change everything at
@@ -212,6 +212,38 @@ Screen Glow, what's drawn, and how many lights near are lit, dimmed or dark now.
 | GlowRange | 220 | Windows farther than this (yards) don't glow; the glow fades out over the last third. |
 | WithClientGlow | 1 | While the client's own Full Screen Glow (`ffxGlow`) is on: 0 = the window glow at full strength, 1 = half, 2 = off. |
 | LightsFollowRooms | 1 | The window lights and their glow follow the rooms behind the glass: a window whose rooms are dark lights nothing, a row dims as its rooms go out (needs `WindowRooms.cdbc`; with the glass, its rooms or `LitRoomsAtNight` off, or `RoomVariety` or `LightsOut` off, every room is lit and so is every light). Lit frosted glass the same way (`FrostedLightsOut`), its light flickering in time with the hearth behind the glass (`HearthFlicker`; the row's own flicker then gives way). 0 = every lit window at full all night. |
+
+## `[LivingAzeroth.SpellLights]`: spells light what's round them (experimental)
+
+Spells, glowing projectiles and weapon enchants give a point light each, through our point lights (the terrain, the
+surface cover, models and buildings: the lights panel's "our point lights" must be on), in the effect's own colours:
+the model's own point light where it has one (22 of the 1,776 spell visual files have one; a white one, as Fireball's,
+takes the effect's hue), else the colours of its particles, ribbons and geometry as they look in game (their colour
+tracks times their textures' glow), leant halfway toward the school its file's name gives (fire, frost, holy, arcane,
+shadow, fel, nature, lightning). As big and as bright as the effect (its file's size times its scale: a Frostbolt's
+light reaches about 7 yards, a Consecration's 14), the light follows it every frame, flares with it and fades out with
+it: as its particles die out, as the client fades it, and where it was once it's gone (about a third of a second).
+A unit's auras at one spot merge into one light at the square root of their summed light (the candle ring's rule), and
+spell lights that overlap share their glow the same way, so an area spell's dozens of pieces light the ground in its
+colour without washing it out to one flat glare. The nearest and brightest `MaxLights` a frame are drawn.
+
+Which models are spell visuals, and what is read from the client, every frame and read only:
+`features/SpellLights.hpp` (the scene's newest models at the head of its list, the client's two missile lists, and
+the light scan's walk; every client instruction it relies on is checked first, else it stays off and says why). The
+lights panel's **Spell lights** section changes all of this at runtime and lists what is followed and drawn and what
+it costs; the snapshot (F11) and the 30-second log line carry the same status, the frame profiler has a row of its own
+("ours: spell lights").
+
+| Key | Default | Meaning |
+|---|---|---|
+| Enabled | 0 | Experimental: spells light what's round them through our point lights: missiles in flight and their impacts, spell effects on characters and on the ground, weapon enchants' glows. 0 = none (the light scan keeps every model's own lights, as before). |
+| Brightness | 1 | Your multiplier on every spell light's brightness. |
+| Radius | 7 | How far a spell light reaches for an effect about a yard across (yards); bigger effects reach up to 2.4 times as far, a weapon enchant half as far. |
+| MaxLights | 24 | At most this many spell lights a frame (0 .. 64), the nearest and brightest first: keeps raids and battlegrounds cheap. Of those followed, only the nearest 3 x this (at least 48) are looked at closely each frame. |
+| Range | 80 | Spell lights farther than this from the camera (yards) are left out. |
+| MergeDistance | 1.5 | Spell lights closer than this (yards) merge into one with the square root of their summed light. |
+| Enchants | 1 | Weapon enchants' glows light what's round them too, weakly. |
+| EnchantStrength | 0.35 | Your multiplier on the enchants' light (they're small and always on). |
 
 ## `[LivingAzeroth.Shafts]`: sun shafts
 

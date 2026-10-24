@@ -62,6 +62,7 @@
 #include "features/Glass.hpp"
 #include "features/GlassShafts.hpp"
 #include "features/SeeThrough.hpp"
+#include "features/SpellLights.hpp"
 #include "features/WindowGlow.hpp"
 #include "features/Windows.hpp"
 #include "features/WmoIce.hpp"
@@ -141,11 +142,11 @@ namespace
         next = now + std::chrono::seconds(30);
         const auto& s = wxl_livingazeroth::world::Current();
         if (!s.inWorld) return;
-        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s; %s; %s",
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s; %s; %s; %s",
                    s.mapId, s.playerPos[0], s.playerPos[1], s.playerPos[2], s.playerTerrainType, s.outdoors ? "outdoors" : "indoors",
                    wxl_livingazeroth::terrainice::StatusLine(), wxl_livingazeroth::modelice::StatusLine(),
                    wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine(), wxl_livingazeroth::crystal::StatusLine(),
-                   wxl_livingazeroth::seethrough::StatusLine(), wxl_livingazeroth::treeshadows::LogLine());
+                   wxl_livingazeroth::seethrough::StatusLine(), wxl_livingazeroth::treeshadows::LogLine(), wxl_livingazeroth::spelllights::StatusLine());
     }
 
     // Between frames: the safe moment to swap the depth surface the next world pass will bind.
@@ -209,6 +210,7 @@ namespace
     {
         wxl_livingazeroth::fields::OnWorldLeave();
         wxl_livingazeroth::storm::OnWorldLeave(); // its bolt models go while the world's scene is still there
+        wxl_livingazeroth::spelllights::Reset();  // the scene's models go with the world
     }
 
     void __cdecl OnDeviceLost(void* /*user*/, const void* /*args*/)

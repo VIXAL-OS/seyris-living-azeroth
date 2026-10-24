@@ -2,6 +2,7 @@
 
 #include "../features/DoodadLightTable.hpp"
 #include "../features/GrassPerf.hpp"
+#include "../features/SpellLights.hpp"
 #include "../features/Windows.hpp"
 #include "Flame.hpp"
 #include "SceneWalk.hpp"
@@ -267,6 +268,9 @@ namespace wxl_livingazeroth::lights
         // off) and its own point lights.
         void ExtractLights(const SceneModel& m, bool haveTable, std::vector<Source>& out, Stats& st)
         {
+            // A spell visual (a missile, a spell's effect, an enchant's glow) while spell lights are on: features/SpellLights
+            // follows it every frame, its own lights too (off: everything as before).
+            if (spelllights::OfferFromScan(m.model)) { ++st.spellModelsLeft; return; }
             if (!m.header) return;
             const uint8_t* hdr = m.header;
             const void* shared = nullptr;
@@ -328,6 +332,7 @@ namespace wxl_livingazeroth::lights
             bool  window;   // a window's light (WindowLights.cdbc): ranks below the others in a full cell
             float night;    // the night factor its colour carries (night-only lights), else 1
             unsigned flames; // separate flames merged into it (lights of different models): FlameClusterScale
+            int8_t given;   // indoor given (FrameLight): 0 = test it here (IsIndoor), 1 = outdoor, 2 = indoor
         };
 
         double g_time = 0.0;
@@ -935,6 +940,7 @@ namespace wxl_livingazeroth::lights
             g_stats.tableLights = g_buildStats.tableLights; g_stats.suppressedModels = g_buildStats.suppressedModels;
             g_stats.attachFallbacks = g_buildStats.attachFallbacks;
             g_stats.attachedModels = g_buildAttached; g_stats.attachedAtRest = g_buildAtRest;
+            g_stats.spellModelsLeft = g_buildStats.spellModelsLeft;
             g_lastAttached = hooks.attached;
             hooks.attached = 0;
             return true;
@@ -1010,6 +1016,212 @@ namespace wxl_livingazeroth::lights
         }
     }
 
+    namespace
+    {
+        // FrameLights (features/SpellLights) as this frame's candidates: never flicker, never baked, moving, their indoor
+        // verdict given.
+        void AddFrameLights(const std::vector<FrameLight>& frame, std::vector<Candidate>& cands)
+        {
+            g_stats.frameLights = 0;
+            for (const FrameLight& f : frame)
+            {
+                if (!(f.radius > 0.0f)) continue;
+                Candidate c{};
+                std::memcpy(c.pos, f.pos, sizeof(c.pos));
+                for (int k = 0; k < 3; ++k) c.color[k] = f.color[k] > 0.0f ? f.color[k] : 0.0f;
+                c.weight = 1.0f;
+                c.radius = f.radius;
+                c.falloff = 1.0f;
+                c.spotDir[0] = 0.0f; c.spotDir[1] = 0.0f; c.spotDir[2] = -1.0f;
+                c.cosOuter = -2.0f; c.spotScale = 1.0f;
+                c.flickerMode = lighttable::kFlickerOff;
+                c.flickerSpeed = -1.0f; c.flickerAmount = 0.0f;
+                c.scale = 1.0f;
+                c.model = f.model;
+                c.bake = false;
+                c.moving = true;
+                c.window = false;
+                c.night = 1.0f;
+                c.flames = 1;
+                c.given = f.indoor < 0 ? 0 : (f.indoor ? 2 : 1);
+                cands.push_back(c);
+                ++g_stats.frameLights;
+            }
+        }
+
+        // The rest of a frame's update, from its candidates: merging, the drawn list, the strikes, baking, the grid.
+        void Finish(const float eye[3], std::vector<Candidate>& cands, double tCand)
+        {
+            const float range = g_settings.range;
+            // Merge point lights closer than the merge distance (torch groups): summed colour, position
+            // weighted by brightness, the larger radius. Spot lights never merge (their cones differ).
+            // Neighbours are found through a grid of merge-distance cells (sorted keys), compared at their
+            // positions before merging: a city holds thousands of lights, and comparing every pair cost
+            // hundreds of milliseconds there (Dalaran, owner's profiler 2026-10-08).
+            unsigned merged = 0;
+            const float md = g_settings.mergeDistance;
+            const float md2 = md * md;
+            static std::vector<std::pair<uint64_t, uint32_t>> cells;
+            static std::vector<float> original;
+            cells.clear();
+            original.resize(cands.size() * 3);
+            const float inv = md > 1e-3f ? 1.0f / md : 0.0f;
+            const auto cellOf = [&](const float p[3], int out[3]) { for (int k = 0; k < 3; ++k) out[k] = static_cast<int>(std::floor(p[k] * inv)); };
+            const auto keyOf = [](int x, int y, int z)
+            {
+                return (static_cast<uint64_t>(x + 1048576) & 0x1FFFFF) | ((static_cast<uint64_t>(y + 1048576) & 0x1FFFFF) << 21) |
+                       ((static_cast<uint64_t>(z + 1048576) & 0x1FFFFF) << 42);
+            };
+            if (inv > 0.0f)
+            {
+                for (size_t k = 0; k < cands.size(); ++k)
+                {
+                    std::memcpy(&original[k * 3], cands[k].pos, 3 * sizeof(float));
+                    if (cands[k].cosOuter > -1.5f) continue;
+                    int c[3];
+                    cellOf(cands[k].pos, c);
+                    cells.push_back({ keyOf(c[0], c[1], c[2]), static_cast<uint32_t>(k) });
+                }
+                std::sort(cells.begin(), cells.end());
+            }
+            for (size_t a = 0; a < cands.size() && inv > 0.0f; ++a)
+            {
+                if (cands[a].weight <= 0.0f || cands[a].cosOuter > -1.5f) continue;
+                float wa = cands[a].color[0] + cands[a].color[1] + cands[a].color[2];
+                int ca[3];
+                cellOf(&original[a * 3], ca);
+                for (int nz = -1; nz <= 1; ++nz)
+                for (int ny = -1; ny <= 1; ++ny)
+                for (int nx = -1; nx <= 1; ++nx)
+                {
+                    const uint64_t key = keyOf(ca[0] + nx, ca[1] + ny, ca[2] + nz);
+                    auto it = std::lower_bound(cells.begin(), cells.end(), std::make_pair(key, 0u));
+                    for (; it != cells.end() && it->first == key; ++it)
+                {
+                    const size_t b = it->second;
+                    if (b <= a || cands[b].weight <= 0.0f) continue;
+                    const float* pa = &original[a * 3];
+                    const float* pb = &original[b * 3];
+                    const float dx = pa[0] - pb[0], dy = pa[1] - pb[1], dz = pa[2] - pb[2];
+                    if (dx * dx + dy * dy + dz * dz > md2) continue;
+                    const float wb = cands[b].color[0] + cands[b].color[1] + cands[b].color[2];
+                    const float share = wa + wb > 0.0f ? wb / (wa + wb) : 0.5f;
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        cands[a].pos[k] += (cands[b].pos[k] - cands[a].pos[k]) * share;
+                        cands[a].color[k] += cands[b].color[k];
+                    }
+                    // (another model's light: another flame; a model's own lights at one flame are one)
+                    if (cands[b].model != cands[a].model || !cands[a].model) cands[a].flames += cands[b].flames;
+                    cands[a].radius = std::max(cands[a].radius, cands[b].radius);
+                    cands[a].scale = std::max(cands[a].scale, cands[b].scale);
+                    cands[a].bake = cands[a].bake || cands[b].bake;
+                    cands[a].moving = cands[a].moving || cands[b].moving;
+                    wa += wb;
+                    cands[b].weight = 0.0f;
+                    ++merged;
+                }
+                }
+            }
+            g_stats.merged = merged;
+            // Separate small flames merged together: sqrt(N) of their summed colour (kSmallFlameRadius, FlameClusterScale).
+            g_stats.flameClusters = 0;
+            g_stats.clusteredFlames = 0;
+            for (Candidate& c : cands)
+            {
+                if (c.weight <= 0.0f || c.flames <= 1) continue;
+                const float radius = (c.radius > 0.0f ? c.radius : g_settings.radius) * c.scale;
+                const float keep = FlameClusterScale(c.flames, radius);
+                if (keep >= 1.0f) continue;
+                for (int k = 0; k < 3; ++k) c.color[k] *= keep;
+                ++g_stats.flameClusters;
+                g_stats.clusteredFlames += c.flames;
+            }
+            const double tMerge = grassperf::Now();
+            g_stats.mergeMs = tMerge - tCand;
+
+            // Every light in range, fading out over the last third of the range. They stay in the scan's
+            // order (stable between scans, so the grid doesn't reshuffle every frame); only past kMaxPool
+            // do the farthest from the camera drop out.
+            std::vector<std::pair<float, size_t>> order;
+            for (size_t k = 0; k < cands.size(); ++k)
+                if (cands[k].weight > 0.0f)
+                {
+                    const float dx = cands[k].pos[0] - eye[0], dy = cands[k].pos[1] - eye[1], dz = cands[k].pos[2] - eye[2];
+                    order.push_back({ dx * dx + dy * dy + dz * dz, k });
+                }
+            g_stats.poolDropped = 0;
+            if (order.size() > static_cast<size_t>(kMaxPool))
+            {
+                g_stats.poolDropped = static_cast<unsigned>(order.size() - kMaxPool);
+                std::nth_element(order.begin(), order.begin() + kMaxPool, order.end());
+                order.resize(kMaxPool);
+                std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+            }
+            g_baseLum.clear();
+            g_wantBake.clear();
+            g_isWindow.clear();
+            unsigned windowLights = 0;
+            unsigned indoorCount = 0;
+            g_indoorTests = 0;
+            const float fadeStart = range * (2.0f / 3.0f);
+            for (size_t n = 0; n < order.size(); ++n)
+            {
+                const Candidate& c = cands[order[n].second];
+                const float d = std::sqrt(order[n].first);
+                const float fade = d <= fadeStart ? 1.0f : std::max(0.0f, 1.0f - (d - fadeStart) / (range - fadeStart));
+                // -1 = the panel's defaults.
+                const int   mode = c.flickerMode == lighttable::kFlickerDefault ? lighttable::kFlickerSmooth : c.flickerMode;
+                const float amount = c.flickerAmount >= 0.0f ? c.flickerAmount : g_settings.flicker;
+                const float speed = c.flickerSpeed >= 0.0f ? c.flickerSpeed : 1.0f;
+                const float flicker = 1.0f - amount * Flicker(mode, c.pos, g_time * speed * g_settings.flickerSpeed);
+                ActiveLight l{};
+                std::memcpy(l.pos, c.pos, sizeof(l.pos));
+                for (int k = 0; k < 3; ++k) l.color[k] = c.color[k] * g_settings.brightness * fade * flicker;
+                l.radius = (c.radius > 0.0f ? c.radius : g_settings.radius) * c.scale; // a scaled-up fire reaches further
+                l.falloff = c.falloff > 0.0f ? c.falloff : 1.0f;
+                std::memcpy(l.spotDir, c.spotDir, sizeof(l.spotDir));
+                l.cosOuter = c.cosOuter; l.spotScale = c.spotScale;
+                l.dip = 1.0f - flicker;
+                l.model = c.model;
+                l.window = c.window;
+                l.indoor = g_settings.indoorSkipsTerrain && (c.given ? c.given == 2 : IsIndoor(l.pos));
+                indoorCount += l.indoor ? 1 : 0;
+                windowLights += c.window ? 1 : 0;
+                g_active.push_back(l);
+                // A window ranks below a torch of the same brightness (full cells keep the torch). A night-only light ranks by
+                // its colour at full night, so the choice doesn't change while the night fades in.
+                const float lum = (c.color[0] + c.color[1] + c.color[2]) * g_settings.brightness / std::max(c.night, kNightOff);
+                g_baseLum.push_back(c.window ? lum * windows::kWindowRank : lum);
+                g_wantBake.push_back(!c.moving && (c.bake || g_settings.bakeAll) ? 1 : 0);
+                g_isWindow.push_back(c.window ? 1 : 0);
+            }
+            windows::GetStats().lights = windowLights;
+            // This frame's transient lights (strikes), after the scene's, while the pool has room: outdoors, never
+            // baked, and ranked first in every cell they reach.
+            for (const ActiveLight& t : g_transient)
+            {
+                if (g_active.size() >= static_cast<size_t>(kMaxPool)) break;
+                const float dx = t.pos[0] - eye[0], dy = t.pos[1] - eye[1];
+                if (std::sqrt(dx * dx + dy * dy) > range + t.radius) continue;
+                g_active.push_back(t);
+                g_baseLum.push_back(1000.0f + t.color[0] + t.color[1] + t.color[2]);
+                g_wantBake.push_back(0);
+                g_isWindow.push_back(0);
+            }
+            g_transient.clear();
+            g_stats.active = static_cast<unsigned>(g_active.size());
+            g_stats.indoor = indoorCount;
+            g_stats.indoorTests = g_indoorTests;
+            const double tActive = grassperf::Now();
+            g_stats.activeMs = tActive - tMerge;
+            Bake(eye);
+            const double tGrid = grassperf::Now();
+            BuildGrid(eye);
+            g_stats.gridMs = grassperf::Now() - tGrid;
+        }
+    }
+
     Settings& Config() { return g_settings; }
     const std::vector<ActiveLight>& Active() { return g_active; }
     const Grid& CellGrid() { return g_grid; }
@@ -1032,6 +1244,7 @@ namespace wxl_livingazeroth::lights
             g_transient.clear();
             g_sources.clear();
             g_walk.Abandon();
+            spelllights::Reset();
             if (g_grid.cells) { g_grid = Grid{ 0.0f, 0.0f, 16.0f, 0, 0, {}, {}, g_grid.generation + 1 }; }
             return;
         }
@@ -1122,177 +1335,26 @@ namespace wxl_livingazeroth::lights
         }
         g_stats.fromClient = fromClient; g_stats.fromWorldMatrix = fromWorld; g_stats.fileColor = fileColor;
         AddWindowLights(snap, eye, night, cands);
+        // This frame's spell lights (features/SpellLights): merged and gridded with the rest.
+        static std::vector<FrameLight> frame;
+        frame.clear();
+        spelllights::Update(dt, snap, eye, frame);
+        AddFrameLights(frame, cands);
         g_stats.inRange = static_cast<unsigned>(cands.size());
 
         const double tCand = grassperf::Now();
         g_stats.candMs = tCand - t0;
+        Finish(eye, cands, tCand);
+    }
 
-        // Merge point lights closer than the merge distance (torch groups): summed colour, position
-        // weighted by brightness, the larger radius. Spot lights never merge (their cones differ).
-        // Neighbours are found through a grid of merge-distance cells (sorted keys), compared at their
-        // positions before merging: a city holds thousands of lights, and comparing every pair cost
-        // hundreds of milliseconds there (Dalaran, owner's profiler 2026-10-08).
-        unsigned merged = 0;
-        const float md = g_settings.mergeDistance;
-        const float md2 = md * md;
-        static std::vector<std::pair<uint64_t, uint32_t>> cells;
-        static std::vector<float> original;
-        cells.clear();
-        original.resize(cands.size() * 3);
-        const float inv = md > 1e-3f ? 1.0f / md : 0.0f;
-        const auto cellOf = [&](const float p[3], int out[3]) { for (int k = 0; k < 3; ++k) out[k] = static_cast<int>(std::floor(p[k] * inv)); };
-        const auto keyOf = [](int x, int y, int z)
-        {
-            return (static_cast<uint64_t>(x + 1048576) & 0x1FFFFF) | ((static_cast<uint64_t>(y + 1048576) & 0x1FFFFF) << 21) |
-                   ((static_cast<uint64_t>(z + 1048576) & 0x1FFFFF) << 42);
-        };
-        if (inv > 0.0f)
-        {
-            for (size_t k = 0; k < cands.size(); ++k)
-            {
-                std::memcpy(&original[k * 3], cands[k].pos, 3 * sizeof(float));
-                if (cands[k].cosOuter > -1.5f) continue;
-                int c[3];
-                cellOf(cands[k].pos, c);
-                cells.push_back({ keyOf(c[0], c[1], c[2]), static_cast<uint32_t>(k) });
-            }
-            std::sort(cells.begin(), cells.end());
-        }
-        for (size_t a = 0; a < cands.size() && inv > 0.0f; ++a)
-        {
-            if (cands[a].weight <= 0.0f || cands[a].cosOuter > -1.5f) continue;
-            float wa = cands[a].color[0] + cands[a].color[1] + cands[a].color[2];
-            int ca[3];
-            cellOf(&original[a * 3], ca);
-            for (int nz = -1; nz <= 1; ++nz)
-            for (int ny = -1; ny <= 1; ++ny)
-            for (int nx = -1; nx <= 1; ++nx)
-            {
-                const uint64_t key = keyOf(ca[0] + nx, ca[1] + ny, ca[2] + nz);
-                auto it = std::lower_bound(cells.begin(), cells.end(), std::make_pair(key, 0u));
-                for (; it != cells.end() && it->first == key; ++it)
-            {
-                const size_t b = it->second;
-                if (b <= a || cands[b].weight <= 0.0f) continue;
-                const float* pa = &original[a * 3];
-                const float* pb = &original[b * 3];
-                const float dx = pa[0] - pb[0], dy = pa[1] - pb[1], dz = pa[2] - pb[2];
-                if (dx * dx + dy * dy + dz * dz > md2) continue;
-                const float wb = cands[b].color[0] + cands[b].color[1] + cands[b].color[2];
-                const float share = wa + wb > 0.0f ? wb / (wa + wb) : 0.5f;
-                for (int k = 0; k < 3; ++k)
-                {
-                    cands[a].pos[k] += (cands[b].pos[k] - cands[a].pos[k]) * share;
-                    cands[a].color[k] += cands[b].color[k];
-                }
-                // (another model's light: another flame; a model's own lights at one flame are one)
-                if (cands[b].model != cands[a].model || !cands[a].model) cands[a].flames += cands[b].flames;
-                cands[a].radius = std::max(cands[a].radius, cands[b].radius);
-                cands[a].scale = std::max(cands[a].scale, cands[b].scale);
-                cands[a].bake = cands[a].bake || cands[b].bake;
-                cands[a].moving = cands[a].moving || cands[b].moving;
-                wa += wb;
-                cands[b].weight = 0.0f;
-                ++merged;
-            }
-            }
-        }
-        g_stats.merged = merged;
-        // Separate small flames merged together: sqrt(N) of their summed colour (kSmallFlameRadius, FlameClusterScale).
-        g_stats.flameClusters = 0;
-        g_stats.clusteredFlames = 0;
-        for (Candidate& c : cands)
-        {
-            if (c.weight <= 0.0f || c.flames <= 1) continue;
-            const float radius = (c.radius > 0.0f ? c.radius : g_settings.radius) * c.scale;
-            const float keep = FlameClusterScale(c.flames, radius);
-            if (keep >= 1.0f) continue;
-            for (int k = 0; k < 3; ++k) c.color[k] *= keep;
-            ++g_stats.flameClusters;
-            g_stats.clusteredFlames += c.flames;
-        }
-        const double tMerge = grassperf::Now();
-        g_stats.mergeMs = tMerge - tCand;
-
-        // Every light in range, fading out over the last third of the range. They stay in the scan's
-        // order (stable between scans, so the grid doesn't reshuffle every frame); only past kMaxPool
-        // do the farthest from the camera drop out.
-        std::vector<std::pair<float, size_t>> order;
-        for (size_t k = 0; k < cands.size(); ++k)
-            if (cands[k].weight > 0.0f)
-            {
-                const float dx = cands[k].pos[0] - eye[0], dy = cands[k].pos[1] - eye[1], dz = cands[k].pos[2] - eye[2];
-                order.push_back({ dx * dx + dy * dy + dz * dz, k });
-            }
-        g_stats.poolDropped = 0;
-        if (order.size() > static_cast<size_t>(kMaxPool))
-        {
-            g_stats.poolDropped = static_cast<unsigned>(order.size() - kMaxPool);
-            std::nth_element(order.begin(), order.begin() + kMaxPool, order.end());
-            order.resize(kMaxPool);
-            std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
-        }
-        g_baseLum.clear();
-        g_wantBake.clear();
-        g_isWindow.clear();
-        unsigned windowLights = 0;
-        unsigned indoorCount = 0;
-        g_indoorTests = 0;
-        const float fadeStart = range * (2.0f / 3.0f);
-        for (size_t n = 0; n < order.size(); ++n)
-        {
-            const Candidate& c = cands[order[n].second];
-            const float d = std::sqrt(order[n].first);
-            const float fade = d <= fadeStart ? 1.0f : std::max(0.0f, 1.0f - (d - fadeStart) / (range - fadeStart));
-            // -1 = the panel's defaults.
-            const int   mode = c.flickerMode == lighttable::kFlickerDefault ? lighttable::kFlickerSmooth : c.flickerMode;
-            const float amount = c.flickerAmount >= 0.0f ? c.flickerAmount : g_settings.flicker;
-            const float speed = c.flickerSpeed >= 0.0f ? c.flickerSpeed : 1.0f;
-            const float flicker = 1.0f - amount * Flicker(mode, c.pos, g_time * speed * g_settings.flickerSpeed);
-            ActiveLight l{};
-            std::memcpy(l.pos, c.pos, sizeof(l.pos));
-            for (int k = 0; k < 3; ++k) l.color[k] = c.color[k] * g_settings.brightness * fade * flicker;
-            l.radius = (c.radius > 0.0f ? c.radius : g_settings.radius) * c.scale; // a scaled-up fire reaches further
-            l.falloff = c.falloff > 0.0f ? c.falloff : 1.0f;
-            std::memcpy(l.spotDir, c.spotDir, sizeof(l.spotDir));
-            l.cosOuter = c.cosOuter; l.spotScale = c.spotScale;
-            l.dip = 1.0f - flicker;
-            l.model = c.model;
-            l.window = c.window;
-            l.indoor = g_settings.indoorSkipsTerrain && IsIndoor(l.pos);
-            indoorCount += l.indoor ? 1 : 0;
-            windowLights += c.window ? 1 : 0;
-            g_active.push_back(l);
-            // A window ranks below a torch of the same brightness (full cells keep the torch). A night-only light ranks by
-            // its colour at full night, so the choice doesn't change while the night fades in.
-            const float lum = (c.color[0] + c.color[1] + c.color[2]) * g_settings.brightness / std::max(c.night, kNightOff);
-            g_baseLum.push_back(c.window ? lum * windows::kWindowRank : lum);
-            g_wantBake.push_back(!c.moving && (c.bake || g_settings.bakeAll) ? 1 : 0);
-            g_isWindow.push_back(c.window ? 1 : 0);
-        }
-        windows::GetStats().lights = windowLights;
-        // This frame's transient lights (strikes), after the scene's, while the pool has room: outdoors, never
-        // baked, and ranked first in every cell they reach.
-        for (const ActiveLight& t : g_transient)
-        {
-            if (g_active.size() >= static_cast<size_t>(kMaxPool)) break;
-            const float dx = t.pos[0] - eye[0], dy = t.pos[1] - eye[1];
-            if (std::sqrt(dx * dx + dy * dy) > range + t.radius) continue;
-            g_active.push_back(t);
-            g_baseLum.push_back(1000.0f + t.color[0] + t.color[1] + t.color[2]);
-            g_wantBake.push_back(0);
-            g_isWindow.push_back(0);
-        }
-        g_transient.clear();
-        g_stats.active = static_cast<unsigned>(g_active.size());
-        g_stats.indoor = indoorCount;
-        g_stats.indoorTests = g_indoorTests;
-        const double tActive = grassperf::Now();
-        g_stats.activeMs = tActive - tMerge;
-        Bake(eye);
-        const double tGrid = grassperf::Now();
-        BuildGrid(eye);
-        g_stats.gridMs = grassperf::Now() - tGrid;
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame)
+    {
+        g_active.clear();
+        g_time += dt;
+        std::vector<Candidate> cands;
+        AddFrameLights(frame, cands);
+        g_stats.inRange = static_cast<unsigned>(cands.size());
+        Finish(eye, cands, grassperf::Now());
     }
 
     float Reach(const float att[3], float share)
@@ -1375,10 +1437,11 @@ namespace wxl_livingazeroth::lights
                       s.modelStockOff, s.bakedAdd, s.indoorSkipsTerrain, s.bakeEnabled);
         out.emplace_back(line);
         const Stats st = g_stats;
-        std::snprintf(line, sizeof(line), "this frame: %u drawn (at most %d; %u past it dropped), %u in range, %u merged (%u of them separate small flames, in %u lights at "
-                      "sqrt(N) of their colour); the grid's busiest cell %u lights, %u cells over the limit (%u entries left out); %u table lights in range, %u indoor",
-                      st.active, kMaxPool, st.poolDropped, st.inRange, st.merged, st.clusteredFlames, st.flameClusters, st.busiestCell, st.fullCells,
-                      st.droppedFromCells, st.tableLights, st.indoor);
+        std::snprintf(line, sizeof(line), "this frame: %u drawn (at most %d; %u past it dropped), %u in range (%u of them spell lights; %u spell visuals the scan left to "
+                      "them), %u merged (%u of them separate small flames, in %u lights at sqrt(N) of their colour); the grid's busiest cell %u lights, %u cells over "
+                      "the limit (%u entries left out); %u table lights in range, %u indoor",
+                      st.active, kMaxPool, st.poolDropped, st.inRange, st.frameLights, st.spellModelsLeft, st.merged, st.clusteredFlames, st.flameClusters,
+                      st.busiestCell, st.fullCells, st.droppedFromCells, st.tableLights, st.indoor);
         out.emplace_back(line);
         std::snprintf(line, sizeof(line), "every shader's knee on our summed light: above %.2f its brightest channel goes toward %.2f (one torch passes it only within a yard of its flame)",
                       kLampKneeStart, kLampKneeStart + kLampKneeRoom);

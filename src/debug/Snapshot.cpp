@@ -15,6 +15,7 @@
 #include "../features/GroundFog.hpp"
 #include "../features/ModelLights.hpp"
 #include "../features/SeeThrough.hpp"
+#include "../features/SpellLights.hpp"
 #include "../features/SurfaceCover.hpp"
 #include "../features/TerrainLights.hpp"
 #include "../features/TreeShadows.hpp"
@@ -407,6 +408,9 @@ namespace wxl_livingazeroth::snapshot
             for (const std::string& l : lines) t("%s", l.c_str());
             t("%s", terrainlights::StatusLine());
             t("%s", modellights::StatusLine());
+            lines.clear();
+            spelllights::SnapshotLines(lines);
+            for (const std::string& l : lines) t("%s", l.c_str());
             t("");
             t("Surface cover panel");
             lines.clear();
