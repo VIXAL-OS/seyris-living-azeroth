@@ -153,7 +153,7 @@ namespace wxl_livingazeroth::glass
         constexpr float kGlowHidden = 0.75f;   // at night a dark room hides this much of the client's lit window in front of it (all of the window)
         // The floor light: the reach along the sun's ray behind a pane, the soft edges (1 / the share of the half
         // sizes), the far end's softness, and the gain.
-        constexpr float kReach = 30.0f, kSoft = 6.0f, kFarSoft = 4.0f, kFloorGain = 1.2f;
+        constexpr float kReach = 30.0f, kFloorGain = 1.2f;   // (the soft edges: GlassShader's kPaneSoft, kPaneFarSoft)
         constexpr float kRoomMargin = 0.5f;   // yd the room's box is widened by (walls sit on its faces)
 
         Settings g_settings;
@@ -179,6 +179,18 @@ namespace wxl_livingazeroth::glass
         std::vector<PaneLight> g_near;           // the panes in range that light the room (sunlit or backlit), nearest first
         std::vector<PaneLight> g_floorList;      // the floor light's, this frame
         std::vector<uint32_t> g_floorKept, g_shaftKept;   // the floor light's and the shafts' panes last time (IDs: ChoosePanes)
+        PaneFader g_floorFader, g_shaftFader;    // their panes fading in and out (2026-10-24: "lots of pop-in when i move")
+        std::chrono::steady_clock::time_point g_floorStamp{}, g_shaftStamp{};   // their last steps (wall time)
+
+        // Seconds since `stamp` (wall time; 0 the first time), and `stamp` now.
+        float SecondsSince(std::chrono::steady_clock::time_point& stamp)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const bool first = stamp == std::chrono::steady_clock::time_point{};
+            const float dt = first ? 0.0f : std::chrono::duration<float>(now - stamp).count();
+            stamp = now;
+            return dt;
+        }
         float g_floorFacing[3] = { 0, 0, 1 };    // its batches' c195: their lights' direction (LightFacing)
         double g_pulseSeconds = 0.0;             // the backlit glass's pulse clock (steady seconds)
         uint32_t g_viewFrame = 0;                // the frame g_view and the panes' rows were made for
@@ -280,9 +292,16 @@ namespace wxl_livingazeroth::glass
             dev->SetPixelShaderConstantF(kViewConstant, g_view, 4);
         }
 
+        // The panes past the first twelve (c34..c57): other shaders write those registers between draws, so every floor batch.
+        void UploadMorePanes(IDirect3DDevice9* dev)
+        {
+            dev->SetPixelShaderConstantF(kPaneConstantMore, g_paneConstants + 4 * kPaneRegisters * kPanesAt101, kPaneRegisters * (kFloorPanes - kPanesAt101));
+        }
+
         void UploadPanes(IDirect3DDevice9* dev)
         {
-            dev->SetPixelShaderConstantF(kPaneConstant, g_paneConstants, kPaneRegisters * kFloorPanes);
+            dev->SetPixelShaderConstantF(kPaneConstant, g_paneConstants, kPaneRegisters * kPanesAt101);
+            UploadMorePanes(dev);
             g_panesUp = true;
             g_uploadedFrame = g_frame;
             ++g_paneUploads;
@@ -660,6 +679,70 @@ namespace wxl_livingazeroth::glass
         std::sort(last.begin(), last.end());
     }
 
+    float FadeShare(float weight)
+    {
+        const float w = Clamp01(weight);
+        return w * w * (3.0f - 2.0f * w);
+    }
+
+    void PaneFader::Step(const std::vector<PaneLight>& chosen, const std::vector<PaneLight>& lit, float dt, size_t max,
+                         std::vector<PaneLight>& out, std::vector<uint32_t>& kept)
+    {
+        out.clear();
+        const float step = (std::isfinite(dt) ? std::clamp(dt, 0.0f, 1.0f) : 0.0f) / kPaneFade;
+        auto litOf = [&lit](uint32_t id) -> const PaneLight* {
+            for (const PaneLight& pl : lit)
+                if (pl.pane && pl.pane->id == id) return &pl;
+            return nullptr;
+        };
+        auto isChosen = [&chosen](uint32_t id) {
+            for (const PaneLight& pl : chosen)
+                if (pl.pane && pl.pane->id == id) return true;
+            return false;
+        };
+        // the slots: toward 1 while chosen, toward 0 when not (or no longer lit: with the light it had); free at 0
+        size_t n = 0;
+        for (size_t i = 0; i < slots.size(); ++i)
+        {
+            Slot s = slots[i];
+            const PaneLight* now = litOf(s.id);
+            if (now) s.light = *now;
+            s.wanted = now && isChosen(s.id);
+            s.weight = std::clamp(s.weight + (s.wanted ? step : -step), 0.0f, 1.0f);
+            if (!s.wanted && s.weight <= 0.0f) continue;
+            slots[n++] = s;
+        }
+        slots.resize(n);
+        // (fewer slots than before: the faintest of those not chosen go first, then the faintest)
+        if (slots.size() > max)
+        {
+            std::stable_sort(slots.begin(), slots.end(), [](const Slot& a, const Slot& b) {
+                return a.wanted != b.wanted ? a.wanted : a.weight > b.weight;
+            });
+            slots.resize(max);
+        }
+        // a pane newly chosen takes a free slot, in the choice's order, from its first frame's share
+        for (const PaneLight& pl : chosen)
+        {
+            if (slots.size() >= max) break;
+            if (!pl.pane) continue;
+            bool have = false;
+            for (const Slot& s : slots) have = have || s.id == pl.pane->id;
+            if (!have) slots.push_back({ pl.pane->id, std::clamp(step, 0.0f, 1.0f), true, pl });
+        }
+        for (const Slot& s : slots)
+        {
+            const float share = FadeShare(s.weight);
+            if (!s.light.pane || !(share > 0.0f)) continue;
+            PaneLight f = s.light;
+            for (float& c : f.colour) c *= share;
+            out.push_back(f);
+        }
+        kept.clear();
+        for (const Slot& s : slots) kept.push_back(s.id);
+        std::sort(kept.begin(), kept.end());
+    }
+
     void RoomBatchConstants(const RoomStyle& style, const Building* b, const Light& light, const RoomInputs& in, const Settings& s,
                             float out[4 * kConstantCount], float seed[4 * kSeedRegisters], float look[4 * kLookRegisters])
     {
@@ -1006,6 +1089,8 @@ namespace wxl_livingazeroth::glass
             g_windowStatus = "GlassWindows.cdbc: not read, wxl-seyris-tools (cdbc) not available (no rooms behind the glass)";
             g_loadProblem = true;
             g_panes.Build({}); g_buildings.Build({}); g_windows.Build({}); g_tableDirty = true;
+            g_near.clear(); g_floorList.clear(); g_floorPanes = 0;
+            g_floorFader.Clear(); g_shaftFader.Clear(); g_floorKept.clear(); g_shaftKept.clear();
             return;
         }
         char err[256] = {};
@@ -1318,7 +1403,10 @@ namespace wxl_livingazeroth::glass
         g_status = status;
         g_panes.Build(std::move(panes));
         g_near.clear();
+        g_floorList.clear();
         g_floorPanes = 0;
+        // (the faders hold the panes' addresses)
+        g_floorFader.Clear(); g_shaftFader.Clear(); g_floorKept.clear(); g_shaftKept.clear();
     }
 
     void LogLoad(const WXL_Api* api)
@@ -1440,8 +1528,14 @@ namespace wxl_livingazeroth::glass
         g_floorList.clear();
         g_floorPanes = 0;
         g_viewFrame = 0;
+        const float floorDt = SecondsSince(g_floorStamp);
         const bool backlitNear = g_settings.titanBacklit && g_backlitPanes > 0;
-        if ((g_light.sunGain <= 0.01f && !backlitNear) || g_panes.Size() == 0) return;
+        if ((g_light.sunGain <= 0.01f && !backlitNear) || g_panes.Size() == 0)
+        {
+            // (no light through any pane: nothing to fade, the next fade in from nothing)
+            g_floorFader.Clear(); g_shaftFader.Clear(); g_floorKept.clear(); g_shaftKept.clear();
+            return;
+        }
         float cam[3];
         wxl::game::camera::GetPosition(cam);
         static std::vector<const Pane*> candidates;
@@ -1457,11 +1551,16 @@ namespace wxl_livingazeroth::glass
         // The floor light: the panes whose room holds the player first (the room you stand in), then the rest, the ones that
         // light the most where the player stands (ChoosePanes; before 2026-10-24 the nearest the camera, so a third-person
         // camera swinging round the player swapped them).
-        if (!g_settings.floorLight) return;
+        if (!g_settings.floorLight) { g_floorFader.Clear(); g_floorKept.clear(); return; }
         const float* focus = snap.playerPos;
         const bool player = std::isfinite(focus[0]) && std::isfinite(focus[1]) && std::isfinite(focus[2]) &&
                             (focus[0] != 0.0f || focus[1] != 0.0f || focus[2] != 0.0f);
-        ChoosePanes(g_near, player ? focus : cam, player ? focus : cam, 0.0f, false, static_cast<size_t>(kFloorPanes), g_floorKept, g_floorList);
+        // (2026-10-24, "lots of pop-in when i move": the slots kept, fading or not, are the choice's `last`; a pane joining or
+        // leaving fades over kPaneFade s: PaneFader)
+        static std::vector<PaneLight> chosen;
+        std::vector<uint32_t> last = g_floorKept;
+        ChoosePanes(g_near, player ? focus : cam, player ? focus : cam, 0.0f, false, static_cast<size_t>(kFloorPanes), last, chosen);
+        g_floorFader.Step(chosen, g_near, floorDt, static_cast<size_t>(kFloorPanes), g_floorList, g_floorKept);
         g_floorPanes = static_cast<unsigned>(g_floorList.size());
     }
 
@@ -1486,15 +1585,16 @@ namespace wxl_livingazeroth::glass
             drawn.clear();
             for (const PaneLight& pl : g_floorList)
             {
+                if (n >= static_cast<unsigned>(kFloorPanes)) break;
                 const Pane* p = pl.pane;
                 float* c = g_paneConstants + 4 * kPaneRegisters * n;
-                // the rows along its light (the sun's, or the light behind a titan pane), its colour
+                // the rows along its light (the sun's, or the light behind a titan pane), its colour (faded: PaneFader), its
+                // room's middle and half size (the soft edges: the shader's c58, kPaneSoft and kPaneFarSoft); packed from the
+                // first (FloorBlock takes them two at a time)
                 if (!ProjectionRows(*p, pl.dir, cam, kReach, c)) continue;
                 for (int k = 0; k < 3; ++k) c[12 + k] = pl.colour[k];
                 c[15] = 1.0f;
-                for (int k = 0; k < 3; ++k) { c[16 + k] = p->roomMin[k] - cam[k]; c[20 + k] = p->roomMax[k] - cam[k]; }
-                c[19] = kSoft;
-                c[23] = kFarSoft;
+                PaneRoom(p->roomMin, p->roomMax, cam, c);
                 drawn.push_back(pl);
                 g_backlitFloor += pl.backlit ? 1 : 0;
                 ++n;
@@ -1623,6 +1723,7 @@ namespace wxl_livingazeroth::glass
         if (g_loopFloor && !m && !rimsOn)
         {
             if (!g_panesUp || g_uploadedFrame != g_frame) UploadPanes(dev);
+            else UploadMorePanes(dev);
             // c180..c183 and c192..c201 once per loop (the ice and the rims leave c192.. alone), again after a glass batch.
             if (!g_floorConstsUp)
             {
@@ -1653,15 +1754,20 @@ namespace wxl_livingazeroth::glass
     bool ShaftPanes(std::vector<PaneLight>& out, size_t max)
     {
         out.clear();
-        if (!g_settings.enabled || !g_settings.colouredShafts || g_near.empty()) return false;
+        const float dt = SecondsSince(g_shaftStamp);
+        if (!g_settings.enabled || !g_settings.colouredShafts || g_near.empty()) { g_shaftFader.Clear(); g_shaftKept.clear(); return false; }
         float cam[3];
         wxl::game::camera::GetPosition(cam);
         // the room the camera is in (a little slack: a doorway), its panes that light the most where the player stands
-        // (ChoosePanes, as the floor light's since 2026-10-24; before, the nearest the camera)
+        // (ChoosePanes, as the floor light's since 2026-10-24; before, the nearest the camera), each faded in and out as it
+        // joins and leaves (PaneFader, as the floor light's)
         const float* focus = world::Current().playerPos;
         const bool player = std::isfinite(focus[0]) && std::isfinite(focus[1]) && std::isfinite(focus[2]) &&
                             (focus[0] != 0.0f || focus[1] != 0.0f || focus[2] != 0.0f);
-        ChoosePanes(g_near, cam, player ? focus : cam, 2.0f, true, max, g_shaftKept, out);
+        static std::vector<PaneLight> chosen;
+        std::vector<uint32_t> last = g_shaftKept;
+        ChoosePanes(g_near, cam, player ? focus : cam, 2.0f, true, max, last, chosen);
+        g_shaftFader.Step(chosen, g_near, dt, max, out, g_shaftKept);
         return !out.empty();
     }
 

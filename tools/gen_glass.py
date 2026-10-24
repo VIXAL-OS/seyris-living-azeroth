@@ -65,6 +65,9 @@ shader finds the window a pixel is in and looks into that window's room), and th
   the plane + W_SLAB, within W_SLAB_MIN .. W_SLAB_MAX: a flat pane's lookup is thin, so a neighbour at a slant
   isn't in it). Numbered per WMO by group, then its middle bottom to top, x, y (the ordinal: the
   window's identity with its group, for the lights out).
+- No row for a window of a texture in NO_WINDOWS (2026-10-24: Dalaran's gold-framed stone surrounds), after the
+  numbering, so every other window keeps its ordinal: nothing opens through it and no room is drawn behind it. Its
+  panes stay in GlassPanes (the floor light) and its texture in GlassMaterials (the look).
 
 RoomStyles and GlassBuildings: the rooms behind the glass differ by building. "Per building: pick the tint and
 brightness from the building's identity ... Room types that follow the building and the zone" (the user, 2026-10-17).
@@ -289,6 +292,14 @@ SKIP = {
     "silvermyst_inn_window01": "a ruined inn", "azr_window01": "ruins", "cer_window01": "ruins",
 }
 BROKEN_WORDS = ("abndn", "abandn", "abandon", "burn", "broken", "destroyed", "ruin")
+# Glass textures with no window in them (2026-10-24): no GlassWindows row (nothing seen through it, no room behind it);
+# its GlassMaterials row (the look) and GlassPanes (the floor light) stay. "the Violet Gate windows' *borders* are
+# transparent when seen from the inside, and the actual glass flickers" (the user, 2026-10-24, at Dalaran 55.6, 43.2):
+# eb_dalaran_window3 is stone with a gold frame round a blind panel, opaque in every texel. Dalaran maps its frame onto
+# the jambs, sills, pointed heads and inner faces round its tall stained windows (the Violet Gate's hall: 24 pieces round
+# its 4 stained panes, the panes 0.6 yd out from the inner face) and onto blind niches. As frosted windows those pieces
+# opened from inside, and with the 16 a frame took the places of the stained panes they surround, which came and went.
+NO_WINDOWS = {"eb_dalaran_window3": "a gold-framed stone surround round Dalaran's stained windows, and blind niches"}
 # Not glass in a glass texture: a corner of it, from (u, v) to the far corner of its tile. The human window atlases'
 # fourth quadrant (u and v from 0.5) is four tall glowing fire slots with red tops, not a window: the forge mouths in the
 # blacksmiths' stone domes, their chimney tops and hearth vents (Goldshire's, Darkshire's, Lakeshire's, Westfall's and New
@@ -1225,7 +1236,8 @@ def wmo_windows(scan, wmo):
     """The WMO's windows (WMO space; windows_of), or [] and why. Its clear, leaded and frosted windows are numbered first,
     as before stained glass had rooms; its stained windows (only with stained: STAINED_SORT; stained_rooms) after them, so
     every other window keeps its ordinal (its room's key and the window lights' cells). A stained window cut into tiles
-    (wider or taller than W_CUT: a dome, a wall of glass, not a window into a room) is left out."""
+    (wider or taller than W_CUT: a dome, a wall of glass, not a window into a room) is left out, and so is a window
+    mostly of a NO_WINDOWS texture, once all are numbered."""
     rp = flat(scan, wmo)
     if not rp.exists():
         return [], "root missing"
@@ -1247,7 +1259,17 @@ def wmo_windows(scan, wmo):
         windows += [w for w in windows_of(sorts[2:]) if w.tile is None]
         for k in range(first, len(windows)):
             windows[k].ordinal = k
+    windows = [w for w in windows if not no_window(w)]
     return windows, ("%d groups missing" % missing if missing else "")
+
+
+def no_window(w):
+    """Whether a window's glass is mostly of NO_WINDOWS textures (by area)."""
+    area = collections.Counter()
+    for p in w.panes:
+        for t, a in p.areas.items():
+            area[base_name(t) in NO_WINDOWS] += a
+    return area[True] > area[False]
 
 
 # --- the rooms behind the glass: who lives there ----------------------------------------------------------------------

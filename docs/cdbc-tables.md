@@ -507,7 +507,10 @@ mullions of one window; a facade's separate windows stand 0.6 yd or more apart),
 7 yd tall. Clear and leaded glass may share a window (its kind is the one with more glass), frosted
 glass only frosted, stained glass only stained (numbered after all the others, so their ordinals are
 as they were before stained glass had rooms; not a dungeon's stained glass, and not a stained sheet
-bigger than a window: one cut into tiles); windows painted into a wall texture have none. Pieces whose
+bigger than a window: one cut into tiles); windows painted into a wall texture have none, and neither
+has a texture the tool lists as no window (`NO_WINDOWS`: Dalaran's `eb_dalaran_window3`, the stone and
+gold surrounds of its stained windows and its blind niches, since 24 October 2026), left out after the
+numbering so every other window keeps its ordinal; its panes stay in GlassPanes for the floor light. Pieces whose
 rectangles overlap on one plane (a duplicated face, an arch over its window) are one window whatever
 its size, so a pixel lies in one window; so are two that face within ~25° of each other (or back to
 back: a sheet's two faces, facing out of the building) where one's middle lies in the other's lookup,

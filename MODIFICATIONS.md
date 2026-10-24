@@ -145,6 +145,16 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   panes nearest the camera, so a camera swinging round the player swapped them and a patch of light came and went
   ("Dalaran windows cast light ... but only in certain angles", in the Silver Enclave). It now takes the panes that light
   the most where the player stands.
+- **Dalaran's window surrounds are stone again** (24 October 2026): the gold-framed stone round Dalaran's stained windows
+  (and its blind niches) was taken for frosted glass, so from inside the Violet Gate the borders went see-through and,
+  with sixteen windows a frame, the stained panes in them came and went ("the Violet Gate windows' *borders* are
+  transparent when seen from the inside, and the actual glass flickers"). They are no windows now (no room behind them,
+  nothing seen through them): the Violet Gate's halls have their four stained panes each, steadily open and tinted. The
+  floor light through them, as in the Silver Enclave's hall, stays.
+- **Window light that fades** (24 October 2026): a patch of sun on the floor (and a coloured shaft) fades in or out over
+  0.4 s when its window joins or leaves the light's set, instead of popping, and a window takes another's place only when
+  it lights the player's spot half as well again; sixteen windows' patches at once, not twelve ("lots of pop-in when i
+  move", in Stormwind's Wizard's Sanctum).
 - **Darker nights** (22 October 2026): the night's ambient light, sky, clouds and water darker so lamps and lit windows
   matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
   day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital

@@ -51,7 +51,7 @@
 //  at a hashed spot (c216, c217), the hearths and candles aglow (c96). Far away (c218) the room fades to its plain
 //  shading: no texture, furniture or corners to shimmer.
 // Floor light (b10: on for the batches of a building's interior groups while sunlit or backlit panes are near): up to
-//  kFloorPanes panes, each as three rows taking the point (camera-relative, world axes) to where the ray toward the
+//  kFloorPanes panes (each faded in and out as it joins and leaves: its colour x its fade), each as three rows taking the point (camera-relative, world axes) to where the ray toward the
 //  sun crosses the pane (|a|, |b| < 1) and how far (0 < t < 1), with soft edges, kept inside its room's box; x the
 //  surface's own texel x its facing to the sun. Titan glass lit from behind (Ulduar, the Halls of Stone and of
 //  Lightning) the same with no new code: each backlit pane's rows along the light behind it instead of the sun's, at
@@ -101,7 +101,8 @@
 //  draw's sign and threshold, whether s15 holds its lead mask; c29..c32 the debug view's tints, defined; c33.x the drawn
 //  triangles' window state, the split redraw's);
 //  the floor light's panes c101..c172 (six registers each; the rims' range: a batch has one or the other, features/Glass
-//  re-uploads when the rims took it). ps_3_0 has c0..c223, and an instruction reads at most one constant register.
+//  re-uploads when the rims took it), and since 2026-10-24 four more in c34..c57 (features/Glass re-uploads them at every
+//  floor batch). ps_3_0 has c0..c223, and an instruction reads at most one constant register.
 #pragma once
 
 #include "../env/GlassModel.hpp"
@@ -121,9 +122,32 @@ namespace wxl_livingazeroth::glass
     constexpr int kConstantCount = 14;
     constexpr int kSeedConstant = 212;   // c212: the building's seed, its block, the dark band; c213: the band's base
     constexpr int kSeedRegisters = 2;
-    constexpr int kPaneConstant = 101;   // c101..c172
+    constexpr int kPaneConstant = 101;   // c101..c172: the floor light's first kPanesAt101 panes
     constexpr int kPaneRegisters = 6;
-    constexpr int kFloorPanes = 12;
+    constexpr int kFloorPanes = 16;      // (twelve before 2026-10-24: "lots of pop-in when i move", the user; Glass's PaneFader)
+    constexpr int kPanesAt101 = 12;
+    constexpr int kPaneConstantMore = 34;   // c34..c57: the rest (2026-10-24). Free in the WMO pixel shaders, but other
+                                            // shaders (the terrain's lights, the cover's ripples) write them between draws:
+                                            // features/Glass uploads them again at every floor batch.
+    /// Pane k's first register (k < kFloorPanes).
+    constexpr int PaneRegister(int k) { return k < kPanesAt101 ? kPaneConstant + kPaneRegisters * k : kPaneConstantMore + kPaneRegisters * (k - kPanesAt101); }
+    constexpr int kPaneSoftConstant = 58;   // c58 (defined): the panes' soft edges, kPaneSoft, kPaneSoft, kPaneFarSoft
+    constexpr float kPaneSoft = 6.0f, kPaneFarSoft = 4.0f;   // across and up a pane's patch, and along its light (1 / the share soft)
+    static_assert(kPaneConstant + kPaneRegisters * kPanesAt101 <= 173, "the rims' range, c101..c172");
+    static_assert(kPaneConstantMore + kPaneRegisters * (kFloorPanes - kPanesAt101) <= kPaneSoftConstant, "the panes below c58");
+    static_assert(kPaneSoftConstant < 78, "below the crystals' c78..c81");
+    static_assert(kFloorPanes % 2 == 0, "FloorBlock takes the panes two at a time");
+    /// A pane's room as its block reads it (c+4 its middle about `origin`, c+5 its half size; `c` the pane's 24 floats).
+    inline void PaneRoom(const float roomMin[3], const float roomMax[3], const float origin[3], float* c)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            c[16 + k] = 0.5f * (roomMin[k] + roomMax[k]) - origin[k];
+            c[20 + k] = 0.5f * (roomMax[k] - roomMin[k]);
+        }
+        c[19] = 0.0f;
+        c[23] = 0.0f;
+    }
     constexpr int kLookConstant = 218;   // c218: the room's detail by the distance (RoomLook)
     constexpr int kLookRegisters = 1;
     constexpr int kDayConstant = 85;     // c85: the glass cooler by day (DayCool); c86: the room by day (the sun's patch, farther darker)
@@ -184,6 +208,8 @@ namespace wxl_livingazeroth::glass
                def(221, hearth::kWeight[0], hearth::kWeight[1], hearth::kWeight[2], hearth::kSpread) +
                // the redraw's debug view's tints (kReplayDebug): an open window's glass, its lead and frame, a shut window, no window
                def(29, 1.0f, 0.0f, 1.0f, 0.0f) + def(30, 0.0f, 1.0f, 0.0f, 0.0f) + def(31, 0.0f, 1.0f, 1.0f, 0.0f) + def(32, 1.0f, 1.0f, 0.0f, 0.0f) +
+               // the floor light's soft edges, across and up the pane and along its light (every pane's: FloorBlock)
+               def(kPaneSoftConstant, kPaneSoft, kPaneSoft, kPaneFarSoft, 0.0f) +
                "    defi i1, " + std::to_string(kMaxPerCell) + ", 0, 0, 0\n"
                "    dcl_2d s8\n    dcl_2d s9\n    dcl_2d s10\n    dcl_2d s11\n    dcl_2d s12\n    dcl_2d s13\n    dcl_2d s15\n";
     }
@@ -997,29 +1023,32 @@ namespace wxl_livingazeroth::glass
             "\n      dp3 r18.z, r17, c183"
             "\n      dp3_sat r18.w, r18, c195"
             "\n      mov r19.xyz, c175.y";
-        for (int k = 0; k < kFloorPanes; ++k)
+        // Two panes at a time (2026-10-24, sixteen in the slots twelve took): the pair's first present (its colour's w 1, r15.w
+        // 1; the panes packed from the first, an absent one all zeros adds nothing); its patch's soft edges by c58 (|a|, |b|
+        // across and up, t along the light, none behind the glass), its room by its middle and half size.
+        const std::string soft = "c" + std::to_string(kPaneSoftConstant);
+        for (int k0 = 0; k0 < kFloorPanes; k0 += 2)
         {
-            auto c = [k](int r) { return "c" + std::to_string(kPaneConstant + kPaneRegisters * k + r); };
-            s += "\n      mov r20.w, " + c(3) + ".w"
-                 "\n      if_gt r20.w, c175.y"
-                 "\n        dp4 r21.x, r15, " + c(0) +
-                 "\n        dp4 r21.y, r15, " + c(1) +
-                 "\n        dp4 r21.z, r15, " + c(2) +
-                 "\n        add r22.xy, c175.x, -r21_abs"
-                 "\n        mul_sat r22.xy, r22, " + c(4) + ".w"
-                 "\n        mul r22.x, r22.x, r22.y"
-                 "\n        add r22.z, c175.x, -r21.z"
-                 "\n        mul_sat r22.z, r22.z, " + c(5) + ".w"
-                 "\n        cmp r22.z, r21.z, r22.z, c175.y"
-                 "\n        mul r22.x, r22.x, r22.z"
-                 "\n        add r23.xyz, r15, -" + c(4) +
-                 "\n        add r24.xyz, -r15, " + c(5) +
-                 "\n        min r23.xyz, r23, r24"
-                 "\n        min r23.x, r23.x, r23.y"
-                 "\n        min r23.x, r23.x, r23.z"
-                 "\n        cmp r22.x, r23.x, r22.x, c175.y"
-                 "\n        mad r19.xyz, " + c(3) + ", r22.x, r19"
-                 "\n      endif";
+            s += "\n      if_ge c" + std::to_string(PaneRegister(k0) + 3) + ".w, r15.w";
+            for (int k = k0; k < k0 + 2; ++k)
+            {
+                auto c = [k](int r) { return "c" + std::to_string(PaneRegister(k) + r); };
+                s += "\n        dp4 r21.x, r15, " + c(0) +
+                     "\n        dp4 r21.y, r15, " + c(1) +
+                     "\n        dp4 r21.z, r15, " + c(2) +
+                     "\n        add r22.xyz, c175.x, -r21_abs"
+                     "\n        mul_sat r22.xyz, r22, " + soft +
+                     "\n        mul r22.x, r22.x, r22.y"
+                     "\n        mul r22.x, r22.x, r22.z"
+                     "\n        cmp r22.x, r21.z, r22.x, c175.y"
+                     "\n        add r23.xyz, r15, -" + c(4) +
+                     "\n        add r23.xyz, " + c(5) + ", -r23_abs"
+                     "\n        min r23.x, r23.x, r23.y"
+                     "\n        min r23.x, r23.x, r23.z"
+                     "\n        cmp r22.x, r23.x, r22.x, c175.y"
+                     "\n        mad r19.xyz, " + c(3) + ", r22.x, r19";
+            }
+            s += "\n      endif";
         }
         s += "\n      mul r19.xyz, r19, r18.w"
              "\n      mul r19.xyz, r19, r13"

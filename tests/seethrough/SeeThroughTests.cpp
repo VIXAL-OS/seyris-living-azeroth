@@ -57,6 +57,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -2658,10 +2659,10 @@ int main(int argc, char** argv)
                     gl::PaneLight pl;
                     if (gl::LightOfPane(*p, gl::MaterialById(p->material), light, in.sun, in.sunColour, 0.0, s, pl)) lit.push_back(pl);
                 }
-                for (int pass = 0; pass < 2; ++pass)   // (the rule before: the camera's room first, the nearest the camera)
+                for (int pass = 0; pass < 2; ++pass)   // (the rule before: the camera's room first, the nearest the camera; twelve, the cap then)
                     for (const gl::PaneLight& pl : lit)
                     {
-                        if (before[v].size() >= static_cast<size_t>(gl::kFloorPanes)) break;
+                        if (before[v].size() >= 12) break;
                         bool inRoom = true;
                         for (int k = 0; k < 3; ++k) inRoom = inRoom && cams[v][k] >= pl.pane->roomMin[k] && cams[v][k] <= pl.pane->roomMax[k];
                         if (inRoom == (pass == 0)) before[v].push_back(pl.pane->id);
@@ -2677,7 +2678,7 @@ int main(int argc, char** argv)
             }
             auto has = [](const std::vector<uint32_t>& v, uint32_t id) { return std::binary_search(v.begin(), v.end(), id); };
             CHECK(before[0].size() == 12 && before[0] != before[1] && has(before[0], 21045) && !has(before[1], 21045));
-            CHECK(now[0].size() == 12 && now[0] == now[1] && has(now[0], 21045));
+            CHECK(now[0].size() >= 12 && now[0] == now[1] && has(now[0], 21045));   // (sixteen at most since 2026-10-24)
         });
 
         if (!scan.empty())
@@ -2726,12 +2727,14 @@ int main(int argc, char** argv)
                     }
                 std::printf("  Dalaran: %zu windows in its exterior groups, %u listed from outside: into 11 %u, 19 %u, 57 %u, 58 %u, 89 %u\n",
                             outside.windows.size(), listed, byRoom[11], byRoom[19], byRoom[57], byRoom[58], byRoom[89]);
-                CHECK(outside.windows.size() == 3949 && onlyThose && listed == byRoom[11] + byRoom[19] + byRoom[57] + byRoom[58] + byRoom[89]);
-                CHECK(byRoom[11] == 28 && byRoom[19] == 10 && byRoom[57] == 10 && byRoom[58] == 10 && byRoom[89] == 65);   // (89: five of them skylights)
+                // (2026-10-24, the Violet Gate: 3,949 before, 1,724 of them the stained windows' stone surrounds, now no windows:
+                // into 11 were 28, 57 and 58 10 each)
+                CHECK(outside.windows.size() == 2225 && onlyThose && listed == byRoom[11] + byRoom[19] + byRoom[57] + byRoom[58] + byRoom[89]);
+                CHECK(byRoom[11] == 3 && byRoom[19] == 10 && byRoom[57] == 2 && byRoom[58] == 2 && byRoom[89] == 65);   // (89: five of them skylights)
                 // where to stand before each (the survey's SEETHROUGH_SPOTS: the street eye opening the most of the room's windows)
                 struct Spot { int room; float eye[3]; unsigned atLeast; };
-                const Spot fromOutside[5] = { { 19, { 12.14f, 89.10f, -0.63f }, 4 }, { 57, { 24.19f, 25.89f, 4.24f }, 9 }, { 58, { 53.82f, -3.78f, 7.82f }, 9 },
-                                              { 11, { -19.60f, 27.15f, 2.06f }, 10 }, { 89, { -80.96f, 178.11f, 206.39f }, 9 } };
+                const Spot fromOutside[5] = { { 19, { 12.14f, 89.10f, -0.63f }, 4 }, { 57, { 27.42f, 18.90f, 7.54f }, 2 }, { 58, { 48.17f, -13.54f, 9.07f }, 2 },
+                                              { 11, { -21.46f, 18.15f, 7.32f }, 2 }, { 89, { -80.96f, 178.11f, 206.39f }, 9 } };
                 for (const Spot& sp : fromOutside)
                 {
                     unsigned facing = 0, open = 0;
@@ -2758,7 +2761,7 @@ int main(int argc, char** argv)
                 // from inside onto the street (ways out: Cartier & Co., the Violet Gate's halls, the Agronomical Apothecary), and between
                 // rooms (the Circle of Wills' window 1681 onto Cantrips & Crows, 70)
                 st::RootWindows inside = st::BuildInside(path, gl::Windows().All(), b.groups.data(), b.groups.size(), between);
-                const Spot fromInside[5] = { { 19, { 2.45f, 64.69f, 4.31f }, 10 }, { 53, { 21.35f, -77.02f, 12.56f }, 25 }, { 54, { 37.36f, -59.55f, 14.13f }, 25 },
+                const Spot fromInside[5] = { { 19, { 2.45f, 64.69f, 4.31f }, 10 }, { 53, { 16.85f, -80.02f, 13.62f }, 4 }, { 54, { 31.36f, -58.05f, 14.73f }, 4 },
                                              { 18, { 17.09f, 63.66f, 3.08f }, 1 }, { 71, { -18.1f, 33.2f, 0.0f }, 1 } };
                 for (const Spot& sp0 : fromInside)
                 {
@@ -2826,7 +2829,7 @@ int main(int argc, char** argv)
                 const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 10.0;
                 std::printf("  a frame's plan from before Cartier & Co.: %u windows of the city's exterior groups planned, %u candidates, %.3f ms\n", planned,
                             candidates, ms);
-                CHECK(planned == 3949 && candidates > 0 && candidates <= 10 && ms < 50.0);
+                CHECK(planned == 2225 && candidates > 0 && candidates <= 10 && ms < 50.0);
             });
 
         // "the Northshire Abbey windows *mostly* work except at weird angles" (the user, 2026-10-24, in the nave; snapshots
@@ -2878,6 +2881,133 @@ int main(int argc, char** argv)
                 CHECK(look(1, archway, s));
                 std::printf("  window 1 from the archway: %d see out, %d against, %d neither\n", s.front, s.back, s.none);
                 CHECK(s.back >= 3 && !st::SightOpen(s, false));
+            });
+
+        // "re: dalaran, amusingly the Violet Gate windows' *borders* are transparent when seen from the inside, and the actual
+        // glass flickers" (the user, 2026-10-24, at Dalaran 55.6, 43.2; snapshot 20261024-083247, from inside group 54). The
+        // surrounds of its three tall stained windows (eb_dalaran_window3: stone and a gold frame, no glass) were frosted
+        // windows, 24 of the hall's 28: they opened onto the street, and with the 16 a frame from inside, nearest first, the
+        // four stained panes in them lost their places as the camera moved (the snapshot: 2867 and 2868 over the budget).
+        // GlassWindows has no row for them now (gen_glass NO_WINDOWS). Through the scan with the shipped table: the hall's
+        // windows; two walks with the user's camera (the player along the window wall, then standing where they stood with
+        // the camera swinging round them), each frame PlanInside's budget and each candidate's held verdict as the runtime's.
+        // With the table before, the same walks print the panes refused the budget (the test fails there).
+        if (!scan.empty())
+            Test("the Violet Gate's hall from the user's camera through the scan (2026-10-24, snapshot 20261024-083247): its windows are "
+                 "its four stained panes, not their surrounds; on two walks every pane on the screen gets the budget every frame and its "
+                 "verdict holds", [&] {
+                ScanBuilding b;
+                CHECK(LoadScanBuilding(scan, kDalaran, b) && b.groups.size() == 91);
+                const uint32_t path = gl::PathHash(kDalaran);
+                const st::RootWindows inside = st::BuildInside(path, gl::Windows().All(), b.groups.size());
+                // the surrounds: no frosted window left in the Violet Gate's halls, the Violet Citadel, the Silver Enclave's hall
+                unsigned surrounds = 0;
+                for (const uint32_t g : { 36u, 53u, 54u, 78u })
+                {
+                    uint32_t k = 0;
+                    const st::SeeWindow* gw = inside.Group(g, k);
+                    for (uint32_t i = 0; gw && i < k; ++i) surrounds += gw[i].kind == gl::kFrosted ? 1 : 0;
+                }
+                uint32_t n = 0;
+                const st::SeeWindow* w = inside.Group(54, n);
+                CHECK(w && n > 0);
+                std::string list;
+                unsigned stained = 0;
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    stained += w[i].kind == gl::kStained ? 1 : 0;
+                    if (w[i].kind == gl::kStained) list += " " + std::to_string(w[i].ordinal);
+                }
+                std::printf("  group 54: %u windows, %u of them stained (%s); frosted windows in groups 36, 53, 54 and 78: %u\n", n, stained,
+                            list.c_str(), surrounds);
+                const ScanGroup& sg = b.File(54);
+                std::vector<std::pair<uint32_t, uint32_t>> ranges;
+                for (const ScanGroup::Moba& m : sg.batches)
+                    if (m.material < b.glass.size() && b.glass[m.material]) ranges.emplace_back(m.start, m.count);
+                std::vector<st::SightPoints> points;
+                st::GlassSightPoints(sg.vertices.data(), static_cast<uint32_t>(sg.vertices.size() / 3), sg.indices.data(),
+                                     static_cast<uint32_t>(sg.indices.size()), ranges, w, n, points);
+                std::vector<std::vector<st::SightMesh>> around(n);
+                for (uint32_t i = 0; i < n; ++i) around[i] = b.Near(w[i], 54);
+                // the hall (group 54's box: x 27.9 .. 50.9, y -67.6 .. -52.1, z 10.5 .. 31.6): the camera kept a yard inside it, as
+                // the client's camera stops at the walls; 60 frames a second
+                auto keepIn = [](float c[3]) {
+                    c[0] = std::clamp(c[0], 28.9f, 49.0f); c[1] = std::clamp(c[1], -66.6f, -53.1f); c[2] = std::clamp(c[2], 11.5f, 30.6f);
+                };
+                static constexpr float kDt = 1.0f / 60.0f, kFov = 54.0f * 3.14159265f / 180.0f;
+                struct Tally { unsigned onScreen = 0, refused = 0, open = 0, changes = 0; bool was = false, wasOn = false; };
+                unsigned surroundOpen = 0;
+                auto walk = [&](const char* name, int frames, auto&& at) {
+                    std::vector<Tally> t(n);
+                    std::vector<st::Gate> gates(n);
+                    for (int f = 0; f < frames; ++f)
+                    {
+                        float player[3], cam[3];
+                        at(f, player, cam);
+                        keepIn(cam);
+                        const float look[3] = { player[0], player[1], player[2] + 1.5f };
+                        float vp[16];
+                        Camera(cam, look, kFov, 16.0f / 9.0f, vp);
+                        std::vector<st::WindowPlan> plan;
+                        unsigned budget = st::kMaxInsidePerFrame;
+                        st::PlanInside(w, n, cam, { -1, -1, 1, 1 }, kIdentity, cam, vp, budget, plan);
+                        for (uint32_t i = 0; i < n; ++i)
+                        {
+                            const bool on = plan[i].state == st::kShut;   // facing in and on the screen
+                            bool open = false;
+                            if (plan[i].candidate)
+                            {
+                                st::Sight s;
+                                st::LookOut(w[i], cam, around[i].data(), around[i].size(), i < points.size() && points[i].n ? &points[i] : nullptr, s);
+                                open = st::Hold(gates[i], st::SightOpen(s, gates[i].seen && gates[i].open), kDt);
+                            }
+                            Tally& ti = t[i];
+                            if (on)
+                            {
+                                const float d[3] = { cam[0] - w[i].center[0], cam[1] - w[i].center[1], cam[2] - w[i].center[2] };
+                                ++ti.onScreen;
+                                ti.refused += !plan[i].candidate && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= st::kInsideRange * st::kInsideRange ? 1 : 0;
+                                ti.open += open ? 1 : 0;
+                                ti.changes += ti.wasOn && open != ti.was ? 1 : 0;
+                            }
+                            ti.was = open;
+                            ti.wasOn = on;
+                            surroundOpen += open && w[i].kind == gl::kFrosted ? 1 : 0;
+                        }
+                    }
+                    unsigned refused = 0, changes = 0, most = 0;
+                    for (uint32_t i = 0; i < n; ++i)
+                    {
+                        if (w[i].kind != gl::kStained) continue;
+                        std::printf("  %s: pane %u on the screen %u frames, open %u, refused the budget %u, its verdict changed %u times\n", name,
+                                    w[i].ordinal, t[i].onScreen, t[i].open, t[i].refused, t[i].changes);
+                        refused += t[i].refused;
+                        changes += t[i].changes;
+                        most = std::max(most, t[i].changes);
+                    }
+                    return std::make_tuple(refused, changes, most);
+                };
+                // the player along the window wall and back (a walk, 2.5 yd a second), the camera 13 yd behind and 7.8 up swinging
+                // 35 degrees either way every 2.5 s
+                const auto [refusedA, changesA, mostA] = walk("along the wall", 576, [](int f, float player[3], float cam[3]) {
+                    const float s = f * kDt, y = -54.0f - 12.0f * (1.0f - std::fabs(1.0f - std::fmod(s * 2.5f / 12.0f, 2.0f)));
+                    player[0] = 47.5f; player[1] = y; player[2] = 11.31f;
+                    const float a = 35.0f * 3.14159265f / 180.0f * std::sin(2.0f * 3.14159265f * s / 2.5f);
+                    cam[0] = player[0] - 13.0f * std::cos(a); cam[1] = player[1] - 13.0f * std::sin(a); cam[2] = player[2] + 7.8f;
+                });
+                // where the user stood (the snapshot's player, WMO space), the camera from where it was swinging 60 degrees either way
+                // over 6 s
+                const auto [refusedB, changesB, mostB] = walk("the user's spot", 360, [](int f, float player[3], float cam[3]) {
+                    player[0] = 49.57f; player[1] = -57.04f; player[2] = 11.31f;
+                    const float a0 = std::atan2(-56.141f + 57.04f, 36.763f - 49.57f);   // the snapshot's camera about the player
+                    const float a = a0 + 60.0f * 3.14159265f / 180.0f * std::sin(2.0f * 3.14159265f * f * kDt / 6.0f);
+                    const float r = std::hypot(36.763f - 49.57f, -56.141f + 57.04f);
+                    cam[0] = player[0] + r * std::cos(a); cam[1] = player[1] + r * std::sin(a); cam[2] = 19.107f;
+                });
+                std::printf("  the panes refused the budget %u and %u frames, their verdicts changed %u and %u times (at most %u and %u for one); "
+                            "frames a surround stood open %u\n", refusedA, refusedB, changesA, changesB, mostA, mostB, surroundOpen);
+                CHECK(n == 4 && stained == 4 && surrounds == 0 && surroundOpen == 0);
+                CHECK(refusedA == 0 && refusedB == 0 && mostA <= 2 && mostB <= 2);
             });
 
         if (!scan.empty())

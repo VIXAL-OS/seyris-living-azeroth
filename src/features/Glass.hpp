@@ -4,8 +4,8 @@
 //  - The look (b9): features/WmoIce's batch hooks ask, per batch, whether its material's texture is glass; this
 //    sets the batch's constants (its kind's look, its mask, inside or outside) and switches the block on.
 //  - The floor light (b10): each frame up to kFloorPanes sunlit panes near the camera become projection rows, the ones
-//    that light the most where the player stands (ChoosePanes); the batches of a building's interior groups (not its
-//    glass, not a sand floor's rims) take them.
+//    that light the most where the player stands (ChoosePanes), each faded in and out as it joins and leaves (PaneFader);
+//    the batches of a building's interior groups (not its glass, not a sand floor's rims) take them.
 //  - The coloured shafts: features/GlassShafts marches the room's air with the panes whose room holds the camera (the
 //    same choice among them).
 //  - The rooms behind clear glass, one per window (GlassWindows.cdbc: env/GlassRooms' WindowTable, a texture the
@@ -240,6 +240,31 @@ namespace wxl_livingazeroth::glass
     constexpr float kPaneFocusFall = 8.0f, kPaneKeep = 1.5f, kPaneReach = 30.0f;
     void ChoosePanes(const std::vector<PaneLight>& panes, const float room[3], const float focus[3], float slack, bool roomOnly, size_t max,
                      std::vector<uint32_t>& last, std::vector<PaneLight>& out);
+    // "hmm, with window lights on the floor in general there's lots of pop-in when i move" (the user, 2026-10-24, in
+    // Stormwind's Wizard's Sanctum, 49.5, 86.4: a long hall with tall stained windows down both sides, 299 panes in its
+    // room). Twelve a frame, chosen by what they light where the player stands: walking down the hall the choice moves
+    // on, and a patch went on or off from one frame to the next. Now a pane's light fades in when it joins the set and out
+    // when it leaves, over kPaneFade seconds of wall time; a pane newly chosen takes a slot only when one is free (a pane
+    // fading out frees its slot once it has gone), so it waits rather than push one out at once; and the slots (all of
+    // them, fading or not) are ChoosePanes' `last`, so a new pane takes the place of the weakest kept one only when it
+    // lights the player's spot kPaneKeep times as well. Sixteen slots for the floor light (kFloorPanes; twelve before).
+    constexpr float kPaneFade = 0.4f;
+    struct PaneFader
+    {
+        struct Slot { uint32_t id = 0; float weight = 0.0f; bool wanted = false; PaneLight light; };
+        std::vector<Slot> slots;   // in the order they were taken; each with its pane's light as last lit
+        /// This frame: `chosen` (ChoosePanes', at most `max`), from the lit panes `lit`; `dt` seconds since the last (wall
+        /// time; at most 1). A slot's weight goes toward 1 while its pane is chosen, toward 0 when not, by dt / kPaneFade; at
+        /// 0 and not chosen it is free. A slot whose pane isn't lit any more (past the range, the sun behind it) fades out
+        /// with the light it had. `out`: each slot's pane, its colour x the smoothstep of its weight (none at 0), at most
+        /// `max`; `kept`: the slots' pane IDs, sorted (ChoosePanes' next `last`). The slots hold the panes' addresses: Clear
+        /// whenever the panes are loaded again.
+        void Step(const std::vector<PaneLight>& chosen, const std::vector<PaneLight>& lit, float dt, size_t max,
+                  std::vector<PaneLight>& out, std::vector<uint32_t>& kept);
+        void Clear() { slots.clear(); }
+    };
+    /// A slot's share of its pane's light at `weight` (0 .. 1): smoothstep, so a fade starts and ends gently.
+    float FadeShare(float weight);
 
     // --- for the window lights (features/Windows) -------------------------------------------------------------------
     /// Whether a dark room hides the client's lit window at night now: the glass on, its blocks in the shaders, the

@@ -13,7 +13,7 @@
 //    glass is multiplied by the glass's colour (TintOf: lerp(1, the texel's hue at full value, the strength), by its lead
 //    mask: none on the lead and frame), as light through coloured glass is, in a pass of its own: its own small pixel
 //    shader (TintShaderText, the client's vertex shader's TEXCOORD0, the batch's texture at s0 and its lead mask at s15;
-//    ZERO / SRCCOLOR), not the stock WMO variants, whose largest uses 2032 of its 2048 slots. It's drawn after the opaque
+//    ZERO / SRCCOLOR), not the stock WMO variants, whose largest uses 2024 of its 2048 slots (2026-10-24; 2032 before). It's drawn after the opaque
 //    draw and before the glass is blended, depth tested LESS: the opaque draw wrote the depth of everything that stays
 //    opaque (the open windows' lead and frame, every shut window) and none of the open windows' glass, so with the same
 //    triangles and vertex shader the tint passes exactly where the glass is in front of what's behind it. Split: over the

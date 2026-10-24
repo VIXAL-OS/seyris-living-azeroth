@@ -359,10 +359,12 @@ per-pixel redraw the default again.
 
 **The roadmap** (2026-10-24). Done: from outside and from inside (sections 3 .. 8), more buildings (9), Phase A stained
 glass (10), Phase B frosted glass (11), Phase C between rooms in Ironforge (13, 14), Phase D Dalaran, room by room, all
-three at once (15). Next: in-game reports from Dalaran (the Lounge's windows far apart in their batch, the stained glass's
-whole-texture lead mask); more than sixteen windows a batch in the redraw (a second constant, if the largest WMO variant's
-slots allow: 2,032 of 2,048 now); the rooms left out (Curiosities & Moore at 34.8%, the Silver Enclave's hall, the Violet
-Citadel) once snapshots from them say why they flicker; Lumenveil's queue after the see-through phases.
+three at once (15); the first reports from Dalaran: the window light's choice (16), the stone surrounds that were frosted
+windows (18), the floor light's fades (19). Next: in-game reports from Dalaran (the Lounge's windows far apart in their
+batch, the stained glass's whole-texture lead mask); more than sixteen windows a batch in the redraw (a second constant, if
+the largest WMO variant's slots allow: 2,024 of 2,048 now); the rooms the surrounds held down that now meet the rule from
+outside (Curiosities & Moore, the Threads of Fate's rooms, the Lounge's hall, the Silver Enclave's hall: section 18) and
+the Violet Citadel, once snapshots from them say how they look; Lumenveil's queue after the see-through phases.
 
 ## 8. From inside: the street through the windows
 
@@ -1112,7 +1114,8 @@ frosted glass the street through 2,161 of 2,161, blurred (the step between pixel
 rooms the Circle of Wills' frosted window (Orgrimmar's texture) Cantrips & Crows through 2,176 of 2,176, blurred (15.2 ->
 5.0). The Violet Gate's frosted pieces are its tall windows' frames, whose window rectangles overlap at their points: there
 the shader's lookup and the batch's triangles name different windows, and the split (which needs the client's index
-buffer, write-only in the game) decides 3% of the pixels otherwise than the whole redraw the game draws.
+buffer, write-only in the game) decides 3% of the pixels otherwise than the whole redraw the game draws. (Corrected the
+same day, section 18: those frames are stone, `eb_dalaran_window3`, and no windows now; the counts here took them in.)
 
 **Where to stand** (the zone map's coordinates from DungeonMap's floors for Dalaran and the Underbelly; the survey's spots,
 SEETHROUGH_SPOTS, which the test above checks): from outside, before Cartier & Co. (Dalaran 39.0, 31.9, facing south-east,
@@ -1190,3 +1193,104 @@ its dormers, the chapel, Northrend's barracks, Kharanos' house, the orcs' houses
 abbey 155 -> 106, over 37 -> 25 windows; the barracks 78 -> 26, its four walks changing a window more than twice now none;
 the chapel 28 -> 18); the inn's dormers' sloped inner panes (0, 25, 29) as before; Kharanos' house and Ironforge (between
 rooms and from inside) unchanged.
+
+## 18. Dalaran's window surrounds are stone (2026-10-24)
+
+"re: dalaran, amusingly the Violet Gate windows' *borders* are transparent when seen from the inside, and the actual glass
+flickers. The outside shows fake rooms afaict." (the user, in a hall of the Violet Gate at Dalaran 55.6, 43.2, before its
+three tall pointed stained windows in their pink frames; snapshot 20261024-083247: group 54 walked from inside, 16 windows
+open as ways out, 7 "shut: over the frame's budget", 2867 and 2868 among them.)
+
+**Why.** `eb_dalaran_window3` was reviewed on 2026-10-17 as frosted glass. It is stone with a gold frame round a blind
+panel, opaque in every texel. Dalaran maps its frame onto the jambs, the sills, the pointed heads and the inner faces round
+its tall stained windows, and onto blind niches. As frosted windows those pieces made 1,910 of Dalaran's 4,478 windows:
+1,724 in its streets, 120 in the Violet Citadel, 24 in each of the Violet Gate's halls (53, 54) and 18 in the Silver
+Enclave's hall (78). Hall 54 had 28 windows from inside: the 24 pieces of the surrounds and its 4 stained panes, which stand
+0.6 yd out from the inner faces round them. With 16 windows a frame from inside, the nearest first, the surrounds opened
+onto the street (so the borders were see-through, blurred as frosted glass) and the panes lost their places in the budget
+as the camera moved. A window refused the budget shuts at once, not after the gate's hold, so the panes flickered between
+the client's glass and the street.
+
+**Now** (`tools/gen_glass.py`, `NO_WINDOWS`). A texture can be glass with no window in it. Its pieces get no GlassWindows
+row, so nothing is seen through them and no room is drawn behind them. The rows are left out after the numbering, so every
+other window keeps its ordinal, its room and its lights. Its GlassMaterials row (the look) and its GlassPanes (the floor
+light) stay; the Silver Enclave's big pane (21045, section 16) is one of these pieces. The table regenerated whole
+(`gen_glass.py <scan> --windows`) is byte for byte the shipped one less those 1,910 rows. Run before the change, the
+generator gives Dalaran's 4,478 rows exactly as shipped. WindowRooms regenerated
+(`gen_window_lights.py`, the new GlassWindows): the 28 cells of 22 of Dalaran's lights that named a surround (stained
+glass's cells read with StainedRooms off, `CELL_UNSTAINED`) are gone, and nothing else changes. WindowLights and
+DoodadLightProperties come out the same. No code changes: a surround's batch now has nearly all its triangles in no window
+(the jambs' edges lie within the panes' lookup: 99 of 114 triangles in none, 57 yd^2 against the 0.25 of trim), so it is
+never deferred (`Deferrable` or `DeferrableWhole`) and the client draws it as it is.
+
+**The rooms again** (the survey, seethrough_tests SEETHROUGH_SURVEY with SEETHROUGH_SPOTS, on the new table). Dalaran's
+streets have 2,225 windows (283 with a room) and its rooms 343. From inside, the Violet Gate's halls are their four
+stained panes each: 99.5% and 100% of the eyes, no verdict changed on any walk (88% and 87% before, over the surrounds).
+Cartier & Co. is at 98%, the Apothecary at 74% (49%: its window's outer partner was a surround). Every row of the table
+still meets the Phase C rule. From outside the Violet Gate's halls open from 66.5% and 44.6% of the street views, but two of
+their windows each changed more than twice on a walk, so they stay inside only. Some rooms the surrounds held down now meet
+the rule from outside: Curiosities & Moore (6, 7: 72.5%, 66.7%), the Threads of Fate's rooms (9, 10, 13: 35 .. 74%), the
+Lounge's hall (55: 40%), the Silver Enclave's hall (78: its one window, 60%). They are not in the table yet; that waits on a
+decision and their where-to-stand. The Violet Citadel from inside: 86% now, but one window flickers.
+
+**The same pattern elsewhere?** Only `nd_dalaran.wmo` uses `eb_dalaran_window3`. Cartier & Co. (19), the Agronomical
+Apothecary (18) and the Underbelly's Circle of Wills (71) have no surround texture. The Circle of Wills' window is
+Orgrimmar's frosted texture (`mm_ogrmr_window_01`), real hide panes in wooden bars, and the bars stay opaque through its
+light's mask.
+
+**Proofs.** seethrough_tests "the Violet Gate's hall from the user's camera": hall 54's windows are its four stained panes,
+and groups 36, 53, 54 and 78 have no frosted window. On two walks with the user's camera (the player along the window wall
+and back, the camera 13 yd behind swinging 35 degrees either way; then where they stood, the camera swinging 60 degrees),
+each frame runs the runtime's PlanInside (16 a frame) and the held verdict of every candidate. With the table before, the
+panes were refused the budget in 944 and 397 frames, their verdicts changed 53 and 14 times (up to 16 for one), and a
+surround stood open in 12,031 pane-frames. Now every pane on the screen is open every frame, never refused and never changing.
+"Dalaran from the scan": 2,225 street windows, 82 listed from outside (into 11: 3, 19: 10, 57: 2, 58: 2, 89: 65). glass_tests:
+the surrounds' batch in either hall is never deferred, and the Violet Gate's stained batch from inside (53's batch 8, three
+of four open) shows the street through 1,884 of 1,884 open glass pixels, tinted (1,792 changed), none of 537 lead and frame.
+The table's checks: ordinals 0 .. n-1 in every WMO but Dalaran, whose gap is the 1,910.
+
+**Where to stand** (corrects section 15's counts, which took in the surrounds: the Lounge's "9 of 9" was 2 panes and 7
+pieces of stone). From outside: below the Lounge's upper rooms (Dalaran 46.8, 37.7, facing south, the windows 12 yd up;
+51.4, 38.5, facing west, 10 yd up), the Threads of Fate's side room (43.1, 44.6, facing east, 12 yd up); before Cartier &
+Co. as before. From inside: the Violet Gate's halls where the user stood (55.6, 43.2, facing south-east, the panes 3 yd away)
+and at 55.2, 50.4 facing east. Cartier & Co. and the Apothecary as before.
+
+## 19. The floor light fades (2026-10-24)
+
+"hmm, with window lights on the floor in general there's lots of pop-in when i move" (the user, in Stormwind's Wizard's
+Sanctum at 49.5, 86.4: a long hall with many tall windows down both sides, about ten patches of sun on the floor).
+
+**Why.** The floor light took twelve panes a frame (section 16: the ones that light the most where the player stands, the
+kept ones counted 1.5 times) and drew each at full strength or not at all. The Sanctum's hall (Stormwind's WMO, x -9036 ..
+-8970, y 832 .. 904, its floor at 29.6) has tall stained windows down both sides, 299 panes in its room, 151 lit by the sun
+at any hour of the day. Running down it, the twelve that light the player's spot most change every few yards, and each
+change switched a patch on or off between one frame and the next.
+
+**Now** (`glass::PaneFader`, for the floor light and the coloured shafts). A pane's light fades in when it joins the set and
+out when it leaves, over `kPaneFade` (0.4 s) of wall time, along a smoothstep. A pane newly chosen takes a slot only when one
+is free, and a pane fading out frees its slot once it has gone, so a new pane waits rather than pushing a lit one out at
+once. A pane that stops being lit (past the 70 yd range or the 256 nearest, or the sun behind it) fades out with the light it
+had. The slots, fading or not, are `ChoosePanes`' kept panes, so a new pane takes the weakest kept one's place only when it
+lights the player's spot 1.5 times as well (`kPaneKeep`). The faders clear when the tables load and when no pane is lit.
+Sixteen slots for the floor light (`kFloorPanes`; twelve before). The first twelve stay in c101 .. c172, the other four go in
+c34 .. c57, which are free in every WMO pixel shader (the stock ones read c0 .. c14). Other shaders write those registers
+between draws, so they are uploaded again at every floor batch. The floor block takes the panes two at a time and branches
+on the pair's first (they are packed from the first, and an absent pane's zeros add nothing). The soft edges (6, 6, 4: the
+same for every pane) are a defined constant (c58), and a pane's room is its middle and half size (`PaneRoom`). That makes 14
+instructions a pane and 2 a pair instead of 20 a pane: 256 instruction lines for sixteen, as for twelve before. The largest
+WMO variant with the glass blocks now uses 2,024 slots (2,032 before), under `kGlassMinSlots` (2,048). Twenty-four panes
+won't fit: c34 .. c77 hold seven more at six registers each, and the slots would pass 2,048.
+
+**Cost.** The choice and the fades: 8.3 us a frame on the CPU (7.1 without the fades, the same walk). The GPU: in a floor
+batch, 14 instructions for each pane drawn, up to sixteen; a pair whose first pane is unused is skipped. One upload of 24
+registers more at each floor batch.
+
+**Proofs.** glass_tests "sanctum" (the shipped GlassPanes): the player runs down the hall and back at 7 yd a second, 60 frames
+a second, the camera 8 yd behind and 4 up, at 09:00, 12:00, 15:00 and 17:00. Before (twelve, switched at once), 290 times a
+pane's light changed by a quarter or more in a frame, and 1,876 times a floor point's light (two yards apart over the hall)
+changed in a frame by 15% of the most it had on the walk. Now (sixteen, faded): 0 and 0. On WARP, the floor about the player
+at the frame the rule before jumped the most (17:00) and the frame before it: before, 23 of 1,024 pixels changed by 15% of
+the floor's brightest or more (the largest change 0.065 of 0.195); now none (GLASS_DUMP: sanctum_<before|now>_<a|b>.ppm).
+"floorchoice": the camera-angle fix of section 16 holds (the rule before 18 different sets over the 24 cameras, `ChoosePanes`
+one, and drawn through the fader one, every slot at full weight); the Dalaran snapshots' ChoosePanes the same sixteen from
+both cameras, the big pane 21045 among them.

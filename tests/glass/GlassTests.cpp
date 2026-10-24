@@ -91,6 +91,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1050,6 +1051,15 @@ namespace
 
     struct V { float x, y, z, rhw, p[3], n[3], uv[2], base[3]; };
 
+    // The floor light's panes (gl::kFloorPanes of gl::kPaneRegisters each) on the device as features/Glass puts them: the
+    // first twelve at c101, the rest at c34 (2026-10-24: sixteen).
+    void UploadPaneRows(IDirect3DDevice9* dev, const float* panes)
+    {
+        dev->SetPixelShaderConstantF(gl::kPaneConstant, panes, gl::kPaneRegisters * gl::kPanesAt101);
+        dev->SetPixelShaderConstantF(gl::kPaneConstantMore, panes + 4 * gl::kPaneRegisters * gl::kPanesAt101,
+                                     gl::kPaneRegisters * (gl::kFloorPanes - gl::kPanesAt101));
+    }
+
     // Draws the quad (corner values as given, interpolated) with the constants, returns the target's pixels (rgb).
     bool Draw(Warp& w, IDirect3DPixelShader9* ps, const V corners[4], const float* consts, int first, int count, bool glass, bool floor,
               std::vector<float>& rgb)
@@ -1222,12 +1232,13 @@ namespace
             const float origin[3] = { 0, 0, 0 };
             float panes[4 * gl::kPaneRegisters * gl::kFloorPanes] = {};
             gl::ProjectionRows(pane, sun, origin, 30, panes);
-            for (int k = 0; k < 3; ++k) { panes[12 + k] = pane.light[k]; panes[16 + k] = pane.roomMin[k]; panes[20 + k] = pane.roomMax[k]; }
-            panes[15] = 1; panes[19] = 6; panes[23] = 4;
+            for (int k = 0; k < 3; ++k) panes[12 + k] = pane.light[k];
+            panes[15] = 1;
+            gl::PaneRoom(pane.roomMin, pane.roomMax, origin, panes);
             float c[4 * gl::kConstantCount] = {};
             c[12] = sun[0]; c[13] = sun[1]; c[14] = sun[2];
             c[36] = 1;
-            w.dev->SetPixelShaderConstantF(gl::kPaneConstant, panes, gl::kPaneRegisters * gl::kFloorPanes);
+            UploadPaneRows(w.dev, panes);
             const float p[4][3] = { { -6, -2, 0 }, { 0, -2, 0 }, { -6, 2, 0 }, { 0, 2, 0 } };
             const float n[3] = { 0, 0, 1 }, base[3] = { 0, 0, 0 };
             V v[4];
@@ -1904,8 +1915,18 @@ namespace
         int stainedBefore = 0;
         for (const auto& kv : firstStained) stainedBefore += lastOther.count(kv.first) && kv.second < lastOther[kv.first] ? 1 : 0;
         size_t wmos = ordinals.size();
+        // ordinals 0 .. n-1 in every WMO but Dalaran's: its stone surrounds (gen_glass NO_WINDOWS, 2026-10-24) were numbered
+        // and left out, so every other window kept its ordinal; 1,910 of its 4,478
         bool dense = true;
-        for (const auto& kv : ordinals) dense = dense && *kv.second.rbegin() + 1 == kv.second.size();
+        size_t dalaranGap = 0;
+        const uint32_t dalaran = gl::PathHash("world\\wmo\\northrend\\dalaran\\nd_dalaran.wmo");
+        for (const auto& kv : ordinals)
+        {
+            const size_t gap = *kv.second.rbegin() + 1 - kv.second.size();
+            if (kv.first == dalaran) dalaranGap = gap;
+            else dense = dense && gap == 0;
+        }
+        dense = dense && dalaranGap == 1910;
         gl::WindowTable table;
         table.Build(windows);
         // At its middle a window is found unless another, lower in ordinal, holds that point too (overlapping windows
@@ -1937,12 +1958,12 @@ namespace
             if (const gl::WindowTable::Grid* g = table.Find(w.path, w.group, w.kind == gl::kStained)) { cells = std::max(cells, g->n[0] * g->n[1] * g->n[2]); coarsest = std::max(coarsest, g->cell); }
         char line[900];
         std::snprintf(line, sizeof(line), "GlassWindows.cdbc: %zu windows (clear %d, leaded %d, frosted %d, stained %d) in %zu WMOs, %d insane, %d ordinals repeated, "
-                      "ordinals 0..n-1 in each: %s (stained after the others in each: %s), the lookup %.2f .. %.2f yd off the plane; the table: %zu groups, %d x %d "
+                      "ordinals 0..n-1 in each but Dalaran (its surrounds left out: %zu): %s (stained after the others in each: %s), the lookup %.2f .. %.2f yd off the plane; the table: %zu groups, %d x %d "
                       "texels (%.1f MB), the most windows in a cell %u (bound %d), the most cells in a grid %u, the coarsest cell %.1f yd; at its middle each "
                       "window found %d (%.1f%%; clear and leaded %d of %d, %.1f%%; stained %d of %d), one lower overlapping it %d, none %d; stained windows a "
                       "clear, leaded or frosted batch would find %d",
                       windows.size(), kinds[gl::kClear], kinds[gl::kLeaded], kinds[gl::kFrosted], kinds[gl::kStained], wmos, insane, duplicate,
-                      dense ? "yes" : "NO", stainedBefore ? "NO" : "yes", thinnest, thickest, table.Grids(), gl::rooms::kWidth, table.Height(),
+                      dalaranGap, dense ? "yes" : "NO", stainedBefore ? "NO" : "yes", thinnest, thickest, table.Grids(), gl::rooms::kWidth, table.Height(),
                       table.Height() * gl::rooms::kWidth * 16.0 / (1 << 20), worst, gl::rooms::kMaxPerCell, cells, coarsest, found,
                       100.0 * found / std::max<size_t>(1, windows.size()), roomsFound, rooms, 100.0 * roomsFound / std::max(1, rooms), stainedFound,
                       kinds[gl::kStained], other, none, stainedInOther);
@@ -1950,11 +1971,15 @@ namespace
         // and leaded glass; stained glass's 84%: Dalaran's and Silvermoon's curved and stacked panes at a slant over a
         // lower-numbered stained window, whose room the pixel takes, as the window lights do)
         const int otherFound = found - stainedFound, others = static_cast<int>(windows.size()) - kinds[gl::kStained];
+        // (the clear, leaded and frosted found at their middles: 98.1% before 2026-10-24, 97.8% since; Dalaran's 1,910 surrounds,
+        // 1,898 of them found, left the table, the 185 others not found as before)
         Check(wt.fields == 17 && windows.size() > 5000 && insane == 0 && duplicate == 0 && dense && stainedBefore == 0 &&
-              worst <= static_cast<uint32_t>(gl::rooms::kMaxPerCell) && none == 0 && otherFound >= others * 98 / 100 &&
+              worst <= static_cast<uint32_t>(gl::rooms::kMaxPerCell) && none == 0 && otherFound >= others * 97 / 100 &&
               roomsFound >= rooms * 99 / 100 && stainedFound >= kinds[gl::kStained] * 80 / 100 && stainedInOther == 0 && table.Height() <= 4096, line);
-        // The windows the user named: Ironforge's and Dalaran's frosted, Dalaran's and Stormwind's (its cathedral's) stained, a
-        // dwarven frosted window in Kharanos (the Thunderbrew Distillery), and no dungeon's stained glass (Tempest Keep's).
+        // The windows the user named: Ironforge's frosted, Dalaran's and Stormwind's (its cathedral's) stained, a dwarven
+        // frosted window in Kharanos (the Thunderbrew Distillery), and no dungeon's stained glass (Tempest Keep's). Dalaran's
+        // frosted: the Underbelly's Circle of Wills' ten alone since 2026-10-24 (the 1,910 others were the stone surrounds of
+        // its stained windows, eb_dalaran_window3: "the Violet Gate windows' *borders* are transparent", gen_glass NO_WINDOWS).
         {
             std::map<std::string, int> named;
             for (const auto& r : wt.rows)
@@ -1970,7 +1995,7 @@ namespace
             std::snprintf(line, sizeof(line), "GlassWindows.cdbc: the rooms behind frosted and stained glass: Ironforge %d frosted; Dalaran %d frosted, %d stained; "
                           "Kharanos' distillery %d frosted; Stormwind %d stained; a dungeon's stained %d", named["Ironforge frosted"], named["Dalaran frosted"],
                           named["Dalaran stained"], named["Kharanos frosted"], named["Stormwind stained"], named["dungeon stained"]);
-            Check(named["Ironforge frosted"] > 500 && named["Dalaran frosted"] > 500 && named["Dalaran stained"] > 1000 && named["Kharanos frosted"] > 0 &&
+            Check(named["Ironforge frosted"] > 500 && named["Dalaran frosted"] == 10 && named["Dalaran stained"] > 1000 && named["Kharanos frosted"] > 0 &&
                   named["Stormwind stained"] > 100 && named["dungeon stained"] == 0, line);
         }
 
@@ -4505,34 +4530,78 @@ namespace
     // Dalaran (2026-10-24, Phase D: "stained glass, frosted glass and windows between rooms at once"), the city's one WMO as
     // placed over Crystalsong Forest (turned -39 degrees), from where the survey says to stand (seethrough_tests' "Dalaran
     // from the scan"): from the street, Cartier & Co.'s stained glass (group 22's batch 4, its 65 windows; 2698 .. 2701 open)
-    // and an upper room of the Legerdemain Lounge's (group 3's batch 5, its 135 windows; the room's four in it open; seen from
-    // the street the frosted pieces of the city's windows, batch 10, are their surrounds, the panes in them stained); from
-    // inside, Cartier & Co.'s own stained glass (group 19's batch 0; five of its six open) and the Violet Gate's frosted glass
-    // (group 53's batch 2: the frames of its tall pointed windows; the 15 of its 24 within sixteen ordinals open, since the
-    // redraw tells sixteen apart; the frames' window rectangles overlap at their points, where the lookup and the batch's
-    // triangles name different windows: the split, which the game can't use here, decides 3% of the pixels otherwise, 5% with
-    // the lookup's inputs lost; 6% allowed); between rooms the Underbelly's Circle of Wills onto Cantrips & Crows (group
-    // 71's batch 10, Orgrimmar's frosted window texture; 1681 open, from a yard and a half before it). Each a view as a
-    // snapshot would give it, through the game's sequence (SequenceScene), its batch alone, the checks counted. The stained
-    // ones with the whole texture's lead mask (StainedFallbackRule: no GlassLead row), so tinted.
+    // and an upper room of the Legerdemain Lounge's (group 3's batch 5; the room's two in it open); from inside, Cartier &
+    // Co.'s own stained glass (group 19's batch 0; five of its six open) and the Violet Gate's (group 53's batch 8, its four
+    // tall pointed panes; three open); between rooms the Underbelly's Circle of Wills onto Cantrips & Crows (group 71's
+    // batch 10, Orgrimmar's frosted window texture; 1681 open, from a yard and a half before it). Each a view as a snapshot
+    // would give it, through the game's sequence (SequenceScene), its batch alone, the checks counted. The stained ones with
+    // the whole texture's lead mask (StainedFallbackRule: no GlassLead row), so tinted. Before 2026-10-24 ("the Violet Gate
+    // windows' *borders* are transparent when seen from the inside, and the actual glass flickers", the user) the Violet
+    // Gate's scene was its frosted batch 2, the stone surrounds of those panes (eb_dalaran_window3, no glass) opened as 24
+    // windows; now they are no windows (DalaranSurrounds).
+    // The Violet Gate's stone surrounds (2026-10-24): the batch of eb_dalaran_window3 in its halls (groups 53 and 54, batch
+    // 2), as the runtime finds its windows (WindowsOfBatch over the group's GlassWindows rows): its triangles in no window
+    // now but the jambs' edges along the stained panes (within their lookup), so far past kTrimArea in none that the redraw
+    // never defers it, either way (Deferrable, DeferrableWhole): the client draws it as it is, opaque. With the table before,
+    // 24 windows each and deferred whenever one of them opened.
+    void DalaranSurrounds(const Table& wt, uint32_t dal)
+    {
+        namespace st = wxl_livingazeroth::seethrough;
+        const char* scan = std::getenv("GLASS_SCAN");
+        if (!scan) { std::printf("skip  the Violet Gate's surrounds (GLASS_SCAN not set)\n"); return; }
+        for (const int g : { 53, 54 })
+        {
+            InnGroup grp;
+            if (!ReadGroup(scan, "world\\wmo\\northrend\\dalaran\\nd_dalaran.wmo", grp, g, 0, 2)) { Check(false, "the Violet Gate's surrounds: group " + std::to_string(g)); continue; }
+            std::vector<st::SeeWindow> see;
+            unsigned stained = 0;
+            for (const auto& r : wt.rows)
+            {
+                if (gl::PathHash(&wt.strings[r[1]]) != dal || r[2] != static_cast<uint32_t>(g)) continue;
+                st::SeeWindow s;
+                s.ordinal = r[3]; s.group = r[2]; s.kind = r[4]; s.interior = -1;
+                for (int k = 0; k < 3; ++k) { s.center[k] = F(r[5 + k]); s.normal[k] = F(r[8 + k]); }
+                gl::WindowFrame(s.normal, s.along, s.up);
+                s.halfWidth = F(r[11]); s.halfHeight = F(r[12]); s.thickness = wt.fields > 16 ? F(r[16]) : 0.0f;
+                see.push_back(s);
+                stained += s.kind == gl::kStained ? 1 : 0;
+            }
+            std::sort(see.begin(), see.end(), [](const st::SeeWindow& a, const st::SeeWindow& b) { return a.ordinal < b.ordinal; });
+            const st::BatchWindows bw = st::WindowsOfBatch(grp.idx.data(), static_cast<uint32_t>(grp.idx.size()), grp.pos.data(),
+                                                            static_cast<uint32_t>(grp.pos.size() / 3), grp.start, grp.count, see.data(),
+                                                            static_cast<uint32_t>(see.size()));
+            const std::vector<uint8_t> open(see.size(), st::kOpened);
+            const bool deferred = st::Deferrable(bw, open.data(), open.size()) || st::DeferrableWhole(bw, open.data(), open.size());
+            unsigned frosted = 0;
+            for (const st::SeeWindow& s : see) frosted += s.kind == gl::kFrosted ? 1 : 0;
+            char line[400];
+            std::snprintf(line, sizeof(line), "the Violet Gate's surrounds (group %d's batch 2, eb_dalaran_window3, %u triangles): the group's windows %zu (%u "
+                          "stained, %u frosted); %u triangles in none (%.1f yd^2, the trim %.2f), %zu windows touched; with every window open deferred: %s",
+                          g, bw.triangles, see.size(), stained, frosted, bw.strays, bw.strayArea, st::kTrimArea, bw.windows.size(), deferred ? "yes" : "no");
+            Check(bw.valid && bw.triangles > 100 && bw.strays * 10 >= bw.triangles * 8 && bw.strayArea > 10.0f * st::kTrimArea && !deferred &&
+                  see.size() == 4 && stained == 4 && frosted == 0, line);
+        }
+    }
+
     std::vector<SeqScene> DalaranScenes(const std::filesystem::path& data)
     {
         struct Spec { const char* label; const char* prefix; int group; bool inside; int batch; float cam[3]; std::vector<uint32_t> open; size_t windows; int minOpen, minShut;
                       int splitApart = 1; };
         const std::vector<Spec> specs = {
             { "Dalaran, stained glass from the street: Cartier & Co.", "dal_cartier_out_", 22, false, 4, { 12.14f, 89.10f, -0.63f }, { 2698, 2699, 2700, 2701 }, 65, 50, -1 },
-            { "Dalaran, stained glass from the street: the Legerdemain Lounge's upper room", "dal_lounge_out_", 3, false, 5, { 24.19f, 25.89f, 4.24f },
-              { 579, 597, 1968, 1972 }, 135, 50, -1 },
+            { "Dalaran, stained glass from the street: the Legerdemain Lounge's upper room", "dal_lounge_out_", 3, false, 5, { 27.42f, 18.90f, 7.54f },
+              { 1968, 1972 }, 71, 50, -1 },
             { "Dalaran, stained glass from inside: Cartier & Co.", "dal_cartier_in_", 19, true, 0, { 2.45f, 64.69f, 4.31f },
               { 2665, 2666, 2667, 2669, 2670 }, 6, 50, -1 },
-            { "Dalaran, frosted glass from inside: the Violet Gate", "dal_gate_in_", 53, true, 2, { 21.35f, -77.02f, 12.56f },
-              { 1515, 1516, 1517, 1518, 1519, 1520, 1521, 1522, 1523, 1524, 1525, 1527, 1528, 1529, 1530 }, 24, 50, -1, 6 },
+            { "Dalaran, stained glass from inside: the Violet Gate", "dal_gate_in_", 53, true, 8, { 16.85f, -80.02f, 13.62f },
+              { 2861, 2862, 2863 }, 4, 50, -1 },
             { "Dalaran, between rooms: the Circle of Wills onto Cantrips & Crows", "dal_wills_", 71, true, 10, { -19.0f, 33.6f, -21.2f }, { 1681 }, 10, 200, -1 },
         };
         Table wt;
         std::vector<SeqScene> out;
         if (!ReadTable(data / "GlassWindows.cdbc", wt)) { Check(false, "Dalaran's scenes: GlassWindows read"); return out; }
         const uint32_t dal = gl::PathHash("world\\wmo\\northrend\\dalaran\\nd_dalaran.wmo");
+        DalaranSurrounds(wt, dal);
         for (const Spec& sp : specs)
         {
             // looking at the open windows' middle
@@ -4659,7 +4728,12 @@ namespace
         const bool windowsRight = sc.partial ? bw.windows.size() == sc.windows : innWindows.size() == sc.windows && bw.windows.size() == innWindows.size();
         if (!bw.valid || (!sc.report && (!canSplit || !windowsRight || bw.strays != 0)) ||
             (open.empty() && rest.empty()) || bw.windows.empty() || (sc.lookAt >= 0 && !lookAt))
-        { Check(false, std::string(label) + ": the batch's windows (the model's)"); return; }
+        {
+            Check(false, std::string(label) + ": the batch's windows (the model's): " + std::to_string(bw.windows.size()) + " in it (" +
+                         std::to_string(sc.windows) + " expected), the group's " + std::to_string(innWindows.size()) + ", " + std::to_string(bw.strays) +
+                         " stray triangles, split " + (canSplit ? "yes" : "no"));
+            return;
+        }
         // the lead mask (a texture without GlassLead rows: none, the light's mask, as the runtime does; stained glass the whole
         // texture's, StainedFallbackRule, since 2026-10-24)
         std::string flat = texture;
@@ -6349,14 +6423,15 @@ namespace
                 const float origin[3] = { 0, 0, 0 };
                 float panes[4 * gl::kPaneRegisters * gl::kFloorPanes] = {};
                 gl::ProjectionRows(pane, pl.dir, origin, 30, panes);
-                for (int k = 0; k < 3; ++k) { panes[12 + k] = pl.colour[k]; panes[16 + k] = pane.roomMin[k]; panes[20 + k] = pane.roomMax[k]; }
-                panes[15] = 1; panes[19] = 6; panes[23] = 4;
+                for (int k = 0; k < 3; ++k) panes[12 + k] = pl.colour[k];
+                panes[15] = 1;
+                gl::PaneRoom(pane.roomMin, pane.roomMax, origin, panes);
                 float facing[3];
                 gl::LightFacing(&pl, 1, in.sun, facing);
                 float c[4 * gl::kConstantCount] = {};
                 c[12] = facing[0]; c[13] = facing[1]; c[14] = facing[2];
                 c[36] = 1;
-                w.dev->SetPixelShaderConstantF(gl::kPaneConstant, panes, gl::kPaneRegisters * gl::kFloorPanes);
+                UploadPaneRows(w.dev, panes);
                 const float p[4][3] = { { -10, -2, 0 }, { 0, -2, 0 }, { -10, 2, 0 }, { 0, 2, 0 } };
                 const float n[3] = { 0, 0, 1 }, base[3] = { 0, 0, 0 };
                 V v[4];
@@ -6534,13 +6609,15 @@ namespace
             }
             return out;
         };
-        // the rule before: the panes whose room holds the camera, then the rest, each the nearest the camera first
+        // the rule before: the panes whose room holds the camera, then the rest, each the nearest the camera first (twelve, the
+        // cap then)
+        static constexpr size_t kCapBefore = 12;
         auto before = [](const std::vector<gl::PaneLight>& near_, const float cam[3]) {
             std::vector<gl::PaneLight> out;
             for (int pass = 0; pass < 2; ++pass)
                 for (const gl::PaneLight& pl : near_)
                 {
-                    if (out.size() >= static_cast<size_t>(gl::kFloorPanes)) break;
+                    if (out.size() >= kCapBefore) break;
                     bool inRoom = true;
                     for (int k = 0; k < 3; ++k) inRoom = inRoom && cam[k] >= pl.pane->roomMin[k] && cam[k] <= pl.pane->roomMax[k];
                     if (inRoom == (pass == 0)) out.push_back(pl);
@@ -6576,28 +6653,40 @@ namespace
         char line[700];
         std::snprintf(line, sizeof(line), "the floor light's panes at Dalaran's snapshots (%zu panes round the hall; %zu and %zu lit by the 07:00 sun in the "
                       "cameras' room): the rule before took %zu and %zu, %zu in common, the hall's big pane %u in the first %s, in the second %s; "
-                      "ChoosePanes takes the same twelve from both (%s), the big pane among them (%s)", panes.size(), inHall[0], inHall[1], oldA.size(), oldB.size(),
-                      common, kDalHallPane, has(oldA, kDalHallPane) ? "yes" : "no", has(oldB, kDalHallPane) ? "yes" : "no", newA == newB ? "yes" : "no",
-                      has(newA, kDalHallPane) && has(newB, kDalHallPane) ? "yes" : "no");
-        Check(oldA.size() == 12 && oldA != oldB && has(oldA, kDalHallPane) && !has(oldB, kDalHallPane) && newA.size() == 12 && newA == newB &&
+                      "ChoosePanes takes the same %zu (of at most %d) from both (%s), the big pane among them (%s)", panes.size(), inHall[0], inHall[1], oldA.size(),
+                      oldB.size(), common, kDalHallPane, has(oldA, kDalHallPane) ? "yes" : "no", has(oldB, kDalHallPane) ? "yes" : "no", newA.size(), gl::kFloorPanes,
+                      newA == newB ? "yes" : "no", has(newA, kDalHallPane) && has(newB, kDalHallPane) ? "yes" : "no");
+        Check(oldA.size() == 12 && oldA != oldB && has(oldA, kDalHallPane) && !has(oldB, kDalHallPane) && newA.size() >= 12 && newA == newB &&
               has(newA, kDalHallPane), line);
-        // the camera swung round the player (10 yd out, 10 up, every 15 degrees; history kept as the runtime keeps it): the rule
-        // before takes several sets, ChoosePanes one
-        std::set<std::vector<uint32_t>> oldSets, newSets;
+        // the camera swung round the player (10 yd out, 10 up, every 15 degrees, a frame each; history kept as the runtime keeps
+        // it, the drawn panes through its PaneFader from the first view's): the rule before takes several sets, ChoosePanes
+        // one, and the drawn panes and their shares don't move
+        std::set<std::vector<uint32_t>> oldSets, newSets, drawnSets;
         std::vector<uint32_t> last;
-        for (int step = 0; step < 24; ++step)
+        gl::PaneFader fader;
+        std::vector<uint32_t> kept;
+        float shareMoved = 0.0f;
+        for (int step = -60; step < 24; ++step)   // (a second at the first place: the fades in done)
         {
-            const float a = step * 15.0f * 3.14159265f / 180.0f;
+            const float a = std::max(step, 0) * 15.0f * 3.14159265f / 180.0f;
             const float cam[3] = { kDalPlayer[0] + 10.0f * std::cos(a), kDalPlayer[1] + 10.0f * std::sin(a), kDalPlayer[2] + 10.0f };
             const std::vector<gl::PaneLight> n = nearby(cam);
+            std::vector<gl::PaneLight> chosen, drawn;
+            std::vector<uint32_t> l = kept;
+            gl::ChoosePanes(n, kDalPlayer, kDalPlayer, 0.0f, false, static_cast<size_t>(gl::kFloorPanes), l, chosen);
+            fader.Step(chosen, n, 1.0f / 60.0f, static_cast<size_t>(gl::kFloorPanes), drawn, kept);
+            if (step < 0) continue;
             oldSets.insert(ids(before(n, cam)));
-            std::vector<gl::PaneLight> chosen;
-            gl::ChoosePanes(n, kDalPlayer, kDalPlayer, 0.0f, false, static_cast<size_t>(gl::kFloorPanes), last, chosen);
-            newSets.insert(ids(chosen));
+            std::vector<gl::PaneLight> plain;
+            gl::ChoosePanes(n, kDalPlayer, kDalPlayer, 0.0f, false, static_cast<size_t>(gl::kFloorPanes), last, plain);
+            newSets.insert(ids(plain));
+            drawnSets.insert(ids(drawn));
+            for (const gl::PaneFader::Slot& sl : fader.slots) shareMoved = std::max(shareMoved, 1.0f - sl.weight);
         }
         std::snprintf(line, sizeof(line), "the camera swung round the player in the hall (24 places, 10 yd out and 10 up): the rule before took %zu different "
-                      "sets of panes, ChoosePanes %zu", oldSets.size(), newSets.size());
-        Check(oldSets.size() > 1 && newSets.size() == 1, line);
+                      "sets of panes, ChoosePanes %zu; drawn through the fader %zu, every slot at full weight (at most %.3f short)", oldSets.size(),
+                      newSets.size(), drawnSets.size(), shareMoved);
+        Check(oldSets.size() > 1 && newSets.size() == 1 && drawnSets.size() == 1 && shareMoved == 0.0f, line);
         // a pane chosen last frame stays against one a little better (kPaneKeep), and gives way to one much better
         {
             gl::Pane a, b;
@@ -6646,11 +6735,10 @@ namespace
                 if (!gl::ProjectionRows(*pl.pane, pl.dir, kDalPlayer, 30.0f, c)) continue;
                 for (int k = 0; k < 3; ++k) c[12 + k] = pl.colour[k];
                 c[15] = 1.0f;
-                for (int k = 0; k < 3; ++k) { c[16 + k] = pl.pane->roomMin[k] - kDalPlayer[k]; c[20 + k] = pl.pane->roomMax[k] - kDalPlayer[k]; }
-                c[19] = 6.0f; c[23] = 4.0f;
+                gl::PaneRoom(pl.pane->roomMin, pl.pane->roomMax, kDalPlayer, c);
                 ++n;
             }
-            w.dev->SetPixelShaderConstantF(gl::kPaneConstant, pc, gl::kPaneRegisters * gl::kFloorPanes);
+            UploadPaneRows(w.dev, pc);
             float c[4 * gl::kConstantCount] = {};
             c[12] = in.sun[0]; c[13] = in.sun[1]; c[14] = in.sun[2];
             c[36] = 1;
@@ -6712,6 +6800,326 @@ namespace
                                 f.put(static_cast<char>(std::clamp(img[v][r][(static_cast<size_t>(row) * kSide + col) * 3 + k] * 255.0f, 0.0f, 255.0f)));
                 }
     }
+
+    // "hmm, with window lights on the floor in general there's lots of pop-in when i move" (the user, 2026-10-24, in
+    // Stormwind's Wizard's Sanctum, 49.5, 86.4: "a long hall with many tall windows down both sides", about ten patches of
+    // sun on the floor). The hall from the shipped GlassPanes: Stormwind's WMO, its room -9036 .. -8970, 832 .. 904, its
+    // floor at 29.6, its tall stained windows down both sides 299 panes. The player runs down its middle and back (7 yd a
+    // second, 60 frames a second, the camera 8 yd behind and 4 up) at four hours; each frame the panes near the camera the
+    // sun lights (Update's: within 70 yd, the 256 nearest), and the floor light's choice as before (twelve, the kept ones
+    // 1.5 times, each switched on or off at once) and as now (sixteen, each faded in and out by PaneFader). Counted: the
+    // panes whose share of their light changed by more than a quarter in a frame; the hall floor's points (two yards apart)
+    // whose light changed in a frame by more than a tenth of the brightest patch's; the choice's CPU a frame; the floor
+    // block's instructions. On WARP, the floor about the player at the frame the rule before jumped the most and the frame
+    // before it, both ways (the same 40 x 40 yd: only the panes change): the pixels apart and the largest change.
+    // GLASS_DUMP: sanctum_<before|now>_<a|b>.ppm.
+    void SanctumWalk(const std::filesystem::path& data, bool warp)
+    {
+        Table pt;
+        if (!ReadTable(data / "GlassPanes.cdbc", pt) || pt.fields < 27) { Check(false, "the shipped GlassPanes read (the Wizard's Sanctum)"); return; }
+        static constexpr float kLo[3] = { -9036.0f, 832.0f, 29.6f }, kHi[3] = { -8970.2f, 904.4f, 80.0f };
+        static constexpr float kMid[3] = { -9003.0f, 868.0f, 29.6f };
+        std::vector<gl::Pane> panes;
+        panes.reserve(pt.rows.size());
+        unsigned hallPanes = 0;
+        for (const auto& r : pt.rows)
+        {
+            if (r[1] != 0) continue;
+            gl::Pane p;
+            p.id = r[0]; p.map = r[1]; p.wmo = r[2];
+            for (int k = 0; k < 3; ++k)
+            {
+                p.pos[k] = F(r[3 + k]); p.out[k] = F(r[6 + k]); p.along[k] = F(r[9 + k]);
+                p.roomMin[k] = F(r[18 + k]) - 0.5f; p.roomMax[k] = F(r[21 + k]) + 0.5f;   // (as glass::Load keeps them)
+                p.light[k] = F(r[14 + k]);
+            }
+            p.halfWidth = F(r[12]); p.halfHeight = F(r[13]); p.kind = r[17]; p.flags = r[24]; p.material = r[26];
+            const float d[3] = { p.pos[0] - kMid[0], p.pos[1] - kMid[1], p.pos[2] - kMid[2] };
+            if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 150.0f * 150.0f) continue;
+            const float lo = std::sqrt(p.out[0] * p.out[0] + p.out[1] * p.out[1] + p.out[2] * p.out[2]);
+            const float la = std::sqrt(p.along[0] * p.along[0] + p.along[1] * p.along[1] + p.along[2] * p.along[2]);
+            if (!(lo > 0.5f) || !(la > 0.5f)) continue;
+            for (int k = 0; k < 3; ++k) { p.out[k] /= lo; p.along[k] /= la; }
+            p.up[0] = p.out[1] * p.along[2] - p.out[2] * p.along[1];
+            p.up[1] = p.out[2] * p.along[0] - p.out[0] * p.along[2];
+            p.up[2] = p.out[0] * p.along[1] - p.out[1] * p.along[0];
+            hallPanes += std::fabs(F(r[18]) - kLo[0]) < 0.2f && std::fabs(F(r[19]) - kLo[1]) < 0.2f && std::fabs(F(r[20]) - kLo[2]) < 0.2f ? 1 : 0;
+            panes.push_back(p);
+        }
+        const gl::Settings s;
+        auto nearby = [&](const float cam[3], const gl::Light& light, const gl::Inputs& in) {
+            std::vector<std::pair<float, const gl::Pane*>> byDistance;
+            for (const gl::Pane& p : panes)
+            {
+                const float d[3] = { p.pos[0] - cam[0], p.pos[1] - cam[1], p.pos[2] - cam[2] };
+                const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                if (dd <= 70.0f * 70.0f) byDistance.emplace_back(dd, &p);
+            }
+            std::stable_sort(byDistance.begin(), byDistance.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            if (byDistance.size() > 256) byDistance.resize(256);
+            std::vector<gl::PaneLight> out;
+            for (const auto& e : byDistance)
+            {
+                gl::PaneLight pl;
+                if (gl::LightOfPane(*e.second, nullptr, light, in.sun, in.sunColour, 0.0, s, pl)) out.push_back(pl);
+            }
+            return out;
+        };
+        auto lum = [](const float c[3]) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
+        // a pane's light at a floor point, as the floor block has it (its rows about the world's origin; soft edges 6 and 4)
+        auto lightAt = [](const float* c, const gl::Pane& p, const float q[3]) {
+            for (int k = 0; k < 3; ++k)
+                if (q[k] < p.roomMin[k] || q[k] > p.roomMax[k]) return 0.0f;
+            const float r0 = c[0] * q[0] + c[1] * q[1] + c[2] * q[2] + c[3], r1 = c[4] * q[0] + c[5] * q[1] + c[6] * q[2] + c[7];
+            const float r2 = c[8] * q[0] + c[9] * q[1] + c[10] * q[2] + c[11];
+            const float sx = std::clamp((1.0f - std::fabs(r0)) * 6.0f, 0.0f, 1.0f), sy = std::clamp((1.0f - std::fabs(r1)) * 6.0f, 0.0f, 1.0f);
+            const float sz = r2 >= 0.0f ? std::clamp((1.0f - r2) * 4.0f, 0.0f, 1.0f) : 0.0f;
+            return sx * sy * sz;
+        };
+        std::vector<std::array<float, 3>> floorPts;
+        for (float x = kLo[0] + 1.0f; x < kHi[0]; x += 2.0f)
+            for (float y = kLo[1] + 1.0f; y < kHi[1]; y += 2.0f) floorPts.push_back({ x, y, kLo[2] + 0.01f });
+        struct Rule
+        {
+            const char* name; size_t cap; bool fade;
+            std::vector<uint32_t> last;
+            gl::PaneFader fader;
+            std::map<uint32_t, float> share;
+            std::vector<float> floor;
+            unsigned pops = 0, jumps = 0, maxDrawn = 0;
+            double seconds = 0.0;
+            std::vector<gl::PaneLight> drawn, prevDrawn;
+        };
+        struct Worst { unsigned jumps = 0; float origin[3] = {}; std::vector<gl::PaneLight> sets[2][2]; const char* hour = ""; };
+        Worst worst;
+        struct FrameSets { std::vector<gl::PaneLight> s[2][2]; };   // [rule][the frame before, this frame]
+        std::vector<FrameSets> frameSets;
+        std::vector<std::array<float, 3>> framePlayer;
+        constexpr int kHours = 4;
+        const float hours[kHours] = { 9.0f, 12.0f, 15.0f, 17.0f };
+        const char* hourNames[kHours] = { "09:00", "12:00", "15:00", "17:00" };
+        unsigned popsBefore = 0, popsNow = 0, jumpsBefore = 0, jumpsNow = 0, frames = 0;
+        double secBefore = 0.0, secNow = 0.0;
+        std::string perHour;
+        for (int h = 0; h < kHours; ++h)
+        {
+            gl::Inputs in;
+            wxl_livingazeroth::sky::LightToward(hours[h] / 24.0f, in.sun);
+            in.daylight = 1.0f;
+            const gl::Light light = gl::Evaluate(in);
+            // the rows of every pane about the world's origin, along this hour's sun, and the brightest patch
+            std::map<uint32_t, std::array<float, 12>> rows;
+            std::map<uint32_t, float> fullLum;   // each lit pane's whole light's luminance
+            float brightest = 0.0f;
+            unsigned litInHall = 0;
+            for (const gl::Pane& p : panes)
+            {
+                gl::PaneLight pl;
+                if (!gl::LightOfPane(p, nullptr, light, in.sun, in.sunColour, 0.0, s, pl)) continue;
+                std::array<float, 12> c{};
+                const float origin[3] = { 0, 0, 0 };
+                if (!gl::ProjectionRows(p, pl.dir, origin, 30.0f, c.data())) continue;
+                rows[p.id] = c;
+                fullLum[p.id] = lum(pl.colour);
+                brightest = std::max(brightest, lum(pl.colour));
+                litInHall += p.roomMin[0] < kLo[0] && p.roomMax[0] > kHi[0] && p.roomMin[2] < kLo[2] && p.roomMax[2] > kHi[2] - 1.0f ? 1 : 0;
+            }
+            Rule rules[2] = { { "before", 12, false }, { "now", static_cast<size_t>(gl::kFloorPanes), true } };
+            // down the hall's middle and back, 7 yd a second
+            const int n = static_cast<int>(2.0f * 48.0f / 7.0f * 60.0f);
+            for (Rule& ru : rules) ru.floor.assign(floorPts.size() * static_cast<size_t>(n), 0.0f);   // every frame's
+            for (int f = 0; f < n; ++f)
+            {
+                const float s0 = f * 7.0f / 60.0f, y = s0 <= 48.0f ? 845.0f + s0 : 893.0f - (s0 - 48.0f);
+                const float dir = s0 <= 48.0f ? 1.0f : -1.0f;
+                const float player[3] = { -9003.0f, y, kLo[2] };
+                const float cam[3] = { player[0], y - 8.0f * dir, kLo[2] + 4.0f };
+                const std::vector<gl::PaneLight> lit = nearby(cam, light, in);
+                for (Rule& ru : rules)
+                {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    std::vector<gl::PaneLight> chosen;
+                    if (ru.fade)
+                    {
+                        std::vector<uint32_t> l = ru.last;
+                        gl::ChoosePanes(lit, player, player, 0.0f, false, ru.cap, l, chosen);
+                        ru.fader.Step(chosen, lit, 1.0f / 60.0f, ru.cap, ru.drawn, ru.last);
+                    }
+                    else
+                    {
+                        gl::ChoosePanes(lit, player, player, 0.0f, false, ru.cap, ru.last, ru.drawn);
+                    }
+                    ru.seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                    ru.maxDrawn = std::max<unsigned>(ru.maxDrawn, static_cast<unsigned>(ru.drawn.size()));
+                    // each pane's share of its light now (drawn colour over its full colour)
+                    std::map<uint32_t, float> share;
+                    for (const gl::PaneLight& d : ru.drawn)
+                    {
+                        const auto it = fullLum.find(d.pane->id);
+                        share[d.pane->id] = it != fullLum.end() && it->second > 0.0f ? lum(d.colour) / it->second : 0.0f;
+                    }
+                    if (f > 0)
+                    {
+                        std::map<uint32_t, float> both = share;
+                        for (const auto& [id, v] : ru.share) both.emplace(id, 0.0f);
+                        for (const auto& [id, v] : both)
+                        {
+                            const auto a = ru.share.find(id), b = share.find(id);
+                            const float was = a == ru.share.end() ? 0.0f : a->second, now = b == share.end() ? 0.0f : b->second;
+                            ru.pops += std::fabs(now - was) > 0.25f ? 1 : 0;
+                        }
+                    }
+                    ru.share = share;
+                }
+                // the floor's light both ways, this frame
+                for (int k = 0; k < 2; ++k)
+                {
+                    Rule& ru = rules[k];
+                    float* L = ru.floor.data() + floorPts.size() * static_cast<size_t>(f);
+                    for (size_t i = 0; i < floorPts.size(); ++i)
+                        for (const gl::PaneLight& d : ru.drawn)
+                        {
+                            const auto it = rows.find(d.pane->id);
+                            if (it != rows.end()) L[i] += lum(d.colour) * lightAt(it->second.data(), *d.pane, floorPts[i].data());
+                        }
+                }
+                // (the sets the rule before had this frame and the last: the WARP pair's, should this frame jump the most)
+                FrameSets fs;
+                fs.s[0][0] = rules[0].prevDrawn; fs.s[0][1] = rules[0].drawn;
+                fs.s[1][0] = rules[1].prevDrawn; fs.s[1][1] = rules[1].drawn;
+                frameSets.push_back(std::move(fs));
+                framePlayer.push_back({ player[0], player[1], player[2] });
+                for (Rule& ru : rules) ru.prevDrawn = ru.drawn;
+            }
+            // A floor point's jump: its light changed in a frame by more than 15% of the most it has on the walk, where that is
+            // a twentieth of the brightest patch or more (a fade moves a pane's light at most 1.5 / 24 of it a frame, and the
+            // panes fading together over a point no more than that of their light together)
+            for (int k = 0; k < 2; ++k)
+            {
+                Rule& ru = rules[k];
+                std::vector<float> most(floorPts.size(), 0.0f);
+                for (int f = 0; f < n; ++f)
+                    for (size_t i = 0; i < floorPts.size(); ++i) most[i] = std::max(most[i], ru.floor[floorPts.size() * static_cast<size_t>(f) + i]);
+                for (int f = 1; f < n; ++f)
+                {
+                    unsigned j = 0;
+                    for (size_t i = 0; i < floorPts.size(); ++i)
+                    {
+                        if (most[i] < 0.05f * brightest) continue;
+                        const float d = std::fabs(ru.floor[floorPts.size() * static_cast<size_t>(f) + i] - ru.floor[floorPts.size() * static_cast<size_t>(f - 1) + i]);
+                        j += d > 0.15f * most[i] ? 1 : 0;
+                    }
+                    ru.jumps += j;
+                    if (k == 0 && j > worst.jumps)
+                    {
+                        worst.jumps = j;
+                        for (int c = 0; c < 3; ++c) worst.origin[c] = framePlayer[static_cast<size_t>(f)][c];
+                        for (int r = 0; r < 2; ++r)
+                            for (int t = 0; t < 2; ++t) worst.sets[r][t] = frameSets[static_cast<size_t>(f)].s[r][t];
+                        worst.hour = hourNames[h];
+                    }
+                }
+            }
+            frameSets.clear();
+            framePlayer.clear();
+            char buf[400];
+            std::snprintf(buf, sizeof(buf), "%s%s: %u panes lit in the hall's room, %u frames; before %u pops, %u floor jumps (at most %u drawn); now %u pops, "
+                          "%u floor jumps (at most %u drawn)", perHour.empty() ? "" : "; ", hourNames[h], litInHall, n, rules[0].pops, rules[0].jumps,
+                          rules[0].maxDrawn, rules[1].pops, rules[1].jumps, rules[1].maxDrawn);
+            perHour += buf;
+            popsBefore += rules[0].pops; popsNow += rules[1].pops; jumpsBefore += rules[0].jumps; jumpsNow += rules[1].jumps;
+            secBefore += rules[0].seconds; secNow += rules[1].seconds;
+            frames += static_cast<unsigned>(n);
+        }
+        // the floor block's instructions (a line each): sixteen panes two at a time, 14 a pane and 2 a pair; twelve before, 20 each
+        const std::string block = gl::FloorBlock("v0", "v1", "v2");
+        const int lines = static_cast<int>(std::count(block.begin(), block.end(), '\n'));
+        const int fixedLines = lines - (gl::kFloorPanes / 2) * (2 + 2 * 14), linesBefore = fixedLines + 12 * 20;
+        char line[1600];
+        std::snprintf(line, sizeof(line), "the Wizard's Sanctum's hall (%zu panes round it, %u in its room), the player running down it and back at four hours: "
+                      "%s. In all: before %u panes popped (a quarter of their light or more in a frame) and %u times a floor point jumped (15%% of its "
+                      "most in a frame); now %u and %u. The choice's CPU a frame: %.1f us before, %.1f us now (with the fades). The floor block: %d "
+                      "instructions for %d panes (two at a time, 14 a pane; a pair skipped where its first is unused), %d before for 12; its panes in "
+                      "c101..c172 and c34..c57", panes.size(), hallPanes, perHour.c_str(), popsBefore, jumpsBefore, popsNow, jumpsNow,
+                      1e6 * secBefore / frames, 1e6 * secNow / frames, lines, gl::kFloorPanes, linesBefore);
+        Check(hallPanes > 200 && popsBefore > 0 && jumpsBefore > 0 && popsNow == 0 && jumpsNow == 0, line);
+        if (!warp) return;
+
+        // On WARP: the floor about the player at the rule before's worst frame and the one before, both ways
+        Warp w;
+        std::string why;
+        if (!InitWarp(w, why)) { std::printf("skip  WARP, the Wizard's Sanctum's floor: %s\n", why.c_str()); return; }
+        std::vector<uint8_t> code;
+        if (!wxl_livingazeroth::shaderpatch::Assemble(BlockShader(), "glass blocks", code, why)) { Check(false, "the blocks assemble (the Sanctum): " + why.substr(0, 200)); return; }
+        IDirect3DPixelShader9* ps = nullptr;
+        if (FAILED(w.dev->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()), &ps))) { Check(false, "the blocks' shader on WARP (the Sanctum)"); return; }
+        float view[16] = { 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
+        w.dev->SetPixelShaderConstantF(gl::kViewConstant, view, 4);
+        UploadLook(w.dev, gl::Light{});
+        gl::Inputs in;
+        const int hw = std::string(worst.hour) == "09:00" ? 0 : std::string(worst.hour) == "12:00" ? 1 : std::string(worst.hour) == "15:00" ? 2 : 3;
+        wxl_livingazeroth::sky::LightToward(hours[hw] / 24.0f, in.sun);
+        const float e = static_cast<float>(kSide) - 0.5f;
+        constexpr float kHalf = 20.0f;
+        auto floorOf = [&](const std::vector<gl::PaneLight>& set, std::vector<float>& rgb) {
+            float pc[4 * gl::kPaneRegisters * gl::kFloorPanes] = {};
+            int n = 0;
+            for (const gl::PaneLight& pl : set)
+            {
+                if (n >= gl::kFloorPanes) break;
+                float* c = pc + 4 * gl::kPaneRegisters * n;
+                if (!gl::ProjectionRows(*pl.pane, pl.dir, worst.origin, 30.0f, c)) continue;
+                for (int k = 0; k < 3; ++k) c[12 + k] = pl.colour[k];
+                c[15] = 1.0f;
+                gl::PaneRoom(pl.pane->roomMin, pl.pane->roomMax, worst.origin, c);
+                ++n;
+            }
+            UploadPaneRows(w.dev, pc);
+            float c[4 * gl::kConstantCount] = {};
+            c[12] = in.sun[0]; c[13] = in.sun[1]; c[14] = in.sun[2];
+            c[36] = 1;
+            const float p[4][3] = { { -kHalf, -kHalf, 0.01f }, { kHalf, -kHalf, 0.01f }, { -kHalf, kHalf, 0.01f }, { kHalf, kHalf, 0.01f } };
+            const float up[3] = { 0, 0, 1 }, base[3] = { 0, 0, 0 };
+            const float xy[4][2] = { { -0.5f, -0.5f }, { e, -0.5f }, { -0.5f, e }, { e, e } };
+            V v[4];
+            for (int k = 0; k < 4; ++k)
+                v[k] = { xy[k][0], xy[k][1], 0, 1, { p[k][0], p[k][1], p[k][2] }, { up[0], up[1], up[2] }, { 0.5f, 0.5f }, { base[0], base[1], base[2] } };
+            return Draw(w, ps, v, c, gl::kFirstConstant, gl::kConstantCount, false, true, rgb);
+        };
+        std::vector<float> img[2][2];
+        bool drew = true;
+        for (int r = 0; r < 2; ++r)
+            for (int t = 0; t < 2; ++t) drew = drew && floorOf(worst.sets[r][t], img[r][t]);
+        ps->Release();
+        if (!drew) { Check(false, "WARP, the Wizard's Sanctum's floor drawn"); return; }
+        int apart[2] = {};
+        float most[2] = {}, peak = 0.0f;
+        for (int r = 0; r < 2; ++r)
+            for (size_t i = 0; i < img[r][0].size() && i < img[r][1].size(); ++i) peak = std::max(peak, std::max(img[r][0][i], img[r][1][i]));
+        for (int r = 0; r < 2; ++r)
+            for (size_t i = 0; i < img[r][0].size() && i < img[r][1].size(); ++i)
+            {
+                const float d = std::fabs(img[r][1][i] - img[r][0][i]);
+                apart[r] += d > 0.15f * peak ? 1 : 0;
+                most[r] = std::max(most[r], d);
+            }
+        std::snprintf(line, sizeof(line), "WARP, the Wizard's Sanctum's floor (40 x 40 yd about the player, %s) at the frame the rule before jumped the most (%u "
+                      "points) and the one before: before %d of %d pixels changed by 15%% of the floor's brightest (%.3f) or more, the largest change %.3f; "
+                      "now %d, the largest %.3f", worst.hour, worst.jumps, apart[0], kSide * kSide, peak, most[0], apart[1], most[1]);
+        Check(apart[0] > 0 && apart[1] == 0 && most[1] * 4.0f < most[0], line);
+        if (const char* dump = std::getenv("GLASS_DUMP"))
+            for (int r = 0; r < 2; ++r)
+                for (int t = 0; t < 2; ++t)
+                {
+                    const std::string file = (std::filesystem::path(dump) / ("sanctum_" + std::string(r ? "now_" : "before_") + (t ? "b.ppm" : "a.ppm"))).string();
+                    std::ofstream f(file, std::ios::binary);
+                    f << "P6\n" << kSide << " " << kSide << "\n255\n";
+                    for (int row = 0; row < kSide; ++row)
+                        for (int col = 0; col < kSide; ++col)
+                            for (int k = 0; k < 3; ++k)
+                                f.put(static_cast<char>(std::clamp(img[r][t][(static_cast<size_t>(row) * kSide + col) * 3 + k] * 255.0f, 0.0f, 255.0f)));
+                }
+    }
 }
 
 int main(int argc, char** argv)
@@ -6725,7 +7133,7 @@ int main(int argc, char** argv)
     }
     if (args.size() < 2) { std::printf("usage: glass_tests <folder with the WMO ps_MapObj*.bls> <repo data folder> [--no-warp]\n"); return 2; }
     // GLASS_ONLY=<parts, comma separated>: only those (rules, edit, shafts, warp, rays, tables, night, dayrooms, nightrooms, lit, frosted, titan,
-    // floorchoice, replay, lead, inn, sequence, inside, stained, tint, frosted, between, dalaran, snapshot)
+    // floorchoice, sanctum, replay, lead, inn, sequence, inside, stained, tint, frosted, between, dalaran, snapshot)
     const char* only = std::getenv("GLASS_ONLY");
     auto run = [only](const char* part) {
         if (!only) return true;
@@ -6748,6 +7156,7 @@ int main(int argc, char** argv)
     if (run("titan")) { BacklitRulesTests(); BacklitTableTests(args[1]); }
     if (warp && run("titan")) BacklitWarpTests();
     if (run("floorchoice")) FloorChoiceTests(args[1], warp);
+    if (run("sanctum")) SanctumWalk(args[1], warp);
     if (warp && run("replay")) ReplayTests(args[1]);
     if (run("lead")) LeadTests(args[1]);
     if (warp && run("inn")) InnRedrawTests(args[0], args[1]);
