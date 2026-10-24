@@ -129,6 +129,19 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   window's room is the group of the pane across its glass where it is glazed on both sides, and the frame's budget goes
   to the nearest windows first. Since 24 October the shops round the ring open out onto the forge too: their rays look as
   far as the room beyond reaches (the forge's far side lies 66 .. 180 yd off), not at most 60 yd.
+- **See-through windows in Dalaran** (24 October 2026, experimental): Dalaran is one building for the whole city, so it
+  opens room by room, the rooms a survey of every window's views and walks chose. From the street: Cartier & Co., two
+  upper rooms of the Legerdemain Lounge, the Threads of Fate's side room and the Purple Parlor. From inside onto the
+  street: Cartier & Co., the Violet Gate's two halls and the Agronomical Apothecary. Between rooms: the Underbelly's
+  Circle of Wills into Cantrips & Crows. Stained glass is tinted (where `GlassLead.cdbc` has no row for a stained texture,
+  its lead mask now comes from the whole texture) and frosted glass lies over the blurred copy. `SeeThroughBuildings.cdbc`'s
+  group rows can now open a room from outside; from outside the frame's budget goes to the nearest windows first, and
+  a city's windows into other rooms aren't even projected. The redraw's sixteen windows a glass batch take in the open
+  window nearest the camera.
+- **Window light that stays put** (24 October 2026): the sun through windows onto the floor and into the air took the
+  panes nearest the camera, so a camera swinging round the player swapped them and a patch of light came and went
+  ("Dalaran windows cast light ... but only in certain angles", in the Silver Enclave). It now takes the panes that light
+  the most where the player stands.
 - **Darker nights** (22 October 2026): the night's ambient light, sky, clouds and water darker so lamps and lit windows
   matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
   day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital

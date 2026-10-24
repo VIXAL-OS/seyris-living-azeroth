@@ -102,6 +102,12 @@ namespace wxl_livingazeroth::glass
             return rects.size() == 1 && rects[0].u0 <= 0.0f && rects[0].v0 <= 0.0f && rects[0].u1 >= 1.0f && rects[0].v1 >= 1.0f;
         }
     };
+    /// Stained glass with no GlassLead row (2026-10-24, Dalaran: none of its five stained textures has one, and the tint over
+    /// the room needs a lead mask, so its stained windows went see-through untinted): the whole texture, glass where it's lit or
+    /// coloured and not darker than kStainedFallbackDark x the lit glass's median luminance, as the chapel's and Northrend's
+    /// arched windows' rows have it.
+    constexpr float kStainedFallbackDark = 0.5f;
+    LeadRule StainedFallbackRule();
     /// The lead mask of a texture's level (`rgb`: w x h texels, three floats each, 0..1 as stored, rows top down) by
     /// its material's light mask (the lit glass) and its rule: w x h bytes, 255 glass, 0 not. False (and `out` empty)
     /// when no texel is in its rectangles.

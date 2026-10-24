@@ -673,14 +673,15 @@ longhouse, the orcs' medium huts (Kargath, Stonard), their great halls (from out
 and zeppelin houses (from inside only: Durotar's, Grom'gol's) and the vrykul longhouses (clear and leaded
 glass; from outside only): 47; and since between rooms (2026-10-23, Phase C: `SeeThroughBetweenRooms`) 13 of
 Ironforge's groups, one row each (the Group column): its shops' and rooms' windows onto its halls, and two halls' onto
-their rooms. A WMO not here keeps its windows as they are. Every placement of a WMO
-counts, on every map.
+their rooms (20 since the Great Forge); and since Dalaran (2026-10-24, Phase D) nine of its rooms, each with its own
+flags: from outside, from inside onto the street, or between rooms. A WMO not here keeps its windows as they are. Every
+placement of a WMO counts, on every map.
 
 | Field | Meaning |
 |---|---|
 | ID | row id |
 | Wmo | the WMO's path (case and slashes don't matter) |
-| Flags | 0x1 from outside (its windows open onto the room behind them), 0x2 from inside (its rooms' own windows open onto the street), 0x4 between rooms (an interior group's windows open onto the interior group beyond them: Ironforge's shops and halls); 0 = none (as if the row weren't there) |
+| Flags | 0x1 from outside (its windows open onto the room behind them; on a group's row, the windows of the exterior groups into that room, or that exterior group's own windows: Dalaran's rooms one by one), 0x2 from inside (its rooms' own windows open onto the street), 0x4 between rooms (an interior group's windows open onto the interior group beyond them: Ironforge's shops and halls); 0 = none (as if the row weren't there) |
 | Comment | which building (or group); never read |
 | Group | -1: the whole WMO; else this group of it alone (a group's flags are the WMO's and its own). A file without the column: every row the whole WMO's |
 

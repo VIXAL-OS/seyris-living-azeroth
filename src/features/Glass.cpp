@@ -178,6 +178,7 @@ namespace wxl_livingazeroth::glass
         bool  g_inWorld = false;
         std::vector<PaneLight> g_near;           // the panes in range that light the room (sunlit or backlit), nearest first
         std::vector<PaneLight> g_floorList;      // the floor light's, this frame
+        std::vector<uint32_t> g_floorKept, g_shaftKept;   // the floor light's and the shafts' panes last time (IDs: ChoosePanes)
         float g_floorFacing[3] = { 0, 0, 1 };    // its batches' c195: their lights' direction (LightFacing)
         double g_pulseSeconds = 0.0;             // the backlit glass's pulse clock (steady seconds)
         uint32_t g_viewFrame = 0;                // the frame g_view and the panes' rows were made for
@@ -612,6 +613,51 @@ namespace wxl_livingazeroth::glass
         }
         const float up[3] = { 0, 0, 1 };   // (lights that cancel: from overhead)
         MeanDirection(dirs.data(), weights.data(), n, up, out);
+    }
+
+    void ChoosePanes(const std::vector<PaneLight>& panes, const float room[3], const float focus[3], float slack, bool roomOnly, size_t max,
+                     std::vector<uint32_t>& last, std::vector<PaneLight>& out)
+    {
+        out.clear();
+        struct Ranked { int tier; float score; size_t at; };
+        static thread_local std::vector<Ranked> ranked;
+        ranked.clear();
+        const bool haveRoom = room && std::isfinite(room[0]) && std::isfinite(room[1]) && std::isfinite(room[2]);
+        const bool haveFocus = focus && std::isfinite(focus[0]) && std::isfinite(focus[1]) && std::isfinite(focus[2]);
+        for (size_t i = 0; i < panes.size(); ++i)
+        {
+            const Pane* p = panes[i].pane;
+            if (!p) continue;
+            bool inRoom = haveRoom;
+            for (int k = 0; k < 3 && inRoom; ++k) inRoom = room[k] >= p->roomMin[k] - slack && room[k] <= p->roomMax[k] + slack;
+            if (roomOnly && !inRoom) continue;
+            const float* d = panes[i].dir;
+            const float cosine = std::max(0.0f, d[0] * p->out[0] + d[1] * p->out[1] + d[2] * p->out[2]);
+            float score = 4.0f * std::max(0.0f, p->halfWidth) * std::max(0.0f, p->halfHeight) * cosine * std::max(0.0f, Lum(panes[i].colour));
+            if (haveFocus)
+            {
+                // the nearest point to the focus of the light's middle ray, from the glass into the room (along -dir)
+                const float rel[3] = { p->pos[0] - focus[0], p->pos[1] - focus[1], p->pos[2] - focus[2] };
+                const float t = std::clamp(rel[0] * d[0] + rel[1] * d[1] + rel[2] * d[2], 0.0f, kPaneReach);
+                const float q[3] = { rel[0] - d[0] * t, rel[1] - d[1] * t, rel[2] - d[2] * t };
+                const float s = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]) / kPaneFocusFall;
+                score /= 1.0f + s * s;
+            }
+            if (std::binary_search(last.begin(), last.end(), p->id)) score *= kPaneKeep;
+            if (!std::isfinite(score)) score = 0.0f;
+            ranked.push_back({ inRoom ? 0 : 1, score, i });
+        }
+        std::stable_sort(ranked.begin(), ranked.end(), [](const Ranked& a, const Ranked& b) {
+            return a.tier != b.tier ? a.tier < b.tier : a.score > b.score;
+        });
+        for (const Ranked& r : ranked)
+        {
+            if (out.size() >= max) break;
+            out.push_back(panes[r.at]);
+        }
+        last.clear();
+        for (const PaneLight& pl : out) last.push_back(pl.pane->id);
+        std::sort(last.begin(), last.end());
     }
 
     void RoomBatchConstants(const RoomStyle& style, const Building* b, const Light& light, const RoomInputs& in, const Settings& s,
@@ -1408,17 +1454,14 @@ namespace wxl_livingazeroth::glass
             g_backlitNear += pl.backlit ? 1 : 0;
             g_near.push_back(pl);
         }
-        // The floor light: the panes whose room holds the camera first (the room you stand in), then the nearest.
+        // The floor light: the panes whose room holds the player first (the room you stand in), then the rest, the ones that
+        // light the most where the player stands (ChoosePanes; before 2026-10-24 the nearest the camera, so a third-person
+        // camera swinging round the player swapped them).
         if (!g_settings.floorLight) return;
-        for (int pass = 0; pass < 2; ++pass)
-            for (const PaneLight& pl : g_near)
-            {
-                if (g_floorList.size() >= static_cast<size_t>(kFloorPanes)) break;
-                const Pane* p = pl.pane;
-                bool inRoom = true;
-                for (int k = 0; k < 3; ++k) inRoom = inRoom && cam[k] >= p->roomMin[k] && cam[k] <= p->roomMax[k];
-                if (inRoom == (pass == 0)) g_floorList.push_back(pl);
-            }
+        const float* focus = snap.playerPos;
+        const bool player = std::isfinite(focus[0]) && std::isfinite(focus[1]) && std::isfinite(focus[2]) &&
+                            (focus[0] != 0.0f || focus[1] != 0.0f || focus[2] != 0.0f);
+        ChoosePanes(g_near, player ? focus : cam, player ? focus : cam, 0.0f, false, static_cast<size_t>(kFloorPanes), g_floorKept, g_floorList);
         g_floorPanes = static_cast<unsigned>(g_floorList.size());
     }
 
@@ -1613,16 +1656,12 @@ namespace wxl_livingazeroth::glass
         if (!g_settings.enabled || !g_settings.colouredShafts || g_near.empty()) return false;
         float cam[3];
         wxl::game::camera::GetPosition(cam);
-        for (const PaneLight& pl : g_near)
-        {
-            if (out.size() >= max) break;
-            // the room you stand in (a little slack: a doorway)
-            const Pane* p = pl.pane;
-            bool inRoom = true;
-            for (int k = 0; k < 3; ++k) inRoom = inRoom && cam[k] >= p->roomMin[k] - 2.0f && cam[k] <= p->roomMax[k] + 2.0f;
-            if (!inRoom) continue;
-            out.push_back(pl);
-        }
+        // the room the camera is in (a little slack: a doorway), its panes that light the most where the player stands
+        // (ChoosePanes, as the floor light's since 2026-10-24; before, the nearest the camera)
+        const float* focus = world::Current().playerPos;
+        const bool player = std::isfinite(focus[0]) && std::isfinite(focus[1]) && std::isfinite(focus[2]) &&
+                            (focus[0] != 0.0f || focus[1] != 0.0f || focus[2] != 0.0f);
+        ChoosePanes(g_near, cam, player ? focus : cam, 2.0f, true, max, g_shaftKept, out);
         return !out.empty();
     }
 

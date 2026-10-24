@@ -376,6 +376,8 @@ namespace wxl_livingazeroth::seethrough
             }
             e.inside = anyBetween ? BuildInside(e.path, glass::Windows().All(), e.groups.data(), e.groups.size(), between)
                                   : BuildInside(e.path, glass::Windows().All(), e.groups.size());
+            // (from outside, the windows into the rooms the table names: a city's group rows, 2026-10-24; a whole WMO's every one)
+            const unsigned listedOutside = ListOutside(e.windows, e.groupSee);
             for (uint32_t g = 0; g < count; ++g)
                 if (e.groups[g].flags & client::kExteriorGroup) e.exteriorGroups.push_back(g);
             e.nearOut.resize(e.windows.windows.size());
@@ -394,9 +396,10 @@ namespace wxl_livingazeroth::seethrough
                 g_logged[e.path] = true;
                 char path[260];
                 ReadPath(r, path);
-                g_api->Log(WXL_LOG_INFO, kTag, "see-through windows: %s: %u windows in its exterior groups, %u with a room behind, %u fake; "
-                           "%u in its rooms (from inside), %u exterior groups; from outside %s, from inside %s (SeeThroughBuildings.cdbc)",
-                           path, static_cast<unsigned>(e.windows.windows.size()), e.windows.real, e.windows.fake,
+                g_api->Log(WXL_LOG_INFO, kTag, "see-through windows: %s: %u windows in its exterior groups, %u with a room behind, %u fake, %u of them "
+                           "into rooms the table opens from outside; %u in its rooms (from inside), %u exterior groups; from outside %s, from inside %s "
+                           "(SeeThroughBuildings.cdbc)",
+                           path, static_cast<unsigned>(e.windows.windows.size()), e.windows.real, e.windows.fake, listedOutside,
                            static_cast<unsigned>(e.inside.windows.size()), static_cast<unsigned>(e.exteriorGroups.size()),
                            (e.see & kSeeFromOutside) ? "yes" : "no", (e.see & kSeeFromInside) ? "yes" : (e.see & kSeeBetween) ? "between its rooms" : "no");
             }
@@ -760,8 +763,10 @@ namespace wxl_livingazeroth::seethrough
                 if (p.state == kShut && !p.candidate)
                 {
                     ++g_now.shut;
+                    const float d[3] = { cam[0] - windows[i].center[0], cam[1] - windows[i].center[1], cam[2] - windows[i].center[2] };
                     NoteWindow(g_now, windows[i].ordinal, windows[i].interior < 0 ? Counts::kFake
-                                                         : DistanceToBox(cam, r->groups[group].lo, r->groups[group].hi) > kRange ? Counts::kFar
+                                                         : DistanceToBox(cam, r->groups[group].lo, r->groups[group].hi) > kRange ||
+                                                           d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > kRange * kRange ? Counts::kFar
                                                          : Counts::kBudget);
                 }
                 if (!p.candidate) continue;
@@ -1349,6 +1354,9 @@ namespace wxl_livingazeroth::seethrough
             const glass::LeadRule* rule = glass::LeadOf(material);
             const glass::Material* m = glass::MaterialAt(material);
             const char* path = glass::TextureOf(material);
+            // (stained glass without a row: the whole texture, so its tint has a mask; 2026-10-24, Dalaran's)
+            static const glass::LeadRule kStainedWhole = glass::StainedFallbackRule();
+            if (!rule && m && m->kind == glass::kStained) rule = &kStainedWhole;
             if (!rule || !m || !path) return nullptr;   // no rectangles: the light's mask
             g_leadThisFrame = true;
             std::vector<uint8_t> file, mask;
@@ -1805,16 +1813,20 @@ namespace wxl_livingazeroth::seethrough
         const BatchWindows* b = WindowsOf(group, record, start, count);
         // (without the glass's look there's no mask to keep the lead opaque, nor a way to tell its windows apart: opaque)
         const bool glassLook = glass::Config().enabled && glass::PatchedVariants() > 0;
-        // (the whole-glass redraw: every window of the batch open or unseen; the per-pixel one tells them apart)
+        // (the whole-glass redraw: every window of the batch open or unseen, and none the table doesn't open from outside, which
+        // the plan leaves unseen: a city's; the per-pixel one tells them apart)
         const bool deferrable = glassLook && b &&
                                 (g_settings.redraw ? Deferrable(*b, g_draw.frame->states.data(), g_draw.frame->states.size())
-                                                   : DeferrableWhole(*b, g_draw.frame->states.data(), g_draw.frame->states.size()));
+                                                   : DeferrableWhole(*b, g_draw.frame->states.data(), g_draw.frame->states.size()) &&
+                                                     !(g_draw.frame && !g_draw.frame->inside && BatchUnlisted(*b, g_draw.windows, g_draw.count)));
         if (!deferrable) ++g_now.kept;
         float first = 0.0f;
         uint32_t bits = 0;
         if (deferrable && g_settings.redraw)
         {
-            OpenBits(*b, g_draw.windows, g_draw.frame->states.data(), g_draw.frame->states.size(), first, bits);
+            // (the sixteen the shader tells apart take in the open window nearest the camera)
+            OpenBits(*b, g_draw.windows, g_draw.frame->states.data(), g_draw.frame->states.size(), first, bits,
+                     g_draw.frame->haveCam ? g_draw.frame->cam : nullptr);
         }
         g_deferral.BeginBatch(deferrable, start, count, first, bits, glassMaterial);
         if (deferrable && g_settings.redraw)

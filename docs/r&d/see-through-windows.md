@@ -357,6 +357,13 @@ glass mask in the redraw), a shut window no longer keeping its batch opaque, and
 seen through them; 2026-10-21 the lead mask (GlassLead.cdbc), every pane's glass see-through and the frames opaque, the
 per-pixel redraw the default again.
 
+**The roadmap** (2026-10-24). Done: from outside and from inside (sections 3 .. 8), more buildings (9), Phase A stained
+glass (10), Phase B frosted glass (11), Phase C between rooms in Ironforge (13, 14), Phase D Dalaran, room by room, all
+three at once (15). Next: in-game reports from Dalaran (the Lounge's windows far apart in their batch, the stained glass's
+whole-texture lead mask); more than sixteen windows a batch in the redraw (a second constant, if the largest WMO variant's
+slots allow: 2,032 of 2,048 now); the rooms left out (Curiosities & Moore at 34.8%, the Silver Enclave's hall, the Violet
+Citadel) once snapshots from them say why they flicker; Lumenveil's queue after the see-through phases.
+
 ## 8. From inside: the street through the windows
 
 "windows should be see-through from the inside as well" (the user, 2026-10-21, standing in the inn's ground floor). From
@@ -1014,3 +1021,136 @@ nor on the walks along their fronts): the enchanters' (26, 72%, at 60.4, 44.6), 
 at 55.2, 58.5) and an upper room by it (76, 66%, at 58.3, 53.2); left out 67 (20%, two walks flickering), 72 (18%), 74
 (4%) and 89 (19%). The table: 20 groups, 67 rows. Their upper windows seen from the ground floor stay shut (their rays
 meet the upper floor's underside).
+
+## 15. Dalaran (2026-10-24, Phase D)
+
+"Phase D is Dalaran, which needs all three at once: stained glass, frosted glass and windows between rooms ... working
+like Ironforge's" (the brief).
+
+**The city.** One WMO, `nd_dalaran.wmo`, 91 groups, placed once over Crystalsong Forest (unique ID 2601597, at 5824.9,
+666.9, 642.0, turned -39 degrees). No building of its own stands in it: the other WMOs on its tiles are Crystalsong's ruins
+and walls and the magehunters' platforms far below. 21 groups are exterior (the streets and squares, the Violet Citadel's
+spire, the Underbelly's tunnels) and 70 interior (the shops, inns, banks and enclaves, the Citadel's halls, the
+Underbelly's rooms). Its MOGN names are the artists' and often wrong, as Ironforge's; the client's own name each group
+(WMOAreaTable, by its MOGP ID): Cartier & Co. Fine Jewelry (19), the Agronomical Apothecary (18), the Threads of Fate (10,
+11, 13), the Legerdemain Lounge (55, its upper rooms 56 .. 58), the Violet Gate (14, 51 .. 54), the Silver Enclave's hall (78:
+the emblem quartermasters), the Violet Citadel (36), the Purple Parlor (89), Archmage Vargoth's Retreat (90), and in the
+Underbelly the Circle of Wills (71) and Cantrips & Crows (70).
+
+Its glass: 3,949 windows in its exterior groups (stained 2,225: `eb_dalaran_windows1`, `dal_window_04`, the enclaves' and
+the prison's; frosted 1,724: `eb_dalaran_window3`), 1,091 of them with an interior group behind (frosted 808, stained 283);
+529 in its rooms, mostly stained, frosted in the Violet Citadel, the Violet Gate, the Silver Enclave's hall and the Circle of
+Wills (whose texture is Orgrimmar's, `mm_ogrmr_window_01`). No clear or leaded glass. An exterior glass batch covers
+hundreds of windows (748 in one), real and fake together, with no stray triangles. From the street the frosted pieces in
+view are the windows' surrounds; the panes in them are stained.
+
+**Room by room.** A whole-WMO row would open every window with a room behind it wherever the gate lets it, the flickering
+ones too. So SeeThroughBuildings' group rows now name rooms from outside as well: a window of an exterior group opens from
+outside only where its own group's flags or its room's have 0x1 (`ListOutside`; a building listed whole has them in every
+group, so it is as it was). From inside (0x2) and between rooms (0x4) the rows were per group already.
+
+**The survey** (seethrough_tests: SEETHROUGH_SURVEY with SEETHROUGH_SURVEY_VERBOSE, its lines added up by room; the views,
+eyes and walks of sections 9 to 14, the eyes on the city's streets). From outside 20% of the street views open, 141
+windows from half their views or more, 394 never, and 50 of 6,156 walks changed a window more than twice. From inside 21% of
+the eyes. Between rooms only 10 windows look onto another room; 519 look onto the street or nothing (`RoomBeyond` finds no
+interior group past them: Dalaran's rooms open onto its streets, not onto halls as Ironforge's do). By the Phase C rule
+(35% of the views or eyes or more, no window changing more than twice on any walk):
+
+| room | group | windows (outside / own) | from outside: street views, flickering windows | from inside: eyes, flickering | taken |
+|---|---|---|---|---|---|
+| Cartier & Co. Fine Jewelry | 19 | 10 / 10, stained | 70%, 0 | 95%, 0 | outside, inside |
+| the Legerdemain Lounge's upper rooms | 57, 58 | 10, 10, frosted and stained | 55%, 54%; 0 | | outside |
+| the Threads of Fate's side room | 11 | 28, frosted and stained | 40%, 0 | | outside |
+| the Purple Parlor | 89 | 65 / 54, stained | 35.0%, 0 | 46%, 8 | outside |
+| the Violet Gate's halls | 53, 54 | 104, 100 / 26, 25 | 15%, 16% | 88%, 87%; 0 | inside |
+| the Agronomical Apothecary | 18 | 1 / 1, stained | 63%, 1 | 49%, 0 | inside |
+| the Circle of Wills, onto Cantrips & Crows | 71 | 1 onto a room (9 onto nothing), frosted | | between: 94% of 609, 0 | between |
+| Curiosities & Moore | 7, 6 | 28, 32 | 34.8%, 29% | | |
+| the Threads of Fate, the Wonderworks, the Visitor Center | 10, 12, 13, 8, 9 | 32 .. 38 | 20 .. 29% | | |
+| the Silver Enclave's hall | 78 | 41 / 15 | 31%, 13 | 38%, 1 | |
+| Archmage Vargoth's Retreat | 90 | 74 / 52 | 35.1%, 1 | 50%, 7 | |
+| the Violet Citadel | 36 | 111 / 126 | 12%, 5 | 33%, 17 | |
+| the banks | 15, 35 | / 79, 76 | | 0.9%, 0.8% | |
+
+Left out between rooms: the Violet Gate's stairwell (14, onto 53 and 54: no floor to stand on, so no eyes) and the Lounge's
+upstairs window onto its hall (56 onto 55: three eyes, too few to judge). The rows: 76 (the 67 before unchanged, nine of
+Dalaran's).
+
+**The plan from outside.** A city's exterior group has hundreds of windows; the budget (48 a frame) went to them in their
+order, so the nearest could find it spent: now the nearest first, as from inside since section 14. A window the table
+doesn't open from outside takes none of it and isn't projected at all (from before Cartier & Co. a frame's plan over the
+city's 3,949 windows: 0.11 ms, 1.06 ms with every window projected); the whole-glass redraw never draws a batch with one of
+those see-through (`BatchUnlisted`).
+
+**Sixteen windows a batch.** The redraw tells sixteen windows of a batch apart (c219.zw: a first ordinal and a bit each).
+The first was the lowest open ordinal; in Dalaran a room's windows can be ordinals far apart (the Lounge's upper room: 579,
+597, 1968 and 1972 in the stained batch), so the window in front of the camera could fall past the sixteen. Now the first is
+the open ordinal whose sixteen take in the open window nearest the camera and, of those, the most open windows (`OpenBits`
+with the camera). Open windows past them still stay the client's glass, their room drawn unseen behind it: a limit of the
+shader's one constant.
+
+**Stained glass's lead mask.** None of Dalaran's five stained textures has a GlassLead row, and the tint over the room
+takes the lead mask, so its stained windows went see-through untinted (the WARP harness from before Cartier & Co.: not one
+of the open glass's pixels changed by the tint). Stained glass without a row now takes the whole texture
+(`StainedFallbackRule`: glass where lit or coloured and not darker than half the lit glass, as the chapel's and Northrend's
+arched windows' rows have it), both for the tint and the redraw's mask.
+
+The masks keep each design's panes and lose its lead lines (`eb_dalaran_windows1` 49% glass, `dal_window_04` 84%,
+`eb_dal_allianceglass` 55%; none of their dark texels; glass_tests' "lead" part, GLASS_DUMP the masks).
+
+**Proofs.** seethrough_tests, through the real reader and the scan's files: Dalaran's nine rows and nothing else of it;
+`ListOutside` over its MOGI lists 123 of its 3,949 exterior windows (into 11: 28, 19: 10, 57: 10, 58: 10, 89: 65, five of them
+skylights) and no other; from where to stand (below) the room's windows open: Cartier & Co.'s 4 of the 6 facing there, the
+Lounge's upper rooms 9 of 9 each, the Threads of Fate's 10 of 25, the Purple Parlor's 9 of 34; from inside Cartier & Co.'s
+10 of 10, the Violet Gate's 25 of 25 and 25 of 25, the Apothecary's 1; between rooms the Circle of Wills' window 1681 onto
+Cantrips & Crows. On WARP (glass_tests "dalaran": the game's sequence, each view as a snapshot gives it, the city placed
+as it stands): from the street Cartier & Co.'s stained glass (group 22's batch 4) shows the room through 3,050 of 3,050 open
+glass pixels, none of 322 lead and frame or 2,425 shut-window pixels, and tinted (3,050 of 3,050 changed, the channels'
+spread 65 -> 116); the Lounge's upper room (group 3's stained batch) 227 of 227, tinted; from inside Cartier & Co.'s own
+glass (a transition batch: the pair silenced and deferred) the street through 3,881 of 3,881, tinted; the Violet Gate's
+frosted glass the street through 2,161 of 2,161, blurred (the step between pixels 14.4 sharp, 6.4 over the copy); between
+rooms the Circle of Wills' frosted window (Orgrimmar's texture) Cantrips & Crows through 2,176 of 2,176, blurred (15.2 ->
+5.0). The Violet Gate's frosted pieces are its tall windows' frames, whose window rectangles overlap at their points: there
+the shader's lookup and the batch's triangles name different windows, and the split (which needs the client's index
+buffer, write-only in the game) decides 3% of the pixels otherwise than the whole redraw the game draws.
+
+**Where to stand** (the zone map's coordinates from DungeonMap's floors for Dalaran and the Underbelly; the survey's spots,
+SEETHROUGH_SPOTS, which the test above checks): from outside, before Cartier & Co. (Dalaran 39.0, 31.9, facing south-east,
+its windows 5 yd up), below the Legerdemain Lounge's upper rooms (45.9, 37.4, south-east, 16 yd up; 50.9, 36.6, south, 12 yd
+up) and the Threads of Fate's side room (42.4, 43.4, south-east, 18 yd up); from inside, in Cartier & Co. (40.6, 36.0, facing
+north-west), the Violet Gate's halls (55.3, 49.5, south-east; 54.9, 45.2, north-east) and the Agronomical Apothecary (41.8,
+34.1, north-west); between rooms, the Underbelly's Circle of Wills (Underbelly 37.6, 38.3, facing south-west, the window 10
+yd up the wall). The Purple Parlor's windows open from outside only up at the Violet Citadel's top beside it (Dalaran
+23.6, 34.8), where the survey's eye stood on a ledge few players reach.
+
+**Only the game can confirm**: the frame rate in Dalaran's streets with these rooms open; the stained glass's whole-texture
+lead mask on the real device; the rooms' look at the Lounge, whose windows' ordinals lie far apart (some of the room's
+windows stay the client's glass).
+
+## 16. The window light's panes (2026-10-24)
+
+"as is, Dalaran windows cast light (which rules) but only in certain angles" (the user, at Dalaran 38.3, 54.8, in the
+Silver Enclave's hall by the emblem quartermasters: a patch of sun on the floor and a pillar by the stairs in one screenshot,
+gone a few seconds later with the camera turned a little; snapshots 20261024-025941 and -025945, the player where they
+were, the camera 20 yd from where it was, both "sunlit panes near 122/137, on the floor 12").
+
+**Why.** The floor light takes kFloorPanes (12) panes a frame, the shafts 16: those whose room holds the camera, the
+nearest the camera first. The hall's tall pointed windows are 54 sunlit panes in its room (each piece of their tracery a
+pane, some a yard across). So the twelve nearest a third-person camera came from whichever window it swung by: from the
+first camera the hall's big pane (21045, 3.7 x 9.7 yd, its patch about 5 yd from the player) and the tracery round it,
+from the second twelve others with nothing in common, and the patch went. Nothing per frame culls a pane; the choice moved
+with the camera.
+
+**Now** (`glass::ChoosePanes`, for the floor light and the shafts): the panes whose room holds the player first (the
+shafts: still only the camera's room's), then by how much light each lets in -- its area x its light's cosine to the glass x
+its colour's luminance -- over 1 + (d / 8 yd)^2, d the distance from the player to its light's middle ray within 30 yd of the
+glass; a pane chosen last frame counts 1.5 times, so two of equal standing don't trade places frame by frame. The player
+doesn't move with the camera, so neither does the choice.
+
+**Proofs.** Through the real reader (seethrough_tests) at the snapshots' cameras and the 07:00 sun: 122 and 137 panes lit
+near them (as the panel said); the rule before took two sets of twelve, the big pane in the first and not the second;
+`ChoosePanes` the same twelve from both, the big pane among them. glass_tests "floorchoice" (the shipped GlassPanes): with
+the camera swung round the player (24 places, 10 yd out and 10 up) the rule before took 18 different sets, `ChoosePanes` one;
+on WARP the hall's floor within 6 yd of the player lit through the floor block by each set: before, 19 pixels from the first
+camera and none from the second (173 of the floor's 1,024 pixels apart); now 27 and 27, not a pixel apart (GLASS_DUMP:
+floor_<snapshot>_<before|now>.ppm).

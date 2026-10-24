@@ -3,9 +3,11 @@
 // docs/cdbc-tables.md).
 //  - The look (b9): features/WmoIce's batch hooks ask, per batch, whether its material's texture is glass; this
 //    sets the batch's constants (its kind's look, its mask, inside or outside) and switches the block on.
-//  - The floor light (b10): each frame the sunlit panes nearest the camera (up to kFloorPanes) become projection
-//    rows; the batches of a building's interior groups (not its glass, not a sand floor's rims) take them.
-//  - The coloured shafts: features/GlassShafts marches the room's air with the panes whose room holds the camera.
+//  - The floor light (b10): each frame up to kFloorPanes sunlit panes near the camera become projection rows, the ones
+//    that light the most where the player stands (ChoosePanes); the batches of a building's interior groups (not its
+//    glass, not a sand floor's rims) take them.
+//  - The coloured shafts: features/GlassShafts marches the room's air with the panes whose room holds the camera (the
+//    same choice among them).
 //  - The rooms behind clear glass, one per window (GlassWindows.cdbc: env/GlassRooms' WindowTable, a texture the
 //    shader looks the pixel's window up in), per building (RoomStyles.cdbc, GlassBuildings.cdbc): features/WmoIce's
 //    group hook (Wmo.RenderGroup: the placed instance, its placement matrix and the group) names the building and its
@@ -222,6 +224,22 @@ namespace wxl_livingazeroth::glass
     /// panes: with a backlit pane among them, their lights' directions weighted by their colours' luminance (MeanDirection;
     /// from overhead if they cancel); sunlit panes alone (or none), the sun's, exactly as before.
     void LightFacing(const PaneLight* lights, size_t n, const float sun[3], float out[3]);
+    // "Dalaran windows cast light (which rules) but only in certain angles" (the user, 2026-10-24, in the emblem
+    // quartermasters' hall at Dalaran 38.3, 54.8: a patch of sun on the floor and on a pillar by the stairs, gone when the
+    // camera turned a little). The floor light takes kFloorPanes panes a frame, and they were the ones in the camera's room
+    // nearest the camera. The hall's tall windows make 54 sunlit panes in its room (each piece of tracery is a pane). So
+    // the twelve nearest a third-person camera swinging 20 yd round the player came from two different windows, and the
+    // big pane whose patch lies 5 yd from the player was in one set and not the other. Now the panes are chosen by what
+    // they light where the player is, which doesn't move with the camera.
+    /// The panes a frame's floor light (or the coloured shafts) take, at most `max`, from the sunlit or backlit panes near
+    /// the camera (`panes`, nearest first). The panes whose room (grown by `slack` yd) holds `room` come first, then the
+    /// rest; with `roomOnly`, only those. Within each, the most light first: its area x its light's cosine to the glass x
+    /// its colour's luminance, over 1 + (d / kPaneFocusFall)^2, where d is how far `focus` is from its light's middle ray
+    /// within kPaneReach yd of the glass. A pane chosen last time (`last`: their IDs, sorted) counts kPaneKeep times, so two
+    /// of equal standing don't trade places frame by frame. Ties keep `panes`' order. `last` becomes the chosen IDs.
+    constexpr float kPaneFocusFall = 8.0f, kPaneKeep = 1.5f, kPaneReach = 30.0f;
+    void ChoosePanes(const std::vector<PaneLight>& panes, const float room[3], const float focus[3], float slack, bool roomOnly, size_t max,
+                     std::vector<uint32_t>& last, std::vector<PaneLight>& out);
 
     // --- for the window lights (features/Windows) -------------------------------------------------------------------
     /// Whether a dark room hides the client's lit window at night now: the glass on, its blocks in the shaders, the

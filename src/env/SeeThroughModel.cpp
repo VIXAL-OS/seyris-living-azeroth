@@ -144,6 +144,19 @@ namespace wxl_livingazeroth::seethrough
         return Build(path, all, groups, count, false);
     }
 
+    unsigned ListOutside(RootWindows& outside, const std::vector<uint32_t>& groupFlags)
+    {
+        unsigned listed = 0;
+        for (SeeWindow& w : outside.windows)
+        {
+            const uint32_t own = w.group < groupFlags.size() ? groupFlags[w.group] : 0u;
+            const uint32_t room = w.interior >= 0 && static_cast<size_t>(w.interior) < groupFlags.size() ? groupFlags[static_cast<size_t>(w.interior)] : 0u;
+            w.unlisted = ((own | room) & kSeeFromOutside) == 0;
+            listed += w.unlisted ? 0 : 1;
+        }
+        return listed;
+    }
+
     RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, size_t groupCount)
     {
         return Build(path, all, nullptr, groupCount, true);
@@ -614,11 +627,15 @@ namespace wxl_livingazeroth::seethrough
         out.assign(count, WindowPlan{});
         if (!windows || !Finite3(camLocal)) return;
         const bool inRange = DistanceToBox(camLocal, boxLo, boxHi) <= kRange;
+        static thread_local std::vector<std::pair<float, uint32_t>> eligible;   // (distance^2, window): the budget's, nearest first
+        eligible.clear();
         for (uint32_t i = 0; i < count; ++i)
         {
             const SeeWindow& w = windows[i];
             WindowPlan& p = out[i];
-            if (!Facing(w, camLocal)) continue;
+            // (a window the table doesn't open from outside is left as the client draws it, not even projected: a city's
+            // thousands cost about a millisecond a frame projected; its batch then isn't drawn whole, see SeeThrough)
+            if (w.unlisted || !Facing(w, camLocal)) continue;
             float quad[4][3];
             Corners(w, kQuadGrow, quad);
             Rect screen, clip;
@@ -626,11 +643,14 @@ namespace wxl_livingazeroth::seethrough
             p.clip = clip;
             p.state = kShut;
             const float d[3] = { camLocal[0] - w.center[0], camLocal[1] - w.center[1], camLocal[2] - w.center[2] };
-            if (w.interior >= 0 && inRange && Dot(d, d) <= kRange * kRange && budget > 0)
-            {
-                p.candidate = true;
-                --budget;
-            }
+            if (w.interior >= 0 && inRange && Dot(d, d) <= kRange * kRange) eligible.emplace_back(Dot(d, d), i);
+        }
+        std::stable_sort(eligible.begin(), eligible.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& e : eligible)
+        {
+            if (budget == 0) break;
+            out[e.second].candidate = true;
+            --budget;
         }
     }
 
@@ -968,6 +988,14 @@ namespace wxl_livingazeroth::seethrough
         return p;
     }
 
+    bool BatchUnlisted(const BatchWindows& b, const SeeWindow* windows, size_t count)
+    {
+        if (!windows) return false;
+        for (const uint16_t w : b.windows)
+            if (w < count && windows[w].unlisted) return true;
+        return false;
+    }
+
     bool DeferrableWhole(const BatchWindows& b, const uint8_t* states, size_t stateCount)
     {
         if (!Deferrable(b, states, stateCount)) return false;
@@ -976,20 +1004,42 @@ namespace wxl_livingazeroth::seethrough
         return true;
     }
 
-    void OpenBits(const BatchWindows& b, const SeeWindow* windows, const uint8_t* states, size_t count, float& first, uint32_t& bits)
+    void OpenBits(const BatchWindows& b, const SeeWindow* windows, const uint8_t* states, size_t count, float& first, uint32_t& bits,
+                  const float* camLocal)
     {
         first = 0.0f;
         bits = 0;
         if (!windows || !states) return;
-        bool any = false;
-        uint32_t lo = 0;
+        // the open windows' ordinals, and the one nearest the camera
+        static thread_local std::vector<uint32_t> open;
+        open.clear();
+        bool haveNear = false;
+        uint32_t nearest = 0;
+        float best = 0.0f;
+        const bool cam = camLocal && Finite3(camLocal);
         for (const uint16_t w : b.windows)
-            if (w < count && states[w] == kOpened && (!any || windows[w].ordinal < lo))
-            {
-                lo = windows[w].ordinal;
-                any = true;
-            }
-        if (!any) return;
+        {
+            if (w >= count || states[w] != kOpened) continue;
+            open.push_back(windows[w].ordinal);
+            if (!cam) continue;
+            const float d[3] = { camLocal[0] - windows[w].center[0], camLocal[1] - windows[w].center[1], camLocal[2] - windows[w].center[2] };
+            const float dd = Dot(d, d);
+            if (!haveNear || dd < best || (dd == best && windows[w].ordinal < nearest)) { best = dd; nearest = windows[w].ordinal; haveNear = true; }
+        }
+        if (open.empty()) return;
+        std::sort(open.begin(), open.end());
+        open.erase(std::unique(open.begin(), open.end()), open.end());
+        // the first: an open ordinal (taking in the nearest one when there is a camera) whose sixteen hold the most open windows
+        uint32_t lo = open.front();
+        size_t most = 0;
+        for (size_t i = 0; i < open.size(); ++i)
+        {
+            const uint32_t from = open[i];
+            if (haveNear && (from > nearest || nearest - from >= kOpenBits)) continue;
+            size_t n = 0;
+            for (size_t j = i; j < open.size() && open[j] - from < kOpenBits; ++j) ++n;
+            if (n > most) { most = n; lo = from; }
+        }
         first = static_cast<float>(lo);
         for (const uint16_t w : b.windows)
             if (w < count && states[w] == kOpened && windows[w].ordinal - lo < kOpenBits) bits |= 1u << (windows[w].ordinal - lo);

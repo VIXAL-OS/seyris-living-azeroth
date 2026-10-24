@@ -25,6 +25,14 @@ namespace wxl_livingazeroth::glass
         }
     }
 
+    LeadRule StainedFallbackRule()
+    {
+        LeadRule rule;
+        rule.rects.push_back({ 0.0f, 0.0f, 1.0f, 1.0f });
+        rule.dark = kStainedFallbackDark;
+        return rule;
+    }
+
     bool LeadMask(const float* rgb, uint32_t w, uint32_t h, const Material& m, const LeadRule& rule, std::vector<uint8_t>& out)
     {
         out.clear();

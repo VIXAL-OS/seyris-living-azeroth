@@ -314,7 +314,7 @@ namespace
               std::string(via) + ": every table found and read (no \"not found\", no reader error in the status)");
 
         const gl::WindowTable& wt = gl::Windows();
-        char line[400];
+        char line[1000];
         size_t keptStained = 0, keptFrosted = 0;
         for (const gl::Window& w : wt.All()) { keptStained += w.kind == gl::kStained ? 1 : 0; keptFrosted += w.kind == gl::kFrosted ? 1 : 0; }
         std::snprintf(line, sizeof(line), "%s: GlassWindows.cdbc: %zu windows kept of %zu clear, leaded, frosted or stained with a WMO (frosted %zu of %zu, stained %zu "
@@ -422,7 +422,9 @@ namespace
         // the frosted glass's (Phase B): the dwarven house from both, the zeppelin house from inside only; and (2026-10-23,
         // Phase C, between rooms) Ironforge by its groups: the smithy's (47) 0x4, the Great Forge's (65, its ring) 0x4 since the
         // first in-game report, and since the second the shops round its ring out onto it (the herbalist's, 71), the Commons'
-        // hall by the Stonefire Tavern (60) none, the city 0x4 in all.
+        // hall by the Stonefire Tavern (60) none, the city 0x4 in all. And (2026-10-24, Phase D) Dalaran by its rooms: Cartier &
+        // Co. (19) from outside and inside, the Purple Parlor (89) from outside, the Violet Gate's hall (53) from inside, the
+        // Underbelly's Circle of Wills (71) between rooms, the Silver Enclave's hall (78) none, the city all three in all.
         auto see = [](const char* wmo) { return gl::SeeThroughFlags(gl::PathHash(wmo)); };
         const uint32_t seeInn = see("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo");
         const uint32_t seeHouse = see("world\\wmo\\azeroth\\buildings\\duskwood_humantwostory\\duskwood_humantwostory.wmo");
@@ -436,18 +438,22 @@ namespace
         const uint32_t seeCity = gl::SeeThroughFlags(ironforge), seeSmithy = gl::SeeThroughGroupFlags(ironforge, 47);
         const uint32_t seeForge = gl::SeeThroughGroupFlags(ironforge, 65), seeHerbalist = gl::SeeThroughGroupFlags(ironforge, 71);
         const uint32_t seeCommons = gl::SeeThroughGroupFlags(ironforge, 60), seeInnGroup = gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo"), 5);
+        const uint32_t dalaran = gl::PathHash("World\\wmo\\Northrend\\Dalaran\\ND_Dalaran.wmo");
+        const uint32_t seeDalaran = gl::SeeThroughFlags(dalaran), seeCartier = gl::SeeThroughGroupFlags(dalaran, 19), seeParlor = gl::SeeThroughGroupFlags(dalaran, 89);
+        const uint32_t seeGate = gl::SeeThroughGroupFlags(dalaran, 53), seeWills = gl::SeeThroughGroupFlags(dalaran, 71), seeEnclave = gl::SeeThroughGroupFlags(dalaran, 78);
         const uint32_t seeNone = see("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo") | see("world\\wmo\\azeroth\\buildings\\human_barn_silo\\barn.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireblacksmith\\goldshireblacksmith.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo");
         std::snprintf(line, sizeof(line), "%s: SeeThroughBuildings.cdbc: %zu buildings; the inn's flags %u, a two-storey house's %u, a mage tower's %u, a "
                       "farmhouse's %u, the chapel's %u, Northrend's town hall's %u, the dwarven house's %u, the zeppelin house's %u; Stormwind, a barn, a "
                       "smithy, the closed inn %u; Ironforge %u (%zu group rows), its smithy's group %u, the Great Forge's %u, the Commons' %u; the inn's group 5 %u (the "
-                      "WMO's)", via,
+                      "WMO's); Dalaran %u, Cartier & Co. %u, the Purple Parlor %u, the Violet Gate %u, the Circle of Wills %u, the Silver Enclave %u", via,
                       gl::SeeThroughBuildings(), seeInn, seeHouse, seeTower, seeFarm, seeChapel, seeHall, seeHovel, seeZeppelin, seeNone, seeCity,
-                      gl::SeeThroughGroupRows(), seeSmithy, seeForge, seeCommons, seeInnGroup);
-        Check(gl::SeeThroughBuildings() == 48 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 &&
-              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 20 && seeSmithy == 4 && seeForge == 4 && seeHerbalist == 4 && seeCommons == 0 &&
-              seeInnGroup == 3 && status.find("SeeThroughBuildings.cdbc: 48 buildings") != std::string::npos, line);
+                      gl::SeeThroughGroupRows(), seeSmithy, seeForge, seeCommons, seeInnGroup, seeDalaran, seeCartier, seeParlor, seeGate, seeWills, seeEnclave);
+        Check(gl::SeeThroughBuildings() == 49 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 &&
+              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 29 && seeSmithy == 4 && seeForge == 4 && seeHerbalist == 4 && seeCommons == 0 &&
+              seeInnGroup == 3 && seeDalaran == 7 && seeCartier == 3 && seeParlor == 1 && seeGate == 2 && seeWills == 4 && seeEnclave == 0 &&
+              status.find("SeeThroughBuildings.cdbc: 49 buildings") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).
         const std::string rooms = gl::RoomLine(), windows = gl::WindowLine();

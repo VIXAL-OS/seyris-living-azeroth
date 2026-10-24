@@ -259,6 +259,7 @@ namespace wxl_livingazeroth::seethrough
         float halfWidth = 0.5f, halfHeight = 0.5f, thickness = 0.0f;
         float outer = 0.0f;                 // a room's own window (from inside): how deep its opening is, to the building's
                                             // outer glass behind it (OuterBehind; 0: none)
+        bool unlisted = false;              // from outside: its room isn't one the table opens from outside (ListOutside)
     };
     constexpr uint32_t kWindowExterior = 0x1;   // GlassWindows.Flags
     // "Northshire Abbey framerate looks awesome but it does flicker between fake rooms and outside" (the user, 2026-10-22,
@@ -290,6 +291,16 @@ namespace wxl_livingazeroth::seethrough
     };
     /// A WMO's windows from the loaded table (glass::Windows().All()) and its root's MOGI (`groups`, `count`).
     RootWindows BuildRoot(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count);
+    // Dalaran (2026-10-24, Phase D): one WMO for the city, 3,949 windows in its exterior groups, 1,091 of them with a room
+    // behind, and most of those rooms are never seen through their glass (one large volume, or behind thick walls). A whole
+    // WMO's row from outside would open every one of them where the gate lets it, flickering ones too. So the table's group
+    // rows say which rooms open from outside: a window opens from outside only when its own exterior group's flags (the
+    // WMO's rows and its group's) or its room's have kSeeFromOutside. A building listed whole has it in every group, so it
+    // stays as it was.
+    /// Marks each window of `outside` (BuildRoot's) whose group's and room's flags (`groupFlags`: each group's, the WMO's
+    /// rows' and its own: glass::SeeThroughGroupFlags) both lack kSeeFromOutside as unlisted, the rest not. How many are
+    /// listed (a fake window counts as listed when its group is).
+    unsigned ListOutside(RootWindows& outside, const std::vector<uint32_t>& groupFlags);
 
     // --- the room seen through a window ---------------------------------------------------------------------------------
     // "certain attic windows shouldn't be able to see through the roof" (the user, 2026-10-20, the Lion's Pride Inn at
@@ -485,8 +496,11 @@ namespace wxl_livingazeroth::seethrough
         float depth = 0.0f;
     };
     /// The plan for one exterior group's windows: the camera (WMO space), the group's box, the walk's rectangle, the
-    /// matrices; `budget` windows may still open this frame (it goes down by each candidate). Candidates' states are
-    /// kShut until the runtime has opened them (kOpened).
+    /// matrices; `budget` windows may still open this frame (it goes down by each candidate), the nearest first (since
+    /// 2026-10-24: a city's group has hundreds of windows, and in their order the nearest could find it spent). A window
+    /// that isn't listed (ListOutside) takes none of it and is left kUnseen, not even projected (Dalaran's 3,826 cost about
+    /// a millisecond a frame projected), so the whole-glass redraw mustn't draw a batch with one see-through (BatchUnlisted).
+    /// Candidates' states are kShut until the runtime has opened them (kOpened).
     void PlanWindows(const SeeWindow* windows, uint32_t count, const float camLocal[3], const float boxLo[3], const float boxHi[3],
                      const Rect& walk, const float model[16], const float eye[3], const float viewProj[16], unsigned& budget,
                      std::vector<WindowPlan>& out);
@@ -590,6 +604,9 @@ namespace wxl_livingazeroth::seethrough
     /// The same for the whole-glass redraw (SeeThroughRedraw 0, as on 2026-10-20): every window it covers open or unseen too
     /// (its glass goes see-through as one, so a shut window would show the void behind it).
     bool DeferrableWhole(const BatchWindows& b, const uint8_t* states, size_t stateCount);
+    /// Whether any of a batch's windows (`windows`: the group's, `count` of them) isn't listed from outside (ListOutside):
+    /// such a batch is never drawn whole (its unlisted windows are left unseen by PlanWindows, not shut).
+    bool BatchUnlisted(const BatchWindows& b, const SeeWindow* windows, size_t count);
     /// Frosted glass (2026-10-23: "if I set the blur to exactly 0 it doesn't work, any value above 0 does"): its windows open
     /// with SeeThroughFrosted on (`frosted`) and the per-pixel redraw; with the blur (SeeThroughFrostBlur) above 0 over the
     /// frame's blurred copy (`copies`), unless the blur can't run here (then shut, as before), at 0 as through clear glass (no
@@ -605,10 +622,14 @@ namespace wxl_livingazeroth::seethrough
     /// The windows c219.w holds (GlassShader's kReplayBits): 16, so the shader's test of a bit keeps a margin a GPU's
     /// approximate exp can't cross (OpenBit's).
     constexpr uint32_t kOpenBits = 16;
-    /// A deferred batch's open windows for the redraw (c219.zw): the lowest open ordinal (`windows`: the group's, `states`
-    /// theirs), and a bit for each open window within kOpenBits of it (its ordinal - first). An open window past them is
-    /// redrawn opaque, as a shut one.
-    void OpenBits(const BatchWindows& b, const SeeWindow* windows, const uint8_t* states, size_t count, float& first, uint32_t& bits);
+    /// A deferred batch's open windows for the redraw (c219.zw): a first ordinal (`windows`: the group's, `states` theirs)
+    /// and a bit for each open window within kOpenBits of it (its ordinal - first). An open window past them is redrawn
+    /// opaque, as a shut one. The first is the lowest open ordinal that takes in the most open windows; with the camera
+    /// (`camLocal`, the WMO's space), the most of those that take in the open window nearest it (2026-10-24, Dalaran: a
+    /// glass batch of the city's covers hundreds of windows, 748 in one, their ordinals far apart, and from the lowest
+    /// open one the window in front of the camera could be past the sixteen). Ties: the lowest.
+    void OpenBits(const BatchWindows& b, const SeeWindow* windows, const uint8_t* states, size_t count, float& first, uint32_t& bits,
+                  const float* camLocal = nullptr);
 
     // --- the deferred glass ---------------------------------------------------------------------------------------------
     /// DrawIndexedPrimitive's arguments for a Gx batch, as the client's device draw (0x6A3620) works them out: the batch

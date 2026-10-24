@@ -180,14 +180,52 @@ SEE_THROUGH_GROUPS = [
     (IF, 71, "Ironforge: the herbalist's and first aid shop on the Great Forge's ring (71), out onto the forge (71%)"),
     (IF, 76, "Ironforge: an upper room on the Great Forge's ring (76), out onto the forge (66%)"),
 ]
+# Dalaran (2026-10-24, Phase D: stained glass, frosted glass and windows between rooms at once). One WMO for the city
+# (nd_dalaran.wmo, 91 groups, placed once over Crystalsong Forest; no building of its own has glass): 3,949 windows in its
+# exterior groups, 1,091 of them with a room behind; 529 in its rooms. Its rows name rooms, each with its own flags (a
+# fourth member): from outside (FROM_OUTSIDE on a room: the windows of the exterior groups into it, env/SeeThroughModel
+# ListOutside), from inside (FROM_INSIDE: the room's own windows onto the street) and between rooms (FROM_BETWEEN).
+# From seethrough_tests' survey of it (SEETHROUGH_SURVEY with SEETHROUGH_SURVEY_VERBOSE, its lines added up by room), by
+# the Phase C rule: 35% of the views or eyes open or more, and no window changing more than twice on any walk. The rooms'
+# names are the client's (WMOAreaTable, by each group's MOGP ID; the MOGN names are the artists').
+# Chosen. From outside: Cartier & Co. Fine Jewelry (19, 70% of street views, stained), two upper rooms of the Legerdemain
+# Lounge (57, 58: 55 and 54%, frosted and stained), the Threads of Fate's side room (11, 40%) and the Purple Parlor (89,
+# 35%, stained). From inside onto the street: Cartier & Co. (19, 95% of eyes), the Violet Gate's two halls (53, 54: 88
+# and 87%, frosted and stained) and the Agronomical Apothecary (18, 49%). Between rooms: the Underbelly's Circle of
+# Wills through its window into Cantrips & Crows (71 onto 70, 94%, frosted).
+# Left out from outside: Curiosities & Moore (7: 34.8%, a hair under; 6: 29%), the Threads of Fate's main room (10:
+# 29%), the Visitor Center, the Wonderworks and their upper floors (8, 9, 12, 13: 20%), the Violet Gate (53, 54: 15%), the
+# Silver Enclave's hall (78: 31%, 13 windows flickering), the Agronomical Apothecary (18: 63%, but its one window
+# flickers), Archmage Vargoth's Retreat (90: 35%, a window flickering), the Violet Citadel (36: 12%, 5 flickering) and the
+# shops whose rooms show through their windows from no street view at all (21, 23, 25 .. 34, 0, 1, 4, 16, 42, 44, 84).
+# From inside: the Purple Parlor and Vargoth's Retreat (89, 90: 46 and 50%, 8 and 7 windows flickering), the Silver
+# Enclave's hall (78: 38%, a window flickering), the Violet Citadel (36: 33%, 17 flickering), and the banks' and shops'
+# rooms whose windows the street is seen through from 0 .. 29% of eyes (15, 35, 21, 29, 39, 71 ...). Between rooms the
+# city has only 10 windows onto another room (519 onto the street or nothing): the Violet Gate's stairwell (14, onto 53
+# and 54: no floor to stand on, so no eyes) and the Legerdemain Lounge's upstairs window onto its hall (56 onto 55: 3
+# eyes, too few to judge) are left out.
+DAL = r"world\wmo\northrend\dalaran\nd_dalaran.wmo"
+SEE_THROUGH_GROUPS += [
+    (DAL, 11, "Dalaran: the Threads of Fate's side room, from outside (40% of street views), frosted and stained glass", FROM_OUTSIDE),
+    (DAL, 18, "Dalaran: the Agronomical Apothecary, from inside onto the street (49% of eyes), stained glass", FROM_INSIDE),
+    (DAL, 19, "Dalaran: Cartier & Co. Fine Jewelry, from outside (70%) and from inside (95%), stained glass", FROM_OUTSIDE | FROM_INSIDE),
+    (DAL, 53, "Dalaran: the Violet Gate's hall, from inside onto the street (88%), frosted and stained glass", FROM_INSIDE),
+    (DAL, 54, "Dalaran: the Violet Gate's other hall, from inside onto the street (87%), frosted and stained glass", FROM_INSIDE),
+    (DAL, 57, "Dalaran: an upper room of the Legerdemain Lounge, from outside (55%), frosted and stained glass", FROM_OUTSIDE),
+    (DAL, 58, "Dalaran: the Legerdemain Lounge's other upper room, from outside (54%), frosted and stained glass", FROM_OUTSIDE),
+    (DAL, 71, "Dalaran: the Underbelly's Circle of Wills, through its window into Cantrips & Crows (70; 94% of eyes), frosted glass", FROM_BETWEEN),
+    (DAL, 89, "Dalaran: the Purple Parlor, from outside (35%), stained glass", FROM_OUTSIDE),
+]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO)
 
 
 def see_through_table():
     """SeeThroughBuildings.cdbc's rows: every SEE_THROUGH building, from outside and from inside unless its entry says
-    (a third member: its Flags), the whole WMO (Group -1); then every SEE_THROUGH_GROUPS group, between rooms."""
+    (a third member: its Flags), the whole WMO (Group -1); then every SEE_THROUGH_GROUPS group, between rooms unless its
+    entry says (a fourth member: its Flags)."""
     rows = [[i + 1, entry[0], entry[2] if len(entry) > 2 else FROM_OUTSIDE | FROM_INSIDE, entry[1], -1] for i, entry in enumerate(SEE_THROUGH)]
-    rows += [[len(rows) + i + 1, wmo, FROM_BETWEEN, comment, group] for i, (wmo, group, comment) in enumerate(SEE_THROUGH_GROUPS)]
+    rows += [[len(rows) + i + 1, entry[0], entry[3] if len(entry) > 3 else FROM_BETWEEN, entry[2], entry[1]]
+             for i, entry in enumerate(SEE_THROUGH_GROUPS)]
     return rows
 
 
@@ -336,7 +374,7 @@ def main():
     if args and args[0] == "--table":
         data = Path(args[1]) if len(args) > 1 else Path(__file__).resolve().parent.parent / "data"
         rows = see_through_table()
-        print(f"{len(rows)} rows: {len(SEE_THROUGH)} buildings, {len(SEE_THROUGH_GROUPS)} groups between rooms")
+        print(f"{len(rows)} rows: {len(SEE_THROUGH)} buildings, {len(SEE_THROUGH_GROUPS)} group rows")
         gg.write(data / "SeeThroughBuildings.cdbc", io.build(SEE_THROUGH_COLUMNS, [tuple(r) for r in rows]))
         return
     only = None
