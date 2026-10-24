@@ -737,10 +737,12 @@ namespace wxl_livingazeroth::seethrough
     {
         // What a line of sight meets first through a building as the client draws it (faces one-sided; a pane seen from
         // behind see-through and passed; `outerPanes`: from inside, an outer pane either way is the way out and stops it).
-        enum class Met { kNothing, kRoomFront, kRoomBack, kShellFront, kShellBack, kRoomPane, kOuterPane };
+        // (kOpening: from inside, a side of the window's own opening met from the front within its lining: Rays')
+        enum class Met { kNothing, kRoomFront, kRoomBack, kShellFront, kShellBack, kRoomPane, kOuterPane, kOpening };
 
         Met Trace(const SightMesh* groups, size_t count, const float o[3], const float d[3], float tmin, float tmax, bool outerPanes,
-                  float ownPane, float& at, const float* reveal = nullptr, float revealUntil = 0.0f, bool revealShell = false)
+                  float ownPane, float& at, const float* reveal = nullptr, float revealUntil = 0.0f, bool revealShell = false,
+                  float* wallNormal = nullptr)
         {
             at = tmax;
             for (int pass = 0; pass < 8; ++pass)
@@ -782,6 +784,7 @@ namespace wxl_livingazeroth::seethrough
                         wall = true;
                         wallFront = h == RoomMesh::kFront;
                         wallExterior = exterior;
+                        if (wallNormal) for (int k = 0; k < 3; ++k) wallNormal[k] = n[k];
                     }
                 }
                 if (outer) return Met::kOuterPane;
@@ -817,11 +820,18 @@ namespace wxl_livingazeroth::seethrough
                     for (float& v : d) v /= len;
                     // (the reveal along the ray; the lining to a plane `reveal` past the glass, along the window's normal)
                     const float until = lining ? len + reveal / std::max(Dot(d, w.normal), 0.2f) : len + reveal;
+                    float wallNormal[3] = {};
                     Met met = Trace(groups, count, eye, d, len + from, len + reach, outerPanes, len + ownPane, at,
-                                    reveal > 0.0f ? axes : nullptr, until, lining);
+                                    reveal > 0.0f ? axes : nullptr, until, lining, wallNormal);
                     // (from inside, out past its opening's lining: the building's own outside met from the front, another wing's
                     // face, is the street seen out of it, as the client draws it there)
                     if (lining && met == Met::kShellFront && at > until) met = Met::kOuterPane;
+                    // (from inside, within the lining: a side of the window's own opening met from the front -- a jamb, the
+                    // sill, the head: its normal along the window's width or height -- is what a slanted view through the glass
+                    // sees of the deep opening, stone the way out draws behind the glass, 2026-10-24)
+                    if (lining && (met == Met::kShellFront || met == Met::kRoomFront) && at <= until &&
+                        (std::fabs(Dot(wallNormal, w.along)) >= kRevealFacing || std::fabs(Dot(wallNormal, w.up)) >= kRevealFacing))
+                        met = Met::kOpening;
                     seen = as(met);
                 }
                 if (i == 0) out.middle = seen;
@@ -893,7 +903,7 @@ namespace wxl_livingazeroth::seethrough
         Rays(w, eye, groups, count, points, -0.02f, 0.02f, kSightReach, true, [](Met m) {
             switch (m)
             {
-            case Met::kOuterPane: case Met::kNothing: return RoomMesh::kFront;
+            case Met::kOuterPane: case Met::kNothing: case Met::kOpening: return RoomMesh::kFront;
             case Met::kRoomBack: case Met::kShellBack: return RoomMesh::kBack;
             default: return RoomMesh::kNone;
             }

@@ -138,6 +138,9 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   group rows can now open a room from outside; from outside the frame's budget goes to the nearest windows first, and
   a city's windows into other rooms aren't even projected. The redraw's sixteen windows a glass batch take in the open
   window nearest the camera.
+- **See-through windows from inside at a slant** (24 October 2026): a room's window in a thick wall now opens onto the
+  street where the view through it meets the sides of its own deep opening (Northshire Abbey's nave from an archway: "the
+  windows *mostly* work except at weird angles"); the stone of the opening is drawn behind the glass, the street past it.
 - **Window light that stays put** (24 October 2026): the sun through windows onto the floor and into the air took the
   panes nearest the camera, so a camera swinging round the player swapped them and a patch of light came and went
   ("Dalaran windows cast light ... but only in certain angles", in the Silver Enclave). It now takes the panes that light

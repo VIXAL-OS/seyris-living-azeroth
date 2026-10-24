@@ -1154,3 +1154,39 @@ the camera swung round the player (24 places, 10 yd out and 10 up) the rule befo
 on WARP the hall's floor within 6 yd of the player lit through the floor block by each set: before, 19 pixels from the first
 camera and none from the second (173 of the floor's 1,024 pixels apart); now 27 and 27, not a pixel apart (GLASS_DUMP:
 floor_<snapshot>_<before|now>.ppm).
+
+## 17. From inside at a slant: the sides of a deep opening (2026-10-24)
+
+"the Northshire Abbey windows *mostly* work except at weird angles" (the user, in the nave at Elwynn 49.2, 42.5; snapshots
+20261024-041636 and -041706 from its corner, the nave's windows 0, 4, 5 and 6 open; -041712 from the archway at a slant,
+window 0 shut, "of 9 rays through its glass: 2 see the street ... 7 a surface from the front (its reveal, the building's
+outside)", the window plain stained glass where the street should show through part of it).
+
+**Why.** Window 0 (1.98 x 7.08 yd, the nave's south side) stands 0.22 yd inside its outer glass in a wall about 1.5 yd
+thick. From the archway the camera looks at it 56 degrees off its axis, 13.3 yd away. Past the glass most of its rays
+missed the narrower outer pane, crossed the back of the outer wall's face round the opening (passed: the lining, section
+10) and met the far side of the opening, the shell's stone facing into it, from the front 1.4 .. 2.8 yd on, within the
+lining's depth (`kLiningMargin` past the outer glass along the window's normal). A surface met from the front there
+counted as neither, so two of nine saw the street and the window stayed shut. The rays don't start at the eye's side of
+the glass (they start a hair before the pane, so nothing in front of it counts); what they met was really behind it.
+
+**Now** (`LookOut`; `Trace` gives the first wall's normal): from inside, with the building's outer glass behind the window
+(its lining), a side of the window's own opening met from the front within that depth -- a jamb, the sill or the head: a
+face whose normal lies along the window's width or height (within `kRevealFacing`), the shell's or the room's -- counts
+as seen out.
+Opened as a way out the client draws that stone behind the glass (the shell through the way out) and the street past it,
+which is what the eye sees there. A face facing the glass (a blind wall behind it) stays neither; anything met from behind stays against; with no outer glass behind it the rule of 2026-10-22 is as it was. From
+outside (`LookIn`: the dormers, the street sweeps) and between rooms nothing changes.
+
+**Proofs.** seethrough_tests: a deep opening (its outer pane smaller than it) seen 56 degrees off its axis, nine of nine
+rays out (the sides of the opening); head on as before; a blind wall behind the glass and a wall from behind still shut. The
+user's three snapshots through SEETHROUGH_SNAPSHOT: from the archway window 0 opens with nine of nine (was two seeing the
+street, seven the opening's side), window 3 too (eight of nine, was two); window 1 stays shut (six rays meet a wall from
+behind 9.7 yd on); from the corner window 0 as before (nine of nine), window 9 now open as well (eight of nine, was two
+and six). The scan's abbey through the real reader from both cameras: window 0 open from both, 4 .. 6 as before. The
+survey (seethrough_tests, SEETHROUGH_SURVEY) before and after: from outside every number the same (the abbeys, the inn and
+its dormers, the chapel, Northrend's barracks, Kharanos' house, the orcs' houses); from inside more eyes open (the abbey
+86 -> 90%, the inn 84 -> 86%, the chapel 91 -> 95%, the barracks 82 -> 95%) and fewer changes on the walks inside (the
+abbey 155 -> 106, over 37 -> 25 windows; the barracks 78 -> 26, its four walks changing a window more than twice now none;
+the chapel 28 -> 18); the inn's dormers' sloped inner panes (0, 25, 29) as before; Kharanos' house and Ironforge (between
+rooms and from inside) unchanged.

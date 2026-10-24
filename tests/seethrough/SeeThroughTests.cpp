@@ -2037,6 +2037,83 @@ int main(int argc, char** argv)
         CHECK(st::kLiningMargin == 1.0f && st::kOuterReach == 6.0f);
     });
 
+    Test("LookOut through the sides of a deep opening (2026-10-24, Northshire Abbey: \"the windows *mostly* work except at weird "
+         "angles\"): at a slant the rays meet the far jamb of the window's own opening from the front, and that counts as seen "
+         "out; head on as before; a blind wall behind the glass, a wall from behind, no lining: as before", [] {
+        // the room: x -6..6, y 0..12, z 0..8, its faces in, the window's opening x -0.7..0.7, z 2..6 in its front wall (y 0),
+        // its pane (facing the room) just inside; the shell's wall 1.5 yd thick round the opening (its outer face at y -1.5
+        // facing out, the opening's sides x -+0.7 facing into it, its sill and head z 2, 6 facing into it), its outer pane
+        // 0.22 yd out (y -0.22), smaller than the opening (x -0.3..0.3, z 3..5): the abbey's window 0, 0.22 yd before its
+        // outer glass, the stone round them 1.5 yd deep, a slanted ray past the outer glass meeting the opening's far side
+        std::vector<float> rv, pv, sv, ov;
+        std::vector<uint16_t> ri, pi, si, oi;
+        AddRect(rv, ri, 2, 0, -6, 6, 0, 12, 1);
+        AddRect(rv, ri, 2, 8, -6, 6, 0, 12, -1);
+        AddRect(rv, ri, 0, -6, 0, 12, 0, 8, 1);
+        AddRect(rv, ri, 0, 6, 0, 12, 0, 8, -1);
+        AddRect(rv, ri, 1, 12, 0, 8, -6, 6, -1);
+        AddRect(rv, ri, 1, 0, 0, 2, -6, 6, 1);
+        AddRect(rv, ri, 1, 0, 6, 8, -6, 6, 1);
+        AddRect(rv, ri, 1, 0, 2, 6, -6, -0.7f, 1);
+        AddRect(rv, ri, 1, 0, 2, 6, 0.7f, 6, 1);
+        AddRect(pv, pi, 1, 0.02f, 2, 6, -0.7f, 0.7f, 1);
+        AddRect(sv, si, 1, -1.5f, 0, 8, -12, -0.7f, -1);   // the outer face round the opening
+        AddRect(sv, si, 1, -1.5f, 0, 8, 0.7f, 12, -1);
+        AddRect(sv, si, 1, -1.5f, 0, 2, -0.7f, 0.7f, -1);
+        AddRect(sv, si, 1, -1.5f, 6, 8, -0.7f, 0.7f, -1);
+        AddRect(sv, si, 0, -0.7f, -1.5f, 0, 2, 6, 1);      // the opening's sides (x = -+0.7: a = y, b = z), facing into it
+        AddRect(sv, si, 0, 0.7f, -1.5f, 0, 2, 6, -1);
+        AddRect(sv, si, 2, 2, -0.7f, 0.7f, -1.5f, 0, 1);   // its sill (z 2) and head (z 6)
+        AddRect(sv, si, 2, 6, -0.7f, 0.7f, -1.5f, 0, -1);
+        AddRect(ov, oi, 1, -0.22f, 3, 5, -0.3f, 0.3f, -1);
+        st::RoomMesh room, pane, shell, outerPane;
+        const auto all = [](const std::vector<uint16_t>& i) { return std::vector<std::pair<uint32_t, uint32_t>>{ { 0u, static_cast<uint32_t>(i.size()) } }; };
+        CHECK(room.Build(rv.data(), static_cast<uint32_t>(rv.size() / 3), ri.data(), static_cast<uint32_t>(ri.size()), all(ri)));
+        CHECK(pane.Build(pv.data(), static_cast<uint32_t>(pv.size() / 3), pi.data(), static_cast<uint32_t>(pi.size()), all(pi), { st::kGlassTag }));
+        CHECK(shell.Build(sv.data(), static_cast<uint32_t>(sv.size() / 3), si.data(), static_cast<uint32_t>(si.size()), all(si)));
+        CHECK(outerPane.Build(ov.data(), static_cast<uint32_t>(ov.size() / 3), oi.data(), static_cast<uint32_t>(oi.size()), all(oi), { st::kGlassTag }));
+        const st::SightMesh building[4] = { { &room, false }, { &pane, false }, { &shell, true }, { &outerPane, true } };
+        st::SeeWindow w = MakeWindow(0, 0.02f, 4, 0, -1, 0, 0.7f, 2, -1, 0);
+        w.outer = 0.24f;
+        st::Sight s;
+        // head on: out by the outer pane
+        const float ahead[3] = { 0, 8, 4 };
+        st::LookOut(w, ahead, building, 4, nullptr, s);
+        CHECK(s.front == 9 && st::SightOpen(s, false));
+        // 56 degrees off the axis (the user's camera through the archway): past the glass most rays miss the outer pane and
+        // meet the far side of the opening (x -0.7) from the front, 0.5 .. 1 yd on: seen out now (before 2026-10-24 neither)
+        const float slant[3] = { 6.6f, 4.45f, 4 };
+        st::LookOut(w, slant, building, 4, nullptr, s);
+        std::printf("  at 56 degrees: %d see out, %d against, %d neither (the first not out %.2f yd past the glass)\n", s.front, s.back, s.none, s.missDepth);
+        CHECK(s.front == 9 && s.back == 0 && s.none == 0 && st::SightOpen(s, false));
+        // with no outer window behind it (w.outer 0) the shell met from the front past the glass was already the building's own
+        // outside, the street seen out of it (2026-10-22): open as before
+        w.outer = 0.0f;
+        st::LookOut(w, slant, building, 4, nullptr, s);
+        CHECK(s.front == 9 && st::SightOpen(s, false));
+        w.outer = 0.24f;
+        // a blind wall just behind the glass facing the room (the shell's, a hand's breadth out): neither, still shut
+        std::vector<float> bv;
+        std::vector<uint16_t> bi;
+        AddRect(bv, bi, 1, -0.1f, 2, 6, -0.7f, 0.7f, 1);
+        st::RoomMesh blind;
+        CHECK(blind.Build(bv.data(), static_cast<uint32_t>(bv.size() / 3), bi.data(), static_cast<uint32_t>(bi.size()), all(bi)));
+        const st::SightMesh walled[3] = { { &room, false }, { &pane, false }, { &blind, true } };
+        st::LookOut(w, ahead, walled, 3, nullptr, s);
+        CHECK(s.none == 9 && !st::SightOpen(s, false));
+        st::LookOut(w, slant, walled, 3, nullptr, s);
+        CHECK(!st::SightOpen(s, false));
+        // a wall met from behind past the lining (the roof over a dormer's sloped pane, seen from below): against, as before
+        std::vector<float> kv;
+        std::vector<uint16_t> ki;
+        AddRect(kv, ki, 1, -4.0f, 0, 10, -30, 30, -1);   // a wall 4 yd out facing away (its back to the window)
+        st::RoomMesh back;
+        CHECK(back.Build(kv.data(), static_cast<uint32_t>(kv.size() / 3), ki.data(), static_cast<uint32_t>(ki.size()), all(ki)));
+        const st::SightMesh backed[3] = { { &room, false }, { &pane, false }, { &back, false } };
+        st::LookOut(w, ahead, backed, 3, nullptr, s);
+        CHECK(s.back == 9 && !st::SightOpen(s, false));
+    });
+
     Test("NearGroups (2026-10-22): the groups round a window's room and its middle, grown 6 yd; none for a window far off", [] {
         std::vector<uint16_t> ids;
         // the inn's window 1 (north front, ground floor), the kitchen behind it: the kitchen, the shell, the rooms over and beside it
@@ -2750,6 +2827,57 @@ int main(int argc, char** argv)
                 std::printf("  a frame's plan from before Cartier & Co.: %u windows of the city's exterior groups planned, %u candidates, %.3f ms\n", planned,
                             candidates, ms);
                 CHECK(planned == 3949 && candidates > 0 && candidates <= 10 && ms < 50.0);
+            });
+
+        // "the Northshire Abbey windows *mostly* work except at weird angles" (the user, 2026-10-24, in the nave; snapshots
+        // 20261024-041636 and -041712): from the nave's corner window 0 opened, from the archway at a slant it stayed shut, two
+        // of its nine rays seeing the street and seven meeting the far side of its deep opening from the front.
+        if (!scan.empty())
+            Test("Northshire Abbey's nave from the user's cameras through the scan (2026-10-24): window 0 opens from the archway at "
+                 "56 degrees off its axis (its opening's far side seen out), as from the corner; windows 4 .. 6 as before", [&] {
+                ScanBuilding b;
+                const char* const abbey = "world\\wmo\\azeroth\\buildings\\nsabbey\\nsabbey.wmo";
+                CHECK(LoadScanBuilding(scan, abbey, b) && b.groups.size() == 14);
+                const uint32_t path = gl::PathHash(abbey);
+                const st::RootWindows inside = st::BuildInside(path, gl::Windows().All(), b.groups.size());   // (each with its outer glass)
+                uint32_t n = 0;
+                const st::SeeWindow* w = inside.Group(0, n);
+                CHECK(w && n == 10);
+                const ScanGroup& sg = b.File(0);
+                std::vector<std::pair<uint32_t, uint32_t>> ranges;
+                for (const ScanGroup::Moba& m : sg.batches)
+                    if (m.material < b.glass.size() && b.glass[m.material]) ranges.emplace_back(m.start, m.count);
+                std::vector<st::SightPoints> points;
+                st::GlassSightPoints(sg.vertices.data(), static_cast<uint32_t>(sg.vertices.size() / 3), sg.indices.data(),
+                                     static_cast<uint32_t>(sg.indices.size()), ranges, w, n, points);
+                auto look = [&](uint32_t ordinal, const float eye[3], st::Sight& s) {
+                    for (uint32_t i = 0; i < n; ++i)
+                        if (w[i].ordinal == ordinal)
+                        {
+                            const std::vector<st::SightMesh> around = b.Near(w[i], 0);
+                            st::LookOut(w[i], eye, around.data(), around.size(), i < points.size() && points[i].n ? &points[i] : nullptr, s);
+                            return true;
+                        }
+                    return false;
+                };
+                const float corner[3] = { -19.49f, 4.20f, 10.13f }, archway[3] = { -12.568f, 2.772f, 7.649f };
+                st::Sight s;
+                CHECK(look(0, archway, s));
+                std::printf("  window 0 from the archway: %d see out, %d against, %d neither\n", s.front, s.back, s.none);
+                CHECK(s.back == 0 && s.front == 9 && st::SightOpen(s, false));
+                CHECK(look(0, corner, s));
+                std::printf("  window 0 from the corner: %d see out, %d against, %d neither\n", s.front, s.back, s.none);
+                CHECK(s.front == 9 && st::SightOpen(s, false));
+                for (const uint32_t o : { 4u, 5u, 6u })
+                    for (const float* eye : { corner, archway })
+                    {
+                        CHECK(look(o, eye, s));
+                        CHECK(st::SightOpen(s, false));
+                    }
+                // window 1 from the archway still shut: six of its rays meet a wall from behind 9.7 yd on (the void past it)
+                CHECK(look(1, archway, s));
+                std::printf("  window 1 from the archway: %d see out, %d against, %d neither\n", s.front, s.back, s.none);
+                CHECK(s.back >= 3 && !st::SightOpen(s, false));
             });
 
         if (!scan.empty())

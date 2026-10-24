@@ -574,7 +574,13 @@ namespace wxl_livingazeroth::seethrough
     /// seen from below). None: it meets a surface from the front (drawn as it is: the window's reveal behind its glass, the
     /// building's outside past an opening, another room). SightOpen and Hold decide as from outside: to open four see the
     /// street and more than meet a surface either way, at most two from behind. With the building's outer glass behind it
-    /// (`w.outer`), the shell met from behind within that opening (its lining) is passed.
+    /// (`w.outer`), the shell met from behind within that opening (its lining) is passed, and a side of the opening met
+    /// from the front within it (a jamb, the sill, the head: a face whose normal lies along the window's width or height,
+    /// the shell's or the room's; not one facing the glass) counts as seen out. "the Northshire Abbey windows *mostly* work except at weird angles" (the user,
+    /// 2026-10-24, the nave's window 0 from an archway 56 degrees off its axis): seven of its nine rays crossed the glass
+    /// and met the far jamb of its deep opening from the front, 1.4 .. 2.8 yd on, so only two saw the street and it stayed
+    /// shut. Opened as a way out, the client draws that jamb behind the glass (the shell through the way out) and the street
+    /// past it: what the eye would see there.
     void LookOut(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out);
 
     // --- which windows a glass batch is in ------------------------------------------------------------------------------

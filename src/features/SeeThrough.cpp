@@ -2005,13 +2005,14 @@ namespace wxl_livingazeroth::seethrough
         {
             const Counts::Note& n = g_last.notes[i];
             const Sight& s = n.sight;
-            char rays[480] = "";
+            char rays[600] = "";
             if ((n.why == Counts::kOpen || n.why == Counts::kBlind || n.why == Counts::kNotReached) && s.rays)
             {
                 if (n.inside)
-                    std::snprintf(rays, sizeof(rays), "; of %d rays through its %s: %d see the street (out by the building's own glass or into the open), "
-                                  "%d meet a wall or the roof from inside (culled: the street would show through it), %d a surface from the front (its "
-                                  "reveal, the building's outside) (to open %d seeing it, more than either; to stay %d)%s", s.rays,
+                    std::snprintf(rays, sizeof(rays), "; of %d rays through its %s: %d see the street (out by the building's own glass, into the open, "
+                                  "or onto the sides of its own deep opening), %d meet a wall or the roof from inside (culled: the street would show "
+                                  "through it), %d a surface from the front (the building's outside close behind it, another room) (to open %d seeing "
+                                  "it, more than either; to stay %d)%s", s.rays,
                                   s.onGlass ? "glass" : "rectangle", s.front, s.back, s.none, kOpenFront, kStayFront, n.held ? "; held, not yet this frame's" : "");
                 else
                     std::snprintf(rays, sizeof(rays), "; of %d rays through its %s, followed on through the building: %d see a room from inside, %d meet "
