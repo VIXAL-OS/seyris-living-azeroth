@@ -211,8 +211,22 @@ SEE_THROUGH_GROUPS = [
 # upstairs (9: window 1948, 17% of its runs; it opens from 19% of its street views), the Threads of Fate upstairs (13,
 # the same building: 1932, 21%; 19%) and the Lounge's hall (55: its one window 1971, 13%; 39%). Kept: Curiosities &
 # Moore (6, 7), the Threads of Fate (10) and the Silver Enclave's hall (78), their windows at most 6%; Phase D's rooms
-# at most 4% (Cartier & Co., the Lounge's upper rooms, the Purple Parlor) but for the Threads of Fate's side room (11:
-# window 1967, 14%; 40% of its street views), left for a decision.
+# at most 4% (Cartier & Co., the Lounge's upper rooms; the Purple Parlor's worst window is 18%, not its 2.5% then: below)
+# but for the Threads of Fate's side room (11: window 1967, 14%; 40% of its street views), left for a decision.
+# Then, the same day: "Threads of Fate side room works fine afaict" (11, its window 1967 at 14%) and "Weirdly the Violet
+# Gate windows work fine from the inside but not from the outside" (53, 54: listed from inside only). A room's row opens
+# all its windows, so one flickering window held a whole room out; the table now has window rows too (SEE_THROUGH_WINDOWS:
+# the Window column, a window's ordinal in its WMO; its Flags the ways it may open, 0 none, a mask over its room's). The
+# rule by window: one is shut when its camera swings flicker in more than 15% of its runs, or any walk changes it more
+# than twice; its room opens from outside when the rest open from 35% of their street views or more. 15%: 1967 at 14.0%
+# (7 of 50 runs) the user finds fine; 1948 at 16.7% (9 of 54) is the one the user saw flicker, and runs between them are
+# one in fifty apart. Opened from outside so: the Violet Gate's halls (53: 1955, 1956 and 1957 shut, the rest 64% of their
+# street views; 54: 1952, 1953, 1954, 1985, 1988, 1990 and 1992 shut, the rest, 1958 and 1961, 65%), Curiosities & Moore
+# upstairs (9: 1948 shut, 43%), the Threads of Fate upstairs (13: 1932 shut, 43%), the Lounge's hall (55: its one window,
+# 1971 at 13%, 40%) and Archmage Vargoth's Retreat (90: 4078, 4125, 4127, 4150 and 4151 shut, the rest 36%). Shut in a
+# room already open: the Purple Parlor's 3905, 3961 and 3964 (89: 17 .. 18% of 22 .. 24 runs; the rest 36%). Still out:
+# the Violet Citadel (36: 2100, 2101 and 2102 shut, the rest 23%), the Visitor Center and the Wonderworks (8, 12: none
+# shut, 29%).
 # Left out from outside: Curiosities & Moore (7: 34.8%, a hair under; 6: 29%), the Threads of Fate's main room (10:
 # 29%), the Visitor Center, the Wonderworks and their upper floors (8, 9, 12, 13: 20%), the Violet Gate (53, 54: 15%), the
 # Silver Enclave's hall (78: 31%, 13 windows flickering), the Agronomical Apothecary (18: 63%, but its one window
@@ -229,8 +243,10 @@ SEE_THROUGH_GROUPS += [
     (DAL, 11, "Dalaran: the Threads of Fate's side room, from outside (80% of street views), stained glass", FROM_OUTSIDE),
     (DAL, 18, "Dalaran: the Agronomical Apothecary, from inside onto the street (74% of eyes), stained glass", FROM_INSIDE),
     (DAL, 19, "Dalaran: Cartier & Co. Fine Jewelry, from outside (70%) and from inside (98%), stained glass", FROM_OUTSIDE | FROM_INSIDE),
-    (DAL, 53, "Dalaran: the Violet Gate's hall, from inside onto the street (99%), stained glass", FROM_INSIDE),
-    (DAL, 54, "Dalaran: the Violet Gate's other hall, from inside onto the street (100%), stained glass", FROM_INSIDE),
+    (DAL, 53, "Dalaran: the Violet Gate's hall, from inside onto the street (99%) and from outside (64%, three windows shut), stained glass",
+     FROM_OUTSIDE | FROM_INSIDE),
+    (DAL, 54, "Dalaran: the Violet Gate's other hall, from inside onto the street (100%) and from outside (65%, seven windows shut), stained glass",
+     FROM_OUTSIDE | FROM_INSIDE),
     (DAL, 57, "Dalaran: an upper room of the Legerdemain Lounge, from outside (100%), stained glass", FROM_OUTSIDE),
     (DAL, 58, "Dalaran: the Legerdemain Lounge's other upper room, from outside (100%), stained glass", FROM_OUTSIDE),
     (DAL, 71, "Dalaran: the Underbelly's Circle of Wills, through its window into Cantrips & Crows (70; 94% of eyes), frosted glass", FROM_BETWEEN),
@@ -241,17 +257,48 @@ SEE_THROUGH_GROUPS += [
     (DAL, 7, "Dalaran: Curiosities & Moore's other room, from outside (67%), stained glass", FROM_OUTSIDE),
     (DAL, 10, "Dalaran: the Threads of Fate, from outside (74%), stained glass", FROM_OUTSIDE),
     (DAL, 78, "Dalaran: the Silver Enclave's hall, from outside (60%), stained glass", FROM_OUTSIDE),
+    # (the same day, by window: their flickering windows shut, SEE_THROUGH_WINDOWS)
+    (DAL, 9, "Dalaran: Curiosities & Moore upstairs, from outside (43%, a window shut), stained glass", FROM_OUTSIDE),
+    (DAL, 13, "Dalaran: the Threads of Fate upstairs, from outside (43%, a window shut), stained glass", FROM_OUTSIDE),
+    (DAL, 55, "Dalaran: the Legerdemain Lounge's hall, from outside (40%), stained glass", FROM_OUTSIDE),
+    (DAL, 90, "Dalaran: Archmage Vargoth's Retreat, from outside (36%, five windows shut), stained glass", FROM_OUTSIDE),
 ]
-SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO)
+# Single windows (2026-10-24): (wmo, its group, its ordinal in the WMO, comment, Flags: the ways it may open, 0 none). A
+# window's row only takes ways away from its room's and group's rows (env/SeeThroughModel MaskWindows).
+SEE_THROUGH_WINDOWS = [
+    (DAL, 3, 1955, "Dalaran: the Violet Gate's hall (53), shut from outside: a walk changes it more than twice", 0),
+    (DAL, 3, 1956, "Dalaran: the Violet Gate's hall (53), shut from outside: 16% of its camera swings flicker, a walk changes it more than twice", 0),
+    (DAL, 3, 1957, "Dalaran: the Violet Gate's hall (53), shut from outside: 18% of its camera swings flicker", 0),
+    (DAL, 3, 1952, "Dalaran: the Violet Gate's other hall (54), shut from outside: 23% of its camera swings flicker", 0),
+    (DAL, 3, 1953, "Dalaran: the Violet Gate's other hall (54), shut from outside: a walk changes it more than twice", 0),
+    (DAL, 3, 1954, "Dalaran: the Violet Gate's other hall (54), shut from outside: 28% of its camera swings flicker", 0),
+    (DAL, 3, 1985, "Dalaran: the Violet Gate's other hall (54), shut from outside: 18% of its camera swings flicker", 0),
+    (DAL, 3, 1988, "Dalaran: the Violet Gate's other hall (54), shut from outside: 30% of its camera swings flicker", 0),
+    (DAL, 3, 1990, "Dalaran: the Violet Gate's other hall (54), shut from outside: 20% of its camera swings flicker", 0),
+    (DAL, 3, 1992, "Dalaran: the Violet Gate's other hall (54), shut from outside: 28% of its camera swings flicker", 0),
+    (DAL, 3, 1948, "Dalaran: Curiosities & Moore upstairs (9), shut from outside: 17% of its camera swings flicker (the walkway's)", 0),
+    (DAL, 3, 1932, "Dalaran: the Threads of Fate upstairs (13), shut from outside: 21% of its camera swings flicker", 0),
+    (DAL, 87, 4078, "Dalaran: Archmage Vargoth's Retreat (90), shut from outside: a walk changes it more than twice", 0),
+    (DAL, 87, 4125, "Dalaran: Archmage Vargoth's Retreat (90), shut from outside: 15.4% of its camera swings flicker", 0),
+    (DAL, 87, 4127, "Dalaran: Archmage Vargoth's Retreat (90), shut from outside: 15.4% of its camera swings flicker", 0),
+    (DAL, 87, 4150, "Dalaran: Archmage Vargoth's Retreat (90), shut from outside: 17% of its camera swings flicker", 0),
+    (DAL, 87, 4151, "Dalaran: Archmage Vargoth's Retreat (90), shut from outside: 18% of its camera swings flicker", 0),
+    (DAL, 87, 3905, "Dalaran: the Purple Parlor (89), shut from outside: 18% of its camera swings flicker", 0),
+    (DAL, 87, 3961, "Dalaran: the Purple Parlor (89), shut from outside: 17% of its camera swings flicker", 0),
+    (DAL, 87, 3964, "Dalaran: the Purple Parlor (89), shut from outside: 17% of its camera swings flicker", 0),
+]
+SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO) Window (-1: none)
 
 
 def see_through_table():
     """SeeThroughBuildings.cdbc's rows: every SEE_THROUGH building, from outside and from inside unless its entry says
     (a third member: its Flags), the whole WMO (Group -1); then every SEE_THROUGH_GROUPS group, between rooms unless its
-    entry says (a fourth member: its Flags)."""
-    rows = [[i + 1, entry[0], entry[2] if len(entry) > 2 else FROM_OUTSIDE | FROM_INSIDE, entry[1], -1] for i, entry in enumerate(SEE_THROUGH)]
-    rows += [[len(rows) + i + 1, entry[0], entry[3] if len(entry) > 3 else FROM_BETWEEN, entry[2], entry[1]]
+    entry says (a fourth member: its Flags); then every SEE_THROUGH_WINDOWS window (Window its ordinal; the rest -1)."""
+    rows = [[i + 1, entry[0], entry[2] if len(entry) > 2 else FROM_OUTSIDE | FROM_INSIDE, entry[1], -1, -1] for i, entry in enumerate(SEE_THROUGH)]
+    rows += [[len(rows) + i + 1, entry[0], entry[3] if len(entry) > 3 else FROM_BETWEEN, entry[2], entry[1], -1]
              for i, entry in enumerate(SEE_THROUGH_GROUPS)]
+    rows += [[len(rows) + i + 1, wmo, flags, comment, group, ordinal]
+             for i, (wmo, group, ordinal, comment, flags) in enumerate(SEE_THROUGH_WINDOWS)]
     return rows
 
 
@@ -400,7 +447,7 @@ def main():
     if args and args[0] == "--table":
         data = Path(args[1]) if len(args) > 1 else Path(__file__).resolve().parent.parent / "data"
         rows = see_through_table()
-        print(f"{len(rows)} rows: {len(SEE_THROUGH)} buildings, {len(SEE_THROUGH_GROUPS)} group rows")
+        print(f"{len(rows)} rows: {len(SEE_THROUGH)} buildings, {len(SEE_THROUGH_GROUPS)} group rows, {len(SEE_THROUGH_WINDOWS)} window rows")
         gg.write(data / "SeeThroughBuildings.cdbc", io.build(SEE_THROUGH_COLUMNS, [tuple(r) for r in rows]))
         return
     only = None

@@ -313,6 +313,10 @@ namespace wxl_livingazeroth::glass
     /// group's; and how many group rows the table has.
     uint32_t SeeThroughGroupFlags(uint32_t pathHash, uint32_t group);
     size_t SeeThroughGroupRows();
+    /// One window's own row (2026-10-24, its ordinal in its WMO: the Window column): its Flags, the ways it may open (0
+    /// none; env/SeeThroughModel MaskWindows), ~0 when it has none; and how many window rows the table has.
+    uint32_t SeeThroughWindowMask(uint32_t pathHash, uint32_t ordinal);
+    size_t SeeThroughWindowRows();
     const char* TextureOf(uint32_t indexPlusOne);
     /// The window table's texture on the device (s13's for every glass batch; null: none yet), for the see-through panel.
     const void* TableTexture();

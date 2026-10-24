@@ -158,6 +158,12 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   0.4 s when its window joins or leaves the light's set, instead of popping, and a window takes another's place only when
   it lights the player's spot half as well again; sixteen windows' patches at once, not twelve ("lots of pop-in when i
   move", in Stormwind's Wizard's Sanctum).
+- **Dalaran's rooms open window by window** (24 October 2026): a room opened from the street with all its windows, so one
+  window that flickers kept a whole room shut ("the Violet Gate windows work fine from the inside but not from the
+  outside"). The see-through table can now keep single windows shut while their room opens. The Violet Gate's two halls
+  now open from the street too, and so do Curiosities & Moore's and the Threads of Fate's upstairs rooms, the
+  Legerdemain Lounge's hall and Archmage Vargoth's Retreat. Twenty windows that flicker as the camera swings round the
+  player stay the client's glass, three of them in the Purple Parlor. The Threads of Fate's side room stays as it is.
 - **Darker nights** (22 October 2026): the night's ambient light, sky, clouds and water darker so lamps and lit windows
   matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
   day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital

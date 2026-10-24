@@ -679,7 +679,10 @@ glass; from outside only): 47; and since between rooms (2026-10-23, Phase C: `Se
 Ironforge's groups, one row each (the Group column): its shops' and rooms' windows onto its halls, and two halls' onto
 their rooms (20 since the Great Forge); and since Dalaran (2026-10-24, Phase D) nine of its rooms, each with its own
 flags: from outside, from inside onto the street, or between rooms; thirteen once its stone surrounds were no windows
-(the same day: four more from outside, after a camera swung round a player on a walkway showed three others flicker). A WMO not here keeps its windows as they are. Every
+(the same day: four more from outside, after a camera swung round a player on a walkway showed three others flicker);
+seventeen with window rows (the same day, the Window column): the Violet Gate's halls from outside too, Curiosities &
+Moore's and the Threads of Fate's upper rooms, the Lounge's hall and Vargoth's Retreat, with their flickering windows
+(20, those of the Purple Parlor with them) shut one by one. A WMO not here keeps its windows as they are. Every
 placement of a WMO counts, on every map.
 
 | Field | Meaning |
@@ -689,6 +692,7 @@ placement of a WMO counts, on every map.
 | Flags | 0x1 from outside (its windows open onto the room behind them; on a group's row, the windows of the exterior groups into that room, or that exterior group's own windows: Dalaran's rooms one by one), 0x2 from inside (its rooms' own windows open onto the street), 0x4 between rooms (an interior group's windows open onto the interior group beyond them: Ironforge's shops and halls); 0 = none (as if the row weren't there) |
 | Comment | which building (or group); never read |
 | Group | -1: the whole WMO; else this group of it alone (a group's flags are the WMO's and its own). A file without the column: every row the whole WMO's |
+| Window | -1: none; else one window of the WMO, by its ordinal (GlassWindows': its index in the WMO), on a row of its own that names no building: its Flags are the ways that window may open (0 = never), a mask over its room's and its group's rows, never adding a way. Group says the window's group, for the reader (not read). Appended 2026-10-24; a file without the column has no window rows. Needs the DLL of the same day: an older one reads such a row as a group row with Flags 0 and skips it, so its room opens whole |
 
 ## CrystalMaterials.cdbc — `CrystalMaterials.xml`
 

@@ -200,9 +200,12 @@ namespace
     // Dalaran (2026-10-24, Phase D): the city's one WMO
     const char* const kDalaran = "world\\wmo\\northrend\\dalaran\\nd_dalaran.wmo";
     // Dalaran's rooms added from outside on 2026-10-24 ("yeah add those four"; upstairs 9 and 13 and the Lounge's hall 55 out
-    // again the same day: "Curiosities' outside windows seem to flicker a bit"): the windows into each, and where to stand
-    // before the Silver Enclave's hall (SEETHROUGH_SPOTS' farther ring: its one window 21.7 yd up)
+    // again the same day: "Curiosities' outside windows seem to flicker a bit"; then by window, the same day, 9, 13 and 55
+    // again with the Violet Gate's halls, 53 and 54, and Vargoth's Retreat, 90, their flickering windows shut by rows of their
+    // own): the windows into each listed, and where to stand before the Silver Enclave's hall (SEETHROUGH_SPOTS' farther ring:
+    // its one window 21.7 yd up)
     constexpr unsigned kInto6 = 4, kInto7 = 3, kInto10 = 4, kInto78 = 1;
+    constexpr unsigned kInto9 = 2, kInto13 = 2, kInto55 = 1, kInto53 = 5, kInto54 = 2, kInto90 = 74, kInto89 = 62;
     constexpr float kSpot78[3] = { -70.03f, -11.67f, 2.00f };
     const st::GroupInfo kInnGroups[12] = {
         { 0x00002000u, { 14.1116447f, -4.85658407f, 0.395452768f }, { 20.4711647f, -0.377688199f, 4.37204647f } },
@@ -596,7 +599,8 @@ namespace
         if (!LoadScanBuilding(scan, wmo, b)) return false;
         row.groups = static_cast<unsigned>(b.groups.size());
         const uint32_t path = gl::PathHash(wmo.c_str());
-        const st::RootWindows outside = st::BuildRoot(path, all, b.groups.data(), b.groups.size());
+        st::RootWindows outside = st::BuildRoot(path, all, b.groups.data(), b.groups.size());
+        st::MaskWindows(outside, gl::SeeThroughWindowMask);   // (2026-10-24: the loaded table's window rows, for "listed" and the spots)
         // (between rooms: every interior group's windows get the room beyond them with SEETHROUGH_BETWEEN, else the groups
         // the loaded table marks 0x4)
         std::vector<uint8_t> between(b.groups.size(), 0);
@@ -772,8 +776,9 @@ namespace
                 for (uint32_t i = 0; i < n; ++i)
                 {
                     if (w[i].interior < 0) continue;
+                    // (listed: its room's or group's rows, and its own row's, 2026-10-24, if it has one: as ListOutside)
                     const bool listedOut = ((gl::SeeThroughGroupFlags(path, g) | gl::SeeThroughGroupFlags(path, static_cast<uint32_t>(w[i].interior))) &
-                                            st::kSeeFromOutside) != 0;
+                                            w[i].see & st::kSeeFromOutside) != 0;
                     if (std::string(swings) != "all" && !listedOut) continue;
                     const float nx = w[i].normal[0], ny = w[i].normal[1], l = std::sqrt(nx * nx + ny * ny);
                     if (l < 0.5f) continue;   // (a skylight)
@@ -867,8 +872,9 @@ namespace
                 const st::SeeWindow* w = outside.Group(g, n);
                 if (!w) continue;
                 pointsOf(outside, g, pts[g]);
+                // (not the windows the table's own rows shut, 2026-10-24: where to stand for the ones that open)
                 for (uint32_t i = 0; i < n; ++i)
-                    if (w[i].interior >= 0) byRoom[w[i].interior].push_back({ g, i });
+                    if (w[i].interior >= 0 && (w[i].see & st::kSeeFromOutside)) byRoom[w[i].interior].push_back({ g, i });
             }
             auto windowOf = [&](const Ref& r) { uint32_t n = 0; return outside.Group(r.g, n) + r.i; };
             for (const auto& [room, refs] : byRoom)
@@ -1776,6 +1782,49 @@ int main(int argc, char** argv)
         CHECK(st::ListOutside(r, between) == 0);
         std::vector<uint32_t> none;
         CHECK(st::ListOutside(r, none) == 0);
+    });
+
+    Test("MaskWindows, ListOutside (2026-10-24, \"the Violet Gate windows work fine from the inside but not from the outside\"): a "
+         "window's own row keeps that window shut while its room opens; it only takes ways away, never adds one", [] {
+        const float cam[3] = { 0, -30, 5 }, at[3] = { 0, 0, 5 };
+        float vp[16];
+        Camera(cam, at, 1.0f, 16.0f / 9.0f, vp);
+        // as above: one exterior group (0), into room 5 (ordinals 1 and 3), room 6 (2) and a fake (4), of the WMO 77
+        st::RootWindows r;
+        r.path = 77;
+        r.windows = { MakeWindow(-6, -10, 3, 0, -1, 0, 1.5f, 1.2f, 5, 1), MakeWindow(-2, -10, 3, 0, -1, 0, 1.5f, 1.2f, 6, 2),
+                      MakeWindow(2, -10, 3, 0, -1, 0, 1.5f, 1.2f, 5, 3), MakeWindow(6, -10, 3, 0, -1, 0, 1.5f, 1.2f, -1, 4) };
+        r.byGroup = { { 0u, 4u } };
+        // the rows (glass::SeeThroughWindowMask's way): 3 never; 1 both ways (as if none); 2 from outside, its room from inside
+        // only; another WMO's 3 none of these
+        auto maskOf = [](uint32_t path, uint32_t ordinal) -> uint32_t {
+            if (path != 77) return ~0u;
+            return ordinal == 3 ? 0u : ordinal == 1 ? (st::kSeeFromOutside | st::kSeeFromInside) : ordinal == 2 ? st::kSeeFromOutside : ~0u;
+        };
+        CHECK(st::MaskWindows(r, maskOf) == 3);
+        CHECK(r.windows[0].see == (st::kSeeFromOutside | st::kSeeFromInside) && r.windows[1].see == st::kSeeFromOutside && r.windows[2].see == 0u &&
+              r.windows[3].see == ~0u);
+        std::vector<uint32_t> flags(8, 0u);
+        flags[5] = st::kSeeFromOutside;
+        flags[6] = st::kSeeFromInside;
+        // room 5 open from outside: its 1 listed, its 3 shut by its own row; 2's row adds nothing to room 6's
+        CHECK(st::ListOutside(r, flags) == 1);
+        CHECK(!r.windows[0].unlisted && r.windows[1].unlisted && r.windows[2].unlisted && r.windows[3].unlisted);
+        const float lo[3] = { -20, -10, 0 }, hi[3] = { 20, 10, 15 };
+        std::vector<st::WindowPlan> plan;
+        unsigned budget = 10;
+        st::PlanWindows(r.windows.data(), 4, cam, lo, hi, { -1, -1, 1, 1 }, kIdentity, cam, vp, budget, plan);
+        // (the shut one left unseen and none of the budget, as a window into a room not listed)
+        CHECK(budget == 9 && plan[0].candidate && !plan[2].candidate && plan[2].state == st::kUnseen);
+        // the exterior group's own row: every window but 3 (the fake listed, as before)
+        std::vector<uint32_t> group(8, 0u);
+        group[0] = st::kSeeFromOutside;
+        CHECK(st::ListOutside(r, group) == 3 && r.windows[2].unlisted);
+        // another WMO's rows: none of its windows has one; and no table (no rows): as before
+        r.path = 78;
+        CHECK(st::MaskWindows(r, maskOf) == 0 && st::ListOutside(r, flags) == 2);
+        r.path = 77;
+        CHECK(st::MaskWindows(r, nullptr) == 0 && st::ListOutside(r, flags) == 2 && !r.windows[2].unlisted);
     });
 
     // --- the room seen through a window ---------------------------------------------------------------------------------
@@ -2695,8 +2744,8 @@ int main(int argc, char** argv)
             std::printf("  SeeThroughBuildings.cdbc: %zu buildings\n", gl::SeeThroughBuildings());
             // (2026-10-22: 24, with stained glass 33, with frosted glass 47; 2026-10-23 Ironforge's groups; 2026-10-24 Dalaran's)
             CHECK(gl::SeeThroughBuildings() == 49);
-            // (33 group rows: Dalaran's four more from outside, 2026-10-24)
-            CHECK(gl::SeeThroughGroupRows() == 33 &&gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 71) == st::kSeeBetween && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
+            // (37 group rows: Dalaran's four more from outside, 2026-10-24, and four more by window the same day; 20 window rows)
+            CHECK(gl::SeeThroughGroupRows() == 37 && gl::SeeThroughWindowRows() == 20 && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 71) == st::kSeeBetween && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
                   gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 65) == st::kSeeBetween);   // (+ the Great Forge, 2026-10-23)
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo")) == st::kSeeFromInside);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\chapel\\redridgechapel.wmo")) == 3);
@@ -2760,12 +2809,15 @@ int main(int argc, char** argv)
             CHECK(gl::SeeThroughFlags(dal) == (st::kSeeFromOutside | st::kSeeFromInside | st::kSeeBetween));
             // (2026-10-24, the stone surrounds no windows, "yeah add those four": from outside Curiosities & Moore, 6, 7 and 9; the
             // Threads of Fate, 10 and 13; the Legerdemain Lounge's hall, 55; the Silver Enclave's hall, 78; the Violet Gate's halls
-            // still from inside only)
-            std::map<uint32_t, uint32_t> want = { { 6, st::kSeeFromOutside }, { 7, st::kSeeFromOutside }, { 10, st::kSeeFromOutside },
-                                                  { 11, st::kSeeFromOutside }, { 18, st::kSeeFromInside },
-                                                  { 19, st::kSeeFromOutside | st::kSeeFromInside }, { 53, st::kSeeFromInside }, { 54, st::kSeeFromInside },
-                                                  { 57, st::kSeeFromOutside }, { 58, st::kSeeFromOutside }, { 71, st::kSeeBetween },
-                                                  { 78, st::kSeeFromOutside }, { 89, st::kSeeFromOutside } };
+            // still from inside only; then by window, the same day: the Violet Gate's halls from outside too, 9, 13 and 55 again
+            // and Vargoth's Retreat, 90, their flickering windows shut by rows of their own)
+            std::map<uint32_t, uint32_t> want = { { 6, st::kSeeFromOutside }, { 7, st::kSeeFromOutside }, { 9, st::kSeeFromOutside },
+                                                  { 10, st::kSeeFromOutside }, { 11, st::kSeeFromOutside }, { 13, st::kSeeFromOutside },
+                                                  { 18, st::kSeeFromInside }, { 19, st::kSeeFromOutside | st::kSeeFromInside },
+                                                  { 53, st::kSeeFromOutside | st::kSeeFromInside }, { 54, st::kSeeFromOutside | st::kSeeFromInside },
+                                                  { 55, st::kSeeFromOutside }, { 57, st::kSeeFromOutside }, { 58, st::kSeeFromOutside },
+                                                  { 71, st::kSeeBetween }, { 78, st::kSeeFromOutside }, { 89, st::kSeeFromOutside },
+                                                  { 90, st::kSeeFromOutside } };
             unsigned rows = 0;
             for (uint32_t g = 0; g < 91; ++g)
             {
@@ -2774,9 +2826,17 @@ int main(int argc, char** argv)
                 if (f != (it == want.end() ? 0u : it->second)) throw std::runtime_error("Dalaran's group " + std::to_string(g) + ": flags " + std::to_string(f));
                 rows += f ? 1 : 0;
             }
-            CHECK(rows == 13 && gl::SeeThroughGroupFlags(dal, 3) == 0 && gl::SeeThroughGroupFlags(dal, 8) == 0 && gl::SeeThroughGroupFlags(dal, 12) == 0);
-            // (and out again from the walkway, "Curiosities' outside windows seem to flicker a bit": upstairs 9 and 13, the Lounge's hall 55)
-            CHECK(gl::SeeThroughGroupFlags(dal, 9) == 0 && gl::SeeThroughGroupFlags(dal, 13) == 0 && gl::SeeThroughGroupFlags(dal, 55) == 0);
+            CHECK(rows == 17 && gl::SeeThroughGroupFlags(dal, 3) == 0 && gl::SeeThroughGroupFlags(dal, 8) == 0 && gl::SeeThroughGroupFlags(dal, 12) == 0 &&
+                  gl::SeeThroughGroupFlags(dal, 36) == 0);
+            // the windows shut by their own rows (Flags 0: never), the swing survey's above 15% of its runs or a walk's more than
+            // twice: the Violet Gate's 53 (3) and 54 (7), 9's 1948 (the walkway's), 13's 1932, 90's five and the Purple Parlor's three
+            const uint32_t shutWindows[] = { 1955, 1956, 1957, 1952, 1953, 1954, 1985, 1988, 1990, 1992, 1948, 1932,
+                                             4078, 4125, 4127, 4150, 4151, 3905, 3961, 3964 };
+            for (const uint32_t ordinal : shutWindows)
+                if (gl::SeeThroughWindowMask(dal, ordinal) != 0u) throw std::runtime_error("Dalaran's window " + std::to_string(ordinal) + ": no row shutting it");
+            CHECK(gl::SeeThroughWindowRows() == std::size(shutWindows));
+            // and the ones kept: 53's 1959 and 1991, 54's 1958 and 1961, 11's 1967 ("works fine afaict", 14%), 9's 1947, 55's 1971
+            for (const uint32_t ordinal : { 1959u, 1991u, 1958u, 1961u, 1967u, 1947u, 1971u }) CHECK(gl::SeeThroughWindowMask(dal, ordinal) == ~0u);
             const uint32_t ironforge = gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo");
             CHECK(gl::SeeThroughFlags(ironforge) == st::kSeeBetween && gl::SeeThroughGroupFlags(ironforge, 65) == st::kSeeBetween &&
                   gl::SeeThroughGroupFlags(ironforge, 60) == 0);
@@ -2880,8 +2940,10 @@ int main(int argc, char** argv)
                 // from outside: the windows into the rooms the rows name listed, no other (2026-10-24: 11, 19, 57, 58 and 89; then
                 // Curiosities & Moore's 6, 7 and 9, the Threads of Fate's 10 and 13, the Lounge's hall 55, the Silver Enclave's
                 // hall 78)
-                const std::vector<int> listedRooms = { 6, 7, 10, 11, 19, 57, 58, 78, 89 };
+                // (then by window, the same day: 9, 13, 53, 54, 55 and 90, twenty windows shut by their own rows)
+                const std::vector<int> listedRooms = { 6, 7, 9, 10, 11, 13, 19, 53, 54, 55, 57, 58, 78, 89, 90 };
                 st::RootWindows outside = st::BuildRoot(path, gl::Windows().All(), b.groups.data(), b.groups.size());
+                const unsigned ownRows = st::MaskWindows(outside, gl::SeeThroughWindowMask);
                 const unsigned listed = st::ListOutside(outside, flags);
                 std::map<int, unsigned> byRoom;
                 bool onlyThose = true;
@@ -2894,20 +2956,31 @@ int main(int argc, char** argv)
                 std::string into;
                 unsigned sum = 0;
                 for (const int r : listedRooms) { into += " " + std::to_string(r) + ": " + std::to_string(byRoom[r]); sum += byRoom[r]; }
-                std::printf("  Dalaran: %zu windows in its exterior groups, %u listed from outside, into%s\n", outside.windows.size(), listed, into.c_str());
+                std::printf("  Dalaran: %zu windows in its exterior groups, %u listed from outside (%u with a row of their own), into%s\n", outside.windows.size(),
+                            listed, ownRows, into.c_str());
                 // (2026-10-24, the Violet Gate: 3,949 before, 1,724 of them the stained windows' stone surrounds, now no windows:
                 // into 11 were 28, 57 and 58 10 each)
-                CHECK(outside.windows.size() == 2225 && onlyThose && listed == sum);
-                CHECK(byRoom[11] == 3 && byRoom[19] == 10 && byRoom[57] == 2 && byRoom[58] == 2 && byRoom[89] == 65);   // (89: five of them skylights)
-                CHECK(byRoom[6] == kInto6 && byRoom[7] == kInto7 && byRoom[10] == kInto10 && byRoom[78] == kInto78 && byRoom[9] == 0 && byRoom[13] == 0 &&
-                      byRoom[55] == 0);
+                CHECK(outside.windows.size() == 2225 && onlyThose && listed == sum && ownRows == 20);
+                // (89: five of them skylights; 65 before its three shut by their rows. 90: 79 before its five shut by theirs)
+                CHECK(byRoom[11] == 3 && byRoom[19] == 10 && byRoom[57] == 2 && byRoom[58] == 2 && byRoom[89] == kInto89);
+                CHECK(byRoom[6] == kInto6 && byRoom[7] == kInto7 && byRoom[10] == kInto10 && byRoom[78] == kInto78);
+                CHECK(byRoom[9] == kInto9 && byRoom[13] == kInto13 && byRoom[55] == kInto55 && byRoom[53] == kInto53 && byRoom[54] == kInto54 &&
+                      byRoom[90] == kInto90);
+                // none of the twenty shut listed; still out, the Violet Citadel (36), the Visitor Center and the Wonderworks (8, 12)
+                for (const st::SeeWindow& w : outside.windows)
+                    if (w.see == 0u) CHECK(w.unlisted);
+                CHECK(byRoom[36] == 0 && byRoom[8] == 0 && byRoom[12] == 0);
                 // where to stand before each (the survey's SEETHROUGH_SPOTS: the street eye opening the most of the room's windows)
                 struct Spot { int room; float eye[3]; unsigned atLeast; };
                 const Spot fromOutside[] = { { 19, { 12.14f, 89.10f, -0.63f }, 4 }, { 57, { 27.42f, 18.90f, 7.54f }, 2 }, { 58, { 48.17f, -13.54f, 9.07f }, 2 },
                                              { 11, { -21.46f, 18.15f, 7.32f }, 2 }, { 89, { -80.96f, 178.11f, 206.39f }, 9 },
                                              { 6, { -46.57f, -60.51f, 10.32f }, 2 }, { 7, { -25.81f, -85.27f, 10.17f }, 2 },
                                              { 10, { -46.22f, -10.29f, 3.70f }, 2 },
-                                             { 78, { kSpot78[0], kSpot78[1], kSpot78[2] }, 1 } };
+                                             { 78, { kSpot78[0], kSpot78[1], kSpot78[2] }, 1 },
+                                             // (by window, the same day: the spots for the windows that open, the shut ones left out)
+                                             { 53, { 32.54f, -88.57f, 9.75f }, 1 }, { 54, { 61.83f, -64.03f, 10.87f }, 2 },
+                                             { 9, { -47.43f, -66.76f, 9.79f }, 1 }, { 13, { -47.08f, -0.36f, 6.75f }, 1 },
+                                             { 55, { 10.79f, 12.27f, 17.96f }, 1 }, { 90, { -146.14f, 102.95f, 228.14f }, 9 } };
                 for (const Spot& sp : fromOutside)
                 {
                     unsigned facing = 0, open = 0;
@@ -3060,24 +3133,33 @@ int main(int argc, char** argv)
         // Moore's wall at Dalaran 49.7, 58.1; snapshots 20261024-162235 and -162259: the player still, the camera 16 yd behind
         // and 9 up, swung 56 degrees between them). Its upstairs room's (9) window 1948 opens from 19% of its street views: from
         // the first camera 7 of its 9 rays see the room, from the second none, and a camera swinging round the player there
-        // crosses that narrow cone's edge every swing. The rows list room 9 from outside no more (nor 13, the same building's
-        // other upstairs room, nor the Lounge's hall 55), so 1948 stays the client's glass.
+        // crosses that narrow cone's edge every swing. The rows listed room 9 from outside no more (nor 13, the same building's
+        // other upstairs room, nor the Lounge's hall 55), so 1948 stayed the client's glass; since window rows (the same day) room
+        // 9 is listed again and 1948 alone is shut, by a row of its own (the swing survey's 17% of its runs, over the 15% cut).
         if (!scan.empty())
             Test("Curiosities & Moore's walkway (2026-10-24, snapshots 162235 and 162259): window 1948 open from the first camera, shut from "
-                 "the second, changing more than twice as the camera swings round the player there; its room listed from outside no more", [&] {
+                 "the second, changing more than twice as the camera swings round the player there; its room listed from outside, it shut "
+                 "by its own row", [&] {
                 ScanBuilding b;
                 CHECK(LoadScanBuilding(scan, kDalaran, b) && b.groups.size() == 91);
                 const uint32_t path = gl::PathHash(kDalaran);
                 st::RootWindows outside = st::BuildRoot(path, gl::Windows().All(), b.groups.data(), b.groups.size());
                 std::vector<uint32_t> flags(b.groups.size());
                 for (uint32_t g = 0; g < b.groups.size(); ++g) flags[g] = gl::SeeThroughGroupFlags(path, g);
+                st::MaskWindows(outside, gl::SeeThroughWindowMask);
                 st::ListOutside(outside, flags);
                 uint32_t n = 0;
                 const st::SeeWindow* w = outside.Group(3, n);
                 CHECK(w && n > 0);
-                int at = -1;
-                for (uint32_t i = 0; i < n; ++i) at = w[i].ordinal == 1948 ? static_cast<int>(i) : at;
-                CHECK(at >= 0 && w[at].interior == 9);
+                int at = -1, kept = -1;
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    at = w[i].ordinal == 1948 ? static_cast<int>(i) : at;
+                    kept = w[i].ordinal == 1947 ? static_cast<int>(i) : kept;
+                }
+                CHECK(at >= 0 && w[at].interior == 9 && kept >= 0 && w[kept].interior == 9);
+                // (its room listed: 1947, the one street views open, 86% of them; 1948 shut by its row)
+                CHECK((flags[9] & st::kSeeFromOutside) && !w[kept].unlisted && w[at].see == 0u);
                 const st::SeeWindow& win = w[at];
                 const ScanGroup& sg = b.File(3);
                 std::vector<std::pair<uint32_t, uint32_t>> ranges;

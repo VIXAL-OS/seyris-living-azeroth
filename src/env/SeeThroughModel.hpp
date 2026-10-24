@@ -260,6 +260,7 @@ namespace wxl_livingazeroth::seethrough
         float outer = 0.0f;                 // a room's own window (from inside): how deep its opening is, to the building's
                                             // outer glass behind it (OuterBehind; 0: none)
         bool unlisted = false;              // from outside: its room isn't one the table opens from outside (ListOutside)
+        uint32_t see = ~0u;                 // its own window row's Flags (MaskWindows: the ways it may open, 0 none); ~0: no row
     };
     constexpr uint32_t kWindowExterior = 0x1;   // GlassWindows.Flags
     // "Northshire Abbey framerate looks awesome but it does flicker between fake rooms and outside" (the user, 2026-10-22,
@@ -298,9 +299,18 @@ namespace wxl_livingazeroth::seethrough
     // WMO's rows and its group's) or its room's have kSeeFromOutside. A building listed whole has it in every group, so it
     // stays as it was.
     /// Marks each window of `outside` (BuildRoot's) whose group's and room's flags (`groupFlags`: each group's, the WMO's
-    /// rows' and its own: glass::SeeThroughGroupFlags) both lack kSeeFromOutside as unlisted, the rest not. How many are
-    /// listed (a fake window counts as listed when its group is).
+    /// rows' and its own: glass::SeeThroughGroupFlags) both lack kSeeFromOutside as unlisted, the rest not; and one whose
+    /// own row (`see`, MaskWindows) lacks it, whatever its room's say. How many are listed (a fake window counts as listed
+    /// when its group is).
     unsigned ListOutside(RootWindows& outside, const std::vector<uint32_t>& groupFlags);
+    // "Weirdly the Violet Gate windows work fine from the inside but not from the outside" (the user, 2026-10-24: its halls
+    // were listed from inside only, some of their windows flickering from outside). A room's row opens all its windows, so one
+    // flickering window held its whole room out. A window row (SeeThroughBuildings' Window column, 2026-10-24: a window's
+    // ordinal in its WMO) keeps that one window to the ways its Flags name, 0 none: its room opens from outside, it stays
+    // shut. Its Flags only take ways away (a mask over its room's and group's), never add one.
+    /// Sets each window's `see` from the table's window rows: maskOf(the WMO's path, its ordinal), ~0 for a window without
+    /// one (glass::SeeThroughWindowMask). How many have a row.
+    unsigned MaskWindows(RootWindows& list, uint32_t (*maskOf)(uint32_t path, uint32_t ordinal));
 
     // --- the room seen through a window ---------------------------------------------------------------------------------
     // "certain attic windows shouldn't be able to see through the roof" (the user, 2026-10-20, the Lion's Pride Inn at

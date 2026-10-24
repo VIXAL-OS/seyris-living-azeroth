@@ -4,4 +4,5 @@
     <Field Name="Flags" Type="int" />
     <Field Name="Comment" Type="string" />
     <Field Name="Group" Type="int" />
+    <Field Name="Window" Type="int" />
   </Table>

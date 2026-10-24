@@ -376,7 +376,9 @@ namespace wxl_livingazeroth::seethrough
             }
             e.inside = anyBetween ? BuildInside(e.path, glass::Windows().All(), e.groups.data(), e.groups.size(), between)
                                   : BuildInside(e.path, glass::Windows().All(), e.groups.size());
-            // (from outside, the windows into the rooms the table names: a city's group rows, 2026-10-24; a whole WMO's every one)
+            // (from outside, the windows into the rooms the table names: a city's group rows, 2026-10-24; a whole WMO's every one;
+            // a window's own row keeps it to the ways it names, MaskWindows, as from inside)
+            const unsigned ownRows = MaskWindows(e.windows, glass::SeeThroughWindowMask) + MaskWindows(e.inside, glass::SeeThroughWindowMask);
             const unsigned listedOutside = ListOutside(e.windows, e.groupSee);
             for (uint32_t g = 0; g < count; ++g)
                 if (e.groups[g].flags & client::kExteriorGroup) e.exteriorGroups.push_back(g);
@@ -397,9 +399,9 @@ namespace wxl_livingazeroth::seethrough
                 char path[260];
                 ReadPath(r, path);
                 g_api->Log(WXL_LOG_INFO, kTag, "see-through windows: %s: %u windows in its exterior groups, %u with a room behind, %u fake, %u of them "
-                           "into rooms the table opens from outside; %u in its rooms (from inside), %u exterior groups; from outside %s, from inside %s "
-                           "(SeeThroughBuildings.cdbc)",
-                           path, static_cast<unsigned>(e.windows.windows.size()), e.windows.real, e.windows.fake, listedOutside,
+                           "into rooms the table opens from outside (%u with a row of their own); %u in its rooms (from inside), %u exterior groups; "
+                           "from outside %s, from inside %s (SeeThroughBuildings.cdbc)",
+                           path, static_cast<unsigned>(e.windows.windows.size()), e.windows.real, e.windows.fake, listedOutside, ownRows,
                            static_cast<unsigned>(e.inside.windows.size()), static_cast<unsigned>(e.exteriorGroups.size()),
                            (e.see & kSeeFromOutside) ? "yes" : "no", (e.see & kSeeFromInside) ? "yes" : (e.see & kSeeBetween) ? "between its rooms" : "no");
             }
@@ -889,8 +891,9 @@ namespace wxl_livingazeroth::seethrough
                 if (p.state != kShut) continue;   // not seen from this reach
                 // between rooms: a window onto another room (RoomBeyond), or none (a fake: its budget back); a way out only
                 // where the group's table says so
+                // (and its own row's ways, MaskWindows: none when it names none)
                 const bool onto = windows[i].interior >= 0;
-                if ((onto && !between) || (!onto && !waysOut))
+                if ((onto && !(between && (windows[i].see & kSeeBetween))) || (!onto && !(waysOut && (windows[i].see & kSeeFromInside))))
                 {
                     g_insideBudget += p.candidate ? 1 : 0;
                     f.states[i] = kShut;

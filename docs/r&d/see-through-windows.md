@@ -364,7 +364,8 @@ windows (18), the floor light's fades (19). Next: in-game reports from Dalaran (
 batch, the stained glass's whole-texture lead mask); more than sixteen windows a batch in the redraw (a second constant, if
 the largest WMO variant's slots allow: 2,024 of 2,048 now); in-game reports from the rooms added from outside once the
 surrounds went (Curiosities & Moore, the Threads of Fate, the Lounge's hall, the Silver Enclave's hall: section 18); the
-Violet Citadel and the Violet Gate from outside, once snapshots say why a window there flickers; Lumenveil's queue after
+Violet Gate's halls, the upstairs rooms, the Lounge's hall and Vargoth's Retreat opened window by window (section 21),
+their in-game reports; the Violet Citadel from outside (23% once its flickering windows are shut); Lumenveil's queue after
 the see-through phases.
 
 ## 8. From inside: the street through the windows
@@ -1343,7 +1344,7 @@ windows:
 | Curiosities & Moore upstairs (9) | 17% (1948) | 19% | out |
 | the Threads of Fate upstairs (13, the same building) | 21% (1932) | 19% | out |
 | the Legerdemain Lounge's hall (55) | 13% (1971) | 39% | out |
-| Phase D's: Cartier & Co., the Lounge's upper rooms, the Purple Parlor | 4%, 3%, 2.5% | | as they were |
+| Phase D's: Cartier & Co., the Lounge's upper rooms, the Purple Parlor | 4%, 3%, 18% (3905: 2.5% here before was not its worst window; section 21) | | as they were |
 | Phase D's: the Threads of Fate's side room (11) | 14% (1967) | 40% | left for a decision |
 | not listed: the Violet Gate's halls (53, 54), the Violet Citadel (36) | 18%, 28%, 36% | | out, as they were |
 
@@ -1353,3 +1354,67 @@ SeeThroughBuildings 80 rows, Dalaran's 13. From outside 94 of its street windows
 rays) and shut (none); swung round the player where they stood, along their arc, it changes four times; and the rows list
 its room from outside no more, so it stays the client's glass. "Dalaran's rows" and "Dalaran from the scan" follow the 13
 rows, each kept room's windows opening from its spot.
+
+## 21. Rooms opened window by window (2026-10-24)
+
+"Threads of Fate side room works fine afaict" (room 11, whose window 1967 flickers in 14% of its camera swings) and
+"Weirdly the Violet Gate windows work fine from the inside but not from the outside" (the user). The Violet Gate's halls
+(53, 54) were listed from inside only: from outside their windows were never opened. A room's row opens all its windows
+from outside, so one window that flickers kept its whole room out.
+
+**Window rows.** SeeThroughBuildings has a sixth column, Window (-1 none): a row naming one window of a WMO by its ordinal
+(GlassWindows': its index in the WMO), whose Flags are the ways that window may open (0 never). It is a mask over its
+room's and group's rows: it only takes ways away. features/Glass reads it through the real reader
+(`SeeThroughWindowMask`); RootFor gives each window its row's mask (env/SeeThroughModel `MaskWindows`, from outside and
+from inside), and ListOutside lists a window only when its own mask has kSeeFromOutside too. A shut window is unlisted
+like a window into a room not listed: left unseen, none of the budget. From inside, a window whose mask lacks
+kSeeFromInside (or kSeeBetween onto another room) is shut the same way. An older file without the column has no window
+rows. An older DLL reads such a row as a group row with Flags 0 and skips it, so its room opens whole: the table needs
+the DLL of the same day.
+
+**The cutoff.** A window is shut when its camera swings (section 20) flicker in more than 15% of its runs, or any walk
+changes it more than twice. Its room opens from outside when the rest open from 35% of their street views or more. Why
+15%: 1967 at 14.0% (7 of 50 runs) the user finds fine, and 1948 at 16.7% (9 of 54) is the one the user saw flicker. The
+two are about one run in fifty apart, and the cut sits between them. At 20% the Violet Gate's 1956 (16%), 1957 (18%) and
+1985 (18%) would open too.
+
+| room | shut | kept | the kept windows' street views | |
+|---|---|---|---|---|
+| the Violet Gate's hall (53) | 1955 (a walk), 1956 (16%, a walk), 1957 (18%) | 1959; above, 1986, 1987, 1989, 1991 (at most 13%) | 64% | opened from outside |
+| the Violet Gate's other hall (54) | 1952 (23%), 1953 (a walk), 1954 (28%); above, 1985 (18%), 1988 (30%), 1990 (20%), 1992 (28%) | 1958 (10%), 1961 (8%, the small one) | 65% | opened from outside |
+| Curiosities & Moore upstairs (9) | 1948 (17%) | 1944, 1947 (0%) | 43% | opened again |
+| the Threads of Fate upstairs (13) | 1932 (21%) | 1928, 1931 (0%) | 43% | opened again |
+| the Legerdemain Lounge's hall (55) | none | 1971 (13%) | 40% | opened again |
+| Archmage Vargoth's Retreat (90) | 4078 (a walk), 4125, 4127 (15.4%), 4150 (17%), 4151 (18%) | 69 more | 36% | opened from outside |
+| the Purple Parlor (89, already open) | 3905 (18%), 3961, 3964 (17%) | 57 more | 36% | as it was |
+| the Violet Citadel (36) | 2100, 2101, 2102 | the rest | 23% | still out |
+| the Visitor Center, the Wonderworks (8, 12) | none | all | 29% | still out |
+
+The other rooms already open lose no window: their worst is the Threads of Fate's side room's 1967 at 14%, then 6%
+(Curiosities & Moore's 1979). The shut windows of rooms 90 and 89 have only 22 .. 26 runs each, from 11 .. 13 spots
+high on the floating rock and the Citadel's top; there 4 runs of 26 is 15.4%, so they are the cut's least certain cases.
+The Violet Gate's halls each have four big lower windows, 7 yd tall, and four small upper ones. Three of each hall's
+four big ones are shut, so from outside a hall shows one big stained window see-through (54 also its small 1961) and,
+in 53, its four upper ones.
+
+SeeThroughBuildings 104 rows: 47 buildings, 37 group rows (Dalaran's 17), 20 window rows. From outside 177 of Dalaran's
+street windows are listed (94 before).
+
+**Where to stand** (SEETHROUGH_SPOTS, which now leaves the shut windows out: the eye opening the most of a room's windows,
+4 .. 12 yd before them, 2 yd over the street):
+
+| room | stand at (WMO) | Dalaran map | facing | the windows, over the ground | |
+|---|---|---|---|---|---|
+| 53 | 32.54, -88.57, 9.75 | 57.2, 49.2 | west | 1959, 7 yd up, 4 yd away | 1 of the 3 facing there |
+| 54 | 61.83, -64.03, 10.87 | 57.1, 42.3 | south-west | 1958 and 1961, 7 yd up, 11 yd away | 2 of 2 |
+| 9 | -47.43, -66.76, 9.79 | 49.1, 58.0 | north-east | 1947, 4 yd up, 4 yd away | 1 of 1 |
+| 13 | -47.08, -0.36, 6.75 | 42.9, 50.3 | north | 1931, 4 yd up, 4 yd away | 1 of 1 |
+| 55 | 10.79, 12.27, 17.96 | 46.1, 40.8 | north-east | 1971, 3 yd up, 4 yd away | 1 of 1 |
+| 90 | -146.14, 102.95, 228.14 | 25.7, 52.5 | south-west | nine, 5 yd up, 8 yd away | on the floating rock, 220 yd over the streets |
+
+**Proofs.** seethrough_tests "MaskWindows, ListOutside": a window's row keeps it shut while its room opens, adds no way,
+and another WMO's rows touch none of its windows. "Dalaran's rows through the real reader": the 17 room rows and the 20
+window rows, the kept windows without one. "Dalaran from the scan": 177 listed, by room, none of the twenty, each new
+room's windows opening from its spot. "Curiosities & Moore's walkway": room 9 listed, 1948 shut by its own row, 1947
+listed. glass_load_tests: the rows through both readers (the linked one and the DLL's), and the file without its Window
+column (no window rows; the rooms' rows as they are).

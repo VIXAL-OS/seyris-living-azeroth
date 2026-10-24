@@ -151,10 +151,21 @@ namespace wxl_livingazeroth::seethrough
         {
             const uint32_t own = w.group < groupFlags.size() ? groupFlags[w.group] : 0u;
             const uint32_t room = w.interior >= 0 && static_cast<size_t>(w.interior) < groupFlags.size() ? groupFlags[static_cast<size_t>(w.interior)] : 0u;
-            w.unlisted = ((own | room) & kSeeFromOutside) == 0;
+            w.unlisted = ((own | room) & w.see & kSeeFromOutside) == 0;
             listed += w.unlisted ? 0 : 1;
         }
         return listed;
+    }
+
+    unsigned MaskWindows(RootWindows& list, uint32_t (*maskOf)(uint32_t path, uint32_t ordinal))
+    {
+        unsigned rows = 0;
+        for (SeeWindow& w : list.windows)
+        {
+            w.see = maskOf ? maskOf(list.path, w.ordinal) : ~0u;
+            rows += w.see != ~0u ? 1 : 0;
+        }
+        return rows;
     }
 
     RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, size_t groupCount)
