@@ -362,9 +362,10 @@ glass (10), Phase B frosted glass (11), Phase C between rooms in Ironforge (13, 
 three at once (15); the first reports from Dalaran: the window light's choice (16), the stone surrounds that were frosted
 windows (18), the floor light's fades (19). Next: in-game reports from Dalaran (the Lounge's windows far apart in their
 batch, the stained glass's whole-texture lead mask); more than sixteen windows a batch in the redraw (a second constant, if
-the largest WMO variant's slots allow: 2,024 of 2,048 now); the rooms the surrounds held down that now meet the rule from
-outside (Curiosities & Moore, the Threads of Fate's rooms, the Lounge's hall, the Silver Enclave's hall: section 18) and
-the Violet Citadel, once snapshots from them say how they look; Lumenveil's queue after the see-through phases.
+the largest WMO variant's slots allow: 2,024 of 2,048 now); in-game reports from the rooms added from outside once the
+surrounds went (Curiosities & Moore, the Threads of Fate, the Lounge's hall, the Silver Enclave's hall: section 18); the
+Violet Citadel and the Violet Gate from outside, once snapshots say why a window there flickers; Lumenveil's queue after
+the see-through phases.
 
 ## 8. From inside: the street through the windows
 
@@ -1229,9 +1230,21 @@ stained panes each: 99.5% and 100% of the eyes, no verdict changed on any walk (
 Cartier & Co. is at 98%, the Apothecary at 74% (49%: its window's outer partner was a surround). Every row of the table
 still meets the Phase C rule. From outside the Violet Gate's halls open from 66.5% and 44.6% of the street views, but two of
 their windows each changed more than twice on a walk, so they stay inside only. Some rooms the surrounds held down now meet
-the rule from outside: Curiosities & Moore (6, 7: 72.5%, 66.7%), the Threads of Fate's rooms (9, 10, 13: 35 .. 74%), the
-Lounge's hall (55: 40%), the Silver Enclave's hall (78: its one window, 60%). They are not in the table yet; that waits on a
-decision and their where-to-stand. The Violet Citadel from inside: 86% now, but one window flickers.
+the rule from outside, and are in the table since (the same day, "yeah add those four", the user; SeeThroughBuildings 83
+rows, Dalaran's 16): Curiosities & Moore (6, 7 and upstairs 9: 72.5%, 66.7%, 35.2%), the Threads of Fate (10 and upstairs
+13: 73.7%, 35.2%), the Legerdemain Lounge's hall (55: 39.7%) and the Silver Enclave's hall (78: its one window, 60.3%);
+none of their windows changed more than twice on any walk, and the survey's numbers were the same on the build after the
+surrounds went. From outside 101 of Dalaran's street windows are listed now (into 6: 4, 7: 3, 9: 3, 10: 4, 13: 3, 55: 1, 78:
+1), a frame's plan before Cartier & Co. 6 candidates, 0.04 ms. Still out: the Visitor Center and the Wonderworks (8, 12:
+28.6%), Vargoth's Retreat and the Violet Citadel (a window flickering each). The Violet Citadel from inside: 86% now, but
+one window flickers.
+
+Where to stand before them (the survey's spots, on foot 2 yd over the surface below; the Silver Enclave's hall's from the
+spots' farther ring, 15 .. 30 yd, as nothing on foot nearer opens its window): Curiosities & Moore at Dalaran 48.6, 57.1
+facing north (the windows 14 yd up) and 52.5, 57.0 facing north; its upstairs at 49.1, 58.0 facing north-east (one of its
+two windows facing there); the Threads of Fate at 43.9, 51.4 facing north (17 yd up), its upstairs at 42.9, 50.3 facing
+north; the Lounge's hall at 46.1, 40.8 facing north-east; the Silver Enclave's hall at 42.2, 54.9 facing west, its window
+22 yd up and 15 yd off.
 
 **The same pattern elsewhere?** Only `nd_dalaran.wmo` uses `eb_dalaran_window3`. Cartier & Co. (19), the Agronomical
 Apothecary (18) and the Underbelly's Circle of Wills (71) have no surround texture. The Circle of Wills' window is

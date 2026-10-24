@@ -199,6 +199,10 @@ namespace
     const char* const kInn = "world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo";
     // Dalaran (2026-10-24, Phase D): the city's one WMO
     const char* const kDalaran = "world\\wmo\\northrend\\dalaran\\nd_dalaran.wmo";
+    // Dalaran's rooms added from outside on 2026-10-24 ("yeah add those four"): the windows into each, and where to stand
+    // before the Silver Enclave's hall (SEETHROUGH_SPOTS' farther ring: its one window 21.7 yd up)
+    constexpr unsigned kInto6 = 4, kInto7 = 3, kInto9 = 3, kInto10 = 4, kInto13 = 3, kInto55 = 1, kInto78 = 1;
+    constexpr float kSpot78[3] = { -70.03f, -11.67f, 2.00f };
     const st::GroupInfo kInnGroups[12] = {
         { 0x00002000u, { 14.1116447f, -4.85658407f, 0.395452768f }, { 20.4711647f, -0.377688199f, 4.37204647f } },
         { 0x00002000u, { 9.97781086f, -4.94043112f, 0.395452768f }, { 14.1673288f, 2.82283831f, 6.56520176f } },
@@ -706,8 +710,9 @@ namespace
             }
         }
         // Where to stand before a room's windows from outside (SEETHROUGH_SPOTS, 2026-10-24: Dalaran's rooms): of the eyes 4 ..
-        // 12 yd before each of its windows, up to 30 degrees aside, 2 yd over the street under them, the one that opens the
-        // most of the room's windows (those facing it within kRange), as the walk from outside decides each.
+        // 12 yd before each of its windows (15 .. 30 yd if none opens from there), up to 30 degrees aside, 2 yd over the street
+        // under them, the one that opens the most of the room's windows (those facing it within kRange), as the walk from
+        // outside decides each.
         if (std::getenv("SEETHROUGH_SPOTS"))
         {
             struct Ref { uint32_t g, i; };
@@ -730,12 +735,16 @@ namespace
                 unsigned bestOpen = 0, bestFacing = 0;
                 float bestEye[3] = {};
                 std::string bestList;
+                // (2026-10-24: a room none of whose windows opens from 4 .. 12 yd, 15 .. 30 yd out: the Silver Enclave's hall's
+                // one window, 21.7 yd up)
+                const std::vector<float> rings[2] = { { 4.0f, 6.0f, 8.0f, 10.0f, 12.0f }, { 15.0f, 18.0f, 22.0f, 26.0f, 30.0f } };
+                for (int ring = 0; ring < 2 && !bestOpen; ++ring)
                 for (const Ref& r : refs)
                 {
                     const st::SeeWindow& w = *windowOf(r);
                     const float nx = w.normal[0], ny = w.normal[1], l = std::sqrt(nx * nx + ny * ny);
                     if (l < 0.5f) continue;
-                    for (const float dist : { 4.0f, 6.0f, 8.0f, 10.0f, 12.0f })
+                    for (const float dist : rings[ring])
                         for (const float deg : { -30.0f, -15.0f, 0.0f, 15.0f, 30.0f })
                         {
                             const float a = deg * 3.14159265f / 180.0f;
@@ -2540,7 +2549,8 @@ int main(int argc, char** argv)
             std::printf("  SeeThroughBuildings.cdbc: %zu buildings\n", gl::SeeThroughBuildings());
             // (2026-10-22: 24, with stained glass 33, with frosted glass 47; 2026-10-23 Ironforge's groups; 2026-10-24 Dalaran's)
             CHECK(gl::SeeThroughBuildings() == 49);
-            CHECK(gl::SeeThroughGroupRows() == 29 &&gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 71) == st::kSeeBetween && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
+            // (36 group rows: Dalaran's seven more from outside, 2026-10-24)
+            CHECK(gl::SeeThroughGroupRows() == 36 &&gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 71) == st::kSeeBetween && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
                   gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 65) == st::kSeeBetween);   // (+ the Great Forge, 2026-10-23)
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo")) == st::kSeeFromInside);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\chapel\\redridgechapel.wmo")) == 3);
@@ -2602,9 +2612,14 @@ int main(int argc, char** argv)
              "rooms, the rest none; Ironforge's and the inn's as they were; a building listed whole lists every window from outside", [&] {
             const uint32_t dal = gl::PathHash(kDalaran);
             CHECK(gl::SeeThroughFlags(dal) == (st::kSeeFromOutside | st::kSeeFromInside | st::kSeeBetween));
-            std::map<uint32_t, uint32_t> want = { { 11, st::kSeeFromOutside }, { 18, st::kSeeFromInside }, { 19, st::kSeeFromOutside | st::kSeeFromInside },
-                                                  { 53, st::kSeeFromInside }, { 54, st::kSeeFromInside }, { 57, st::kSeeFromOutside },
-                                                  { 58, st::kSeeFromOutside }, { 71, st::kSeeBetween }, { 89, st::kSeeFromOutside } };
+            // (2026-10-24, the stone surrounds no windows, "yeah add those four": from outside Curiosities & Moore, 6, 7 and 9; the
+            // Threads of Fate, 10 and 13; the Legerdemain Lounge's hall, 55; the Silver Enclave's hall, 78; the Violet Gate's halls
+            // still from inside only)
+            std::map<uint32_t, uint32_t> want = { { 6, st::kSeeFromOutside }, { 7, st::kSeeFromOutside }, { 9, st::kSeeFromOutside }, { 10, st::kSeeFromOutside },
+                                                  { 11, st::kSeeFromOutside }, { 13, st::kSeeFromOutside }, { 18, st::kSeeFromInside },
+                                                  { 19, st::kSeeFromOutside | st::kSeeFromInside }, { 53, st::kSeeFromInside }, { 54, st::kSeeFromInside },
+                                                  { 55, st::kSeeFromOutside }, { 57, st::kSeeFromOutside }, { 58, st::kSeeFromOutside }, { 71, st::kSeeBetween },
+                                                  { 78, st::kSeeFromOutside }, { 89, st::kSeeFromOutside } };
             unsigned rows = 0;
             for (uint32_t g = 0; g < 91; ++g)
             {
@@ -2613,7 +2628,7 @@ int main(int argc, char** argv)
                 if (f != (it == want.end() ? 0u : it->second)) throw std::runtime_error("Dalaran's group " + std::to_string(g) + ": flags " + std::to_string(f));
                 rows += f ? 1 : 0;
             }
-            CHECK(rows == 9 && gl::SeeThroughGroupFlags(dal, 78) == 0 && gl::SeeThroughGroupFlags(dal, 3) == 0);   // (the Silver Enclave's hall left out)
+            CHECK(rows == 16 && gl::SeeThroughGroupFlags(dal, 3) == 0 && gl::SeeThroughGroupFlags(dal, 8) == 0 && gl::SeeThroughGroupFlags(dal, 12) == 0);
             const uint32_t ironforge = gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo");
             CHECK(gl::SeeThroughFlags(ironforge) == st::kSeeBetween && gl::SeeThroughGroupFlags(ironforge, 65) == st::kSeeBetween &&
                   gl::SeeThroughGroupFlags(ironforge, 60) == 0);
@@ -2714,7 +2729,10 @@ int main(int argc, char** argv)
                     }
                     return i < it->second.size() && it->second[i].n ? &it->second[i] : nullptr;
                 };
-                // from outside: the windows into 11, 19, 57, 58 and 89 listed, no other
+                // from outside: the windows into the rooms the rows name listed, no other (2026-10-24: 11, 19, 57, 58 and 89; then
+                // Curiosities & Moore's 6, 7 and 9, the Threads of Fate's 10 and 13, the Lounge's hall 55, the Silver Enclave's
+                // hall 78)
+                const std::vector<int> listedRooms = { 6, 7, 9, 10, 11, 13, 19, 55, 57, 58, 78, 89 };
                 st::RootWindows outside = st::BuildRoot(path, gl::Windows().All(), b.groups.data(), b.groups.size());
                 const unsigned listed = st::ListOutside(outside, flags);
                 std::map<int, unsigned> byRoom;
@@ -2723,18 +2741,25 @@ int main(int argc, char** argv)
                     if (!w.unlisted && w.interior >= 0)
                     {
                         ++byRoom[w.interior];
-                        onlyThose = onlyThose && (w.interior == 11 || w.interior == 19 || w.interior == 57 || w.interior == 58 || w.interior == 89);
+                        onlyThose = onlyThose && std::find(listedRooms.begin(), listedRooms.end(), w.interior) != listedRooms.end();
                     }
-                std::printf("  Dalaran: %zu windows in its exterior groups, %u listed from outside: into 11 %u, 19 %u, 57 %u, 58 %u, 89 %u\n",
-                            outside.windows.size(), listed, byRoom[11], byRoom[19], byRoom[57], byRoom[58], byRoom[89]);
+                std::string into;
+                unsigned sum = 0;
+                for (const int r : listedRooms) { into += " " + std::to_string(r) + ": " + std::to_string(byRoom[r]); sum += byRoom[r]; }
+                std::printf("  Dalaran: %zu windows in its exterior groups, %u listed from outside, into%s\n", outside.windows.size(), listed, into.c_str());
                 // (2026-10-24, the Violet Gate: 3,949 before, 1,724 of them the stained windows' stone surrounds, now no windows:
                 // into 11 were 28, 57 and 58 10 each)
-                CHECK(outside.windows.size() == 2225 && onlyThose && listed == byRoom[11] + byRoom[19] + byRoom[57] + byRoom[58] + byRoom[89]);
+                CHECK(outside.windows.size() == 2225 && onlyThose && listed == sum);
                 CHECK(byRoom[11] == 3 && byRoom[19] == 10 && byRoom[57] == 2 && byRoom[58] == 2 && byRoom[89] == 65);   // (89: five of them skylights)
+                CHECK(byRoom[6] == kInto6 && byRoom[7] == kInto7 && byRoom[9] == kInto9 && byRoom[10] == kInto10 && byRoom[13] == kInto13 &&
+                      byRoom[55] == kInto55 && byRoom[78] == kInto78);
                 // where to stand before each (the survey's SEETHROUGH_SPOTS: the street eye opening the most of the room's windows)
                 struct Spot { int room; float eye[3]; unsigned atLeast; };
-                const Spot fromOutside[5] = { { 19, { 12.14f, 89.10f, -0.63f }, 4 }, { 57, { 27.42f, 18.90f, 7.54f }, 2 }, { 58, { 48.17f, -13.54f, 9.07f }, 2 },
-                                              { 11, { -21.46f, 18.15f, 7.32f }, 2 }, { 89, { -80.96f, 178.11f, 206.39f }, 9 } };
+                const Spot fromOutside[] = { { 19, { 12.14f, 89.10f, -0.63f }, 4 }, { 57, { 27.42f, 18.90f, 7.54f }, 2 }, { 58, { 48.17f, -13.54f, 9.07f }, 2 },
+                                             { 11, { -21.46f, 18.15f, 7.32f }, 2 }, { 89, { -80.96f, 178.11f, 206.39f }, 9 },
+                                             { 6, { -46.57f, -60.51f, 10.32f }, 2 }, { 7, { -25.81f, -85.27f, 10.17f }, 2 }, { 9, { -47.43f, -66.76f, 9.79f }, 1 },
+                                             { 10, { -46.22f, -10.29f, 3.70f }, 2 }, { 13, { -47.08f, -0.36f, 6.75f }, 1 }, { 55, { 10.79f, 12.27f, 17.96f }, 1 },
+                                             { 78, { kSpot78[0], kSpot78[1], kSpot78[2] }, 1 } };
                 for (const Spot& sp : fromOutside)
                 {
                     unsigned facing = 0, open = 0;

@@ -424,7 +424,8 @@ namespace
         // first in-game report, and since the second the shops round its ring out onto it (the herbalist's, 71), the Commons'
         // hall by the Stonefire Tavern (60) none, the city 0x4 in all. And (2026-10-24, Phase D) Dalaran by its rooms: Cartier &
         // Co. (19) from outside and inside, the Purple Parlor (89) from outside, the Violet Gate's hall (53) from inside, the
-        // Underbelly's Circle of Wills (71) between rooms, the Silver Enclave's hall (78) none, the city all three in all.
+        // Underbelly's Circle of Wills (71) between rooms, the city all three in all; since the stone surrounds are no windows
+        // (the same day) seven rooms more from outside, the Silver Enclave's hall (78) among them.
         auto see = [](const char* wmo) { return gl::SeeThroughFlags(gl::PathHash(wmo)); };
         const uint32_t seeInn = see("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo");
         const uint32_t seeHouse = see("world\\wmo\\azeroth\\buildings\\duskwood_humantwostory\\duskwood_humantwostory.wmo");
@@ -451,8 +452,8 @@ namespace
                       gl::SeeThroughBuildings(), seeInn, seeHouse, seeTower, seeFarm, seeChapel, seeHall, seeHovel, seeZeppelin, seeNone, seeCity,
                       gl::SeeThroughGroupRows(), seeSmithy, seeForge, seeCommons, seeInnGroup, seeDalaran, seeCartier, seeParlor, seeGate, seeWills, seeEnclave);
         Check(gl::SeeThroughBuildings() == 49 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 &&
-              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 29 && seeSmithy == 4 && seeForge == 4 && seeHerbalist == 4 && seeCommons == 0 &&
-              seeInnGroup == 3 && seeDalaran == 7 && seeCartier == 3 && seeParlor == 1 && seeGate == 2 && seeWills == 4 && seeEnclave == 0 &&
+              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 36 && seeSmithy == 4 && seeForge == 4 && seeHerbalist == 4 && seeCommons == 0 &&
+              seeInnGroup == 3 && seeDalaran == 7 && seeCartier == 3 && seeParlor == 1 && seeGate == 2 && seeWills == 4 && seeEnclave == 1 &&
               status.find("SeeThroughBuildings.cdbc: 49 buildings") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).

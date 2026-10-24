@@ -193,6 +193,13 @@ SEE_THROUGH_GROUPS = [
 # 35%, stained). From inside onto the street: Cartier & Co. (19, 95% of eyes), the Violet Gate's two halls (53, 54: 88
 # and 87%, frosted and stained) and the Agronomical Apothecary (18, 49%). Between rooms: the Underbelly's Circle of
 # Wills through its window into Cantrips & Crows (71 onto 70, 94%, frosted).
+# Surveyed again the same day once Dalaran's stone surrounds (eb_dalaran_window3, gen_glass NO_WINDOWS) were no windows: they
+# had made 1,910 of its windows and held some rooms under the rule. Added from outside: Curiosities & Moore (6, 7 and
+# upstairs 9: 73, 67 and 35% of street views), the Threads of Fate (10 and upstairs 13: 74 and 35%), the Legerdemain
+# Lounge's hall (55: 40%) and the Silver Enclave's hall (78: 60%, its one window), none of their windows changing more than
+# twice on any walk. Still out from outside: the Violet Gate's halls (53, 54: 67 and 45%, but two windows each flicker),
+# the Visitor Center and the Wonderworks (8, 12: 29%), Vargoth's Retreat (90: 35%, a window flickering), the Violet
+# Citadel (36: 38%, a window flickering). The rows' percentages are this survey's; below, the first one's reasons.
 # Left out from outside: Curiosities & Moore (7: 34.8%, a hair under; 6: 29%), the Threads of Fate's main room (10:
 # 29%), the Visitor Center, the Wonderworks and their upper floors (8, 9, 12, 13: 20%), the Violet Gate (53, 54: 15%), the
 # Silver Enclave's hall (78: 31%, 13 windows flickering), the Agronomical Apothecary (18: 63%, but its one window
@@ -206,15 +213,23 @@ SEE_THROUGH_GROUPS = [
 # eyes, too few to judge) are left out.
 DAL = r"world\wmo\northrend\dalaran\nd_dalaran.wmo"
 SEE_THROUGH_GROUPS += [
-    (DAL, 11, "Dalaran: the Threads of Fate's side room, from outside (40% of street views), frosted and stained glass", FROM_OUTSIDE),
-    (DAL, 18, "Dalaran: the Agronomical Apothecary, from inside onto the street (49% of eyes), stained glass", FROM_INSIDE),
-    (DAL, 19, "Dalaran: Cartier & Co. Fine Jewelry, from outside (70%) and from inside (95%), stained glass", FROM_OUTSIDE | FROM_INSIDE),
-    (DAL, 53, "Dalaran: the Violet Gate's hall, from inside onto the street (88%), frosted and stained glass", FROM_INSIDE),
-    (DAL, 54, "Dalaran: the Violet Gate's other hall, from inside onto the street (87%), frosted and stained glass", FROM_INSIDE),
-    (DAL, 57, "Dalaran: an upper room of the Legerdemain Lounge, from outside (55%), frosted and stained glass", FROM_OUTSIDE),
-    (DAL, 58, "Dalaran: the Legerdemain Lounge's other upper room, from outside (54%), frosted and stained glass", FROM_OUTSIDE),
+    (DAL, 11, "Dalaran: the Threads of Fate's side room, from outside (80% of street views), stained glass", FROM_OUTSIDE),
+    (DAL, 18, "Dalaran: the Agronomical Apothecary, from inside onto the street (74% of eyes), stained glass", FROM_INSIDE),
+    (DAL, 19, "Dalaran: Cartier & Co. Fine Jewelry, from outside (70%) and from inside (98%), stained glass", FROM_OUTSIDE | FROM_INSIDE),
+    (DAL, 53, "Dalaran: the Violet Gate's hall, from inside onto the street (99%), stained glass", FROM_INSIDE),
+    (DAL, 54, "Dalaran: the Violet Gate's other hall, from inside onto the street (100%), stained glass", FROM_INSIDE),
+    (DAL, 57, "Dalaran: an upper room of the Legerdemain Lounge, from outside (100%), stained glass", FROM_OUTSIDE),
+    (DAL, 58, "Dalaran: the Legerdemain Lounge's other upper room, from outside (100%), stained glass", FROM_OUTSIDE),
     (DAL, 71, "Dalaran: the Underbelly's Circle of Wills, through its window into Cantrips & Crows (70; 94% of eyes), frosted glass", FROM_BETWEEN),
     (DAL, 89, "Dalaran: the Purple Parlor, from outside (35%), stained glass", FROM_OUTSIDE),
+    # (2026-10-24, the stone surrounds no windows: "yeah add those four", the user)
+    (DAL, 6, "Dalaran: Curiosities & Moore, from outside (73% of street views), stained glass", FROM_OUTSIDE),
+    (DAL, 7, "Dalaran: Curiosities & Moore's other room, from outside (67%), stained glass", FROM_OUTSIDE),
+    (DAL, 9, "Dalaran: Curiosities & Moore upstairs, from outside (35%), stained glass", FROM_OUTSIDE),
+    (DAL, 10, "Dalaran: the Threads of Fate, from outside (74%), stained glass", FROM_OUTSIDE),
+    (DAL, 13, "Dalaran: the Threads of Fate upstairs, from outside (35%), stained glass", FROM_OUTSIDE),
+    (DAL, 55, "Dalaran: the Legerdemain Lounge's hall, from outside (40%), stained glass", FROM_OUTSIDE),
+    (DAL, 78, "Dalaran: the Silver Enclave's hall, from outside (60%), stained glass", FROM_OUTSIDE),
 ]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO)
 

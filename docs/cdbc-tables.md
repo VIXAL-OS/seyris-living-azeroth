@@ -543,7 +543,8 @@ windows (stained glass's big sheets are left out). The lookup finds 98% of the w
 those with a room); the rest are panes at a slant over a lower-numbered window (a bay's side lights,
 a siege engine's curved glass), where the pixel takes that window's room. WindowRooms: 988 rooms for
 887 lights, 421 lit frosted windows at 333 lights, 1,549 stained windows at 1,191 lights (Dalaran 356);
-28 cells read only without stained glass's rooms (Dalaran's stained panes beside frosted windows).
+28 cells read only without stained glass's rooms (Dalaran's stained panes beside frosted windows: its stone
+surrounds, gone with them on 2026-10-24, when GlassWindows lost those 1,910 windows: 5,209 frosted left).
 
 ### RoomStyles.cdbc — `RoomStyles.xml`
 
@@ -677,7 +678,8 @@ and zeppelin houses (from inside only: Durotar's, Grom'gol's) and the vrykul lon
 glass; from outside only): 47; and since between rooms (2026-10-23, Phase C: `SeeThroughBetweenRooms`) 13 of
 Ironforge's groups, one row each (the Group column): its shops' and rooms' windows onto its halls, and two halls' onto
 their rooms (20 since the Great Forge); and since Dalaran (2026-10-24, Phase D) nine of its rooms, each with its own
-flags: from outside, from inside onto the street, or between rooms. A WMO not here keeps its windows as they are. Every
+flags: from outside, from inside onto the street, or between rooms; sixteen once its stone surrounds were no windows
+(the same day: seven more from outside). A WMO not here keeps its windows as they are. Every
 placement of a WMO counts, on every map.
 
 | Field | Meaning |
