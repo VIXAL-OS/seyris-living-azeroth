@@ -18,6 +18,7 @@
 #include "features/TerrainIce.hpp"
 #include "features/WmoIce.hpp"
 #include "features/TerrainWetness.hpp"
+#include "features/TreeShadows.hpp"
 #include "features/Glass.hpp"
 #include "features/SeeThrough.hpp"
 #include "features/SunShafts.hpp"
@@ -166,6 +167,19 @@ namespace wxl_livingazeroth::config
 
         shelter::SetEnabled(Bool(s, "WindShelter", "Roofs and overhangs shelter the ground below from wind.", shelter::Enabled()));
         shelter::SetLeeEnabled(Bool(s, "WindLee", "Walls and cliffs cast a wind shadow on their downwind side.", shelter::LeeEnabled()));
+
+        {
+            treeshadow::Settings& t = treeshadows::Config();
+            auto rate = [](float v) { return std::isfinite(v) ? (v < 0.0f ? 0.0f : (v > 240.0f ? 240.0f : v)) : 0.0f; };
+            t.enabled = Bool(s, "TreeShadows",
+                "Tree shadows follow the wind (wxl-treewind's sway): at shadow quality 3-4 the client draws the shadows of the trees round you again only after you walk on, so they keep a pose and step; this draws the near trees' shadow map (40 yards) again while a tree or bush casts into it. Quality 5 redraws every shadow map every frame itself, at a much higher cost; 0-2 have no tree shadows.",
+                t.enabled != 0) ? 1 : 0;
+            t.rate = rate(Float(s, "TreeShadowsRate", "Most redraws a second of the near trees' shadow map (0 = every frame).", t.rate));
+            t.farTrees = Bool(s, "TreeShadowsFar",
+                "The trees 40 to 160 yards away follow the wind too: their shadow map is drawn again as well (16 times the area of the near one, so it costs more).",
+                t.farTrees != 0) ? 1 : 0;
+            t.farRate = rate(Float(s, "TreeShadowsFarRate", "Most redraws a second of the far trees' shadow map (0 = every frame).", t.farRate));
+        }
 
         debug::SetShowArrows(Bool(s, "DebugWindArrows", "Debug: draw the wind as arrows around the player.", debug::ShowArrows()));
         {

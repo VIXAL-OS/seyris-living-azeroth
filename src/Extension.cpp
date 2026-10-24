@@ -58,6 +58,7 @@
 #include "features/SunShafts.hpp"
 #include "features/TerrainIce.hpp"
 #include "features/TerrainWetness.hpp"
+#include "features/TreeShadows.hpp"
 #include "features/Glass.hpp"
 #include "features/GlassShafts.hpp"
 #include "features/SeeThrough.hpp"
@@ -140,11 +141,11 @@ namespace
         next = now + std::chrono::seconds(30);
         const auto& s = wxl_livingazeroth::world::Current();
         if (!s.inWorld) return;
-        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s; %s",
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s; %s; %s",
                    s.mapId, s.playerPos[0], s.playerPos[1], s.playerPos[2], s.playerTerrainType, s.outdoors ? "outdoors" : "indoors",
                    wxl_livingazeroth::terrainice::StatusLine(), wxl_livingazeroth::modelice::StatusLine(),
                    wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine(), wxl_livingazeroth::crystal::StatusLine(),
-                   wxl_livingazeroth::seethrough::StatusLine());
+                   wxl_livingazeroth::seethrough::StatusLine(), wxl_livingazeroth::treeshadows::LogLine());
     }
 
     // Between frames: the safe moment to swap the depth surface the next world pass will bind.
@@ -168,6 +169,7 @@ namespace
         wxl_livingazeroth::doodadfade::Update();
         const auto& snap = wxl_livingazeroth::world::Refresh();
         wxl_livingazeroth::playerdepth::Update(snap.inWorld);
+        wxl_livingazeroth::treeshadows::Tick();
         {
             prof::Scope scope(prof::kOursEnv);
             wxl_livingazeroth::climate::Update(snap);
@@ -262,6 +264,7 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::modelice::Install(api);   // the M2 batch draws: ice models switch their block on
     wxl_livingazeroth::playerdepth::Install(api); // the player's see-through batches (mount wings) write depth too
     wxl_livingazeroth::doodadfade::Install(api);  // the doodad fade and the M2 batch draws: fading doodads dissolve in
+    wxl_livingazeroth::treeshadows::Install(api); // the shadow cache's band draw: the near trees' map drawn again, following the wind
     wxl_livingazeroth::modellights::Register();
     wxl_livingazeroth::modelice::Register();
     wxl_livingazeroth::shaderpatch::Install(api);

@@ -53,6 +53,12 @@ only add what stock data can't express, and every feature can be switched off.
 - Lit and fogged like the terrain, so it follows the time of day and zone fog. Reaches 640 yards
   in rings that get coarser with distance; only the nearest 40 yards deform.
 
+**Tree shadows that follow the wind** (with `wxl-treewind`; `TreeShadows` in the ini, F9 "tree shadows" panel)
+- At shadow quality 3-4 the client draws the trees' shadows again only after you walk on, so a swaying tree's
+  shadow kept a pose and stepped. The near shadow map (40 yards) is drawn again each frame (at most 30 times a
+  second) while a tree or bush casts into it, so those shadows sway with the trees; the 160-yard map can follow too
+  (`TreeShadowsFar`, off by default). Quality 5 does this for every shadow itself, at a much higher cost.
+
 **Anti-aliasing**
 - Our own FXAA pass on the world, drawn before the interface (on by default, `AntiAliasing` in the
   ini). It runs while the client's multisampling is off, which the readable scene depth needs
@@ -124,6 +130,7 @@ The extension builds inside the WarcraftXL core tree. Core picks up every folder
 
 - **wxl-grasswind:** both patch the same grass shaders. If it's loaded, this module's grass motion
   stays off and logs why; the rest keeps working.
+- **wxl-treewind:** the tree shadows only work with it (it sways the trees); without it they do nothing.
 - **Multisampling:** fine for everything except the readable scene depth, which is off while
   multisampling is on. Changing multisampling in-game is handled.
 

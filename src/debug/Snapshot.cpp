@@ -17,6 +17,7 @@
 #include "../features/SeeThrough.hpp"
 #include "../features/SurfaceCover.hpp"
 #include "../features/TerrainLights.hpp"
+#include "../features/TreeShadows.hpp"
 
 #include "engine/events/Event.hpp"
 #include "game/Camera.hpp"
@@ -410,6 +411,11 @@ namespace wxl_livingazeroth::snapshot
             t("Surface cover panel");
             lines.clear();
             cover::StatusLines(lines);
+            for (const std::string& l : lines) t("%s", l.c_str());
+            t("");
+            t("Tree shadows panel");
+            lines.clear();
+            treeshadows::StatusLines(lines);
             for (const std::string& l : lines) t("%s", l.c_str());
         }
 
