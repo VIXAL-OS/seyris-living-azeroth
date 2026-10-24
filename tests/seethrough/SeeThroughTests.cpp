@@ -199,9 +199,10 @@ namespace
     const char* const kInn = "world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo";
     // Dalaran (2026-10-24, Phase D): the city's one WMO
     const char* const kDalaran = "world\\wmo\\northrend\\dalaran\\nd_dalaran.wmo";
-    // Dalaran's rooms added from outside on 2026-10-24 ("yeah add those four"): the windows into each, and where to stand
+    // Dalaran's rooms added from outside on 2026-10-24 ("yeah add those four"; upstairs 9 and 13 and the Lounge's hall 55 out
+    // again the same day: "Curiosities' outside windows seem to flicker a bit"): the windows into each, and where to stand
     // before the Silver Enclave's hall (SEETHROUGH_SPOTS' farther ring: its one window 21.7 yd up)
-    constexpr unsigned kInto6 = 4, kInto7 = 3, kInto9 = 3, kInto10 = 4, kInto13 = 3, kInto55 = 1, kInto78 = 1;
+    constexpr unsigned kInto6 = 4, kInto7 = 3, kInto10 = 4, kInto78 = 1;
     constexpr float kSpot78[3] = { -70.03f, -11.67f, 2.00f };
     const st::GroupInfo kInnGroups[12] = {
         { 0x00002000u, { 14.1116447f, -4.85658407f, 0.395452768f }, { 20.4711647f, -0.377688199f, 4.37204647f } },
@@ -451,6 +452,49 @@ namespace
                     over.push_back({ &Mesh(static_cast<int>(g)), true });
             return Ground(x, y, z, over, found);
         }
+        // The levels one can stand on under (x, y) from `top` down to `bottom` (2026-10-24, Curiosities & Moore's walkway: the
+        // street under a window isn't the only place players stand): every upward face of the exterior groups over it, top
+        // first, each with 2.5 yd or more to the level above it.
+        std::vector<float> Levels(float x, float y, float top, float bottom)
+        {
+            std::vector<st::SightMesh> over;
+            for (size_t g = 0; g < groups.size(); ++g)
+                if ((groups[g].flags & st::client::kExteriorGroup) && groups[g].lo[0] <= x && groups[g].hi[0] >= x && groups[g].lo[1] <= y &&
+                    groups[g].hi[1] >= y && groups[g].lo[2] < top)
+                    over.push_back({ &Mesh(static_cast<int>(g)), true });
+            std::vector<float> out;
+            float z = top, above = 1e30f;
+            for (int k = 0; k < 8 && z > bottom; ++k)
+            {
+                bool found = false;
+                const float level = Ground(x, y, z, over, &found);
+                if (!found || level < bottom) break;
+                if (above - level >= 2.5f) out.push_back(level);
+                above = level;
+                z = level - 0.2f;
+            }
+            return out;
+        }
+        // How far the camera gets from `head` toward `to` before a surface of the building (either side) stops it, less 0.4 yd
+        // (the client's camera stops at the first wall between it and the player), at least 1 yd.
+        float CameraReach(const float head[3], const float to[3])
+        {
+            float d[3] = { to[0] - head[0], to[1] - head[1], to[2] - head[2] };
+            const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (len < 1e-3f) return 0.0f;
+            for (float& v : d) v /= len;
+            float best = len;
+            for (size_t g = 0; g < groups.size(); ++g)
+            {
+                bool overlaps = true;
+                for (int k = 0; k < 3; ++k)
+                    overlaps = overlaps && std::min(head[k], to[k]) <= groups[g].hi[k] && std::max(head[k], to[k]) >= groups[g].lo[k];
+                if (!overlaps) continue;
+                float t = 0.0f;
+                if (Mesh(static_cast<int>(g)).First(head, d, 0.0f, best, &t) != st::RoomMesh::kNone && t < best) best = t;
+            }
+            return best < len ? std::max(1.0f, best - 0.4f) : len;
+        }
         // The first upward face under (x, y, z) among `near` (a street, a floor), else the building's lowest point.
         float Ground(float x, float y, float z, const std::vector<st::SightMesh>& around, bool* found = nullptr) const
         {
@@ -487,6 +531,9 @@ namespace
         unsigned mostlyOpen = 0, neverOpen = 0, highOnly = 0;
         unsigned walkFrames = 0, walkOpen = 0, flips = 0, flipWindows = 0, maxFlips = 0;
         unsigned walks = 0, flickers = 0;   // walks, and those whose verdict changed more than twice (open, shut, open again)
+        // the camera swung round a player standing before a window, on every level there (SEETHROUGH_SWINGS, 2026-10-24): the
+        // windows, the runs (a spot and a camera, two swings), those that changed a window more than twice
+        unsigned swingWindows = 0, swingRuns = 0, swingFlickerRuns = 0, swingFlickerWindows = 0, swingBlinkRuns = 0, swingBlinkWindows = 0;
         unsigned insideViews = 0, insideOpen = 0, insideWindows = 0, insideMostly = 0, insideNever = 0;
         // walks through each room (2026-10-22, Northshire Abbey: "it does flicker between fake rooms and outside"): the
         // windows' verdicts changed, over how many, at most for one, and the walks that changed one more than twice
@@ -708,6 +755,102 @@ namespace
                     }
                 }
             }
+            // The camera swung round a player standing before the window (SEETHROUGH_SWINGS, 2026-10-24: "Curiosities' outside
+            // windows seem to flicker a bit", the user, on the raised walkway by its wall, the camera 16 yd behind and 9 up). The
+            // walks above pass each front once, so a window open only in a narrow cone of views changes twice and passes; a
+            // third-person camera swinging across that cone's edge changes it every swing. Spots: 3 .. 18 yd before the window,
+            // up to 8 yd aside, on every level one can stand on there (street, walkway, stairs: Levels), from 25 yd below the
+            // window to a yard over it; the player's head 1.7 yd over it, looking at the window; the camera 16 yd behind at 30
+            // degrees up (the user's) or 10 yd at 20, swung 60 degrees one way and back at 30 degrees a second (60 frames a
+            // second; swung faster, a narrow cone of views is crossed within the gate's hold and never opens), stopped by the
+            // first wall between it and the head as the client's camera is (CameraReach); each frame the walk's held verdict
+            // where the window faces the camera within kRange. A run flickers when it changes the window more than twice (a
+            // window whose views open on one side of the swing and shut on the other changes twice: one edge crossed out and
+            // back; one open, or shut, in a band within the swing four times). "1": the windows the table lists from outside;
+            // "all": every one with a room.
+            if (const char* swings = std::getenv("SEETHROUGH_SWINGS"))
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    if (w[i].interior < 0) continue;
+                    const bool listedOut = ((gl::SeeThroughGroupFlags(path, g) | gl::SeeThroughGroupFlags(path, static_cast<uint32_t>(w[i].interior))) &
+                                            st::kSeeFromOutside) != 0;
+                    if (std::string(swings) != "all" && !listedOut) continue;
+                    const float nx = w[i].normal[0], ny = w[i].normal[1], l = std::sqrt(nx * nx + ny * ny);
+                    if (l < 0.5f) continue;   // (a skylight)
+                    const float ox = nx / l, oy = ny / l, ax = -oy, ay = ox;
+                    const std::vector<st::SightMesh> around = b.Near(w[i], w[i].interior);
+                    const st::SightPoints* sp = i < points.size() && points[i].n ? &points[i] : nullptr;
+                    unsigned runs = 0, flickerRuns = 0, blinkRuns = 0, spots = 0, most = 0;
+                    float worst[4] = {};
+                    for (const float out : { 3.0f, 6.0f, 10.0f, 14.0f, 18.0f })
+                        for (const float side : { -8.0f, -4.0f, 0.0f, 4.0f, 8.0f })
+                        {
+                            const float px = w[i].center[0] + ox * out + ax * side, py = w[i].center[1] + oy * out + ay * side;
+                            for (const float level : b.Levels(px, py, w[i].center[2] + 1.0f, w[i].center[2] - 25.0f))
+                            {
+                                const float head[3] = { px, py, level + 1.7f };
+                                if (!st::Facing(w[i], head)) continue;
+                                ++spots;
+                                // toward the window, level; the camera behind the head
+                                float dx = w[i].center[0] - px, dy = w[i].center[1] - py;
+                                const float dl = std::sqrt(dx * dx + dy * dy);
+                                if (dl < 0.1f) continue;
+                                dx /= dl; dy /= dl;
+                                for (const auto& cam : { std::make_pair(16.0f, 30.0f), std::make_pair(10.0f, 20.0f) })
+                                {
+                                    const float back = cam.first * std::cos(cam.second * 3.14159265f / 180.0f), up = cam.first * std::sin(cam.second * 3.14159265f / 180.0f);
+                                    st::Gate gate;
+                                    bool last = false, first = true;
+                                    unsigned changes = 0;
+                                    for (int f = 0; f < 480; ++f)
+                                    {
+                                        const float t = static_cast<float>(f) / 480.0f;   // -60 .. +60 .. -60 degrees, 30 a second
+                                        const float phi = (t < 0.5f ? -60.0f + 240.0f * t : 180.0f - 240.0f * t) * 3.14159265f / 180.0f;
+                                        const float bx = -(dx * std::cos(phi) - dy * std::sin(phi)), by = -(dy * std::cos(phi) + dx * std::sin(phi));
+                                        const float want[3] = { head[0] + bx * back, head[1] + by * back, head[2] + up };
+                                        // (stopped by the first wall between it and the head, as the client's camera)
+                                        const float reach = b.CameraReach(head, want), s = reach / cam.first;
+                                        const float eye[3] = { head[0] + (want[0] - head[0]) * s, head[1] + (want[1] - head[1]) * s, head[2] + (want[2] - head[2]) * s };
+                                        const float d[3] = { eye[0] - w[i].center[0], eye[1] - w[i].center[1], eye[2] - w[i].center[2] };
+                                        if (!st::Facing(w[i], eye) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > st::kRange * st::kRange)
+                                        {
+                                            first = true;
+                                            gate = st::Gate{};
+                                            continue;
+                                        }
+                                        st::Sight sg;
+                                        st::LookIn(w[i], eye, around.data(), around.size(), sp, sg);
+                                        const bool held = st::Hold(gate, st::SightOpen(sg, gate.seen && gate.open), 1.0f / 60.0f);
+                                        if (!first) changes += held != last ? 1 : 0;
+                                        last = held;
+                                        first = false;
+                                    }
+                                    ++runs;
+                                    if (changes > 2) ++flickerRuns;
+                                    if (changes > 4) ++blinkRuns;   // (two narrow bands of views, or one crossed back and forth)
+                                    if (changes > most)
+                                    {
+                                        most = changes;
+                                        worst[0] = px; worst[1] = py; worst[2] = level; worst[3] = cam.first;
+                                    }
+                                }
+                            }
+                        }
+                    ++row.swingWindows;
+                    row.swingRuns += runs;
+                    row.swingFlickerRuns += flickerRuns;
+                    row.swingFlickerWindows += flickerRuns ? 1 : 0;
+                    row.swingBlinkRuns += blinkRuns;
+                    row.swingBlinkWindows += blinkRuns ? 1 : 0;
+                    if (verbose)
+                    {
+                        char line[300];
+                        std::snprintf(line, sizeof(line), "    swings: group %3u window %4u (z %5.1f, room %3d%s): %u runs from %u spots, %u flickering (more than twice), %u blinking (more than four), "
+                                      "at most %u changes, at %.2f %.2f on the level %.2f, the camera %.0f yd", g, w[i].ordinal, w[i].center[2], w[i].interior,
+                                      listedOut ? ", listed" : "", runs, spots, flickerRuns, blinkRuns, most, worst[0], worst[1], worst[2], worst[3]);
+                        row.lines.push_back(line);
+                    }
+                }
         }
         // Where to stand before a room's windows from outside (SEETHROUGH_SPOTS, 2026-10-24: Dalaran's rooms): of the eyes 4 ..
         // 12 yd before each of its windows (15 .. 30 yd if none opens from there), up to 30 degrees aside, 2 yd over the street
@@ -1161,6 +1304,9 @@ namespace
                     r.mostlyOpen, r.neverOpen, r.highOnly, r.highOpen, r.highViews);
         std::printf("    walks: open %u of %u frames; the verdict changed %u times in all, over %u windows (at most %u for one); %u of %u walks "
                     "changed it more than twice\n", r.walkOpen, r.walkFrames, r.flips, r.flipWindows, r.maxFlips, r.flickers, r.walks);
+        if (r.swingWindows)
+            std::printf("    swings (SEETHROUGH_SWINGS): %u windows, %u runs; %u runs changed a window more than twice, over %u windows; %u more than four "
+                        "times, over %u windows\n", r.swingWindows, r.swingRuns, r.swingFlickerRuns, r.swingFlickerWindows, r.swingBlinkRuns, r.swingBlinkWindows);
         std::printf("    from inside: %u windows seen, open from %u of %u eyes (%.0f%%); %u from half their eyes or more, %u never; %.1f s\n", r.insideWindows,
                     r.insideOpen, r.insideViews, r.insideViews ? 100.0 * r.insideOpen / r.insideViews : 0.0, r.insideMostly, r.insideNever, r.seconds);
         std::printf("    walks inside: open %u of %u frames; the verdict changed %u times in all, over %u windows (at most %u for one); %u of %u walks "
@@ -2549,8 +2695,8 @@ int main(int argc, char** argv)
             std::printf("  SeeThroughBuildings.cdbc: %zu buildings\n", gl::SeeThroughBuildings());
             // (2026-10-22: 24, with stained glass 33, with frosted glass 47; 2026-10-23 Ironforge's groups; 2026-10-24 Dalaran's)
             CHECK(gl::SeeThroughBuildings() == 49);
-            // (36 group rows: Dalaran's seven more from outside, 2026-10-24)
-            CHECK(gl::SeeThroughGroupRows() == 36 &&gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 71) == st::kSeeBetween && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
+            // (33 group rows: Dalaran's four more from outside, 2026-10-24)
+            CHECK(gl::SeeThroughGroupRows() == 33 &&gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 71) == st::kSeeBetween && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
                   gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 65) == st::kSeeBetween);   // (+ the Great Forge, 2026-10-23)
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo")) == st::kSeeFromInside);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\chapel\\redridgechapel.wmo")) == 3);
@@ -2615,10 +2761,10 @@ int main(int argc, char** argv)
             // (2026-10-24, the stone surrounds no windows, "yeah add those four": from outside Curiosities & Moore, 6, 7 and 9; the
             // Threads of Fate, 10 and 13; the Legerdemain Lounge's hall, 55; the Silver Enclave's hall, 78; the Violet Gate's halls
             // still from inside only)
-            std::map<uint32_t, uint32_t> want = { { 6, st::kSeeFromOutside }, { 7, st::kSeeFromOutside }, { 9, st::kSeeFromOutside }, { 10, st::kSeeFromOutside },
-                                                  { 11, st::kSeeFromOutside }, { 13, st::kSeeFromOutside }, { 18, st::kSeeFromInside },
+            std::map<uint32_t, uint32_t> want = { { 6, st::kSeeFromOutside }, { 7, st::kSeeFromOutside }, { 10, st::kSeeFromOutside },
+                                                  { 11, st::kSeeFromOutside }, { 18, st::kSeeFromInside },
                                                   { 19, st::kSeeFromOutside | st::kSeeFromInside }, { 53, st::kSeeFromInside }, { 54, st::kSeeFromInside },
-                                                  { 55, st::kSeeFromOutside }, { 57, st::kSeeFromOutside }, { 58, st::kSeeFromOutside }, { 71, st::kSeeBetween },
+                                                  { 57, st::kSeeFromOutside }, { 58, st::kSeeFromOutside }, { 71, st::kSeeBetween },
                                                   { 78, st::kSeeFromOutside }, { 89, st::kSeeFromOutside } };
             unsigned rows = 0;
             for (uint32_t g = 0; g < 91; ++g)
@@ -2628,7 +2774,9 @@ int main(int argc, char** argv)
                 if (f != (it == want.end() ? 0u : it->second)) throw std::runtime_error("Dalaran's group " + std::to_string(g) + ": flags " + std::to_string(f));
                 rows += f ? 1 : 0;
             }
-            CHECK(rows == 16 && gl::SeeThroughGroupFlags(dal, 3) == 0 && gl::SeeThroughGroupFlags(dal, 8) == 0 && gl::SeeThroughGroupFlags(dal, 12) == 0);
+            CHECK(rows == 13 && gl::SeeThroughGroupFlags(dal, 3) == 0 && gl::SeeThroughGroupFlags(dal, 8) == 0 && gl::SeeThroughGroupFlags(dal, 12) == 0);
+            // (and out again from the walkway, "Curiosities' outside windows seem to flicker a bit": upstairs 9 and 13, the Lounge's hall 55)
+            CHECK(gl::SeeThroughGroupFlags(dal, 9) == 0 && gl::SeeThroughGroupFlags(dal, 13) == 0 && gl::SeeThroughGroupFlags(dal, 55) == 0);
             const uint32_t ironforge = gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo");
             CHECK(gl::SeeThroughFlags(ironforge) == st::kSeeBetween && gl::SeeThroughGroupFlags(ironforge, 65) == st::kSeeBetween &&
                   gl::SeeThroughGroupFlags(ironforge, 60) == 0);
@@ -2732,7 +2880,7 @@ int main(int argc, char** argv)
                 // from outside: the windows into the rooms the rows name listed, no other (2026-10-24: 11, 19, 57, 58 and 89; then
                 // Curiosities & Moore's 6, 7 and 9, the Threads of Fate's 10 and 13, the Lounge's hall 55, the Silver Enclave's
                 // hall 78)
-                const std::vector<int> listedRooms = { 6, 7, 9, 10, 11, 13, 19, 55, 57, 58, 78, 89 };
+                const std::vector<int> listedRooms = { 6, 7, 10, 11, 19, 57, 58, 78, 89 };
                 st::RootWindows outside = st::BuildRoot(path, gl::Windows().All(), b.groups.data(), b.groups.size());
                 const unsigned listed = st::ListOutside(outside, flags);
                 std::map<int, unsigned> byRoom;
@@ -2751,14 +2899,14 @@ int main(int argc, char** argv)
                 // into 11 were 28, 57 and 58 10 each)
                 CHECK(outside.windows.size() == 2225 && onlyThose && listed == sum);
                 CHECK(byRoom[11] == 3 && byRoom[19] == 10 && byRoom[57] == 2 && byRoom[58] == 2 && byRoom[89] == 65);   // (89: five of them skylights)
-                CHECK(byRoom[6] == kInto6 && byRoom[7] == kInto7 && byRoom[9] == kInto9 && byRoom[10] == kInto10 && byRoom[13] == kInto13 &&
-                      byRoom[55] == kInto55 && byRoom[78] == kInto78);
+                CHECK(byRoom[6] == kInto6 && byRoom[7] == kInto7 && byRoom[10] == kInto10 && byRoom[78] == kInto78 && byRoom[9] == 0 && byRoom[13] == 0 &&
+                      byRoom[55] == 0);
                 // where to stand before each (the survey's SEETHROUGH_SPOTS: the street eye opening the most of the room's windows)
                 struct Spot { int room; float eye[3]; unsigned atLeast; };
                 const Spot fromOutside[] = { { 19, { 12.14f, 89.10f, -0.63f }, 4 }, { 57, { 27.42f, 18.90f, 7.54f }, 2 }, { 58, { 48.17f, -13.54f, 9.07f }, 2 },
                                              { 11, { -21.46f, 18.15f, 7.32f }, 2 }, { 89, { -80.96f, 178.11f, 206.39f }, 9 },
-                                             { 6, { -46.57f, -60.51f, 10.32f }, 2 }, { 7, { -25.81f, -85.27f, 10.17f }, 2 }, { 9, { -47.43f, -66.76f, 9.79f }, 1 },
-                                             { 10, { -46.22f, -10.29f, 3.70f }, 2 }, { 13, { -47.08f, -0.36f, 6.75f }, 1 }, { 55, { 10.79f, 12.27f, 17.96f }, 1 },
+                                             { 6, { -46.57f, -60.51f, 10.32f }, 2 }, { 7, { -25.81f, -85.27f, 10.17f }, 2 },
+                                             { 10, { -46.22f, -10.29f, 3.70f }, 2 },
                                              { 78, { kSpot78[0], kSpot78[1], kSpot78[2] }, 1 } };
                 for (const Spot& sp : fromOutside)
                 {
@@ -2906,6 +3054,81 @@ int main(int argc, char** argv)
                 CHECK(look(1, archway, s));
                 std::printf("  window 1 from the archway: %d see out, %d against, %d neither\n", s.front, s.back, s.none);
                 CHECK(s.back >= 3 && !st::SightOpen(s, false));
+            });
+
+        // "hmm, Curiosities' outside windows seem to flicker a bit" (the user, 2026-10-24, on the raised walkway by Curiosities &
+        // Moore's wall at Dalaran 49.7, 58.1; snapshots 20261024-162235 and -162259: the player still, the camera 16 yd behind
+        // and 9 up, swung 56 degrees between them). Its upstairs room's (9) window 1948 opens from 19% of its street views: from
+        // the first camera 7 of its 9 rays see the room, from the second none, and a camera swinging round the player there
+        // crosses that narrow cone's edge every swing. The rows list room 9 from outside no more (nor 13, the same building's
+        // other upstairs room, nor the Lounge's hall 55), so 1948 stays the client's glass.
+        if (!scan.empty())
+            Test("Curiosities & Moore's walkway (2026-10-24, snapshots 162235 and 162259): window 1948 open from the first camera, shut from "
+                 "the second, changing more than twice as the camera swings round the player there; its room listed from outside no more", [&] {
+                ScanBuilding b;
+                CHECK(LoadScanBuilding(scan, kDalaran, b) && b.groups.size() == 91);
+                const uint32_t path = gl::PathHash(kDalaran);
+                st::RootWindows outside = st::BuildRoot(path, gl::Windows().All(), b.groups.data(), b.groups.size());
+                std::vector<uint32_t> flags(b.groups.size());
+                for (uint32_t g = 0; g < b.groups.size(); ++g) flags[g] = gl::SeeThroughGroupFlags(path, g);
+                st::ListOutside(outside, flags);
+                uint32_t n = 0;
+                const st::SeeWindow* w = outside.Group(3, n);
+                CHECK(w && n > 0);
+                int at = -1;
+                for (uint32_t i = 0; i < n; ++i) at = w[i].ordinal == 1948 ? static_cast<int>(i) : at;
+                CHECK(at >= 0 && w[at].interior == 9);
+                const st::SeeWindow& win = w[at];
+                const ScanGroup& sg = b.File(3);
+                std::vector<std::pair<uint32_t, uint32_t>> ranges;
+                for (const ScanGroup::Moba& m : sg.batches)
+                    if (m.material < b.glass.size() && b.glass[m.material]) ranges.emplace_back(m.start, m.count);
+                std::vector<st::SightPoints> points;
+                st::GlassSightPoints(sg.vertices.data(), static_cast<uint32_t>(sg.vertices.size() / 3), sg.indices.data(),
+                                     static_cast<uint32_t>(sg.indices.size()), ranges, w, n, points);
+                const st::SightPoints* sp = static_cast<size_t>(at) < points.size() && points[at].n ? &points[at] : nullptr;
+                const std::vector<st::SightMesh> around = b.Near(win, 9);
+                const float camA[3] = { -52.451f, -81.996f, 15.567f }, camB[3] = { -57.792f, -70.822f, 16.184f };
+                st::Sight a, c;
+                st::LookIn(win, camA, around.data(), around.size(), sp, a);
+                st::LookIn(win, camB, around.data(), around.size(), sp, c);
+                std::printf("  window 1948 from the first camera: %d see its room, %d against; from the second: %d, %d\n", a.front, a.back, c.front, c.back);
+                CHECK(st::SightOpen(a, false) && !st::SightOpen(c, false));
+                // the camera swung round the player where they stood (WMO space; the head 1.7 yd over the walkway, 2 yd from the wall
+                // under the window), 16 yd out at 30 degrees up, 40 degrees either way about the middle of the user's two cameras
+                // (they looked along the walkway, 56 degrees apart) and back, 20 degrees a second, stopped by walls, as the survey's swings
+                const float head[3] = { -44.88f, -71.10f, 6.32f + 1.7f };
+                float ux = (camA[0] - head[0]) / std::hypot(camA[0] - head[0], camA[1] - head[1]) + (camB[0] - head[0]) / std::hypot(camB[0] - head[0], camB[1] - head[1]);
+                float uy = (camA[1] - head[1]) / std::hypot(camA[0] - head[0], camA[1] - head[1]) + (camB[1] - head[1]) / std::hypot(camB[0] - head[0], camB[1] - head[1]);
+                const float ul = std::sqrt(ux * ux + uy * uy);
+                const float dx = -ux / ul, dy = -uy / ul;   // (the camera behind the head along -d)
+                const float back = 16.0f * std::cos(30.0f * 3.14159265f / 180.0f), up = 16.0f * std::sin(30.0f * 3.14159265f / 180.0f);
+                st::Gate gate;
+                bool last = false, first = true;
+                unsigned changes = 0, openFrames = 0, frames = 0;
+                float reachLo = 1e9f, reachHi = 0.0f;
+                for (int f = 0; f < 480; ++f)
+                {
+                    const float t = static_cast<float>(f) / 480.0f;   // -40 .. +40 .. -40 degrees, 20 a second
+                    const float phi = (t < 0.5f ? -40.0f + 160.0f * t : 120.0f - 160.0f * t) * 3.14159265f / 180.0f;
+                    const float want[3] = { head[0] - (dx * std::cos(phi) - dy * std::sin(phi)) * back, head[1] - (dy * std::cos(phi) + dx * std::sin(phi)) * back,
+                                            head[2] + up };
+                    const float reach = b.CameraReach(head, want), s = reach / 16.0f;
+                    reachLo = std::min(reachLo, reach); reachHi = std::max(reachHi, reach);
+                    const float eye[3] = { head[0] + (want[0] - head[0]) * s, head[1] + (want[1] - head[1]) * s, head[2] + (want[2] - head[2]) * s };
+                    if (!st::Facing(win, eye)) { first = true; gate = st::Gate{}; continue; }
+                    st::Sight sgt;
+                    st::LookIn(win, eye, around.data(), around.size(), sp, sgt);
+                    const bool held = st::Hold(gate, st::SightOpen(sgt, gate.seen && gate.open), 1.0f / 60.0f);
+                    changes += !first && held != last ? 1 : 0;
+                    last = held;
+                    first = false;
+                    ++frames;
+                    openFrames += held ? 1 : 0;
+                }
+                std::printf("  the camera swung round the player on the walkway (it reached %.1f .. %.1f yd): window 1948 open %u of %u frames, its verdict "
+                            "changed %u times; listed from outside: %s\n", reachLo, reachHi, openFrames, frames, changes, win.unlisted ? "no" : "yes");
+                CHECK(changes > 2 && win.unlisted);
             });
 
         // "re: dalaran, amusingly the Violet Gate windows' *borders* are transparent when seen from the inside, and the actual

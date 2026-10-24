@@ -678,8 +678,8 @@ and zeppelin houses (from inside only: Durotar's, Grom'gol's) and the vrykul lon
 glass; from outside only): 47; and since between rooms (2026-10-23, Phase C: `SeeThroughBetweenRooms`) 13 of
 Ironforge's groups, one row each (the Group column): its shops' and rooms' windows onto its halls, and two halls' onto
 their rooms (20 since the Great Forge); and since Dalaran (2026-10-24, Phase D) nine of its rooms, each with its own
-flags: from outside, from inside onto the street, or between rooms; sixteen once its stone surrounds were no windows
-(the same day: seven more from outside). A WMO not here keeps its windows as they are. Every
+flags: from outside, from inside onto the street, or between rooms; thirteen once its stone surrounds were no windows
+(the same day: four more from outside, after a camera swung round a player on a walkway showed three others flicker). A WMO not here keeps its windows as they are. Every
 placement of a WMO counts, on every map.
 
 | Field | Meaning |

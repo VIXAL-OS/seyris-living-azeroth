@@ -200,6 +200,19 @@ SEE_THROUGH_GROUPS = [
 # twice on any walk. Still out from outside: the Violet Gate's halls (53, 54: 67 and 45%, but two windows each flicker),
 # the Visitor Center and the Wonderworks (8, 12: 29%), Vargoth's Retreat (90: 35%, a window flickering), the Violet
 # Citadel (36: 38%, a window flickering). The rows' percentages are this survey's; below, the first one's reasons.
+# Then, the same day, from Curiosities & Moore's raised walkway (Dalaran 49.7, 58.1, the camera 16 yd behind and 9 up):
+# "Curiosities' outside windows seem to flicker a bit" (snapshots 20261024-162235 and -162259: window 1948 open with 7 of
+# its 9 rays seeing its room from one camera, shut with none from the other, 12 yd along). The walks pass a front once,
+# so a window open in a narrow cone of views changes twice and passes; a camera swinging about a player crosses its edge
+# every swing. The survey now also swings the camera round players standing on every level before each window
+# (SEETHROUGH_SWINGS: streets, walkways, stairs; the camera 16 yd out at 30 degrees or 10 at 20, 60 degrees either way
+# and back at 30 a second, stopped by walls), and the rule takes each listed window too: it changes more than twice in a
+# swing (a narrow band of views opening or shutting it) in at most 10% of its runs. Out again: Curiosities & Moore
+# upstairs (9: window 1948, 17% of its runs; it opens from 19% of its street views), the Threads of Fate upstairs (13,
+# the same building: 1932, 21%; 19%) and the Lounge's hall (55: its one window 1971, 13%; 39%). Kept: Curiosities &
+# Moore (6, 7), the Threads of Fate (10) and the Silver Enclave's hall (78), their windows at most 6%; Phase D's rooms
+# at most 4% (Cartier & Co., the Lounge's upper rooms, the Purple Parlor) but for the Threads of Fate's side room (11:
+# window 1967, 14%; 40% of its street views), left for a decision.
 # Left out from outside: Curiosities & Moore (7: 34.8%, a hair under; 6: 29%), the Threads of Fate's main room (10:
 # 29%), the Visitor Center, the Wonderworks and their upper floors (8, 9, 12, 13: 20%), the Violet Gate (53, 54: 15%), the
 # Silver Enclave's hall (78: 31%, 13 windows flickering), the Agronomical Apothecary (18: 63%, but its one window
@@ -222,13 +235,11 @@ SEE_THROUGH_GROUPS += [
     (DAL, 58, "Dalaran: the Legerdemain Lounge's other upper room, from outside (100%), stained glass", FROM_OUTSIDE),
     (DAL, 71, "Dalaran: the Underbelly's Circle of Wills, through its window into Cantrips & Crows (70; 94% of eyes), frosted glass", FROM_BETWEEN),
     (DAL, 89, "Dalaran: the Purple Parlor, from outside (35%), stained glass", FROM_OUTSIDE),
-    # (2026-10-24, the stone surrounds no windows: "yeah add those four", the user)
+    # (2026-10-24, the stone surrounds no windows: "yeah add those four", the user; then from its walkway "Curiosities'
+    # outside windows seem to flicker a bit": upstairs 9 and 13 and the Lounge's hall 55 out again, below)
     (DAL, 6, "Dalaran: Curiosities & Moore, from outside (73% of street views), stained glass", FROM_OUTSIDE),
     (DAL, 7, "Dalaran: Curiosities & Moore's other room, from outside (67%), stained glass", FROM_OUTSIDE),
-    (DAL, 9, "Dalaran: Curiosities & Moore upstairs, from outside (35%), stained glass", FROM_OUTSIDE),
     (DAL, 10, "Dalaran: the Threads of Fate, from outside (74%), stained glass", FROM_OUTSIDE),
-    (DAL, 13, "Dalaran: the Threads of Fate upstairs, from outside (35%), stained glass", FROM_OUTSIDE),
-    (DAL, 55, "Dalaran: the Legerdemain Lounge's hall, from outside (40%), stained glass", FROM_OUTSIDE),
     (DAL, 78, "Dalaran: the Silver Enclave's hall, from outside (60%), stained glass", FROM_OUTSIDE),
 ]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO)

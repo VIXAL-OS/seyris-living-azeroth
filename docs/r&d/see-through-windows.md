@@ -1237,14 +1237,12 @@ none of their windows changed more than twice on any walk, and the survey's numb
 surrounds went. From outside 101 of Dalaran's street windows are listed now (into 6: 4, 7: 3, 9: 3, 10: 4, 13: 3, 55: 1, 78:
 1), a frame's plan before Cartier & Co. 6 candidates, 0.04 ms. Still out: the Visitor Center and the Wonderworks (8, 12:
 28.6%), Vargoth's Retreat and the Violet Citadel (a window flickering each). The Violet Citadel from inside: 86% now, but
-one window flickers.
+one window flickers. (Upstairs 9 and 13 and the Lounge's hall 55 went out again the same day: section 20.)
 
 Where to stand before them (the survey's spots, on foot 2 yd over the surface below; the Silver Enclave's hall's from the
 spots' farther ring, 15 .. 30 yd, as nothing on foot nearer opens its window): Curiosities & Moore at Dalaran 48.6, 57.1
-facing north (the windows 14 yd up) and 52.5, 57.0 facing north; its upstairs at 49.1, 58.0 facing north-east (one of its
-two windows facing there); the Threads of Fate at 43.9, 51.4 facing north (17 yd up), its upstairs at 42.9, 50.3 facing
-north; the Lounge's hall at 46.1, 40.8 facing north-east; the Silver Enclave's hall at 42.2, 54.9 facing west, its window
-22 yd up and 15 yd off.
+facing north (the windows 14 yd up) and 52.5, 57.0 facing north; the Threads of Fate at 43.9, 51.4 facing north (17 yd
+up); the Silver Enclave's hall at 42.2, 54.9 facing west, its window 22 yd up and 15 yd off.
 
 **The same pattern elsewhere?** Only `nd_dalaran.wmo` uses `eb_dalaran_window3`. Cartier & Co. (19), the Agronomical
 Apothecary (18) and the Underbelly's Circle of Wills (71) have no surround texture. The Circle of Wills' window is
@@ -1307,3 +1305,51 @@ the floor's brightest or more (the largest change 0.065 of 0.195); now none (GLA
 "floorchoice": the camera-angle fix of section 16 holds (the rule before 18 different sets over the 24 cameras, `ChoosePanes`
 one, and drawn through the fader one, every slot at full weight); the Dalaran snapshots' ChoosePanes the same sixteen from
 both cameras, the big pane 21045 among them.
+
+## 20. Curiosities & Moore from its walkway (2026-10-24)
+
+"hmm, Curiosities' outside windows seem to flicker a bit" (the user, on the raised walkway along Curiosities & Moore's
+wall at Dalaran 49.7, 58.1, the camera 16 yd behind and 9 up; snapshots 20261024-162235 and -162259, the player still and
+the camera swung 56 degrees between them). The three narrow pointed windows above them are upstairs room 9's: 1944, 1947
+and 1948.
+
+**Why.** The gate decides each view right. Replayed through SEETHROUGH_SNAPSHOT, window 1948 is open from the first camera
+(7 of its 9 rays see its room) and shut from the second (none: past its glass they meet surfaces from behind 2 .. 3 yd
+on). 1947 is open from both and 1944 shut from both. 1948 opens only in a narrow cone of views: 19% of the street views,
+where 1947 opens from 85%. Room 9 passed the rule at 35.2%, carried by 1947, and its walks found no flicker, because a
+walk passes a front once at a steady height. A window open in a narrow cone changes twice on such a walk and passes. A
+third-person camera swinging round a player standing still crosses that cone's edges every swing, and the user stood on a
+walkway 6 yd over the street, 2 yd from the wall under the window.
+
+**The survey** (seethrough_tests, `SEETHROUGH_SWINGS`). Spots run 3 .. 18 yd before each window and up to 8 yd aside, on
+every level one can stand on there (`ScanBuilding::Levels`: each upward face of the exterior groups, with 2.5 yd over it,
+from 25 yd below the window to a yard over it). The player's head is 1.7 yd over the spot. The camera is 16 yd out at 30
+degrees up (the user's) or 10 yd at 20, swung 60 degrees either way and back at 30 degrees a second. It is stopped by the
+first wall between it and the head, as the client's camera is (`CameraReach`). Each frame takes the walk's held verdict. A
+run flickers when it changes the window more than twice. A window whose views open on one side of the swing and shut on
+the other changes twice (one edge out and back); a band of views within the swing makes four. At a swing a second, a
+narrow cone is crossed within the gate's hold and never opens, so the speed matters: 1948 from the user's own spot
+and arc opens for 90 of 480 frames and changes four times. The rule now also takes each listed window: it flickers in at
+most 10% of its runs.
+
+**The rooms.** Every window the table lists from outside, and every other window with a room, 10,482 runs over 273
+windows:
+
+| room | its windows' flickering runs (the worst) | street views of the worst | |
+|---|---|---|---|
+| Curiosities & Moore (6, 7) | 6%, 4% | 99%, 100% | kept |
+| the Threads of Fate (10) | 4% | 99% | kept |
+| the Silver Enclave's hall (78) | 2% | 60% | kept |
+| Curiosities & Moore upstairs (9) | 17% (1948) | 19% | out |
+| the Threads of Fate upstairs (13, the same building) | 21% (1932) | 19% | out |
+| the Legerdemain Lounge's hall (55) | 13% (1971) | 39% | out |
+| Phase D's: Cartier & Co., the Lounge's upper rooms, the Purple Parlor | 4%, 3%, 2.5% | | as they were |
+| Phase D's: the Threads of Fate's side room (11) | 14% (1967) | 40% | left for a decision |
+| not listed: the Violet Gate's halls (53, 54), the Violet Citadel (36) | 18%, 28%, 36% | | out, as they were |
+
+SeeThroughBuildings 80 rows, Dalaran's 13. From outside 94 of its street windows are listed.
+
+**Proofs.** seethrough_tests "Curiosities & Moore's walkway": window 1948 from the user's two cameras, open (7 of 9
+rays) and shut (none); swung round the player where they stood, along their arc, it changes four times; and the rows list
+its room from outside no more, so it stays the client's glass. "Dalaran's rows" and "Dalaran from the scan" follow the 13
+rows, each kept room's windows opening from its spot.

@@ -150,9 +150,10 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   with sixteen windows a frame, the stained panes in them came and went ("the Violet Gate windows' *borders* are
   transparent when seen from the inside, and the actual glass flickers"). They are no windows now (no room behind them,
   nothing seen through them): the Violet Gate's halls have their four stained panes each, steadily open and tinted. The
-  floor light through them, as in the Silver Enclave's hall, stays. Without the stone counted, four more of Dalaran's rooms
-  open from the street: Curiosities & Moore, the Threads of Fate, the Legerdemain Lounge's hall and the Silver Enclave's
-  hall.
+  floor light through them, as in the Silver Enclave's hall, stays. Without the stone counted, more of Dalaran's rooms
+  open from the street: Curiosities & Moore, the Threads of Fate and the Silver Enclave's hall. Their upstairs rooms and
+  the Legerdemain Lounge's hall stay shut from outside: a window of each opens only in a narrow cone of views, so a camera
+  swinging round a player on Curiosities' walkway made it flicker ("Curiosities' outside windows seem to flicker a bit").
 - **Window light that fades** (24 October 2026): a patch of sun on the floor (and a coloured shaft) fades in or out over
   0.4 s when its window joins or leaves the light's set, instead of popping, and a window takes another's place only when
   it lights the player's spot half as well again; sixteen windows' patches at once, not twelve ("lots of pop-in when i
