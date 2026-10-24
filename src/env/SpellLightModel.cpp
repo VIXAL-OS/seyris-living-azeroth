@@ -320,10 +320,21 @@ namespace wxl_livingazeroth::spelllight
 
     float Lift(float size) { return std::clamp(0.25f * size, 0.3f, 1.5f); }
 
+    float Approach(float dt, float seconds)
+    {
+        // 1 - exp(-x): the share of the way an exponential ease goes in dt. Frames are short against the time constants
+        // (x up to a third at 60 fps): a series there (within 0.03% of it), exp beyond.
+        const float x = dt / std::max(seconds, 1e-4f);
+        if (!(x > 0.0f)) return 0.0f;
+        if (x < 0.5f) return x * (1.0f - x * (0.5f - x * (1.0f / 6.0f - x * (1.0f / 24.0f))));
+        return 1.0f - std::exp(-x);
+    }
+
     void StepFade(Fade& f, const float target[3], float dt)
     {
         const float peak = MaxChannel(target);
         dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.5f) : 0.0f;
+        if (f.started && peak <= 0.0f && f.level <= 0.0f) { f.age += dt; return; }   // dark and staying so
         if (!f.started)
         {
             f.started = true;
@@ -332,11 +343,11 @@ namespace wxl_livingazeroth::spelllight
         const bool young = f.age < kYoungSeconds;
         f.age += dt;
         const float tau = peak > f.level ? (young ? kAttackSeconds : kRiseSeconds) : kFallSeconds;
-        f.level += (peak - f.level) * (1.0f - std::exp(-dt / tau));
+        f.level += (peak - f.level) * Approach(dt, tau);
         if (f.level < 1e-4f && peak <= 0.0f) f.level = 0.0f;
         if (peak > 1e-4f)
         {
-            const float h = 1.0f - std::exp(-dt / (young ? kAttackSeconds : kHueSeconds));
+            const float h = Approach(dt, young ? kAttackSeconds : kHueSeconds);
             for (int k = 0; k < 3; ++k) f.hue[k] += (target[k] / peak - f.hue[k]) * h;
         }
     }
@@ -354,7 +365,7 @@ namespace wxl_livingazeroth::spelllight
         dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.5f) : 0.0f;
         // None alive: nothing of it is seen (its particles faded out before they died), it goes at once.
         if (live <= 0.0f) seconds = std::min(seconds, kAttackSeconds);
-        count += (live - count) * (1.0f - std::exp(-dt / std::max(seconds, 1e-3f)));
+        count += (live - count) * Approach(dt, seconds);
         if (live <= 0.0f && count < 0.05f) count = 0.0f;
     }
 
@@ -472,7 +483,7 @@ namespace wxl_livingazeroth::spelllight
         const size_t n = models.size();
         st.in = static_cast<unsigned>(n);
         dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.5f) : 0.0f;
-        const float step = 1.0f - std::exp(-dt / kPresenceSeconds), hurryStep = 1.0f - std::exp(-dt / kAttackSeconds);
+        const float step = Approach(dt, kPresenceSeconds), hurryStep = Approach(dt, kAttackSeconds);
         const float range = std::max(0.0f, s.range), fadeFrom = range * (1.0f - kRangeFade);
         const size_t cap = static_cast<size_t>(std::clamp(s.maxLights, 0, kMaxLightsCap));
 

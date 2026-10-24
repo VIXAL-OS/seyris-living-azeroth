@@ -533,6 +533,7 @@ namespace wxl_livingazeroth::spelllights
                     if (Get(emitters, e * 4, em) && em) Get(em, kEmitterLive, live);
                     live = std::min(live, 65535u);
                     const Emitter& fe = f.emitters[e];
+                    if (!live && !(t.count[e] > 0.0f)) continue;   // none alive, none lately
                     sl::StepCount(t.count[e], static_cast<float>(live), sl::CountSeconds(fe.life, young), dt);
                     t.countPeak[e] = std::max(t.countPeak[e], t.count[e]);
                     if (!(t.count[e] > 0.0f)) continue;

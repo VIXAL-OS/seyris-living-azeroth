@@ -165,6 +165,8 @@ namespace wxl_livingazeroth::spelllight
     /// are born and die doesn't flicker.
     float CountSeconds(float particleLife, bool young);
     void StepCount(float& count, float live, float seconds, float dt);
+    /// How far an exponential ease with this time constant goes in `dt` (1 - exp(-dt / seconds)).
+    float Approach(float dt, float seconds);
 
     // --- a frame's lights -------------------------------------------------------------------------------------------------
     struct Light
