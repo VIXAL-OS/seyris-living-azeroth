@@ -63,7 +63,9 @@ only add what stock data can't express, and every feature can be switched off.
 panel)
 - Spells, glowing projectiles and weapon enchants light what's round them through our point lights: the ground, the
   snow, models and buildings, in the effect's own colours (a Fireball orange, a Frostbolt blue, a Holy Light gold).
-- As big and bright as the effect, following it every frame and fading out with it.
+- As big and bright as the effect, following it every frame and fading out with it; a steady spell's light is steady.
+- Only spells, missiles and enchants: herb and ore nodes, chests, portals and the game's own sparkles keep their own
+  lights.
 - An area spell's dozens of pieces share their glow instead of washing the ground out; the nearest and brightest 24 a
   frame keep raids cheap.
 

@@ -93,6 +93,8 @@ namespace wxl_livingazeroth::spelllights
             { 0x00833EEE, 24, { 0x8D, 0x8E, 0x04, 0x01, 0x00, 0x00, 0x89, 0x8F, 0xD8, 0x00, 0x00, 0x00, 0x8D, 0x96, 0x14, 0x01, 0x00, 0x00,
                                 0x8D, 0x86, 0x24, 0x01, 0x00, 0x00 },
               "CM2Model's emitter set-up: the colour track M2Particle +0x104, the alpha track +0x114, the scale track +0x124" },
+            { 0x00830B57, 19, { 0x8B, 0x86, 0x9C, 0x00, 0x00, 0x00, 0x83, 0xF8, 0x01, 0x77, 0x12, 0x75, 0x19, 0x8B, 0x96, 0xA0, 0x00, 0x00, 0x00 },
+              "the particles' animation: the lifespan track M2Particle +0x98 (its keys +0x9C, +0xA0)" },
         };
 
         sl::Settings g_settings;
@@ -115,7 +117,7 @@ namespace wxl_livingazeroth::spelllights
         constexpr double   kTextureBudgetMs = 1.0;
 
         // One model file (CM2Shared), by its address; its name is compared each time to notice the address reused.
-        struct Emitter { float track[3] = { 1.0f, 1.0f, 1.0f }; float weight = 0.0f; int texture = -1; };
+        struct Emitter { float track[3] = { 1.0f, 1.0f, 1.0f }; float weight = 0.0f; int texture = -1; float life = 0.5f; };
         struct File
         {
             std::string raw;                 // the name as the client has it
@@ -123,6 +125,7 @@ namespace wxl_livingazeroth::spelllights
             std::string path;                // normalized (spelllight::NormalizePath)
             sl::Kind pathKind = sl::Kind::None; // what the file alone says (spelllight::PathKind), once
             bool  neverLit = false;
+            bool  objectModel = false;       // a game object's own model (GameObjectDisplayInfo)
             bool  loaded = false;            // its data read
             float bounds = 1.0f;
             uint32_t vertices = 0, colours = 0, weights = 0;
@@ -130,7 +133,7 @@ namespace wxl_livingazeroth::spelllights
             std::vector<Emitter> emitters;
             std::vector<Emitter> ribbons;    // its ribbons: colour and alpha (their tracks' first keys), texture
             std::vector<int> textures;       // its textures (file ones: -1 for the rest)
-            std::vector<int> rest;           // of those, the ones its emitters and ribbons don't use (its geometry's)
+            std::vector<int> rest;           // of those, the ones its emitters and ribbons don't use (its geometry's; a spell's file only)
             bool  hasKeyword = false;
             float keyword[3] = {};
         };
@@ -149,8 +152,18 @@ namespace wxl_livingazeroth::spelllights
             float pos[3] = {};
             float radius = 0.0f;
             bool  placed = false;
-            uint16_t peak[sl::kMaxEmitters] = {};
+            // Each emitter's live particles over wall time (spelllight::StepCount) and the most it held.
+            float count[sl::kMaxEmitters] = {}, countPeak[sl::kMaxEmitters] = {};
             uint64_t lastShown = 0, firstFrame = 0;
+            float age = 0.0f;                // s since it was first followed
+            uint32_t stamp = 0;              // its frame stamp (+0x3C) as last seen, and s since it last changed
+            float sinceStamp = 1e3f;
+            float held[3] = {};              // the colour it last gave when looked at closely, and s since
+            float sinceLook = 0.0f;
+            // Its place in the frame's selection (spelllight::Select): presence, kept, its cluster.
+            float presence = 0.0f;
+            bool  kept = false;
+            const void* label = nullptr;
             // Its file, kept while the cache holds it (g_filesGeneration): a model alive holds its shared model, so its name
             // needn't be read again every frame.
             File* file = nullptr;
@@ -171,7 +184,9 @@ namespace wxl_livingazeroth::spelllights
         uint64_t g_frame = 0;
 
         std::vector<Drawn> g_drawn;
-        std::vector<sl::Light> g_frameLights;
+        std::vector<sl::Light> g_models, g_frameLights;   // this frame: one per model lit (with its state), the lights drawn
+        std::vector<Tracked*> g_owners;                   // g_models' models
+        double g_lastMs = 0.0;                            // grassperf::Now() at the last Update (its wall time between frames)
 
         struct IndoorCell { bool indoor; DWORD expires; };
         std::unordered_map<uint64_t, IndoorCell> g_indoorCells;
@@ -189,12 +204,21 @@ namespace wxl_livingazeroth::spelllights
             g_setsRead = true;
             std::vector<uint8_t> bytes;
             if (g_read("DBFilesClient\\SpellVisualEffectName.dbc", bytes))
+            {
                 g_sets.spellRows = sl::LoadVisualTable(bytes.data(), bytes.size(), 2, g_sets.spells);
+                sl::LoadVisualTable(bytes.data(), bytes.size(), 2, g_sets.hardcoded, 1, "HARDCODED");
+            }
             bytes.clear();
             if (g_read("DBFilesClient\\ItemVisualEffects.dbc", bytes))
                 g_sets.itemRows = sl::LoadVisualTable(bytes.data(), bytes.size(), 1, g_sets.items);
+            bytes.clear();
+            if (g_read("DBFilesClient\\GameObjectDisplayInfo.dbc", bytes))
+                g_sets.objectRows = sl::LoadVisualTable(bytes.data(), bytes.size(), 1, g_sets.objects);
             g_stats.spellRows = g_sets.spellRows;
             g_stats.itemRows = g_sets.itemRows;
+            g_stats.objectRows = g_sets.objectRows;
+            g_stats.clientEffects = static_cast<unsigned>(g_sets.hardcoded.size());
+            g_stats.objectModels = static_cast<unsigned>(g_sets.objects.size());
         }
 
         // --- textures -----------------------------------------------------------------------------------------------------
@@ -255,7 +279,8 @@ namespace wxl_livingazeroth::spelllights
             std::memcpy(&f.head8, name, std::min<size_t>(8, std::strlen(name) + 1));
             f.path = sl::NormalizePath(name);
             f.pathKind = sl::PathKind(f.path, g_sets);
-            f.neverLit = sl::NeverLit(f.path);
+            f.neverLit = sl::NeverLit(f.path, g_sets);
+            f.objectModel = sl::ObjectModel(f.path, g_sets);
             f.hasKeyword = sl::KeywordColour(f.path, f.keyword);
             return &g_files.emplace(shared, std::move(f)).first->second;
         }
@@ -354,14 +379,20 @@ namespace wxl_livingazeroth::spelllights
                     for (uint32_t k = 0; k < sn; ++k) scale += 0.5f * (std::fabs(sv[2 * k]) + std::fabs(sv[2 * k + 1])) / sn;
                     em.weight = sl::BlendWeight(blend) * alphaMean * sl::ScaleWeight(sn ? scale : 0.5f);
                     em.texture = tex < f.textures.size() ? f.textures[tex] : -1;
+                    // Its particles' life (the lifespan track's first key; 0.5 s when it can't be read): how long its
+                    // live count is smoothed over.
+                    float life = 0.0f;
+                    em.life = FirstKey(p + kParticleLifespan, &life, sizeof(life)) && std::isfinite(life) && life > 0.01f && life < 60.0f ? life : 0.5f;
                     f.emitters.push_back(em);
                 }
+            // Its ribbons: a spell's glowing trail (Arcane Missiles, Frostbolt); a thrown weapon's or an arrow's is the streak
+            // of its flight, no light (any file outside spells\ lights by its particles and own lights alone).
             uint32_t nr = 0, nm = 0;
             const uint8_t* ribbons = nullptr;
             const uint8_t* materials = nullptr;
             Get(data, kDataMaterials, nm);
             Get(data, kDataMaterials + 4, materials);
-            if (Get(data, kDataRibbons, nr) && Get(data, kDataRibbons + 4, ribbons) && ribbons)
+            if (f.pathKind != sl::Kind::None && Get(data, kDataRibbons, nr) && Get(data, kDataRibbons + 4, ribbons) && ribbons)
                 for (uint32_t r = 0; r < std::min(nr, 8u); ++r)
                 {
                     const uint8_t* rb = ribbons + r * kRibbonStride;
@@ -382,13 +413,16 @@ namespace wxl_livingazeroth::spelllights
                     em.texture = tex < f.textures.size() ? f.textures[tex] : -1;
                     f.ribbons.push_back(em);
                 }
-            for (int t : f.textures)
-            {
-                bool used = false;
-                for (const Emitter& em : f.emitters) used = used || em.texture == t;
-                for (const Emitter& em : f.ribbons) used = used || em.texture == t;
-                if (t >= 0 && !used) f.rest.push_back(t);
-            }
+            // The rest's glow (its geometry's textures) for a spell's own file only: an arrow or a thrown axe flying as a
+            // missile gives light by its particles and lights, not by its wood and steel.
+            if (f.pathKind != sl::Kind::None)
+                for (int t : f.textures)
+                {
+                    bool used = false;
+                    for (const Emitter& em : f.emitters) used = used || em.texture == t;
+                    for (const Emitter& em : f.ribbons) used = used || em.texture == t;
+                    if (t >= 0 && !used) f.rest.push_back(t);
+                }
             f.loaded = true;
         }
 
@@ -407,7 +441,10 @@ namespace wxl_livingazeroth::spelllights
             }
             File* f = quick ? FileQuick(shared) : FileFor(shared);
             if (!f) return false;
-            const sl::Kind kind = sl::KindOf(f->pathKind, f->neverLit, flags, missile);
+            // Hung on another model (a unit's, a weapon's) or placed alone (a game object's own model is placed alone).
+            const void* parent = nullptr;
+            const bool attached = f->objectModel && Get(model, kModelParent, parent) && parent != nullptr;
+            const sl::Kind kind = sl::KindOf(f->pathKind, f->neverLit, f->objectModel, flags, missile, attached);
             if (kind == sl::Kind::None || (kind == sl::Kind::Enchant && !g_settings.enchants)) return false;
             auto it = g_tracked.find(model);
             if (it != g_tracked.end())
@@ -426,6 +463,7 @@ namespace wxl_livingazeroth::spelllights
             t.origin = origin;
             t.kind = kind;
             t.firstFrame = g_frame;
+            t.stamp = GetOr<uint32_t>(model, kModelFrame, 0);   // only a change from here counts as animated recently
             g_tracked.emplace(model, t);
             return true;
         }
@@ -473,7 +511,8 @@ namespace wxl_livingazeroth::spelllights
         }
 
         // --- what a model gives off ---------------------------------------------------------------------------------------
-        void BuildLook(Tracked& t, const File& f, sl::Look& look)
+        // `dt`: the time since it was last looked at.
+        void BuildLook(Tracked& t, const File& f, sl::Look& look, float dt)
         {
             const uint8_t* model = t.model;
             look.alpha = std::clamp(GetOr<float>(model, kModelEffectiveAlpha, 1.0f), 0.0f, 1.0f);
@@ -481,27 +520,27 @@ namespace wxl_livingazeroth::spelllights
             look.hasKeyword = f.hasKeyword;
             std::memcpy(look.keyword, f.keyword, sizeof(look.keyword));
 
-            const uint8_t* states = nullptr;
+            // Its emitters: as bright as their particles alive (smoothed over a quarter of their life, spelllight::StepCount)
+            // of the most they held.
             const uint8_t* emitters = nullptr;
-            Get(model, kModelEmitterStates, states);
             Get(model, kModelEmitters, emitters);
-            if (states && emitters)
+            const bool young = t.age < sl::kYoungSeconds;
+            if (emitters)
                 for (size_t e = 0; e < f.emitters.size() && e < sl::kMaxEmitters; ++e)
                 {
-                    uint8_t active = 0;
                     const uint8_t* em = nullptr;
                     uint32_t live = 0;
-                    Get(states + e * kEmitterStateStride, kEmitterStateActive, active);
                     if (Get(emitters, e * 4, em) && em) Get(em, kEmitterLive, live);
                     live = std::min(live, 65535u);
-                    t.peak[e] = static_cast<uint16_t>(std::max<uint32_t>(t.peak[e], live));
-                    if (!live) continue;
-                    const float share = std::sqrt(std::min(1.0f, static_cast<float>(live) / std::max(4.0f, static_cast<float>(t.peak[e]))));
                     const Emitter& fe = f.emitters[e];
+                    sl::StepCount(t.count[e], static_cast<float>(live), sl::CountSeconds(fe.life, young), dt);
+                    t.countPeak[e] = std::max(t.countPeak[e], t.count[e]);
+                    if (!(t.count[e] > 0.0f)) continue;
+                    const float share = std::sqrt(std::min(1.0f, t.count[e] / std::max(4.0f, t.countPeak[e])));
                     const float* tc = TextureColour(fe.texture);
                     sl::EmitterLook& out = look.emitters[look.emitterCount++];
                     for (int k = 0; k < 3; ++k) out.color[k] = fe.track[k] * tc[k];
-                    out.weight = fe.weight * share * (active ? 1.0f : 0.8f);
+                    out.weight = fe.weight * share;
                 }
 
             // Its ribbons (a missile's trail), while the client keeps them visible.
@@ -591,22 +630,26 @@ namespace wxl_livingazeroth::spelllights
             return true;
         }
 
-        // Each frame for every model followed: whether it's still the model it was and in the scene, drawn by the client
-        // now, where it is and how far its light reaches (a few of its own cache lines).
-        void Place(Tracked& t, const ClientView& view, uint32_t sceneFrame, const float eye[3])
+        // Each frame for every model followed: whether it's still the model it was and in the scene (a model taken out of
+        // the scene and put back is followed on; its memory handed to another model has another file or loop origin),
+        // drawn by the client lately, where it is and how far its light reaches (a few of its own cache lines).
+        void Place(Tracked& t, const ClientView& view, uint32_t sceneFrame, const float eye[3], float dt)
         {
             const void* shared = nullptr;
             const void* prev = nullptr;
             const void* scene = nullptr;
             uint32_t origin = 0;
-            t.alive = t.alive && Get(t.model, kModelShared, shared) && shared == t.shared && Get(t.model, kModelLoopOrigin, origin) &&
+            t.alive = Get(t.model, kModelShared, shared) && shared == t.shared && Get(t.model, kModelLoopOrigin, origin) &&
                       origin == t.origin && Get(t.model, kModelScenePrev, prev) && prev && Get(t.model, kModelScene, scene) && scene == view.scene;
             t.shining = false;
             t.size = 1.0f;
             t.distance2 = 1e30f;
             if (!t.alive) return;
             const uint32_t init = GetOr<uint32_t>(t.model, kModelInit, 0), stamp = GetOr<uint32_t>(t.model, kModelFrame, 0);
-            const bool shown = (init & 1) && sceneFrame - stamp <= 3u;
+            // Drawn: animated this frame or lately (the client animates a far or busy model every few frames).
+            if (stamp != t.stamp) { t.stamp = stamp; t.sinceStamp = 0.0f; }
+            else t.sinceStamp += dt;
+            const bool shown = (init & 1) && (sceneFrame - stamp <= 3u || t.sinceStamp < kHoldSeconds);
             float w[16];
             const void* parent = nullptr;
             bool placed = false, animated = false;
@@ -636,22 +679,29 @@ namespace wxl_livingazeroth::spelllights
             t.shining = t.distance2 <= reach * reach;
         }
 
-        // For the nearest models drawn now: what it gives off (its lights, particles, ribbons, geometry), then the fade.
-        void Shine(Tracked& t, bool lookAtIt, float dt)
+        // For the nearest models drawn now: what it gives off (its lights, particles, ribbons, geometry); one drawn but not
+        // looked at closely this frame keeps what it last gave (for kHoldSeconds); then the fade.
+        void Shine(Tracked& t, float dt)
         {
             float target[3] = {};
-            if (lookAtIt && t.file)
+            t.sinceLook += dt;
+            if (t.shining && t.lookedAt && t.file)
             {
                 sl::Look look;
-                BuildLook(t, *t.file, look);
+                BuildLook(t, *t.file, look, std::min(t.sinceLook, 0.5f));
                 float c[3];
                 if (sl::Shade(look, c))
                 {
                     const float k = sl::SizeGain(t.size) * (t.kind == sl::Kind::Enchant ? g_settings.enchantStrength : 1.0f);
                     for (int i = 0; i < 3; ++i) target[i] = c[i] * k;
                 }
+                std::memcpy(t.held, target, sizeof(target));
+                t.sinceLook = 0.0f;
             }
+            else if (t.shining && t.sinceLook < kHoldSeconds)
+                std::memcpy(target, t.held, sizeof(target));
             sl::StepFade(t.fade, target, dt);
+            t.age += dt;
         }
 
         bool IndoorAt(const float pos[3], unsigned& tests)
@@ -690,15 +740,16 @@ namespace wxl_livingazeroth::spelllights
             const double tTextures = grassperf::Now();
             st.msTextures = tTextures - tFound;
 
-            g_frameLights.clear();
+            g_models.clear();
+            g_owners.clear();
             unsigned byKind[4] = {};
             // Where each one is; only the nearest kLooksPerFrame drawn now (3 x the cap, at least 48) are looked at
-            // closely (their emitters, ribbons, colours: a dozen scattered reads each), the rest fade as if dark.
+            // closely (their emitters, ribbons, colours: a dozen scattered reads each), the rest keep what they last gave.
             static std::vector<Tracked*> shining;
             shining.clear();
             for (auto& entry : g_tracked)
             {
-                Place(entry.second, view, sceneFrame, eye);
+                Place(entry.second, view, sceneFrame, eye, dt);
                 entry.second.lookedAt = false;
                 if (entry.second.shining) shining.push_back(&entry.second);
             }
@@ -716,7 +767,7 @@ namespace wxl_livingazeroth::spelllights
             for (auto it = g_tracked.begin(); it != g_tracked.end();)
             {
                 Tracked& t = it->second;
-                Shine(t, t.lookedAt, dt);
+                Shine(t, dt);
                 const bool faded = t.fade.level < 0.004f;
                 if ((!t.alive && faded) || (t.alive && faded && g_frame - std::max(t.lastShown, t.firstFrame) > kForgetFrames))
                 {
@@ -735,8 +786,14 @@ namespace wxl_livingazeroth::spelllights
                     l.radius = t.radius;
                     l.model = t.model;
                     l.kind = t.kind;
-                    g_frameLights.push_back(l);
+                    l.age = t.age;
+                    l.presence = t.presence;
+                    l.kept = t.kept;
+                    l.label = t.label;
+                    g_models.push_back(l);
+                    g_owners.push_back(&t);
                 }
+                else { t.presence = 0.0f; t.kept = false; t.label = nullptr; }
                 ++it;
             }
             st.tracked = static_cast<unsigned>(g_tracked.size());
@@ -747,9 +804,19 @@ namespace wxl_livingazeroth::spelllights
             const double tModels = grassperf::Now();
             st.msModels = tModels - tTextures;
             sl::MergeStats ms;
-            sl::MergeAndCap(g_frameLights, eye, g_settings, ms);
+            sl::CellRoom room;
+            room.cellSize = lights::GridCellSize();
+            room.perCell = lights::SpellSlotsPerCell();
+            sl::Select(g_models, g_frameLights, eye, g_settings, room, dt, ms);
+            for (size_t k = 0; k < g_models.size(); ++k)
+            {
+                g_owners[k]->presence = g_models[k].presence;
+                g_owners[k]->kept = g_models[k].kept;
+                g_owners[k]->label = g_models[k].label;
+            }
             st.msMerge = grassperf::Now() - tModels;
             st.inRange = ms.inRange; st.merged = ms.merged; st.clusters = ms.clusters; st.dropped = ms.dropped; st.drawn = ms.out;
+            st.leaving = ms.leaving; st.waiting = ms.waiting; st.overflow = ms.overflow; st.cellRoom = static_cast<unsigned>(room.perCell);
 
             g_drawn.clear();
             unsigned tests = 0;
@@ -771,6 +838,8 @@ namespace wxl_livingazeroth::spelllights
                 std::memcpy(d.color, l.color, sizeof(d.color));
                 d.radius = l.radius;
                 d.sources = l.sources;
+                d.presence = l.presence;
+                d.kept = l.kept;
                 const float dx = l.pos[0] - eye[0], dy = l.pos[1] - eye[1], dz = l.pos[2] - eye[2];
                 d.distance = std::sqrt(dx * dx + dy * dy + dz * dz);
                 g_drawn.push_back(std::move(d));
@@ -838,13 +907,19 @@ namespace wxl_livingazeroth::spelllights
         ++g_filesGeneration;
         g_headCount = 0;
         g_drawn.clear();
+        g_models.clear();
+        g_owners.clear();
         g_frameLights.clear();
         g_indoorCells.clear();
+        g_lastMs = 0.0;
         g_offered = 0;
         Stats keep = g_stats;
         g_stats = Stats{};
         g_stats.spellRows = keep.spellRows;
         g_stats.itemRows = keep.itemRows;
+        g_stats.objectRows = keep.objectRows;
+        g_stats.clientEffects = keep.clientEffects;
+        g_stats.objectModels = keep.objectModels;
         g_stats.why = keep.why;
     }
 
@@ -891,7 +966,11 @@ namespace wxl_livingazeroth::spelllights
         }
         g_stats.active = true;
         g_stats.why = "on";
-        Frame(view, dt, eye, out);
+        // Wall time since the last frame (the fades and the smoothing go by it), the frame's dt if there's none yet.
+        const double nowMs = grassperf::Now();
+        const double wall = g_lastMs > 0.0 ? (nowMs - g_lastMs) / 1000.0 : dt;
+        g_lastMs = nowMs;
+        Frame(view, std::isfinite(wall) && wall > 0.0 && wall < 1.0 ? static_cast<float>(wall) : dt, eye, out);
     }
 
     void SetFileReader(FileReader read) { g_read = read; g_setsRead = false; g_sets = sl::VisualSets{}; }
@@ -907,19 +986,23 @@ namespace wxl_livingazeroth::spelllights
     const char* StatusLine()
     {
         const Stats& s = g_stats;
-        char line[900];
+        char line[1200];
         if (!s.active)
             std::snprintf(line, sizeof(line), "spell lights: %s%s", g_settings.enabled ? "stopped: " : "", s.why);
         else
             std::snprintf(line, sizeof(line),
                           "spell lights: on; %u followed (%u missiles, %u effects, %u enchants), %u drawn by the client (the nearest %u looked at), %u lit (%u gone, fading); "
-                          "this frame %u in range, %u merged into %u, %u over the cap, %u drawn; missiles %u in flight, %u after their hit; "
+                          "this frame %u in range, %u merged into %u, %u over the cap, %u drawn (%u of them fading out of the kept set), %u waiting for room in the grid (%u a cell), %u dropped for want of it; "
+                          "missiles %u in flight, %u after their hit; "
                           "the scene's head: %u walked, %u new; %u offered by the light scan; files %u (%u loading), glow colours %u (%u waiting, %u read now); "
-                          "SpellVisualEffectName %d rows, ItemVisualEffects %d; cost %.3f ms (%.3f on average, %.3f at most over the last second; "
+                          "SpellVisualEffectName %d rows (%u files of the client's own effects left out), ItemVisualEffects %d, GameObjectDisplayInfo %d (%u game objects' models left out unless they hang on another); "
+                          "cost %.3f ms (%.3f on average, %.3f at most over the last second; "
                           "this frame: finding %.3f, glow colours %.3f, the models %.3f, merge and cap %.3f)",
                           s.tracked, s.missiles, s.effects, s.enchants, s.shown, s.looked, s.lit, s.fading, s.inRange, s.merged, s.clusters, s.dropped, s.drawn,
+                          s.leaving, s.waiting, s.cellRoom, s.overflow,
                           s.inFlight, s.impact, s.headWalked, s.headNew, s.fromScan, s.files, s.filesWaiting, s.textures, s.texturesWaiting,
-                          s.texturesRead, s.spellRows, s.itemRows, s.ms, s.msAverage, s.msMost, s.msFind, s.msTextures, s.msModels, s.msMerge);
+                          s.texturesRead, s.spellRows, s.clientEffects, s.itemRows, s.objectRows, s.objectModels, s.ms, s.msAverage, s.msMost, s.msFind, s.msTextures,
+                          s.msModels, s.msMerge);
         g_status = line;
         return g_status.c_str();
     }
@@ -936,9 +1019,9 @@ namespace wxl_livingazeroth::spelllights
         for (const Drawn& d : g_drawn)
         {
             if (n++ >= 8) break;
-            std::snprintf(line, sizeof(line), "  %s %s, %.1f yd away at %.1f %.1f %.1f: colour %.2f %.2f %.2f, radius %.1f yd%s", sl::KindName(d.kind), d.path.c_str(),
+            std::snprintf(line, sizeof(line), "  %s %s, %.1f yd away at %.1f %.1f %.1f: colour %.2f %.2f %.2f, radius %.1f yd%s%s", sl::KindName(d.kind), d.path.c_str(),
                           d.distance, d.pos[0], d.pos[1], d.pos[2], d.color[0], d.color[1], d.color[2], d.radius,
-                          d.sources > 1 ? (" (" + std::to_string(d.sources) + " merged)").c_str() : "");
+                          d.sources > 1 ? (" (" + std::to_string(d.sources) + " merged)").c_str() : "", d.kept ? "" : ", fading out of the kept set");
             out.emplace_back(line);
         }
     }
@@ -962,8 +1045,9 @@ namespace wxl_livingazeroth::spelllights
         for (const Drawn& d : g_drawn)
         {
             if (n++ >= 10) break;
-            std::snprintf(line, sizeof(line), "  %s %s, %.1f yd: colour %.2f %.2f %.2f, radius %.1f yd%s", sl::KindName(d.kind), d.path.c_str(), d.distance,
-                          d.color[0], d.color[1], d.color[2], d.radius, d.sources > 1 ? (" (" + std::to_string(d.sources) + " merged)").c_str() : "");
+            std::snprintf(line, sizeof(line), "  %s %s, %.1f yd: colour %.2f %.2f %.2f, radius %.1f yd%s%s", sl::KindName(d.kind), d.path.c_str(), d.distance,
+                          d.color[0], d.color[1], d.color[2], d.radius, d.sources > 1 ? (" (" + std::to_string(d.sources) + " merged)").c_str() : "",
+                          d.kept ? "" : " (leaving)");
             ui::Text(api, line);
         }
     }

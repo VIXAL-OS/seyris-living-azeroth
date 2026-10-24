@@ -161,8 +161,10 @@ namespace wxl_livingazeroth::lights
 
     /// A light of a moving source for this frame only (features/SpellLights: spells, projectiles, weapon enchants): world
     /// position, colour (already at this frame's strength), radius, the model it follows, and whether it is inside an
-    /// indoor WMO group (0 no, 1 yes; -1: Update tests it). Merged with the scene's lights (closer than the merge distance)
-    /// and put in the grid like them; never flickers, never baked.
+    /// indoor WMO group (0 no, 1 yes; -1: Update tests it). Already merged and capped by spell lights' own rules, it doesn't
+    /// merge with the scene's lights (a missile passing a torch would pull the torch's light along), never leaves the pool
+    /// for a nearer torch, and takes its own room in each grid cell (SpellSlotsPerCell): a full cell of torches never
+    /// drops it and it never drops a torch. Never flickers, never baked.
     struct FrameLight
     {
         float pos[3];
@@ -172,8 +174,19 @@ namespace wxl_livingazeroth::lights
         int   indoor;
     };
 
-    /// Tests: Update's merge, drawn list and grid over `frame` alone, from `eye` (no scan, no client reads).
+    /// Tests: Update's merge, drawn list and grid over `frame` alone, from `eye` (no scan, no client reads); with `scene`,
+    /// those as the scene's own lights too (merged by the scene's rules, never flickering, unbaked).
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame);
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene);
+
+    /// Room for spell lights in each grid cell, after the scene's Settings::maxPerCell: kSpellSlotsPerCell as far as the
+    /// shaders' kMaxPerCellCap allows, while spell lights are on (0: none; they rank with the scene's lights then). A cell's
+    /// list (what a pixel there loops over) grows by at most this: 16 + 16 = the shaders' 32 where torches fill it and
+    /// spells are cast; in the open, spells have the 16 places they had before.
+    constexpr int kSpellSlotsPerCell = 16;
+    int SpellSlotsPerCell();
+    /// The grid's cell size in yd (Settings::cellSize, at least 4); cells sit at world multiples of it.
+    float GridCellSize();
 
     /// The lights to draw this frame (at most kMaxPool), in a stable order between scans (so the
     /// grid only changes when the scan or the camera's cell does).

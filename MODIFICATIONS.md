@@ -187,6 +187,23 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   (the nearest and brightest 24) keeps raids cheap: about 0.6 ms a frame with 300 spell visuals near, 0.2 ms in a
   dungeon pull. Its status in the lights panel, the log line, the snapshot and the frame profiler;
   `tests/spelllights`. From Lumenveil's list, the idea only (its code is GPL v2).
+  - Steady and only spells (24 October 2026). Spell lights flickered though the spells didn't, and a tracked
+    Icethorn in the Storm Peaks lit its snow and tree bright blue-white. The light follows its effect over wall time:
+    each emitter's live particles are smoothed over a quarter of their life (the count steps by one as particles are
+    born and die), the brightness eases up and down (still flaring at once in a spell's first moments), the hue slower;
+    a model the client animates only every few frames counts as drawn between them. Merged and overlapping lights add in
+    quadrature, so a faint one coming or going barely moves a bright one; two merged stay merged a little past the merge
+    distance; the cap keeps what it kept unless another is clearly better, and a light leaving or joining the kept set
+    fades out or in; lights fade out toward the range's end. In env/Lights spell lights no longer merge with torches,
+    never leave the pool for a nearer one, and have their own 16 places in each cell of the grid, which their selection
+    never overfills (a better one in a full cell hurries the weakest out in a few frames): a full cell of torches no
+    longer drops a spell light, nor a spell light a torch. Only spell visuals, missiles and enchants are spell lights:
+    files under `spells\`, not the client's own effects (`SpellVisualEffectName.dbc` rows named HARDCODED: the loot
+    sparkle, `Particles\LootFX.m2`, the client hangs on a tracked herb or ore node, a chest or a quest object, which was
+    the Icethorn's light; breath, level-up), not `particles\` (footsteps, blood, the sparkle), not the doodads,
+    creatures and weapons the table also lists (wisps, mage portals, the Saronite deposit), not a game object's own
+    model (`GameObjectDisplayInfo.dbc`: instance portals) unless it hangs on a unit; those keep the light scan's doodad
+    rules. Anything flying as a missile still counts, by its particles and own lights alone unless its file is a spell's.
 - **Snapshot key** (22 October 2026): one key (`SnapshotKey`, F11) or a panel button writes where you are, the camera
   (in the nearest building's own space too), the time, the weather, the settings that matter, the frame rate and the
   panels' status to `Logs\la-snapshots\` in the game folder, for bug reports; the glass and see-through test harnesses

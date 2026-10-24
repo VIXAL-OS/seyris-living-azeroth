@@ -11,8 +11,11 @@
 //  5. On WARP (the CPU rasterizer behind D3D9On12, no GPU): a floor and a sphere drawn with the stock lit M2 vertex shader
 //     as features/ModelLights patches it, its light texture filled by ModelLights from env/Lights' grid, at night, lit
 //     by fire, frost, holy, arcane, fel and an area spell's field; a contact sheet (--sheet).
+//  6. Flicker: our light on the floor at one spot, frame by frame, for steady effects (their particles born and dying as
+//     their files say), effects among torches and in a crowd over the cap, and a missile passing (--traces <folder>: CSV).
+//  7. Objects that aren't spells: a tracked herb node's loot sparkle, chests, ore, portals, breath, blood, level-up.
 // Run: spelllights_tests <spell data folder (m2\, blp\, dbc\)> <M2 shader folder> [<Wow.exe> [<Wow-WarcraftXL.exe>]]
-//      [--no-warp] [--sheet <bmp>]
+//      [--no-warp] [--sheet <bmp>] [--traces <folder>]
 #include "env/Lights.hpp"
 #include "env/SpellLightModel.hpp"
 #include "features/ModelLights.hpp"
@@ -35,6 +38,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -99,14 +103,21 @@ namespace
         std::vector<uint8_t> bytes;
         const bool haveSpells = ReadAll(g_data / "dbc" / "SpellVisualEffectName.dbc", bytes);
         sets.spellRows = haveSpells ? sl::LoadVisualTable(bytes.data(), bytes.size(), 2, sets.spells) : -1;
+        if (haveSpells) sl::LoadVisualTable(bytes.data(), bytes.size(), 2, sets.hardcoded, 1, "HARDCODED");
         const bool haveItems = ReadAll(g_data / "dbc" / "ItemVisualEffects.dbc", bytes);
         sets.itemRows = haveItems ? sl::LoadVisualTable(bytes.data(), bytes.size(), 1, sets.items) : -1;
+        const bool haveObjects = ReadAll(g_data / "dbc" / "GameObjectDisplayInfo.dbc", bytes);
+        sets.objectRows = haveObjects ? sl::LoadVisualTable(bytes.data(), bytes.size(), 1, sets.objects) : -1;
         Check(sets.spellRows == 3965 && sets.spells.size() > 1700, F("SpellVisualEffectName through the loader: %d rows, %zu model files", sets.spellRows, sets.spells.size()));
         Check(sets.itemRows == 93 && sets.items.size() > 80, F("ItemVisualEffects: %d rows, %zu model files", sets.itemRows, sets.items.size()));
+        Check(sets.objectRows == 3790 && sets.objects.size() > 3500, F("GameObjectDisplayInfo: %d rows, %zu model files (game objects' own models)", sets.objectRows, sets.objects.size()));
+        Check(sets.hardcoded.size() == 16 && sets.hardcoded.count("particles\\lootfx.m2") && sets.hardcoded.count("particles\\coldbreath.m2") &&
+              sets.hardcoded.count("spells\\levelup\\levelup.m2"),
+              F("the client's own effects (rows named HARDCODED): %zu files, the loot sparkle, breath and level-up among them", sets.hardcoded.size()));
         Check(sets.spells.count("spells\\fireball_missile_high.m2") && sets.spells.count("particles\\frostbolt_missle.m2"), "Fireball's and the old Frostbolt's missiles are in it");
-        unsigned world = 0;
-        for (const std::string& s : sets.spells) world += s.compare(0, 6, "world\\") == 0;
-        Check(world > 300, F("%u of its files are under world\\ (spells using world models): found by the table, not the folder", world));
+        unsigned world = 0, creature = 0;
+        for (const std::string& s : sets.spells) { world += s.compare(0, 6, "world\\") == 0; creature += s.compare(0, 9, "creature\\") == 0; }
+        Info(F("%u of its files are under world\\ and %u under creature\\ (doodads and creatures a few spells reuse: they stay theirs)", world, creature));
         uint8_t junk[64] = { 'W', 'D', 'B', 'C' };
         std::unordered_set<std::string> none;
         Check(sl::LoadVisualTable(junk, sizeof(junk), 2, none) == -1 && none.empty(), "a cut-off table is refused");
@@ -118,10 +129,36 @@ namespace
         Check(sl::Classify("spells\\fireball_missile_high.m2", sl::kFlagMapDoodad, false, sets) == K::None, "a map doodad (0x20) with a spell's file stays with the doodad lights");
         Check(sl::Classify("spells\\errorcube.m2", 0, true, sets) == K::None, "the client's stand-in ErrorCube gives no light");
         Check(sl::Classify("spells\\enchantments\\redglow_high.m2", 0, false, sets) == K::Enchant, "an enchant's glow");
-        const std::string worldSpell = [&] { for (const std::string& s : sets.spells) if (s.compare(0, 6, "world\\") == 0) return s; return std::string(); }();
-        Check(!worldSpell.empty() && sl::Classify(worldSpell, 0, false, sets) == K::Effect, "a spell using a world model (" + worldSpell + "): an effect");
         Check(sl::Classify("world\\azeroth\\elwynn\\passivedoodads\\anvil\\anvil.m2", 0, false, sets) == K::None, "an anvil: not a spell visual");
         Check(sl::Classify("creature\\human\\male\\humanmale.m2", 0, false, sets) == K::None, "a character: not a spell visual");
+        // Not spells (2026-10-24, the Storm Peaks' Icethorn): what the client shows by itself, game objects, doodads and
+        // creatures a spell reuses.
+        struct Not { const char* path; bool attached; const char* what; };
+        const Not notSpells[] = {
+            { "particles\\lootfx.m2", true, "the loot sparkle on a tracked herb or ore node, a chest, a quest object (HARDCODED Loot Art)" },
+            { "particles\\coldbreath.m2", true, "breath in cold air (HARDCODED Breath Cold)" },
+            { "spells\\levelup\\levelup.m2", true, "a level-up (HARDCODED Unit Level Up, under spells\\)" },
+            { "spells\\reputationlevelup.m2", true, "a reputation level (HARDCODED)" },
+            { "particles\\bloodspurts\\bloodspurt.m2", true, "a combat blood spurt (particles\\)" },
+            { "particles\\footstepspraysnow.m2", true, "a footstep spray in snow (particles\\)" },
+            { "particles\\frostbolt_missle.m2", false, "an old Frostbolt no 3.3.5 spell uses (particles\\)" },
+            { "world\\expansion02\\doodads\\azjol-nerub\\saronite\\saronite_node_01.m2", false, "a Saronite deposit (a game object; the table's Massive Saronite Rock)" },
+            { "world\\skillactivated\\tradeskillnodes\\bush_icethorn.m2", false, "an Icethorn node" },
+            { "world\\generic\\activedoodads\\spellportals\\mageportal_stormwind.m2", false, "a mage's portal (a game object the table lists)" },
+            { "spells\\instancenewportal_blue.m2", false, "an instance portal: a game object's model under spells\\, placed alone" },
+            { "world\\expansion02\\doodads\\generic\\human\\northrend human mailbox dodad\\final\\hu_mailbox.m2", false, "a mailbox" },
+            { "world\\expansion02\\doodads\\dalaran\\dalaran_lamppost01.m2", false, "a Dalaran lamp post (a game object)" },
+            { "creature\\wisp\\wisp.m2", false, "a wisp (a creature the table lists)" },
+            { "item\\objectcomponents\\weapon\\sword_2h_frostmourne_d_02.m2", true, "Frostmourne in a hand (an item the table lists)" },
+        };
+        for (const Not& n : notSpells)
+            Check(sl::Classify(n.path, 0, false, sets, n.attached) == K::None, F("not a spell light: %s", n.what));
+        Check(sl::Classify("spells\\banish_chest_dark.m2", 0, false, sets, true) == K::Effect && sl::ObjectModel("spells\\banish_chest_dark.m2", sets),
+              "a spell's file a game object also uses, hung on a unit (Banish): an effect");
+        Check(sl::Classify("world\\expansion02\\doodads\\azjol-nerub\\saronite\\saronite_node_01.m2", sl::kFlagMissile, false, sets) == K::Missile &&
+              sl::Classify("item\\objectcomponents\\ammo\\arrowfireflight_01.m2", 0, true, sets) == K::Missile &&
+              sl::Classify("particles\\lootfx.m2", 0, true, sets) == K::None,
+              "anything flying as a missile is one (a hurled rock, a fire arrow), never the client's own effects");
 
         float c[3];
         Check(sl::KeywordColour("spells\\fireball_blue_missile_high.m2", c) && c[2] > c[0], "names: blue fire is blue (colour words first)");
@@ -239,6 +276,32 @@ namespace
             for (int k = 0; k < 60; ++k) sl::StepFade(g, blue, 1.0f / 60.0f);
             sl::FadedColour(g, c);
             Check(c[2] > c[0], "the hue follows a changing colour");
+            // Steady: after its first moments a step in what it gives (a particle more of ten) shows gently.
+            sl::Fade h;
+            const float ten[3] = { 1.0f, 1.0f, 1.0f }, eleven[3] = { 1.1f, 1.1f, 1.1f };
+            for (int k = 0; k < 60; ++k) sl::StepFade(h, ten, 1.0f / 60.0f);
+            const float before = h.level;
+            sl::StepFade(h, eleven, 1.0f / 60.0f);
+            Check((h.level - before) / before < 0.02f, F("a steady light's 10%% step shows as %.1f%% the next frame (kRiseSeconds %.2f s after the first %.2f s)",
+                                                     100.0f * (h.level - before) / before, sl::kRiseSeconds, sl::kYoungSeconds));
+            // Wall time, not frames: 30 frames at 30 fps reach what 60 at 60 fps do.
+            sl::Fade a, b;
+            for (int k = 0; k < 30; ++k) sl::StepFade(a, on, 1.0f / 30.0f);
+            for (int k = 0; k < 60; ++k) sl::StepFade(b, on, 1.0f / 60.0f);
+            Check(std::fabs(a.level - b.level) < 0.01f, F("by wall time: a second at 30 fps %.3f, at 60 fps %.3f", a.level, b.level));
+            // An emitter's live count: 9, 10, 9, 10 ... as particles are born and die, steady.
+            float count = 10.0f, lo = 1e9f, hi = 0.0f;
+            const float seconds = sl::CountSeconds(1.0f, false);
+            for (int k = 0; k < 240; ++k)
+            {
+                sl::StepCount(count, (k / 6) % 2 ? 9.0f : 10.0f, seconds, 1.0f / 60.0f);
+                if (k >= 120) { lo = std::min(lo, count); hi = std::max(hi, count); }
+            }
+            Check((hi - lo) / hi < 0.03f, F("a live count stepping 9, 10, 9 (10 a second) smoothed over %.2f s: within %.1f%%", seconds, 100.0f * (hi - lo) / hi));
+            float gone = 10.0f;
+            int frames = 0;
+            while (gone > 0.0f && frames < 120) { sl::StepCount(gone, 0.0f, seconds, 1.0f / 60.0f); ++frames; }
+            Check(frames <= 30, F("none alive: the count gone in %d frames (nothing of it is seen)", frames));
         }
 
         // Merge and cap.
@@ -375,6 +438,158 @@ namespace
             sl::MergeAndCap(d, eye, zero, md);
             Check(d.empty(), "MaxLights 0: none");
         }
+
+        // Select, frame after frame (each model's state carried as SpellLights carries it).
+        {
+            sl::Settings st;
+            const float eye[3] = { 0.0f, 0.0f, 10.0f };
+            const float dt = 1.0f / 60.0f;
+            auto light = [](float x, float y, float b, uintptr_t id)
+            {
+                sl::Light l;
+                l.pos[0] = x; l.pos[1] = y; l.pos[2] = 1.0f;
+                l.color[0] = b; l.color[1] = 0.8f * b; l.color[2] = 0.4f * b;
+                l.radius = 7.0f;
+                l.model = reinterpret_cast<const void*>(id);
+                l.age = 10.0f;
+                return l;
+            };
+            std::vector<sl::Light> out;
+            sl::MergeStats ms;
+            // Quadrature: a dim light at a bright one's spot barely changes it (the old rule took 1 / sqrt 2 of their sum).
+            {
+                std::vector<sl::Light> two = { light(0, 0, 1.0f, 0x100), light(0.2f, 0, 0.01f, 0x110) };
+                for (sl::Light& l : two) l.age = 0.0f;
+                for (int f = 0; f < 3; ++f) sl::Select(two, out, eye, st, sl::CellRoom{}, dt, ms);
+                Check(out.size() == 1 && std::fabs(sl::MaxChannel(out[0].color) - 1.0f) < 0.001f,
+                      F("a faint light joining a bright one: %.4f of it (summed in quadrature)", out.empty() ? 0.0f : sl::MaxChannel(out[0].color)));
+            }
+            // Merging holds: two merged at 1.4 yd stay merged at 1.8 (within kMergeHold x 1.5 = 1.95), part at 2.1.
+            {
+                std::vector<sl::Light> two = { light(0, 0, 1.0f, 0x200), light(1.4f, 0, 0.9f, 0x210) };
+                sl::Select(two, out, eye, st, sl::CellRoom{}, dt, ms);
+                const size_t at14 = out.size();
+                two[1].pos[0] = 1.8f;
+                sl::Select(two, out, eye, st, sl::CellRoom{}, dt, ms);
+                const size_t at18 = out.size();
+                two[1].pos[0] = 2.1f;
+                sl::Select(two, out, eye, st, sl::CellRoom{}, dt, ms);
+                const size_t at21 = out.size();
+                std::vector<sl::Light> fresh = { light(0, 0, 1.0f, 0x300), light(1.8f, 0, 0.9f, 0x310) };
+                sl::Select(fresh, out, eye, st, sl::CellRoom{}, dt, ms);
+                Check(at14 == 1 && at18 == 1 && at21 == 2 && out.size() == 2,
+                      F("merged at 1.4 yd: still one at 1.8 (kMergeHold %.1f x the distance), two at 2.1; two new ones 1.8 apart: two", sl::kMergeHold));
+            }
+            // The cap holds what it kept: 25 alike for 24 places, their scores wobbling 5%: the same 24 every frame; one
+            // clearly better coming in: the one it displaces fades out over frames, still drawn meanwhile.
+            {
+                std::vector<sl::Light> set;
+                for (int k = 0; k < 25; ++k) set.push_back(light(3.0f * (k % 5) - 6.0f, 3.0f * (k / 5) - 6.0f, 0.5f, 0x1000 + 16 * k));
+                std::vector<const void*> first;
+                bool same = true;
+                for (int f = 0; f < 60; ++f)
+                {
+                    for (int k = 0; k < 25; ++k) for (int c = 0; c < 3; ++c) set[k].color[c] = (c == 0 ? 0.5f : c == 1 ? 0.4f : 0.2f) * (1.0f + 0.05f * std::sin(0.3f * f + k));
+                    sl::Select(set, out, eye, st, sl::CellRoom{}, dt, ms);
+                    std::vector<const void*> kept;
+                    for (const sl::Light& l : out) if (l.kept) kept.push_back(l.model);
+                    std::sort(kept.begin(), kept.end());
+                    if (f == 10) first = kept;
+                    if (f > 10) same = same && kept == first;
+                }
+                Check(same && first.size() == 24, F("25 alike for 24 places, scores wobbling 5%%: the same %zu kept every frame", first.size()));
+                set.push_back(light(7.5f, -7.5f, 2.0f, 0x2000));
+                set.back().age = 0.0f;   // new: comes in at once
+                sl::Select(set, out, eye, st, sl::CellRoom{}, dt, ms);
+                unsigned leaving = 0;
+                float leavingLight = 0.0f;
+                bool newcomer = false;
+                for (const sl::Light& l : out)
+                {
+                    if (!l.kept) { ++leaving; leavingLight = sl::MaxChannel(l.color); }
+                    newcomer = newcomer || (l.model == set.back().model && l.kept);
+                }
+                Check(newcomer && leaving == 1 && leavingLight > 0.1f, F("a brighter one new: in at once, the one it displaces still drawn (%u leaving, %.2f)", leaving, leavingLight));
+                int frames = 1;
+                while (frames < 120)
+                {
+                    sl::Select(set, out, eye, st, sl::CellRoom{}, dt, ms);
+                    ++frames;
+                    bool any = false;
+                    for (const sl::Light& l : out) any = any || !l.kept;
+                    if (!any) break;
+                }
+                Check(frames > 20 && frames < 70, F("... fading out over %d frames (%.2f s; kPresenceSeconds %.2f)", frames, frames / 60.0f, sl::kPresenceSeconds));
+            }
+            // The grid's room: 20 lights in one 16-yd cell, 16 places: 16 drawn there, 4 waiting; the next frame the same.
+            {
+                std::vector<sl::Light> crowd;
+                for (int k = 0; k < 20; ++k) crowd.push_back(light(4.0f + 2.0f * (k % 5), 4.0f + 2.0f * (k / 5), 0.3f, 0x3000 + 16 * k));
+                for (sl::Light& l : crowd) l.radius = 3.0f;
+                sl::Settings wide = st;
+                wide.maxLights = 32;
+                wide.mergeDistance = 0.5f;
+                const sl::CellRoom room{ 16.0f, 16 };
+                sl::Select(crowd, out, eye, wide, room, dt, ms);
+                const size_t first = out.size();
+                const unsigned waiting = ms.waiting;
+                sl::Select(crowd, out, eye, wide, room, dt, ms);
+                Check(first == 16 && waiting == 4 && out.size() == 16 && ms.waiting == 4,
+                      F("20 lights within one grid cell of 16 places: %zu drawn, %u waiting (and %zu, %u the next frame)", first, waiting, out.size(), ms.waiting));
+            }
+            // A missile flying into a full cell: eight kept lights fill its room; the brighter newcomer hurries the weakest
+            // out (a few frames' fade, no pop) and comes in.
+            {
+                std::vector<sl::Light> cell;
+                for (int k = 0; k < 8; ++k) cell.push_back(light(3.0f + 1.6f * k, 4.0f, 0.2f + 0.01f * k, 0x5000 + 16 * k));
+                for (sl::Light& l : cell) l.radius = 3.0f;
+                sl::Settings wide = st;
+                wide.mergeDistance = 0.5f;
+                const sl::CellRoom room{ 16.0f, 8 };
+                for (int f = 0; f < 60; ++f) sl::Select(cell, out, eye, wide, room, dt, ms);
+                cell.push_back(light(8.0f, 10.0f, 1.5f, 0x6000));
+                cell.back().radius = 3.0f;
+                cell.back().age = 0.0f;
+                int frames = 0;
+                bool in = false, smooth = true;
+                std::map<const void*, float> last;   // each light's brightness the frame before: none may drop 3/4 or vanish from 0.05 up
+                for (const sl::Light& l : out) last[l.model] = sl::MaxChannel(l.color);
+                while (!in && frames < 60)
+                {
+                    sl::Select(cell, out, eye, wide, room, dt, ms);
+                    cell.back().age += dt;
+                    ++frames;
+                    std::map<const void*, float> now;
+                    for (const sl::Light& l : out)
+                    {
+                        in = in || (l.model == cell.back().model && l.kept);
+                        now[l.model] = sl::MaxChannel(l.color);
+                    }
+                    for (const auto& [model, before] : last)
+                    {
+                        const auto it = now.find(model);
+                        const float after = it == now.end() ? 0.0f : it->second;
+                        if (before > 0.05f && after < 0.25f * before) smooth = false;
+                    }
+                    last = now;
+                }
+                Check(in && frames <= 20 && smooth && out.size() <= 9,
+                      F("a full cell (8 places): a brighter newcomer is in after %d frames, the weakest there faded out meanwhile, not popped", frames));
+            }
+            // Out of range: a light going past the range fades out over its last fifth instead of popping.
+            {
+                sl::Settings narrow = st;
+                narrow.range = 20.0f;
+                std::vector<sl::Light> one = { light(0.0f, 12.0f, 1.0f, 0x4000) };
+                one[0].age = 0.0f;
+                sl::Select(one, out, eye, narrow, sl::CellRoom{}, dt, ms);
+                const float atStart = out.empty() ? 0.0f : sl::MaxChannel(out[0].color);
+                one[0].pos[1] = 16.5f;
+                sl::Select(one, out, eye, narrow, sl::CellRoom{}, dt, ms);
+                const float nearEnd = out.empty() ? 0.0f : sl::MaxChannel(out[0].color);
+                Check(atStart > 0.99f && nearEnd > 0.1f && nearEnd < 0.6f, F("toward the range's end it fades (%.2f at 15 yd, %.2f at 18.8 yd of 20)", atStart, nearEnd));
+            }
+        }
     }
 
     // --- 2. the client side over a fake client ----------------------------------------------------------------------------
@@ -392,6 +607,9 @@ namespace
     uint32_t Ptr(const void* p) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p)); }
 
     // A model file as the client holds it once loaded: the arrays features/SpellLights reads made pointers.
+    // Each loaded file's bytes as on disk (the fake's own simulation reads the tracks there).
+    std::map<const uint8_t*, std::vector<uint8_t>> g_originals;
+
     uint8_t* LoadM2(Arena& a, const std::string& name, size_t& size)
     {
         std::vector<uint8_t> bytes;
@@ -399,6 +617,7 @@ namespace
         uint8_t* d = a.Alloc(bytes.size());
         std::memcpy(d, bytes.data(), bytes.size());
         size = bytes.size();
+        g_originals[d] = bytes;
         auto rel = [&](size_t at)
         {
             const uint32_t count = Take<uint32_t>(d, at - 4), off = Take<uint32_t>(d, at);
@@ -431,6 +650,10 @@ namespace
             {
                 const size_t p = (e - d) + k * 0x1DC;
                 for (size_t at : { 0x108u, 0x110u, 0x118u, 0x120u }) rel(p + at);
+                // The lifespan track (M2Track at +0x98): its values' per-sequence arrays, each sequence's keys.
+                const uint32_t sequences = Take<uint32_t>(d, p + 0x98 + 0x0C);
+                if (uint8_t* per = rel(p + 0x98 + 0x10))
+                    for (uint32_t q = 0; q < sequences; ++q) rel((per - d) + q * 8 + 4);
             }
         Put<uint32_t>(d, 0xF0, 0u);   // no attachments (a parent's attachment then is its origin)
         return d;
@@ -447,7 +670,46 @@ namespace
         uint8_t* weights = nullptr;
         uint32_t colourCount = 0, weightCount = 0;
         bool shown = true;
+        // Particles born and dying (Simulate): per emitter its rate track (ms, per second), life and life variation.
+        struct Sim
+        {
+            std::vector<uint32_t> times;
+            std::vector<float> rates;
+            float life = 1.0f, lifeVariation = 0.0f, acc = 0.0f;
+            std::vector<float> deaths;   // the alive particles' ages at death, minus their age now
+        };
+        std::vector<Sim> sims;
+        uint32_t sequence = 1000;        // ms: its sequence's length (the clock wraps)
+        float clock = 0.0f;              // s since it was made
+        int cadence = 1;                 // the client animates it every this many frames (its frame stamp lags between)
+        // Its texture weights animated as the file says (Simulate), when asked: their tracks' keys (ms, 0 .. 32767).
+        bool animateWeights = false;
+        std::vector<std::vector<uint32_t>> weightTimes;
+        std::vector<std::vector<int16_t>> weightValues;
     };
+
+    // A track's keys of its first sequence, from the file's own offsets (`data`, `size` bytes: the file as on disk). None
+    // where they lie outside it (a creature's sequence kept in its .anim file).
+    template <class T>
+    void TrackKeys(const uint8_t* data, size_t size, const uint8_t* track, std::vector<uint32_t>& times, std::vector<T>& values)
+    {
+        times.clear();
+        values.clear();
+        const uint32_t ts = Take<uint32_t>(track, 0x04), to = Take<uint32_t>(track, 0x08), vs = Take<uint32_t>(track, 0x0C), vo = Take<uint32_t>(track, 0x10);
+        if (!vs || static_cast<uint64_t>(vo) + 8 > size) return;
+        const uint32_t vn = std::min(Take<uint32_t>(data, vo), 64u), vp = Take<uint32_t>(data, vo + 4);
+        if (static_cast<uint64_t>(vp) + static_cast<uint64_t>(vn) * sizeof(T) > size) return;
+        for (uint32_t k = 0; k < vn; ++k) values.push_back(Take<T>(data, vp + k * sizeof(T)));
+        if (ts && static_cast<uint64_t>(to) + 8 <= size)
+        {
+            const uint32_t tn = std::min(Take<uint32_t>(data, to), 64u), tp = Take<uint32_t>(data, to + 4);
+            if (static_cast<uint64_t>(tp) + static_cast<uint64_t>(tn) * 4 > size) { values.clear(); return; }
+            for (uint32_t k = 0; k < tn; ++k) times.push_back(Take<uint32_t>(data, tp + k * 4));
+        }
+    }
+
+    uint32_t g_rng = 12345;
+    float Rand01() { g_rng = g_rng * 1664525u + 1013904223u; return (g_rng >> 8) * (1.0f / 16777216.0f); }
 
     struct FakeClient
     {
@@ -563,13 +825,15 @@ namespace
             return raw;
         }
 
-        // An M2Track's first value, from the file's own offsets (its nested arrays aren't relocated here).
+        // An M2Track's first value, from the file's own offsets (its nested arrays aren't relocated here; none where they lie
+        // outside the file).
         void FirstValue(const uint8_t* track, void* out, size_t size, const uint8_t* data)
         {
+            const size_t bytes = g_originals.count(data) ? g_originals[data].size() : 0;
             const uint32_t seqs = Take<uint32_t>(track, 0x0C), seqOff = Take<uint32_t>(track, 0x10);
-            if (!seqs) return;
+            if (!seqs || static_cast<uint64_t>(seqOff) + 8 > bytes) return;
             const uint32_t n = Take<uint32_t>(data, seqOff), off = Take<uint32_t>(data, seqOff + 4);
-            if (n) std::memcpy(out, data + off, size);
+            if (n && static_cast<uint64_t>(off) + size <= bytes) std::memcpy(out, data + off, size);
         }
 
         void Link()
@@ -602,6 +866,26 @@ namespace
 
         void Move(FakeModel* m, const float pos[3]) { std::memcpy(m->m + 0xB4 + 48, pos, 12); }
 
+        void Attach(FakeModel* child, FakeModel* parent)
+        {
+            Put<uint32_t>(child->m, 0x48, Ptr(parent->m));
+            Put<uint32_t>(child->m, 0x54, 0xFFFFu);
+        }
+
+        // A character (its file named only: no data) holding a weapon, and `file` on the weapon: an enchant as the client
+        // has it (ItemVisualEffects' model on the weapon's model, the weapon on the character's).
+        FakeModel* Enchant(const std::string& file, const float at[3], FakeModel** unitOut = nullptr)
+        {
+            FakeModel* unit = Make("Character#Human#Male#HumanMale.m2", at);
+            FakeModel* weapon = Make("Item#ObjectComponents#Weapon#Sword_1H_Long_A_01.m2", at);
+            Attach(weapon, unit);
+            const float zero[3] = {};
+            FakeModel* glow = Make(file, zero);
+            Attach(glow, weapon);
+            if (unitOut) *unitOut = unit;
+            return glow;
+        }
+
         sp::ClientView View() const
         {
             sp::ClientView v;
@@ -617,10 +901,98 @@ namespace
             ++frame;
             Put<uint32_t>(scene, 0x14, frame);
             for (auto& m : models)
-                if (m->shown) Put<uint32_t>(m->m, 0x3C, frame);
+            {
+                if (!m->sims.empty()) Simulate(*m, dt);
+                if (m->shown && (frame % static_cast<uint32_t>(std::max(1, m->cadence))) == 0) Put<uint32_t>(m->m, 0x3C, frame);
+            }
             std::vector<li::FrameLight> out;
             sp::FrameForTests(View(), dt, eye, out);
             return out;
+        }
+
+        // Its emitters' particles born at their rate tracks' rate (linear between keys, the sequence looping) and dying at
+        // their life (+- its variation): the live counts the client's emitters hold, frame by frame.
+        void StartSimulation(FakeModel* fm)
+        {
+            const uint8_t* sh = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(Take<uint32_t>(fm->m, 0x2C)));
+            const uint8_t* loaded = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(Take<uint32_t>(sh, 0x150)));
+            if (!loaded || !g_originals.count(loaded)) return;
+            const uint8_t* data = g_originals[loaded].data();   // the file's own offsets
+            const size_t size = g_originals[loaded].size();
+            const uint8_t* seqs = data + Take<uint32_t>(data, 0x20);
+            if (Take<uint32_t>(data, 0x1C)) fm->sequence = std::max(1u, Take<uint32_t>(seqs, 4));
+            const uint32_t ne = std::min(Take<uint32_t>(data, 0x128), 32u);
+            const uint8_t* em = data + Take<uint32_t>(data, 0x12C);
+            const uint32_t nw = std::min(Take<uint32_t>(data, 0x58), 8u);
+            fm->weightTimes.assign(nw, {});
+            fm->weightValues.assign(nw, {});
+            for (uint32_t k = 0; k < nw; ++k) TrackKeys<int16_t>(data, size, data + Take<uint32_t>(data, 0x5C) + k * 0x14, fm->weightTimes[k], fm->weightValues[k]);
+            fm->sims.assign(ne, {});
+            for (uint32_t e = 0; e < ne; ++e)
+            {
+                const uint8_t* p = em + e * 0x1DC;
+                FakeModel::Sim& sim = fm->sims[e];
+                TrackKeys<float>(data, size, p + 0xB0, sim.times, sim.rates);
+                std::vector<uint32_t> lt;
+                std::vector<float> lv;
+                TrackKeys<float>(data, size, p + 0x98, lt, lv);
+                sim.life = lv.empty() ? 1.0f : std::max(0.05f, lv[0]);
+                sim.lifeVariation = Take<float>(p, 0xAC);
+                Put<uint32_t>(fm->emitters[e], 0x50, 0u);
+            }
+        }
+
+        // A key track's value at `t` ms (linear between keys; the last key's past them).
+        template <class T>
+        static float At(const std::vector<uint32_t>& times, const std::vector<T>& values, float t)
+        {
+            if (values.empty()) return 0.0f;
+            if (values.size() == 1 || times.size() != values.size()) return static_cast<float>(values[0]);
+            for (size_t k = 0; k + 1 < times.size(); ++k)
+                if (t >= times[k] && t <= times[k + 1])
+                {
+                    const float span = static_cast<float>(times[k + 1] - times[k]);
+                    const float f = span > 0 ? (t - times[k]) / span : 0.0f;
+                    return static_cast<float>(values[k]) + (static_cast<float>(values[k + 1]) - static_cast<float>(values[k])) * f;
+                }
+            return static_cast<float>(values.back());
+        }
+
+        void Simulate(FakeModel& m, float dt)
+        {
+            m.clock += dt;
+            const float t = std::fmod(m.clock * 1000.0f, static_cast<float>(m.sequence));
+            if (m.animateWeights)
+                for (size_t k = 0; k < m.weightValues.size() && k < m.weightCount; ++k)
+                    Put<float>(m.weights, k * 0x0C + 8, std::clamp(At(m.weightTimes[k], m.weightValues[k], t) / 32767.0f, 0.0f, 1.0f));
+            for (size_t e = 0; e < m.sims.size(); ++e)
+            {
+                FakeModel::Sim& sim = m.sims[e];
+                float rate = 0.0f;
+                if (sim.rates.empty()) rate = 0.0f;   // (its first sequence has no keys: kept in the creature's .anim)
+                else if (sim.rates.size() == 1 || sim.times.size() != sim.rates.size()) rate = sim.rates[0];
+                else
+                {
+                    rate = sim.rates.back();
+                    for (size_t k = 0; k + 1 < sim.times.size(); ++k)
+                        if (t >= sim.times[k] && t <= sim.times[k + 1])
+                        {
+                            const float span = static_cast<float>(sim.times[k + 1] - sim.times[k]);
+                            const float f = span > 0 ? (t - sim.times[k]) / span : 0.0f;
+                            rate = sim.rates[k] + (sim.rates[k + 1] - sim.rates[k]) * f;
+                            break;
+                        }
+                }
+                for (float& d : sim.deaths) d -= dt;
+                sim.deaths.erase(std::remove_if(sim.deaths.begin(), sim.deaths.end(), [](float d) { return d <= 0.0f; }), sim.deaths.end());
+                sim.acc += std::max(0.0f, rate) * dt;
+                while (sim.acc >= 1.0f)
+                {
+                    sim.acc -= 1.0f;
+                    sim.deaths.push_back(sim.life * (1.0f + sim.lifeVariation * (2.0f * Rand01() - 1.0f)));
+                }
+                Put<uint32_t>(m.emitters[e], 0x50, static_cast<uint32_t>(sim.deaths.size()));
+            }
         }
     };
 
@@ -700,7 +1072,7 @@ namespace
             const li::FrameLight* lv = Nearest(out, lavaAt);
             const float lavaFull = lv ? sl::MaxChannel(lv->color) : 0.0f;
             for (uint8_t* em : lava->emitters) Put<uint32_t>(em, 0x50, 2u);
-            for (int f = 0; f < 30; ++f) out = c.Step(eye);
+            for (int f = 0; f < 90; ++f) out = c.Step(eye);
             lv = Nearest(out, lavaAt);
             const float lavaFew = lv && std::hypot(lv->pos[0] - lavaAt[0], lv->pos[1] - lavaAt[1]) < 0.1f ? sl::MaxChannel(lv->color) : 0.0f;
             for (uint8_t* em : lava->emitters) Put<uint32_t>(em, 0x50, 0u);
@@ -730,11 +1102,15 @@ namespace
             l = Nearest(out, at);
             Check(l && sl::MaxChannel(l->color) < 0.35f * full, F("its alpha at a quarter: a quarter of the light (%.2f)", l ? sl::MaxChannel(l->color) : 0));
             Put<float>(frost->m, 0x198, 1.0f);
-            // Off the screen: the client doesn't animate it, it gives no light.
+            // Off the screen: the client doesn't animate it, it gives no light (after kHoldSeconds: a far model is
+            // animated every few frames).
             frost->shown = false;
-            for (int f = 0; f < 90; ++f) out = c.Step(eye);
-            Check(!Nearest(out, at) || std::hypot(Nearest(out, at)->pos[0] - at[0], Nearest(out, at)->pos[1] - at[1]) > 0.1f,
-                  "not drawn by the client (culled): no light");
+            for (int f = 0; f < 15; ++f) out = c.Step(eye);
+            const li::FrameLight* held = Nearest(out, at);
+            const bool stillThere = held && std::hypot(held->pos[0] - at[0], held->pos[1] - at[1]) < 0.1f && sl::MaxChannel(held->color) > 0.5f * full;
+            for (int f = 0; f < 120; ++f) out = c.Step(eye);
+            Check(stillThere && (!Nearest(out, at) || std::hypot(Nearest(out, at)->pos[0] - at[0], Nearest(out, at)->pos[1] - at[1]) > 0.1f),
+                  F("not animated by the client for a quarter second: still lit; for two seconds (culled): no light (hold %.1f s)", sp::kHoldSeconds));
             const unsigned followed = sp::GetStats().tracked;
             frost->shown = true;
             // The slot handed out again: the same address, another model (a new loop origin).
@@ -781,11 +1157,8 @@ namespace
             Check(l && l->color[1] > l->color[0] && l->color[1] > l->color[2], F("the green Lava Burst is green (%.2f %.2f %.2f)", l ? l->color[0] : 0, l ? l->color[1] : 0, l ? l->color[2] : 0));
             // Attached to a moving unit: follows its parent.
             const float unitAt[3] = { -4.0f, 0.0f, 0.0f };
-            FakeModel* unit = c.Make("Spells#Holy_Precast_Low_Hand.m2", unitAt, sl::kFlagMapDoodad);   // a stand-in parent (not lit itself)
-            const float handAt[3] = { 0, 0, 0 };
-            FakeModel* glow = c.Make("spells#enchantments#greenglow_high.m2", handAt);
-            Put<uint32_t>(glow->m, 0x48, Ptr(unit->m));
-            Put<uint32_t>(glow->m, 0x54, 0xFFFFu);
+            FakeModel* unit = nullptr;
+            c.Enchant("spells#enchantments#greenglow_high.m2", unitAt, &unit);
             for (int f = 0; f < 20; ++f) out = c.Step(eye);
             l = Nearest(out, unitAt);
             Check(l && std::hypot(l->pos[0] - unitAt[0], l->pos[1] - unitAt[1]) < 0.01f, "an enchant's glow on a weapon follows its parent");
@@ -813,10 +1186,11 @@ namespace
         ResetFeature();
     }
 
-    // The merge in env/Lights (Finish), through UpdateForTests: spell lights with the scene's rules, and the candle ring's.
+    // env/Lights (Finish), through UpdateForTests: the scene's lights by its rules (the candle ring's), spell lights (frame
+    // lights) apart from them: no merge with a torch, their own room in a full cell of the grid.
     void TestLightsMerge()
     {
-        std::printf("-- env/Lights' merge and grid on frame lights\n");
+        std::printf("-- env/Lights' merge and grid: the scene's lights and spell lights\n");
         const float eye[3] = { 0.0f, 0.0f, 5.0f };
         std::vector<li::FrameLight> candles;
         for (int k = 0; k < 7; ++k)
@@ -828,13 +1202,68 @@ namespace
             f.model = reinterpret_cast<const void*>(static_cast<uintptr_t>(0x5000 + k * 16));
             candles.push_back(f);
         }
-        li::UpdateForTests(eye, 1.0f / 60.0f, candles);
+        li::UpdateForTests(eye, 1.0f / 60.0f, {}, candles);
         Check(li::Active().size() == 1 && std::fabs(li::Active()[0].color[0] - 0.76f * std::sqrt(7.0f)) < 0.01f,
-              F("7 small flames within a yard: one light at sqrt(7) of their sum (%.3f = %.2f x one), the candle ring's rule (c5ec800)",
+              F("the scene's 7 small flames within a yard: one light at sqrt(7) of their sum (%.3f = %.2f x one), the candle ring's rule (c5ec800)",
                 li::Active().empty() ? 0.0f : li::Active()[0].color[0], li::Active().empty() ? 0.0f : li::Active()[0].color[0] / 0.76f));
         for (auto& f : candles) f.radius = 18.0f;
-        li::UpdateForTests(eye, 1.0f / 60.0f, candles);
-        Check(li::Active().size() == 1 && std::fabs(li::Active()[0].color[0] - 0.76f * 7.0f) < 0.01f, "torches (reach > 10 yd) within a yard: their sum, as before");
+        li::UpdateForTests(eye, 1.0f / 60.0f, {}, candles);
+        Check(li::Active().size() == 1 && std::fabs(li::Active()[0].color[0] - 0.76f * 7.0f) < 0.01f, "the scene's torches (reach > 10 yd) within a yard: their sum, as before");
+        // A spell light beside a torch: merged and capped by its own rules already, it stays apart (a missile passing
+        // would otherwise pull the torch's light along with it).
+        {
+            std::vector<li::FrameLight> torch(1, candles[0]), spell(1, candles[1]);
+            spell[0].pos[0] = 0.5f;
+            li::UpdateForTests(eye, 1.0f / 60.0f, spell, torch);
+            Check(li::Active().size() == 2 && std::fabs(li::Active()[0].pos[0] - candles[0].pos[0]) < 1e-4f,
+                  F("a spell light half a yard from a torch: both drawn, the torch where it is (%zu lights)", li::Active().size()));
+        }
+        // A full cell: 20 torches in one 16-yd cell (16 places for the scene's) and 4 spell lights there: every spell light
+        // listed in its own room, the same 16 torches as without them.
+        {
+            std::vector<li::FrameLight> torches, spells;
+            for (int k = 0; k < 20; ++k)
+            {
+                li::FrameLight f{};
+                f.pos[0] = 1.0f + 3.0f * (k % 5); f.pos[1] = 1.0f + 3.0f * (k / 5); f.pos[2] = 2.0f;
+                f.color[0] = 0.4f + 0.05f * k; f.color[1] = 0.3f; f.color[2] = 0.1f;
+                f.radius = 6.0f;
+                f.model = reinterpret_cast<const void*>(static_cast<uintptr_t>(0x8000 + k * 16));
+                torches.push_back(f);
+            }
+            for (int k = 0; k < 4; ++k)
+            {
+                li::FrameLight f{};
+                f.pos[0] = 2.5f + 3.0f * k; f.pos[1] = 8.5f; f.pos[2] = 1.0f;
+                f.color[0] = 0.05f; f.color[1] = 0.1f; f.color[2] = 0.3f;   // dim: a cell ranked by brightness would drop them
+                f.radius = 4.0f;
+                f.model = reinterpret_cast<const void*>(static_cast<uintptr_t>(0x9000 + k * 16));
+                spells.push_back(f);
+            }
+            const float cellEye[3] = { 8.0f, 8.0f, 5.0f };
+            auto listed = [&]()
+            {
+                const li::Grid& g = li::CellGrid();
+                const int cx = static_cast<int>(std::floor((8.0f - g.originX) / g.cellSize)), cy = static_cast<int>(std::floor((8.0f - g.originY) / g.cellSize));
+                const size_t cell = static_cast<size_t>(cy) * g.cells + cx;
+                std::vector<const void*> models;
+                for (int k = 0; k < g.count[cell]; ++k) models.push_back(li::Active()[g.index[cell * g.perCell + k]].model);
+                std::sort(models.begin(), models.end());
+                return models;
+            };
+            li::UpdateForTests(cellEye, 1.0f / 60.0f, {}, torches);
+            const std::vector<const void*> alone = listed();
+            li::UpdateForTests(cellEye, 1.0f / 60.0f, spells, torches);
+            std::vector<const void*> both = listed(), torchesThere;
+            unsigned spellsThere = 0;
+            for (const void* m : both)
+            {
+                if (reinterpret_cast<uintptr_t>(m) >= 0x9000) ++spellsThere;
+                else torchesThere.push_back(m);
+            }
+            Check(alone.size() == 16 && spellsThere == 4 && torchesThere == alone && li::CellGrid().perCell == 16 + li::SpellSlotsPerCell(),
+                  F("a cell of 20 torches (16 listed) and 4 dim spell lights: all 4 listed in their own room (%d a cell), the same 16 torches", li::SpellSlotsPerCell()));
+        }
         std::vector<li::FrameLight> apart;
         for (int k = 0; k < 4; ++k)
         {
@@ -913,7 +1342,7 @@ namespace
     // One scene's cost: `visuals` spell visuals (a fifth of them missiles in flight, a tenth enchants) among `plain` map
     // doodads, over 240 frames with `churn` new effects and as many gone each frame. Times by the thread's own cycles
     // (QueryThreadCycleTime): on a core shared at Idle priority the wall clock also counts other threads' turns.
-    struct Cost { double median = 0, p95 = 0, worst = 0, wallMedian = 0, lightsMedian = 0, offerNs = 0; sp::Stats st; };
+    struct Cost { double median = 0, p95 = 0, worst = 0, wallMedian = 0, lightsMedian = 0, offerNs = 0, findMedian = 0, modelsMedian = 0, mergeMedian = 0; sp::Stats st; };
     Cost RunCost(int plain, int visuals, int churn, double perMs)
     {
         ResetFeature();
@@ -945,7 +1374,7 @@ namespace
         }
         for (int f = 0; f < 30; ++f) out = c.Step(eye);   // the textures read, a couple a frame
         auto cycles = [] { ULONG64 v = 0; QueryThreadCycleTime(GetCurrentThread(), &v); return static_cast<double>(v); };
-        std::vector<double> ms, wall, lightsMs;
+        std::vector<double> ms, wall, lightsMs, find, models, merge;
         int next = visuals;
         for (int f = 0; f < 240; ++f)
         {
@@ -970,12 +1399,17 @@ namespace
             wall.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - w0).count());
             ms.push_back((c1 - c0) / perMs);
             lightsMs.push_back((c2 - c1) / perMs);
+            find.push_back(sp::GetStats().msFind);
+            models.push_back(sp::GetStats().msModels);
+            merge.push_back(sp::GetStats().msMerge);
         }
         std::sort(ms.begin(), ms.end());
         std::sort(wall.begin(), wall.end());
         std::sort(lightsMs.begin(), lightsMs.end());
         Cost r;
         r.median = ms[ms.size() / 2]; r.p95 = ms[ms.size() * 95 / 100]; r.worst = ms.back();
+        for (std::vector<double>* v : { &find, &models, &merge }) std::sort(v->begin(), v->end());
+        r.findMedian = find[find.size() / 2]; r.modelsMedian = models[models.size() / 2]; r.mergeMedian = merge[merge.size() / 2];
         r.wallMedian = wall[wall.size() / 2]; r.lightsMedian = lightsMs[lightsMs.size() / 2];
         r.st = sp::GetStats();
         if (!plains.empty())
@@ -1006,17 +1440,413 @@ namespace
         const Cost raid = RunCost(20000, 300, 4, perMs);
         Info(F("a raid in a city (20,000 models, %u spell visuals followed, %u missiles in flight, 4 new and 4 gone a frame): spell lights %.3f ms a frame (median; 95th %.3f, worst %.3f; the thread's own time at %.2f GHz, the wall clock's median %.3f)",
                raid.st.tracked, raid.st.inFlight, raid.median, raid.p95, raid.worst, perMs / 1e6, raid.wallMedian));
-        Info(F("   %u drawn by the client, the nearest %u looked at, %u in range, %u merged into %u, %u over the cap, %u drawn; the steps: finding %.3f, the models %.3f, merge and cap %.3f",
-               raid.st.shown, raid.st.looked, raid.st.inRange, raid.st.merged, raid.st.clusters, raid.st.dropped, raid.st.drawn, raid.st.msFind, raid.st.msModels, raid.st.msMerge));
+        Info(F("   %u drawn by the client, the nearest %u looked at, %u in range, %u merged into %u, %u over the cap, %u drawn; the steps (medians, wall clock): finding %.3f, the models %.3f, merge and cap %.3f",
+               raid.st.shown, raid.st.looked, raid.st.inRange, raid.st.merged, raid.st.clusters, raid.st.dropped, raid.st.drawn, raid.findMedian, raid.modelsMedian, raid.mergeMedian));
         Info(F("   env/Lights' merge, drawn list and grid over them %.3f ms; the light scan's offer %.0f ns a model (a city's 20,000: %.1f ms a pass, spread over its slices)",
                raid.lightsMedian, raid.offerNs, raid.offerNs * 20000 / 1e6));
-        Check(raid.median < 0.75 && raid.st.drawn <= static_cast<unsigned>(sp::Config().maxLights) && raid.st.drawn > 0,
-              F("a raid's spells: %.2f ms a frame, the cap holding (%u drawn)", raid.median, raid.st.drawn));
+        Check(raid.median < 0.75 && raid.st.drawn - raid.st.leaving <= static_cast<unsigned>(sp::Config().maxLights) &&
+              raid.st.drawn <= 2u * static_cast<unsigned>(sp::Config().maxLights) && raid.st.drawn > 0,
+              F("a raid's spells: %.2f ms a frame, the cap holding (%u drawn: %u kept, %u fading out of the set; %u waiting for room in the grid)",
+                raid.median, raid.st.drawn, raid.st.drawn - raid.st.leaving, raid.st.leaving, raid.st.waiting));
         const Cost pull = RunCost(5000, 40, 1, perMs);
         Info(F("a dungeon pull (5,000 models, %u spell visuals, 1 new and 1 gone a frame): %.3f ms a frame (median; worst %.3f); %u drawn",
                pull.st.tracked, pull.median, pull.worst, pull.st.drawn));
         Check(pull.median < 0.3, F("a dungeon pull's spells: %.3f ms a frame", pull.median));
         Check(raid.offerNs < 300.0, F("the light scan's offer: %.0f ns a model", raid.offerNs));
+    }
+
+    // --- 6. flicker traces --------------------------------------------------------------------------------------------------
+    // Our light on the floor at one spot, frame by frame (env/Lights SumAt: the grid cell's list there, the shaders' sum,
+    // through the knee), with the particles born and dying as the files say: steady effects (their light should be
+    // steady), effects whose glow breathes by design or a light moving a little (it should follow smoothly), a busy area
+    // spell (no frame-to-frame zigzag), a missile passing (one smooth rise and fall).
+    enum class TraceKind { Steady, Smooth, Busy, Moving };
+    struct Trace { std::string name; std::vector<float> b; TraceKind kind = TraceKind::Steady; unsigned turns = 0; };
+    struct TraceStats { float mean = 0, relStd = 0, maxJump = 0; unsigned jumps = 0, reversals = 0, zigzags = 0, frames = 0; };
+    // jumps: frame-to-frame changes over 2% of the mean (of the rise above the trace's least, for a missile passing);
+    // reversals: changes of direction (steps over 0.2%); zigzags: a step up and down again (or down and up) over 1% each,
+    // within two frames: flicker.
+    TraceStats Measure(const Trace& t)
+    {
+        TraceStats r;
+        r.frames = static_cast<unsigned>(t.b.size());
+        if (t.b.size() < 3) return r;
+        double sum = 0, sq = 0;
+        for (float v : t.b) { sum += v; sq += v * v; }
+        r.mean = static_cast<float>(sum / t.b.size());
+        r.relStd = r.mean > 1e-6f ? static_cast<float>(std::sqrt(std::max(0.0, sq / t.b.size() - (sum / t.b.size()) * (sum / t.b.size()))) / r.mean) : 0.0f;
+        int lastSign = 0;
+        const float peak = *std::max_element(t.b.begin(), t.b.end()), least = *std::min_element(t.b.begin(), t.b.end());
+        const float scale = t.kind == TraceKind::Moving ? peak - least : r.mean;
+        std::vector<float> d(t.b.size(), 0.0f);
+        for (size_t k = 1; k < t.b.size(); ++k)
+        {
+            d[k] = t.b[k] - t.b[k - 1];
+            if (scale > 1e-6f) r.maxJump = std::max(r.maxJump, std::fabs(d[k]) / scale);
+            if (scale > 1e-6f && std::fabs(d[k]) > 0.02f * scale) ++r.jumps;
+            const int sign = std::fabs(d[k]) > 0.002f * scale ? (d[k] > 0 ? 1 : -1) : 0;
+            if (sign && lastSign && sign != lastSign) ++r.reversals;
+            if (sign) lastSign = sign;
+        }
+        for (size_t k = 2; k < t.b.size(); ++k)
+        {
+            const float big = 0.01f * scale;
+            const bool updown = std::fabs(d[k]) > big && std::fabs(d[k - 1]) > big && (d[k] > 0) != (d[k - 1] > 0);
+            const bool across = k >= 3 && std::fabs(d[k]) > big && std::fabs(d[k - 2]) > big && (d[k] > 0) != (d[k - 2] > 0) && std::fabs(d[k - 1]) <= big;
+            if (scale > 1e-6f && (updown || across)) ++r.zigzags;
+        }
+        return r;
+    }
+
+    float FloorLight(const float p[3])
+    {
+        const float up[3] = { 0.0f, 0.0f, 1.0f };
+        const li::LightAt a = li::SumAt(p, up);
+        return sl::MaxChannel(a.kneed);
+    }
+
+    // env/Lights' frame over this frame's spell lights and the scene's own (torches) where a scenario has them.
+    void UpdateLights(const float eye[3], float dt, const std::vector<li::FrameLight>& spells, const std::vector<li::FrameLight>& scene)
+    {
+        li::UpdateForTests(eye, dt, spells, scene);
+    }
+
+    // One scenario: `setup` makes the models, `each` moves things a frame; `frames` recorded after a warm-up (1 s).
+    template <class Setup, class Each>
+    Trace RunTrace(const char* name, const float spot[3], TraceKind kind, int frames, Setup setup, Each each, int warm = 60,
+                   const std::vector<li::FrameLight>& scene = {})
+    {
+        ResetFeature();
+        g_rng = 12345;
+        FakeClient c;
+        const float eye[3] = { -10.0f, -12.0f, 8.0f };
+        c.Step(eye);
+        setup(c);
+        Trace t{ name, {}, kind };
+        const float dt = 1.0f / 60.0f;
+        for (int f = 0; f < warm + frames; ++f)
+        {
+            each(c, f, dt);
+            std::vector<li::FrameLight> out = c.Step(eye, dt);
+            UpdateLights(eye, dt, out, scene);
+            if (f >= warm) t.b.push_back(FloorLight(spot));
+        }
+        ResetFeature();
+        return t;
+    }
+
+    // Twenty torches (the scene's own lights) over one 16-yd cell of the grid: more than its 16 places for them.
+    std::vector<li::FrameLight> Torches()
+    {
+        std::vector<li::FrameLight> torches;
+        for (int k = 0; k < 20; ++k)
+        {
+            li::FrameLight f{};
+            f.pos[0] = 1.0f + 3.5f * (k % 5); f.pos[1] = 1.0f + 3.5f * (k / 5); f.pos[2] = 2.5f;
+            f.color[0] = 0.9f + 0.08f * k; f.color[1] = 0.65f; f.color[2] = 0.3f;
+            f.radius = 8.0f;
+            f.model = reinterpret_cast<const void*>(static_cast<uintptr_t>(0xA000 + k * 16));
+            torches.push_back(f);
+        }
+        return torches;
+    }
+
+    // Consecration's ground glow held at full (its texture weights at 1: the file breathes them 1 .. 0.4 by design).
+    FakeModel* Consecration(FakeClient& c, const float at[3], int cadence = 1, bool breathing = false)
+    {
+        FakeModel* m = c.Make("spells#consecration_impact_base.m2", at);
+        for (uint32_t k = 0; k < m->weightCount; ++k) Put<float>(m->weights, k * 0x0C + 8, 1.0f);
+        m->cadence = cadence;
+        m->animateWeights = breathing;
+        c.StartSimulation(m);
+        return m;
+    }
+
+    void TestFlicker(const fs::path& traceFolder)
+    {
+        std::printf("-- flicker: our light on the floor, frame by frame (particles born and dying as the files say)\n");
+        std::vector<Trace> traces;
+        const float origin[3] = { 0.0f, 0.0f, 0.0f };
+        auto none = [](FakeClient&, int, float) {};
+        const float spot[3] = { 2.0f, 1.0f, 0.0f };
+        // Consecration: one ground effect, its glow held; the client animating it every frame, every 3rd, every 6th (a
+        // distant or busy model).
+        traces.push_back(RunTrace("Consecration, its glow held", spot, TraceKind::Steady, 240, [&](FakeClient& c) { Consecration(c, origin); }, none, 150));
+        traces.push_back(RunTrace("... the client animating it every 3rd frame", spot, TraceKind::Steady, 240, [&](FakeClient& c) { Consecration(c, origin, 3); }, none, 150));
+        traces.push_back(RunTrace("... every 6th frame (far off)", spot, TraceKind::Steady, 240, [&](FakeClient& c) { Consecration(c, origin, 6); }, none, 150));
+        // Its glow breathing as its file says (1 .. 0.4 and back every 2 s): followed smoothly, turning where it turns.
+        {
+            Trace t = RunTrace("Consecration breathing as its file says (1 .. 0.4, 2 s)", spot, TraceKind::Smooth, 240,
+                               [&](FakeClient& c) { Consecration(c, origin, 1, true); }, none, 150);
+            t.turns = 4;
+            traces.push_back(t);
+        }
+        // ... among twenty torches over one cell of the grid (the scene's 16 places full).
+        {
+            Trace t = RunTrace("... among 20 torches (a full cell of the grid)", spot, TraceKind::Smooth, 240,
+                               [&](FakeClient& c) { Consecration(c, origin, 1, true); }, none, 150, Torches());
+            t.turns = 4;
+            traces.push_back(t);
+        }
+        // Rain of Fire: its rune on the ground and an impact every 0.3 s within 6 yd, each gone after its 3.3 s (busy by
+        // design: meteors land).
+        {
+            const float at[3] = { 1.0f, 1.0f, 0.0f };
+            std::vector<std::pair<FakeModel*, int>> impacts;
+            traces.push_back(RunTrace("Rain of Fire (rune + impacts)", at, TraceKind::Busy, 300, [&](FakeClient& c)
+            {
+                FakeModel* rune = c.Make("Spells#SummonGround_RainofFire.m2", origin);
+                rune->animateWeights = true;
+                c.StartSimulation(rune);
+            }, [&](FakeClient& c, int f, float)
+            {
+                if (f % 18 == 0)
+                {
+                    const float a = Rand01() * 6.2832f, r = 6.0f * std::sqrt(Rand01());
+                    const float p[3] = { r * std::cos(a), r * std::sin(a), 0.0f };
+                    FakeModel* m = c.Make("Spells#RainOfFire_Impact_Base.m2", p);
+                    c.StartSimulation(m);
+                    impacts.push_back({ m, f });
+                }
+                for (auto it = impacts.begin(); it != impacts.end();)
+                    if (f - it->second > 198) { c.Unlink(it->first); it = impacts.erase(it); }
+                    else ++it;
+            }));
+        }
+        // Weapon enchants on a standing player: Crusader-like red glow (steady), Mongoose (its sparks in bursts about once a
+        // second, by design: followed smoothly).
+        for (const char* file : { "spells#enchantments#redglow_high.m2", "Spells#Enchantments#MongooseGlow_High.m2" })
+        {
+            const float at[3] = { 1.0f, 0.0f, 0.0f };
+            const bool red = std::strstr(file, "red") != nullptr;
+            Trace t = RunTrace(red ? "enchant RedGlow" : "enchant Mongoose (its sparks in bursts)", at, red ? TraceKind::Steady : TraceKind::Smooth, 240,
+                               [&](FakeClient& c)
+            {
+                const float hand[3] = { 0.3f, 0.0f, 1.1f };
+                c.StartSimulation(c.Enchant(file, hand));
+            }, none);
+            t.turns = 8;
+            traces.push_back(t);
+        }
+        // Two auras on one unit, 1.4 .. 1.6 yd apart as it breathes (around the merge distance): the light moves a little.
+        {
+            const float at[3] = { 0.5f, 0.0f, 0.0f };
+            FakeModel* b = nullptr;
+            Trace t = RunTrace("two auras breathing round the merge distance", at, TraceKind::Smooth, 240, [&](FakeClient& c)
+            {
+                const float pa[3] = { 0.0f, 0.0f, 0.5f }, pb[3] = { 1.5f, 0.0f, 0.5f };
+                FakeModel* a = c.Make("spells#enchantments#redglow_high.m2", pa);
+                b = c.Make("Spells#Holy_Missile_High.m2", pb);
+                c.StartSimulation(a);
+                c.StartSimulation(b);
+            }, [&](FakeClient& c, int f, float)
+            {
+                const float pb[3] = { 1.5f + 0.1f * std::sin(f * 0.21f), 0.0f, 0.5f };
+                if (b) c.Move(b, pb);
+            });
+            t.turns = 16;   // its own sway: 8 periods
+            traces.push_back(t);
+        }
+        // A crowd round a Consecration: 30 players, each with two enchants, swaying a little: well over the cap of 24.
+        {
+            std::vector<FakeModel*> units;
+            Trace t = RunTrace("Consecration in a crowd of 30 enchanted players (over the cap)", spot, TraceKind::Smooth, 240, [&](FakeClient& c)
+            {
+                Consecration(c, origin);
+                for (int k = 0; k < 30; ++k)
+                {
+                    const float a = k * 2.39996f, r = 3.0f + 9.0f * std::sqrt((k + 0.5f) / 30.0f);
+                    const float p[3] = { r * std::cos(a), r * std::sin(a), 0.0f };
+                    FakeModel* unit = nullptr;
+                    c.StartSimulation(c.Enchant("spells#enchantments#redglow_high.m2", p, &unit));
+                    units.push_back(unit);
+                    FakeModel* offhand = c.Make("Item#ObjectComponents#Weapon#Sword_1H_Long_A_01.m2", p);
+                    c.Attach(offhand, unit);
+                    FakeModel* glow = c.Make("Spells#Enchantments#MongooseGlow_High.m2", origin);
+                    c.Attach(glow, offhand);
+                    c.StartSimulation(glow);
+                }
+            }, [&](FakeClient& c, int f, float)
+            {
+                for (size_t k = 0; k < units.size(); ++k)
+                {
+                    const float a = k * 2.39996f, r = 3.0f + 9.0f * std::sqrt((k + 0.5f) / 30.0f) + 0.4f * std::sin(f * 0.05f + k);
+                    const float p[3] = { r * std::cos(a), r * std::sin(a), 0.0f };
+                    c.Move(units[k], p);
+                }
+            }, 150);
+            t.turns = 8;    // the crowd sways (2 s)
+            traces.push_back(t);
+        }
+        // A Fireball flying past the spot at 25 yd/s (a smooth rise and fall: one reversal).
+        auto fireball = [&](const char* name, float y, float z, const float at[3], const std::vector<li::FrameLight>& scene)
+        {
+            FakeModel* fb = nullptr;
+            traces.push_back(RunTrace(name, at, TraceKind::Moving, 96, [&](FakeClient& c)
+            {
+                const float p[3] = { -20.0f, y, z };
+                fb = c.Make("Spells#Fireball_Missile_High.m2", p, sl::kFlagMissile);
+                c.Missile(fb);
+                c.StartSimulation(fb);
+            }, [&](FakeClient& c, int f, float)
+            {
+                const float x = -20.0f + 25.0f * std::max(0, f - 60) / 60.0f;
+                const float p[3] = { x, y, z };
+                c.Move(fb, p);
+            }, 60, scene));
+        };
+        fireball("Fireball flying past (25 yd/s)", -1.0f, 1.5f, origin, {});
+        {
+            const float at[3] = { 9.0f, 6.0f, 0.0f };
+            fireball("... through 20 torches, a yard from them (a full cell)", 4.5f, 2.5f, at, Torches());
+        }
+        std::printf("      %-62s %7s %7s %8s %6s %9s %8s\n", "", "mean", "spread", "max jump", "jumps", "reversals", "zigzags");
+        for (const Trace& t : traces)
+        {
+            const TraceStats st = Measure(t);
+            std::printf("trace %-62s %7.3f %6.1f%% %7.1f%% %6u %9u %8u\n", t.name.c_str(), st.mean, 100.0f * st.relStd, 100.0f * st.maxJump, st.jumps,
+                        st.reversals, st.zigzags);
+            switch (t.kind)
+            {
+                case TraceKind::Steady:
+                    Check(st.mean > 0.01f && st.jumps == 0 && st.zigzags == 0 && st.relStd < 0.03f,
+                          F("%s: steady (%.1f%% spread, %u frame-to-frame steps over 2%%, the biggest %.1f%%)", t.name.c_str(), 100.0f * st.relStd, st.jumps, 100.0f * st.maxJump));
+                    break;
+                case TraceKind::Smooth:
+                    Check(st.mean > 0.01f && st.jumps == 0 && st.zigzags == 0 && st.reversals <= t.turns + 2,
+                          F("%s: follows smoothly (the biggest step %.1f%%, %u turns for its own %u, no zigzag)", t.name.c_str(), 100.0f * st.maxJump, st.reversals, t.turns));
+                    break;
+                case TraceKind::Busy:
+                    Check(st.mean > 0.02f && st.zigzags == 0 && st.maxJump < 0.1f,
+                          F("%s: no zigzag frame to frame (%u), the biggest step %.1f%% (meteors land)", t.name.c_str(), st.zigzags, 100.0f * st.maxJump));
+                    break;
+                case TraceKind::Moving:
+                    Check(st.reversals <= 2 && st.maxJump < 0.25f, F("%s: a smooth rise and fall (%u reversals, the biggest step %.0f%% of it)", t.name.c_str(), st.reversals, 100.0f * st.maxJump));
+                    break;
+            }
+        }
+        if (!traceFolder.empty())
+        {
+            std::ofstream csv(traceFolder / "spelllights_traces.csv");
+            csv << "frame";
+            for (const Trace& t : traces) csv << "," << '"' << t.name << '"';
+            csv << "\n";
+            size_t most = 0;
+            for (const Trace& t : traces) most = std::max(most, t.b.size());
+            for (size_t k = 0; k < most; ++k)
+            {
+                csv << k;
+                for (const Trace& t : traces) { csv << ","; if (k < t.b.size()) csv << t.b[k]; }
+                csv << "\n";
+            }
+            Info("traces: " + (traceFolder / "spelllights_traces.csv").string());
+        }
+    }
+
+    // --- 7. objects that aren't spells -----------------------------------------------------------------------------------------
+    // "icethorn is VERY bright" (the Storm Peaks 42.0, 60.2): a herb node a herbalist tracks (Find Herbs) gets the client's
+    // loot sparkle (CGGameObject_C::CheckForPassiveHighlight 0x711210 -> ShowLootEffect: "HARDCODED Loot Art",
+    // Particles\LootFX.m2, on the node's model, scaled by its height up to 5x). The same for chests and quest objects; the
+    // client's other effects (breath, blood, level-up), game objects' models (an ore deposit, portals), creatures and
+    // doodads a spell reuses. Our light at the object's foot and what was drawn; then spells that still give light.
+    void TestObjects()
+    {
+        std::printf("-- objects that aren't spells: gatherable nodes, their sparkle, portals, breath, blood\n");
+        auto run = [&](const char* name, const float spot[3], auto setup)
+        {
+            const Trace t = RunTrace(name, spot, TraceKind::Steady, 60, setup, [](FakeClient&, int, float) {});
+            const TraceStats st = Measure(t);
+            std::string drawn;
+            ResetFeature();
+            // (RunTrace resets after itself: run the setup once more to list what is drawn)
+            {
+                FakeClient c;
+                const float eye[3] = { -10.0f, -12.0f, 8.0f };
+                c.Step(eye);
+                setup(c);
+                for (int f = 0; f < 60; ++f) c.Step(eye);
+                for (const sp::Drawn& d : sp::DrawnLights())
+                    drawn += (drawn.empty() ? "" : ", ") + std::string(sl::KindName(d.kind)) + " " + d.path + F(" (%.2f)", sl::MaxChannel(d.color));
+                ResetFeature();
+            }
+            Info(F("%-62s our light at its foot %.3f; drawn: %s", name, st.mean, drawn.empty() ? "none" : drawn.c_str()));
+            return st.mean;
+        };
+        const float foot[3] = { 0.6f, 0.0f, 0.0f };
+        const float origin[3] = { 0.0f, 0.0f, 0.0f };
+        const float head[3] = { 0.0f, 0.0f, 1.7f };
+        // A game object's sparkle: LootFX on its model (attachment: its origin here), as ShowLootEffect hangs it.
+        auto sparkled = [&](const char* object)
+        {
+            return [object, origin](FakeClient& c)
+            {
+                FakeModel* node = c.Make(object, origin);
+                c.StartSimulation(node);
+                FakeModel* sparkle = c.Make("Particles#LootFX.m2", origin);
+                c.Attach(sparkle, node);
+                c.StartSimulation(sparkle);
+            };
+        };
+        // One of the client's own effects on a character's model.
+        auto onUnit = [&](const char* effect)
+        {
+            return [effect, head, origin](FakeClient& c)
+            {
+                FakeModel* unit = c.Make("Character#Human#Male#HumanMale.m2", head);
+                FakeModel* e = c.Make(effect, origin);
+                c.Attach(e, unit);
+                c.StartSimulation(e);
+            };
+        };
+        auto alone = [&](const char* model)
+        {
+            return [model, origin](FakeClient& c) { c.StartSimulation(c.Make(model, origin)); };
+        };
+        struct Case { const char* name; std::function<void(FakeClient&)> setup; };
+        const Case notSpells[] = {
+            { "Icethorn node, tracked (its loot sparkle)", sparkled("World#SkillActivated#TradeskillNodes#Bush_IceThorn.m2") },
+            { "Frost Lotus node, tracked", sparkled("World#SkillActivated#TradeskillNodes#Bush_FrostLotus.m2") },
+            { "a Saronite deposit (a game object the table lists), tracked", sparkled("world#expansion02#doodads#azjol-nerub#saronite#saronite_node_01.m2") },
+            { "a chest's or quest object's sparkle (LootFX on a world model)", sparkled("world#generic#passivedoodads#furniture#containers#lichcontainer01.m2") },
+            { "an instance portal (a game object's model under spells\\)", alone("spells#InstanceNewPortal_Blue.m2") },
+            { "a mage's portal to Stormwind (a game object the table lists)", alone("world#generic#activedoodads#spellportals#MagePortal_Stormwind.m2") },
+            { "a wisp (a creature the table lists)", alone("Creature#Wisp#Wisp.m2") },
+            { "a character breathing in cold air", onUnit("particles#coldbreath.m2") },
+            { "a blood spurt as a character is hit", onUnit("Particles#BloodSpurts#BloodSpurt.m2") },
+            { "a character's level-up (under spells\\)", onUnit("Spells#LevelUp#LevelUp.m2") },
+        };
+        bool dark = true;
+        std::string lit;
+        for (const Case& k : notSpells)
+        {
+            const float v = run(k.name, foot, k.setup);
+            if (!(v < 0.005f)) { dark = false; lit += F(" %s (%.3f)", k.name, v); }
+        }
+        Check(dark, "none of them gives a spell light" + (lit.empty() ? std::string() : ":" + lit));
+        // Still spell lights: an enchant on a weapon, an effect on a unit (Banish, a file a game object also uses, hung
+        // on a unit), a fire arrow flying (its file under item\, its flames' particles).
+        const float enchant = run("an enchant on a character's weapon", foot, [&](FakeClient& c)
+        {
+            const float hand[3] = { 0.3f, 0.0f, 1.1f };
+            c.StartSimulation(c.Enchant("spells#enchantments#redglow_high.m2", hand));
+        });
+        const float banish = run("Banish on a character (a file game objects use too)", foot, onUnit("spells#Banish_Chest_Dark.m2"));
+        const float arrow = run("a fire arrow flying (item\\, a missile)", foot, [&](FakeClient& c)
+        {
+            const float at[3] = { 0.0f, 0.0f, 1.0f };
+            FakeModel* m = c.Make("Item#ObjectComponents#Ammo#ArrowFireFlight_01.m2", at, sl::kFlagMissile);
+            c.Missile(m);
+            c.StartSimulation(m);
+        });
+        const float dagger = run("a thrown dagger flying (a missile with no glow of its own)", foot, [&](FakeClient& c)
+        {
+            const float at[3] = { 0.0f, 0.0f, 1.0f };
+            FakeModel* m = c.Make("Item#ObjectComponents#Weapon#Thrown_1H_Dagger_A_01.m2", at, sl::kFlagMissile);
+            c.Missile(m);
+            c.StartSimulation(m);
+        });
+        Check(enchant > 0.02f && banish > 0.005f && arrow > 0.02f, F("spells still do: an enchant %.3f, Banish %.3f, a fire arrow %.3f", enchant, banish, arrow));
+        Check(dagger < 0.005f, F("a thrown dagger (its steel's texture isn't a glow): %.3f", dagger));
     }
 
     // --- 5. WARP ------------------------------------------------------------------------------------------------------------
@@ -1431,12 +2261,13 @@ int main(int argc, char** argv)
 {
     std::vector<std::string> pos;
     bool warp = true;
-    fs::path sheet;
+    fs::path sheet, traceFolder;
     for (int k = 1; k < argc; ++k)
     {
         const std::string a = argv[k];
         if (a == "--no-warp") warp = false;
         else if (a == "--sheet" && k + 1 < argc) sheet = argv[++k];
+        else if (a == "--traces" && k + 1 < argc) traceFolder = argv[++k];
         else pos.push_back(a);
     }
     if (pos.size() < 2)
@@ -1453,6 +2284,8 @@ int main(int argc, char** argv)
     TestLightsMerge();
     TestGuards(std::vector<std::string>(pos.begin() + 2, pos.end()));
     TestCost();
+    TestFlicker(traceFolder);
+    TestObjects();
     if (warp) TestWarp(pos[1], sheet);
     else std::printf("(--no-warp: the WARP checks left out)\n");
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED", g_failures, g_failures == 1 ? "" : "s");

@@ -223,9 +223,24 @@ tracks times their textures' glow), leant halfway toward the school its file's n
 shadow, fel, nature, lightning). As big and as bright as the effect (its file's size times its scale: a Frostbolt's
 light reaches about 7 yards, a Consecration's 14), the light follows it every frame, flares with it and fades out with
 it: as its particles die out, as the client fades it, and where it was once it's gone (about a third of a second).
-A unit's auras at one spot merge into one light at the square root of their summed light (the candle ring's rule), and
-spell lights that overlap share their glow the same way, so an area spell's dozens of pieces light the ground in its
-colour without washing it out to one flat glare. The nearest and brightest `MaxLights` a frame are drawn.
+A unit's auras at one spot merge into one light at the square root of their summed light (the candle ring's rule;
+lights of different strength add in quadrature, so a faint one barely changes a bright one), and spell lights that
+overlap share their glow the same way, so an area spell's dozens of pieces light the ground in its colour without
+washing it out to one flat glare. The nearest and brightest `MaxLights` a frame are drawn.
+
+A steady spell gives a steady light: the light follows its effect over time, not frames (the particles' count smoothed
+over a quarter of their life, the brightness and hue eased; a spell still flares at once), lights merged stay merged a
+little past `MergeDistance`, the lights kept stay kept unless another is clearly better, a light joining or leaving the
+kept set fades in or out (about a fifth of a second), and lights fade out over the last fifth of `Range`. Spell lights
+have their own 16 places in each 16-yard cell of our lights' grid, after the torches' and lanterns' (a cell full of
+torches never drops one, and they never drop a torch); more than fit wait for room, a clearly better one (a missile
+flying in) taking the place of the weakest within a few frames.
+
+Only spell visuals, missiles and weapon enchants give spell lights: the files under `spells\` and the enchants'. The
+game's own effects are left out (the loot sparkle on a herb or ore node you track, a chest or a quest object; breath in
+cold air, footstep sprays, blood, level-up), and so are game objects' own models (portals, nodes, chests, mailboxes,
+lamps), creatures and doodads: those keep their own lights as before (none, with the model lights off). Anything flying
+as a missile counts (a fire arrow by its flames).
 
 Which models are spell visuals, and what is read from the client, every frame and read only:
 `features/SpellLights.hpp` (the scene's newest models at the head of its list, the client's two missile lists, and
@@ -239,9 +254,9 @@ it costs; the snapshot (F11) and the 30-second log line carry the same status, t
 | Enabled | 0 | Experimental: spells light what's round them through our point lights: missiles in flight and their impacts, spell effects on characters and on the ground, weapon enchants' glows. 0 = none (the light scan keeps every model's own lights, as before). |
 | Brightness | 1 | Your multiplier on every spell light's brightness. |
 | Radius | 7 | How far a spell light reaches for an effect about a yard across (yards); bigger effects reach up to 2.4 times as far, a weapon enchant half as far. |
-| MaxLights | 24 | At most this many spell lights a frame (0 .. 64), the nearest and brightest first: keeps raids and battlegrounds cheap. Of those followed, only the nearest 3 x this (at least 48) are looked at closely each frame. |
-| Range | 80 | Spell lights farther than this from the camera (yards) are left out. |
-| MergeDistance | 1.5 | Spell lights closer than this (yards) merge into one with the square root of their summed light. |
+| MaxLights | 24 | At most this many spell lights a frame (0 .. 64), the nearest and brightest first: keeps raids and battlegrounds cheap. The lights kept stay kept unless another is clearly better; one leaving fades out (drawn meanwhile: at most twice this). Of those followed, only the nearest 3 x this (at least 48) are looked at closely each frame. |
+| Range | 80 | Spell lights farther than this from the camera (yards) are left out; they fade out over the last fifth of it. |
+| MergeDistance | 1.5 | Spell lights closer than this (yards) merge into one with the square root of their summed light; two merged stay merged up to 1.3 times this apart. |
 | Enchants | 1 | Weapon enchants' glows light what's round them too, weakly. |
 | EnchantStrength | 0.35 | Your multiplier on the enchants' light (they're small and always on). |
 

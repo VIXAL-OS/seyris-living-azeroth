@@ -35,27 +35,42 @@ namespace wxl_livingazeroth::spelllight
         return s;
     }
 
-    int LoadVisualTable(const uint8_t* bytes, size_t size, int fileField, std::unordered_set<std::string>& out)
+    int LoadVisualTable(const uint8_t* bytes, size_t size, int fileField, std::unordered_set<std::string>& out, int nameField,
+                        const char* namePrefix)
     {
         if (!bytes || size < 20 || std::memcmp(bytes, "WDBC", 4) != 0 || fileField < 0) return -1;
         uint32_t h[4];
         std::memcpy(h, bytes + 4, sizeof(h));
         const uint32_t records = h[0], fields = h[1], recordSize = h[2], stringSize = h[3];
-        if (static_cast<uint32_t>(fileField) >= fields || recordSize < fields * 4 ||
-            20ull + static_cast<uint64_t>(records) * recordSize + stringSize > size)
+        if (static_cast<uint32_t>(fileField) >= fields || (nameField >= 0 && static_cast<uint32_t>(nameField) >= fields) ||
+            recordSize < fields * 4 || 20ull + static_cast<uint64_t>(records) * recordSize + stringSize > size)
             return -1;
         const uint8_t* rows = bytes + 20;
         const char* strings = reinterpret_cast<const char*>(rows + static_cast<size_t>(records) * recordSize);
+        // A row's string in `field`, or null (out of the block, not terminated inside it).
+        auto text = [&](uint32_t r, int field) -> const char*
+        {
+            uint32_t at = 0;
+            std::memcpy(&at, rows + static_cast<size_t>(r) * recordSize + field * 4u, 4);
+            if (at >= stringSize) return nullptr;
+            const char* s = strings + at;
+            return strnlen(s, stringSize - at) < stringSize - at ? s : nullptr;
+        };
+        const size_t prefixLength = namePrefix ? std::strlen(namePrefix) : 0;
         int read = 0;
         for (uint32_t r = 0; r < records; ++r)
         {
-            uint32_t at = 0;
-            std::memcpy(&at, rows + static_cast<size_t>(r) * recordSize + fileField * 4u, 4);
             ++read;
-            if (at >= stringSize || !strings[at]) continue;
-            const char* s = strings + at;
-            const size_t len = strnlen(s, stringSize - at);
-            if (len >= stringSize - at) continue;   // not terminated inside the block
+            if (nameField >= 0)
+            {
+                const char* name = text(r, nameField);
+                bool match = name != nullptr;
+                for (size_t k = 0; match && k < prefixLength; ++k)
+                    match = name[k] && std::tolower(static_cast<unsigned char>(name[k])) == std::tolower(static_cast<unsigned char>(namePrefix[k]));
+                if (!match) continue;
+            }
+            const char* s = text(r, fileField);
+            if (!s || !s[0]) continue;
             std::string n = NormalizePath(s);
             // Some rows name the artists' own drive ("\\guldan\drive2\..."): the client finds nothing there.
             if (!n.empty() && n[0] != '\\') out.insert(std::move(n));
@@ -70,24 +85,30 @@ namespace wxl_livingazeroth::spelllight
 
     Kind PathKind(const std::string& path, const VisualSets& sets)
     {
-        if (NeverLit(path)) return Kind::None;
+        if (NeverLit(path, sets)) return Kind::None;
         if (sets.items.count(path) || StartsWith(path, "spells\\enchantments\\")) return Kind::Enchant;
-        if (sets.spells.count(path) || StartsWith(path, "spells\\") || StartsWith(path, "particles\\")) return Kind::Effect;
+        if (StartsWith(path, "spells\\")) return Kind::Effect;
         return Kind::None;
     }
 
-    bool NeverLit(const std::string& path) { return path.empty() || path == "spells\\errorcube.m2"; }
+    bool NeverLit(const std::string& path, const VisualSets& sets)
+    {
+        return path.empty() || path == "spells\\errorcube.m2" || sets.hardcoded.count(path) != 0;
+    }
 
-    Kind KindOf(Kind pathKind, bool neverLit, uint32_t creationFlags, bool inMissileList)
+    bool ObjectModel(const std::string& path, const VisualSets& sets) { return sets.objects.count(path) != 0; }
+
+    Kind KindOf(Kind pathKind, bool neverLit, bool objectModel, uint32_t creationFlags, bool inMissileList, bool attached)
     {
         if (neverLit || (creationFlags & kFlagMapDoodad)) return Kind::None;
         if (inMissileList || (creationFlags & kFlagMissile)) return Kind::Missile;
+        if (objectModel && !attached) return Kind::None;
         return pathKind;
     }
 
-    Kind Classify(const std::string& path, uint32_t creationFlags, bool inMissileList, const VisualSets& sets)
+    Kind Classify(const std::string& path, uint32_t creationFlags, bool inMissileList, const VisualSets& sets, bool attached)
     {
-        return KindOf(PathKind(path, sets), NeverLit(path), creationFlags, inMissileList);
+        return KindOf(PathKind(path, sets), NeverLit(path, sets), ObjectModel(path, sets), creationFlags, inMissileList, attached);
     }
 
     float MaxChannel(const float c[3]) { return std::fmax(c[0], std::fmax(c[1], c[2])); }
@@ -302,21 +323,39 @@ namespace wxl_livingazeroth::spelllight
     void StepFade(Fade& f, const float target[3], float dt)
     {
         const float peak = MaxChannel(target);
+        dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.5f) : 0.0f;
         if (!f.started)
         {
             f.started = true;
-            f.level = 0.0f;
             for (int k = 0; k < 3; ++k) f.hue[k] = peak > 1e-4f ? target[k] / peak : 0.0f;
         }
-        dt = std::clamp(dt, 0.0f, 0.5f);
-        const float tau = peak > f.level ? kRiseSeconds : kFallSeconds;
+        const bool young = f.age < kYoungSeconds;
+        f.age += dt;
+        const float tau = peak > f.level ? (young ? kAttackSeconds : kRiseSeconds) : kFallSeconds;
         f.level += (peak - f.level) * (1.0f - std::exp(-dt / tau));
         if (f.level < 1e-4f && peak <= 0.0f) f.level = 0.0f;
         if (peak > 1e-4f)
         {
-            const float h = 1.0f - std::exp(-dt / kHueSeconds);
+            const float h = 1.0f - std::exp(-dt / (young ? kAttackSeconds : kHueSeconds));
             for (int k = 0; k < 3; ++k) f.hue[k] += (target[k] / peak - f.hue[k]) * h;
         }
+    }
+
+    float CountSeconds(float particleLife, bool young)
+    {
+        if (young) return kAttackSeconds;
+        if (!std::isfinite(particleLife) || particleLife <= 0.0f) particleLife = 0.5f;
+        return std::clamp(0.25f * particleLife, kAttackSeconds, 0.25f);
+    }
+
+    void StepCount(float& count, float live, float seconds, float dt)
+    {
+        if (!std::isfinite(count)) count = 0.0f;
+        dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.5f) : 0.0f;
+        // None alive: nothing of it is seen (its particles faded out before they died), it goes at once.
+        if (live <= 0.0f) seconds = std::min(seconds, kAttackSeconds);
+        count += (live - count) * (1.0f - std::exp(-dt / std::max(seconds, 1e-3f)));
+        if (live <= 0.0f && count < 0.05f) count = 0.0f;
     }
 
     void FadedColour(const Fade& f, float out[3])
@@ -334,10 +373,13 @@ namespace wxl_livingazeroth::spelllight
         return MaxChannel(l.color) * l.radius / (1.0f + d2 / (15.0f * 15.0f));
     }
 
+
     float Crowding(const std::vector<Light>& lights, size_t i)
     {
         float k = 1.0f;
         const Light& a = lights[i];
+        const float ba = MaxChannel(a.color);
+        if (!(ba > 0.0f)) return k;
         for (size_t j = 0; j < lights.size(); ++j)
         {
             if (j == i) continue;
@@ -345,80 +387,198 @@ namespace wxl_livingazeroth::spelllight
             const float dx = a.pos[0] - b.pos[0], dy = a.pos[1] - b.pos[1], dz = a.pos[2] - b.pos[2];
             const float d2 = dx * dx + dy * dy + dz * dz;
             if (!(b.radius > 0.0f) || d2 >= b.radius * b.radius) continue;
-            const float t2 = d2 / (b.radius * b.radius);
-            k += (1.0f - t2) * (1.0f - t2);
+            const float t2 = d2 / (b.radius * b.radius), r = MaxChannel(b.color) / ba;
+            k += (1.0f - t2) * (1.0f - t2) * r * r;
         }
         return k;
     }
 
-    void MergeAndCap(std::vector<Light>& lights, const float eye[3], const Settings& s, MergeStats& st)
+    namespace
     {
-        st = MergeStats{};
-        st.in = static_cast<unsigned>(lights.size());
-        const float range = std::max(0.0f, s.range);
-        lights.erase(std::remove_if(lights.begin(), lights.end(), [&](const Light& l)
+        struct Cluster
         {
-            const float dx = l.pos[0] - eye[0], dy = l.pos[1] - eye[1], dz = l.pos[2] - eye[2];
-            return !(MaxChannel(l.color) > 0.0f) || !(l.radius > 0.0f) || dx * dx + dy * dy + dz * dz > range * range;
-        }), lights.end());
-        st.inRange = static_cast<unsigned>(lights.size());
-        const size_t cap = static_cast<size_t>(std::clamp(s.maxLights, 0, kMaxLightsCap));
+            double color[3] = {};        // its members' colours summed (potential: before presence)
+            double squares = 0.0;        // their brightness squared, summed
+            double weight = 0.0, pos[3] = {};
+            float  radius = 0.0f, spread = 0.0f;
+            unsigned sources = 0;
+            const void* rep = nullptr;   // its brightest member's model: the cluster's name this frame
+            Kind   kind = Kind::Effect;
+            uint32_t first = 0, count = 0; // its members in `members`
+            float  score = 0.0f, rank = 0.0f, distance2 = 0.0f;
+            bool   wasKept = false, drawnBefore = false, wanted = false, kept = false, drawn = false;
+            bool   hurried = false;      // making room in a full cell for a better one: it fades out fast
+            float  light[3] = {};        // what it gives this frame (presence and quadrature)
+        };
 
-        // A raid can hold hundreds: only the best 4 x the cap (at least 64) by score go on to merging.
-        const size_t keepForMerge = std::max<size_t>(64, 4 * cap);
-        if (lights.size() > keepForMerge)
+        uint64_t CellKey(int x, int y)
         {
-            for (Light& l : lights) l.score = Score(l, eye);
-            std::nth_element(lights.begin(), lights.begin() + keepForMerge, lights.end(), [](const Light& x, const Light& y)
-            {
-                return x.score != y.score ? x.score > y.score : std::less<const void*>()(x.model, y.model);
-            });
-            st.dropped += static_cast<unsigned>(lights.size() - keepForMerge);
-            lights.resize(keepForMerge);
+            return (static_cast<uint64_t>(static_cast<uint32_t>(x + 1048576)) << 32) | static_cast<uint32_t>(y + 1048576);
         }
 
-        // Merging, brightest first, against the lights' positions before any merge: a sorted list of merge-distance cells,
-        // looked up by binary search (no allocation once the scratch has grown).
-        const float md = s.mergeDistance;
-        if (md > 1e-3f && lights.size() > 1)
+        // How many spell lights each grid cell holds this frame: open addressing, emptied by a new generation (no
+        // allocation once made). Full (a frame's lights reaching more than 4096 cells): no limit counted.
+        struct CellCounts
         {
-            std::sort(lights.begin(), lights.end(), [](const Light& x, const Light& y)
+            struct Slot { uint64_t key = 0; uint32_t generation = 0; int count = 0; };
+            static constexpr size_t kSlots = 8192;
+            std::vector<Slot> slots = std::vector<Slot>(kSlots);
+            uint32_t generation = 1;
+            unsigned used = 0;
+            void Clear() { ++generation; used = 0; }
+            Slot* Find(uint64_t key, bool add)
             {
-                const float px = MaxChannel(x.color), py = MaxChannel(y.color);
-                return px != py ? px > py : std::less<const void*>()(x.model, y.model);
+                size_t h = static_cast<size_t>((key * 0x9E3779B97F4A7C15ull) >> 51) & (kSlots - 1);
+                for (size_t probe = 0; probe < kSlots; ++probe, h = (h + 1) & (kSlots - 1))
+                {
+                    Slot& sl = slots[h];
+                    if (sl.generation != generation)
+                    {
+                        if (!add || used >= kSlots / 2) return nullptr;
+                        sl.generation = generation; sl.key = key; sl.count = 0;
+                        ++used;
+                        return &sl;
+                    }
+                    if (sl.key == key) return &sl;
+                }
+                return nullptr;
+            }
+        };
+
+        // The grid cells (world multiples of `size`) a light at `pos` reaching `radius` takes: every cell whose square
+        // comes within its radius in x and y (as env/Lights BuildGrid puts lights in cells).
+        template <class Each>
+        void ForCells(const float pos[3], float radius, float size, Each each)
+        {
+            if (!(radius > 0.0f) || !(size > 0.0f)) return;
+            const int x0 = static_cast<int>(std::floor((pos[0] - radius) / size)), x1 = static_cast<int>(std::floor((pos[0] + radius) / size));
+            const int y0 = static_cast<int>(std::floor((pos[1] - radius) / size)), y1 = static_cast<int>(std::floor((pos[1] + radius) / size));
+            for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x)
+                {
+                    const float nx = std::max(x * size, std::min(pos[0], (x + 1) * size)) - pos[0];
+                    const float ny = std::max(y * size, std::min(pos[1], (y + 1) * size)) - pos[1];
+                    if (nx * nx + ny * ny > radius * radius) continue;
+                    each(CellKey(x, y));
+                }
+        }
+    }
+
+    void Select(std::vector<Light>& models, std::vector<Light>& out, const float eye[3], const Settings& s, const CellRoom& room,
+                float dt, MergeStats& st)
+    {
+        st = MergeStats{};
+        out.clear();
+        const size_t n = models.size();
+        st.in = static_cast<unsigned>(n);
+        dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.5f) : 0.0f;
+        const float step = 1.0f - std::exp(-dt / kPresenceSeconds), hurryStep = 1.0f - std::exp(-dt / kAttackSeconds);
+        const float range = std::max(0.0f, s.range), fadeFrom = range * (1.0f - kRangeFade);
+        const size_t cap = static_cast<size_t>(std::clamp(s.maxLights, 0, kMaxLightsCap));
+
+        // Each model's light as it could be (its colour x the fade toward the range's end); those lit take part.
+        static std::vector<float> potential, bright;
+        static std::vector<const void*> labelBefore;
+        static std::vector<uint32_t> part;
+        potential.assign(n * 3, 0.0f);
+        bright.assign(n, 0.0f);
+        labelBefore.resize(n);
+        part.clear();
+        for (size_t i = 0; i < n; ++i)
+        {
+            Light& m = models[i];
+            labelBefore[i] = m.label;
+            m.label = nullptr;
+            const float dx = m.pos[0] - eye[0], dy = m.pos[1] - eye[1], dz = m.pos[2] - eye[2];
+            const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            float fade = d >= range ? 0.0f : (d <= fadeFrom ? 1.0f : (range - d) / std::max(range - fadeFrom, 1e-3f));
+            if (!(m.radius > 0.0f) || !std::isfinite(d) || !std::isfinite(m.radius)) fade = 0.0f;
+            for (int k = 0; k < 3; ++k) potential[i * 3 + k] = std::isfinite(m.color[k]) && m.color[k] > 0.0f ? m.color[k] * fade : 0.0f;
+            bright[i] = MaxChannel(&potential[i * 3]);
+            if (bright[i] > 0.0f) part.push_back(static_cast<uint32_t>(i));
+        }
+        st.inRange = static_cast<unsigned>(part.size());
+        auto scoreOf = [&](uint32_t i)
+        {
+            const Light& m = models[i];
+            const float dx = m.pos[0] - eye[0], dy = m.pos[1] - eye[1], dz = m.pos[2] - eye[2];
+            return bright[i] * m.radius / (1.0f + (dx * dx + dy * dy + dz * dz) / (15.0f * 15.0f));
+        };
+
+        // A raid can hold hundreds: those drawn last frame, then the best by score, 4 x the cap (at least 64) go on.
+        const size_t keepForMerge = std::max<size_t>(64, 4 * cap);
+        if (part.size() > keepForMerge)
+        {
+            for (uint32_t i : part) models[i].score = scoreOf(i);
+            std::nth_element(part.begin(), part.begin() + keepForMerge, part.end(), [&](uint32_t x, uint32_t y)
+            {
+                const bool dx = models[x].presence > 0.0f, dy = models[y].presence > 0.0f;
+                if (dx != dy) return dx;
+                return models[x].score != models[y].score ? models[x].score > models[y].score : std::less<const void*>()(models[x].model, models[y].model);
             });
-            const float inv = 1.0f / md;
-            auto cellOf = [&](const float p[3], int out[3]) { for (int k = 0; k < 3; ++k) out[k] = static_cast<int>(std::floor(p[k] * inv)); };
-            auto keyOf = [](int x, int y, int z)
+            st.dropped += static_cast<unsigned>(part.size() - keepForMerge);
+            part.resize(keepForMerge);
+        }
+
+        // Merging, brightest first, each against the brightest of its cluster at their positions this frame; two merged
+        // last frame (the same label) stay merged up to kMergeHold x the distance. Neighbours through a sorted list of
+        // cells kMergeHold x the distance across.
+        std::sort(part.begin(), part.end(), [&](uint32_t x, uint32_t y)
+        {
+            return bright[x] != bright[y] ? bright[x] > bright[y] : std::less<const void*>()(models[x].model, models[y].model);
+        });
+        static std::vector<int> clusterOf;
+        static std::vector<Cluster> clusters;
+        static std::vector<uint32_t> members;
+        clusterOf.assign(n, -1);
+        clusters.clear();
+        members.clear();
+        const float md = s.mergeDistance > 1e-3f ? s.mergeDistance : 0.0f, hold = md * kMergeHold;
+        static std::vector<std::pair<uint64_t, uint32_t>> cells;
+        cells.clear();
+        const float inv = hold > 0.0f ? 1.0f / hold : 0.0f;
+        auto cellOf = [&](const float p[3], int out3[3]) { for (int k = 0; k < 3; ++k) out3[k] = static_cast<int>(std::floor(p[k] * inv)); };
+        auto keyOf = [](int x, int y, int z)
+        {
+            return (static_cast<uint64_t>(x + 1048576) & 0x1FFFFF) | ((static_cast<uint64_t>(y + 1048576) & 0x1FFFFF) << 21) |
+                   ((static_cast<uint64_t>(z + 1048576) & 0x1FFFFF) << 42);
+        };
+        if (inv > 0.0f)
+        {
+            for (uint32_t i : part)
             {
-                return (static_cast<uint64_t>(x + 1048576) & 0x1FFFFF) | ((static_cast<uint64_t>(y + 1048576) & 0x1FFFFF) << 21) |
-                       ((static_cast<uint64_t>(z + 1048576) & 0x1FFFFF) << 42);
-            };
-            static std::vector<std::pair<uint64_t, uint32_t>> cells;
-            static std::vector<float> original;
-            static std::vector<char> gone;
-            static std::vector<uint32_t> members;
-            cells.clear();
-            original.resize(lights.size() * 3);
-            gone.assign(lights.size(), 0);
-            for (size_t i = 0; i < lights.size(); ++i)
-            {
-                std::memcpy(&original[i * 3], lights[i].pos, sizeof(lights[i].pos));
                 int c[3];
-                cellOf(lights[i].pos, c);
-                cells.push_back({ keyOf(c[0], c[1], c[2]), static_cast<uint32_t>(i) });
+                cellOf(models[i].pos, c);
+                cells.push_back({ keyOf(c[0], c[1], c[2]), i });
             }
             std::sort(cells.begin(), cells.end());
-            for (size_t a = 0; a < lights.size(); ++a)
+        }
+        for (uint32_t a : part)
+        {
+            if (clusterOf[a] >= 0) continue;
+            const int id = static_cast<int>(clusters.size());
+            clusters.emplace_back();
+            Cluster& cl = clusters.back();
+            cl.first = static_cast<uint32_t>(members.size());
+            cl.rep = models[a].model;
+            cl.kind = models[a].kind;
+            const float* pa = models[a].pos;
+            auto add = [&](uint32_t i, float distance)
             {
-                if (gone[a]) continue;
-                Light& la = lights[a];
-                const float* pa = &original[a * 3];
-                double wsum = MaxChannel(la.color);
-                double pos[3] = { la.pos[0] * wsum, la.pos[1] * wsum, la.pos[2] * wsum };
-                float spread = 0.0f;
-                unsigned sources = la.sources;
-                members.clear();
+                clusterOf[i] = id;
+                members.push_back(i);
+                const float b = bright[i];
+                for (int k = 0; k < 3; ++k) { cl.color[k] += potential[i * 3 + k]; cl.pos[k] += models[i].pos[k] * b; }
+                cl.squares += static_cast<double>(b) * b;
+                cl.weight += b;
+                cl.radius = std::max(cl.radius, models[i].radius);
+                cl.spread = std::max(cl.spread, distance);
+                cl.sources += std::max(1u, models[i].sources);
+                if (models[i].kind == Kind::Missile) cl.kind = Kind::Missile;
+            };
+            add(a, 0.0f);
+            if (inv > 0.0f)
+            {
                 int ca[3];
                 cellOf(pa, ca);
                 for (int dz = -1; dz <= 1; ++dz)
@@ -429,63 +589,204 @@ namespace wxl_livingazeroth::spelllight
                             for (auto it = std::lower_bound(cells.begin(), cells.end(), std::make_pair(key, 0u)); it != cells.end() && it->first == key; ++it)
                             {
                                 const uint32_t b = it->second;
-                                if (b == a || gone[b]) continue;
-                                const float* pb = &original[b * 3];
+                                if (clusterOf[b] >= 0) continue;
+                                const float* pb = models[b].pos;
                                 const float ex = pb[0] - pa[0], ey = pb[1] - pa[1], ez = pb[2] - pa[2];
-                                if (ex * ex + ey * ey + ez * ez > md * md) continue;
-                                members.push_back(b);
+                                const float d2 = ex * ex + ey * ey + ez * ez;
+                                const bool together = labelBefore[a] && labelBefore[a] == labelBefore[b];
+                                if (d2 > (together ? hold * hold : md * md)) continue;
+                                add(b, std::sqrt(d2));
                             }
                         }
-                if (members.empty()) continue;
-                std::sort(members.begin(), members.end());
-                for (uint32_t b : members)
-                {
-                    Light& lb = lights[b];
-                    const float w = MaxChannel(lb.color);
-                    for (int k = 0; k < 3; ++k) { la.color[k] += lb.color[k]; pos[k] += lb.pos[k] * w; }
-                    wsum += w;
-                    la.radius = std::max(la.radius, lb.radius);
-                    sources += lb.sources;
-                    const float* pb = &original[b * 3];
-                    const float ex = pb[0] - pa[0], ey = pb[1] - pa[1], ez = pb[2] - pa[2];
-                    spread = std::max(spread, std::sqrt(ex * ex + ey * ey + ez * ez));
-                    gone[b] = 1;
-                    ++st.merged;
-                }
-                if (wsum > 1e-6)
-                    for (int k = 0; k < 3; ++k) la.pos[k] = static_cast<float>(pos[k] / wsum);
-                // The summed colour of the separate sources (each one light): sqrt N of it (MergeKeep), as for env/Lights'
-                // small flames.
-                const float keep = MergeKeep(sources);
-                for (int k = 0; k < 3; ++k) la.color[k] *= keep;
-                la.sources = sources;
-                la.radius += 0.5f * spread;
-                ++st.clusters;
             }
-            size_t w = 0;
-            for (size_t i = 0; i < lights.size(); ++i)
-                if (!gone[i]) lights[w++] = lights[i];
-            lights.resize(w);
+            cl.count = static_cast<uint32_t>(members.size()) - cl.first;
+            // (members after the first in the order found: sorted, so the sums don't depend on the cells' order)
+            std::sort(members.begin() + cl.first + 1, members.end());
+            if (cl.count > 1) { st.merged += cl.count - 1; ++st.clusters; }
         }
 
-        for (Light& l : lights) l.score = Score(l, eye);
-        std::sort(lights.begin(), lights.end(), [](const Light& a, const Light& b)
+        // Each cluster: its light as it could be, its score; kept last frame, drawn last frame.
+        for (Cluster& cl : clusters)
         {
-            return a.score != b.score ? a.score > b.score : std::less<const void*>()(a.model, b.model);
-        });
-        if (lights.size() > cap)
-        {
-            st.dropped += static_cast<unsigned>(lights.size() - cap);
-            lights.resize(cap);
+            const float w = static_cast<float>(cl.weight);
+            float pos[3];
+            for (int k = 0; k < 3; ++k) pos[k] = w > 0.0f ? static_cast<float>(cl.pos[k] / cl.weight) : models[members[cl.first]].pos[k];
+            for (int k = 0; k < 3; ++k) cl.pos[k] = pos[k];
+            cl.radius += 0.5f * cl.spread;
+            const float dx = pos[0] - eye[0], dy = pos[1] - eye[1], dz = pos[2] - eye[2];
+            cl.distance2 = dx * dx + dy * dy + dz * dz;
+            cl.score = static_cast<float>(std::sqrt(cl.squares)) * cl.radius / (1.0f + cl.distance2 / (15.0f * 15.0f));
+            for (uint32_t k = 0; k < cl.count; ++k)
+            {
+                const Light& m = models[members[cl.first + k]];
+                cl.wasKept = cl.wasKept || m.kept;
+                cl.drawnBefore = cl.drawnBefore || m.presence > 0.0f;
+            }
+            cl.rank = cl.score * (cl.wasKept ? kKeepBonus : 1.0f);
         }
-        st.out = static_cast<unsigned>(lights.size());
-        // Crowding: overlapping lights share their glow (each from the colours before any is scaled).
-        std::vector<float> keep(lights.size(), 1.0f);
-        for (size_t i = 0; i < lights.size(); ++i) keep[i] = 1.0f / std::sqrt(Crowding(lights, i));
-        for (size_t i = 0; i < lights.size(); ++i)
+        static std::vector<uint32_t> order;
+        order.resize(clusters.size());
+        for (size_t k = 0; k < order.size(); ++k) order[k] = static_cast<uint32_t>(k);
+        std::sort(order.begin(), order.end(), [&](uint32_t x, uint32_t y)
+        {
+            const Cluster& a = clusters[x];
+            const Cluster& b = clusters[y];
+            return a.rank != b.rank ? a.rank > b.rank : std::less<const void*>()(a.rep, b.rep);
+        });
+        for (size_t k = 0; k < order.size() && k < cap; ++k) clusters[order[k]].wanted = true;
+
+        // The cap and the grid's room: those drawn last frame keep their place in its cells (the best first), the
+        // wanted new ones come in where theirs have room. At most 2 x the cap drawn (those leaving fade out). A wanted
+        // one kept out of a full cell hurries out the weakest there that it outranks (leaving, or kept but weaker even
+        // with its kKeepBonus): that one fades out within a few frames (kAttackSeconds) and the better one comes in, so a
+        // missile flying into a busy cell isn't kept waiting.
+        static CellCounts taken;
+        static std::vector<std::pair<uint64_t, uint32_t>> occupants;   // (cell, cluster) for those drawn
+        taken.Clear();
+        occupants.clear();
+        const bool limited = room.perCell > 0 && room.cellSize > 0.0f;
+        auto fits = [&](const Cluster& cl)
+        {
+            if (!limited) return true;
+            bool ok = true;
+            const float p[3] = { static_cast<float>(cl.pos[0]), static_cast<float>(cl.pos[1]), static_cast<float>(cl.pos[2]) };
+            ForCells(p, cl.radius, room.cellSize, [&](uint64_t key)
+            {
+                const CellCounts::Slot* c = taken.Find(key, false);
+                if (c && c->count >= room.perCell) ok = false;
+            });
+            return ok;
+        };
+        auto take = [&](const Cluster& cl)
+        {
+            if (!limited) return;
+            const float p[3] = { static_cast<float>(cl.pos[0]), static_cast<float>(cl.pos[1]), static_cast<float>(cl.pos[2]) };
+            const uint32_t id = static_cast<uint32_t>(&cl - clusters.data());
+            ForCells(p, cl.radius, room.cellSize, [&](uint64_t key)
+            {
+                if (CellCounts::Slot* c = taken.Find(key, true)) ++c->count;
+                occupants.push_back({ key, id });
+            });
+        };
+        // For a wanted one with no room: in each full cell it reaches, the weakest there below it hurries out (rare: a
+        // look through those drawn).
+        auto hurry = [&](const Cluster& cl)
+        {
+            const float p[3] = { static_cast<float>(cl.pos[0]), static_cast<float>(cl.pos[1]), static_cast<float>(cl.pos[2]) };
+            ForCells(p, cl.radius, room.cellSize, [&](uint64_t key)
+            {
+                const CellCounts::Slot* c = taken.Find(key, false);
+                if (!c || c->count < room.perCell) return;
+                Cluster* weakest = nullptr;
+                for (const auto& o : occupants)
+                {
+                    if (o.first != key) continue;
+                    Cluster& there = clusters[o.second];
+                    if (there.hurried) return;   // room is being made here already
+                    if (!weakest || there.rank < weakest->rank) weakest = &there;
+                }
+                if (weakest && weakest->rank < cl.rank) { weakest->hurried = true; weakest->kept = false; }
+            });
+        };
+        const size_t most = 2 * cap;
+        size_t drawn = 0;
+        for (uint32_t k : order)
+        {
+            Cluster& cl = clusters[k];
+            if (!cl.drawnBefore) continue;
+            if (drawn >= most || !fits(cl)) { ++st.overflow; continue; }
+            take(cl);
+            cl.drawn = true;
+            cl.kept = cl.wanted;
+            ++drawn;
+        }
+        for (uint32_t k : order)
+        {
+            Cluster& cl = clusters[k];
+            if (cl.drawnBefore || !cl.wanted) continue;
+            if (drawn >= most || !fits(cl))
+            {
+                ++st.waiting;
+                if (limited && drawn < most) hurry(cl);
+                continue;
+            }
+            take(cl);
+            cl.drawn = cl.kept = true;
+            ++drawn;
+        }
+
+        // Presence: a kept cluster's members fade in (a young model at once: its own fade ramps it), the rest fade out
+        // (those hurried out of a full cell fast); an overflowing one's go at once. Then what each cluster drawn gives:
+        // its members' brightness x presence, in quadrature, in their mean hue.
+        for (Cluster& cl : clusters)
+        {
+            double sq = 0.0, hue[3] = {};
+            for (uint32_t k = 0; k < cl.count; ++k)
+            {
+                const uint32_t i = members[cl.first + k];
+                Light& m = models[i];
+                m.label = cl.rep;
+                m.kept = cl.kept;
+                if (cl.kept) m.presence = m.age < kYoungSeconds ? 1.0f : m.presence + (1.0f - m.presence) * step;
+                else if (cl.drawn) m.presence -= m.presence * (cl.hurried ? hurryStep : step);
+                else m.presence = 0.0f;
+                if (!cl.kept && m.presence < 0.02f) m.presence = 0.0f;
+                const double d = static_cast<double>(m.presence) * bright[i];
+                sq += d * d;
+                for (int c = 0; c < 3; ++c) hue[c] += m.presence * potential[i * 3 + c];
+            }
+            const double hp = std::max(hue[0], std::max(hue[1], hue[2]));
+            const double level = std::sqrt(sq);
+            for (int c = 0; c < 3; ++c) cl.light[c] = cl.drawn && hp > 1e-9 ? static_cast<float>(hue[c] / hp * level) : 0.0f;
+            if (cl.drawn && !(MaxChannel(cl.light) > 0.0f)) cl.drawn = false;
+        }
+        // Those not taking part (unlit, out of range, past the pre-cut) fade out of the set.
+        for (size_t i = 0; i < n; ++i)
+            if (clusterOf[i] < 0)
+            {
+                Light& m = models[i];
+                m.kept = false;
+                m.presence -= m.presence * step;
+                if (m.presence < 0.02f) m.presence = 0.0f;
+            }
+
+        for (uint32_t k : order)
+        {
+            const Cluster& cl = clusters[k];
+            if (!cl.drawn) { if (!cl.wanted && !cl.drawnBefore) ++st.dropped; continue; }
+            Light l;
+            for (int c = 0; c < 3; ++c) { l.pos[c] = static_cast<float>(cl.pos[c]); l.color[c] = cl.light[c]; }
+            l.radius = cl.radius;
+            l.model = cl.rep;
+            l.kind = cl.kind;
+            l.sources = cl.sources;
+            l.score = cl.score;
+            l.kept = cl.kept;
+            l.label = cl.rep;
+            float pmax = 0.0f;
+            for (uint32_t m = 0; m < cl.count; ++m) pmax = std::max(pmax, models[members[cl.first + m]].presence);
+            l.presence = pmax;
+            out.push_back(l);
+            if (!cl.kept) ++st.leaving;
+        }
+        st.out = static_cast<unsigned>(out.size());
+
+        // Crowding: overlapping lights share their glow, in quadrature (each from the colours before any is scaled).
+        static std::vector<float> keep;
+        keep.assign(out.size(), 1.0f);
+        for (size_t i = 0; i < out.size(); ++i) keep[i] = 1.0f / std::sqrt(Crowding(out, i));
+        for (size_t i = 0; i < out.size(); ++i)
         {
             if (keep[i] < 0.99f) ++st.crowded;
-            for (float& c : lights[i].color) c *= keep[i];
+            for (float& c : out[i].color) c *= keep[i];
         }
+    }
+
+    void MergeAndCap(std::vector<Light>& lights, const float eye[3], const Settings& s, MergeStats& st)
+    {
+        for (Light& l : lights) { l.age = 0.0f; l.presence = 0.0f; l.kept = false; l.label = nullptr; }
+        std::vector<Light> out;
+        Select(lights, out, eye, s, CellRoom{}, 0.0f, st);
+        lights.swap(out);
     }
 }

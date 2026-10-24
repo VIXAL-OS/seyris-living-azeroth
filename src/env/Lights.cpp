@@ -333,6 +333,7 @@ namespace wxl_livingazeroth::lights
             float night;    // the night factor its colour carries (night-only lights), else 1
             unsigned flames; // separate flames merged into it (lights of different models): FlameClusterScale
             int8_t given;   // indoor given (FrameLight): 0 = test it here (IsIndoor), 1 = outdoor, 2 = indoor
+            bool  frame;    // a FrameLight (a spell light): merged and capped already; its own room in the grid
         };
 
         double g_time = 0.0;
@@ -369,18 +370,23 @@ namespace wxl_livingazeroth::lights
         Grid g_grid;
         std::vector<float> g_baseLum;   // per active light: its brightness before fade and flicker (ranks it in full cells)
 
-        struct CellEntry { uint32_t cell; float score; uint16_t light; bool window; };
+        struct CellEntry { uint32_t cell; float score; uint16_t light; bool window; bool frame; };
         std::vector<char> g_isWindow;   // per active light: a window's
+        std::vector<char> g_isFrame;    // per active light: a spell light's (FrameLight)
 
         // The grid snaps to whole cells around the camera, so a cell only changes when lights do.
         // A light goes into every cell its radius reaches (circle vs square). A cell holding more than
         // perCell keeps the strongest at its centre: brightness x (1 - d / reach)^2 with the light's
-        // base brightness (no flicker or fade, so the choice doesn't flip from frame to frame).
+        // base brightness (no flicker or fade, so the choice doesn't flip from frame to frame). Spell lights
+        // (FrameLights) have their own SpellSlotsPerCell after the scene's maxPerCell, the strongest first (their
+        // selection never puts more in a cell than that).
         void BuildGrid(const float eye[3])
         {
             Grid next;
-            next.cellSize = std::max(4.0f, g_settings.cellSize);
-            next.perCell = std::max(1, std::min(g_settings.maxPerCell, kMaxPerCellCap));
+            next.cellSize = GridCellSize();
+            const int scenePerCell = std::max(1, std::min(g_settings.maxPerCell, kMaxPerCellCap));
+            const int spellSlots = SpellSlotsPerCell();
+            next.perCell = scenePerCell + spellSlots;
             const int half = std::min(static_cast<int>(std::ceil(g_settings.range / next.cellSize)), kMaxCells / 2);
             next.cells = std::max(1, half * 2);
             next.originX = (std::floor(eye[0] / next.cellSize) - half) * next.cellSize;
@@ -410,25 +416,33 @@ namespace wxl_livingazeroth::lights
                         if (nx * nx + ny * ny > r * r) continue;
                         const float cx = (x + 0.5f) * cs - lx, cy = (y + 0.5f) * cs - ly;
                         const float t = 1.0f - std::min(std::sqrt(cx * cx + cy * cy) / (r + halfDiag), 1.0f);
-                        entries.push_back({ static_cast<uint32_t>(y * next.cells + x), g_baseLum[i] * t * t, static_cast<uint16_t>(i), g_isWindow[i] != 0 });
+                        entries.push_back({ static_cast<uint32_t>(y * next.cells + x), g_baseLum[i] * t * t, static_cast<uint16_t>(i), g_isWindow[i] != 0,
+                                            spellSlots > 0 && g_isFrame[i] != 0 });
                     }
             }
             std::sort(entries.begin(), entries.end(), [](const CellEntry& a, const CellEntry& b)
                       { return a.cell != b.cell ? a.cell < b.cell : (a.score != b.score ? a.score > b.score : a.light < b.light); });
 
             // Per cell, the strongest first; windows (scored down by windows::kWindowRank) at most the windows panel's
-            // per-cell number of them (windows::PickCell).
+            // per-cell number of them (windows::PickCell); then the spell lights in their own room.
             unsigned busiest = 0, full = 0, dropped = 0, windowsOut = 0;
             static std::vector<windows::CellEntry> cell;
+            static std::vector<uint16_t> spells;
             const int windowCap = std::max(0, windows::Config().perCell);
             for (size_t e = 0; e < entries.size();)
             {
                 const uint32_t c = entries[e].cell;
                 cell.clear();
+                spells.clear();
                 for (; e < entries.size() && entries[e].cell == c; ++e)
-                    cell.push_back({ entries[e].score, entries[e].light, entries[e].window });
-                const unsigned n = static_cast<unsigned>(cell.size());
-                const unsigned taken = windows::PickCell(cell.data(), cell.size(), next.perCell, windowCap, &next.index[c * next.perCell], windowsOut);
+                {
+                    if (entries[e].frame) spells.push_back(entries[e].light);
+                    else cell.push_back({ entries[e].score, entries[e].light, entries[e].window });
+                }
+                const unsigned n = static_cast<unsigned>(cell.size() + spells.size());
+                uint16_t* list = &next.index[c * next.perCell];
+                unsigned taken = windows::PickCell(cell.data(), cell.size(), spellSlots > 0 ? scenePerCell : next.perCell, windowCap, list, windowsOut);
+                for (size_t k = 0; k < spells.size() && k < static_cast<size_t>(spellSlots); ++k) list[taken++] = spells[k];
                 busiest = std::max(busiest, n);
                 if (n > taken) { ++full; dropped += n - taken; }
                 next.count[c] = static_cast<uint8_t>(taken);
@@ -1044,9 +1058,19 @@ namespace wxl_livingazeroth::lights
                 c.night = 1.0f;
                 c.flames = 1;
                 c.given = f.indoor < 0 ? 0 : (f.indoor ? 2 : 1);
+                c.frame = true;
                 cands.push_back(c);
                 ++g_stats.frameLights;
             }
+        }
+
+        // Tests: FrameLights as the scene's own lights (a torch's: the scene's merge, no flicker, unbaked).
+        void AddSceneLightsForTests(const std::vector<FrameLight>& scene, std::vector<Candidate>& cands)
+        {
+            const size_t first = cands.size();
+            AddFrameLights(scene, cands);
+            for (size_t k = first; k < cands.size(); ++k) { cands[k].frame = false; cands[k].moving = false; }
+            g_stats.frameLights = 0;
         }
 
         // The rest of a frame's update, from its candidates: merging, the drawn list, the strikes, baking, the grid.
@@ -1077,7 +1101,7 @@ namespace wxl_livingazeroth::lights
                 for (size_t k = 0; k < cands.size(); ++k)
                 {
                     std::memcpy(&original[k * 3], cands[k].pos, 3 * sizeof(float));
-                    if (cands[k].cosOuter > -1.5f) continue;
+                    if (cands[k].cosOuter > -1.5f || cands[k].frame) continue;
                     int c[3];
                     cellOf(cands[k].pos, c);
                     cells.push_back({ keyOf(c[0], c[1], c[2]), static_cast<uint32_t>(k) });
@@ -1086,7 +1110,7 @@ namespace wxl_livingazeroth::lights
             }
             for (size_t a = 0; a < cands.size() && inv > 0.0f; ++a)
             {
-                if (cands[a].weight <= 0.0f || cands[a].cosOuter > -1.5f) continue;
+                if (cands[a].weight <= 0.0f || cands[a].cosOuter > -1.5f || cands[a].frame) continue;
                 float wa = cands[a].color[0] + cands[a].color[1] + cands[a].color[2];
                 int ca[3];
                 cellOf(&original[a * 3], ca);
@@ -1142,7 +1166,7 @@ namespace wxl_livingazeroth::lights
 
             // Every light in range, fading out over the last third of the range. They stay in the scan's
             // order (stable between scans, so the grid doesn't reshuffle every frame); only past kMaxPool
-            // do the farthest from the camera drop out.
+            // do the farthest from the camera drop out, never a spell light (they're few: their own cap).
             std::vector<std::pair<float, size_t>> order;
             for (size_t k = 0; k < cands.size(); ++k)
                 if (cands[k].weight > 0.0f)
@@ -1153,14 +1177,23 @@ namespace wxl_livingazeroth::lights
             g_stats.poolDropped = 0;
             if (order.size() > static_cast<size_t>(kMaxPool))
             {
-                g_stats.poolDropped = static_cast<unsigned>(order.size() - kMaxPool);
-                std::nth_element(order.begin(), order.begin() + kMaxPool, order.end());
-                order.resize(kMaxPool);
+                const size_t before = order.size();
+                const auto rest = std::stable_partition(order.begin(), order.end(), [&](const std::pair<float, size_t>& o) { return cands[o.second].frame; });
+                const size_t frames = static_cast<size_t>(rest - order.begin());
+                const size_t room = frames < static_cast<size_t>(kMaxPool) ? kMaxPool - frames : 0;
+                if (static_cast<size_t>(order.end() - rest) > room)
+                {
+                    std::nth_element(rest, rest + room, order.end());
+                    order.erase(rest + room, order.end());
+                }
+                if (order.size() > static_cast<size_t>(kMaxPool)) order.resize(kMaxPool);
+                g_stats.poolDropped = static_cast<unsigned>(before - order.size());
                 std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
             }
             g_baseLum.clear();
             g_wantBake.clear();
             g_isWindow.clear();
+            g_isFrame.clear();
             unsigned windowLights = 0;
             unsigned indoorCount = 0;
             g_indoorTests = 0;
@@ -1195,6 +1228,7 @@ namespace wxl_livingazeroth::lights
                 g_baseLum.push_back(c.window ? lum * windows::kWindowRank : lum);
                 g_wantBake.push_back(!c.moving && (c.bake || g_settings.bakeAll) ? 1 : 0);
                 g_isWindow.push_back(c.window ? 1 : 0);
+                g_isFrame.push_back(c.frame ? 1 : 0);
             }
             windows::GetStats().lights = windowLights;
             // This frame's transient lights (strikes), after the scene's, while the pool has room: outdoors, never
@@ -1208,6 +1242,7 @@ namespace wxl_livingazeroth::lights
                 g_baseLum.push_back(1000.0f + t.color[0] + t.color[1] + t.color[2]);
                 g_wantBake.push_back(0);
                 g_isWindow.push_back(0);
+                g_isFrame.push_back(0);
             }
             g_transient.clear();
             g_stats.active = static_cast<unsigned>(g_active.size());
@@ -1349,13 +1384,28 @@ namespace wxl_livingazeroth::lights
 
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame)
     {
+        UpdateForTests(eye, dt, frame, {});
+    }
+
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene)
+    {
         g_active.clear();
         g_time += dt;
         std::vector<Candidate> cands;
+        AddSceneLightsForTests(scene, cands);
         AddFrameLights(frame, cands);
         g_stats.inRange = static_cast<unsigned>(cands.size());
         Finish(eye, cands, grassperf::Now());
     }
+
+    int SpellSlotsPerCell()
+    {
+        if (!spelllights::Config().enabled) return 0;
+        const int scene = std::max(1, std::min(g_settings.maxPerCell, kMaxPerCellCap));
+        return std::max(0, std::min(kSpellSlotsPerCell, kMaxPerCellCap - scene));
+    }
+
+    float GridCellSize() { return std::max(4.0f, g_settings.cellSize); }
 
     float Reach(const float att[3], float share)
     {

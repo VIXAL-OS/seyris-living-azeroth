@@ -12,18 +12,22 @@
 //    model at +0x18).
 //  - The light scan's walk over every model in range (env/Lights, a slice a frame) offers each one too (OfferFromScan),
 //    which catches what was there before (an aura already up when the feature is switched on).
-// A model is a spell visual by its file (SpellVisualEffectName.dbc, ItemVisualEffects.dbc, spells\ and particles\) and
-// its creation flags (+0x04: 0x20 = the map's own doodads stay with the doodad lights, 0x40 = a missile).
+// A model is a spell light by its file and how it was made (env/SpellLightModel Classify): files under spells\ (the
+// enchants ItemVisualEffects.dbc's too), not the client's own effects (SpellVisualEffectName.dbc's rows named HARDCODED:
+// the loot sparkle on a tracked herb or ore node, a chest, a quest object; breath, level-up), not a game object's own
+// model (GameObjectDisplayInfo.dbc's) unless it hangs on another (+0x48); its creation flags (+0x04: 0x20 = the map's
+// own doodads stay with the doodad lights, 0x40 = a missile, whatever its file).
 // What it gives off, every frame: its own point lights' live colours (instance +0x1D0, 0xD4 each, CM2Light at +0x68), its
 // particle emitters' colours (the file's M2Particle colour and alpha tracks +0x104, +0x114, x their texture's glow colour,
 // read once from the client's archives; a big particle counts more, its scale track +0x124) weighted by how many
-// particles are alive now (CParticleEmitter2 +0x50, the
-// emitter states +0x2C0 0x88 apart with the active flag +0x85, the emitters +0x2C4), its ribbons' (their texture x their
-// colour and alpha tracks' first keys, while the ribbon state +0x2B8, 0x50 apart, says visible +0x4C), its geometry's
-// textures and colours
-// (+0xA0, x the most visible colour's alpha and texture weight +0xA8) for models with no emitters, x its effective
-// alpha (+0x198). It follows the model (its world matrix +0xB4, or the
-// attachment it hangs on, env/Lights AttachedWorld) and fades out with it; a model gone fades where it was.
+// particles are alive (CParticleEmitter2 +0x50, the emitters +0x2C4; smoothed over a quarter of the particles' life,
+// the lifespan track +0x98, so a steady emitter's count stepping by one doesn't flicker), its ribbons' (their texture x
+// their colour and alpha tracks' first keys, while the ribbon state +0x2B8, 0x50 apart, says visible +0x4C), the glow
+// of the rest of a spell's file (its geometry's textures and colours +0xA0, x the most visible colour's alpha and
+// texture weight +0xA8), x its effective alpha (+0x198). It follows the model (its world matrix +0xB4, or the
+// attachment it hangs on, env/Lights AttachedWorld) and fades out with it; a model gone fades where it was. A model the
+// client animated within the last kHoldSeconds counts as drawn (a distant one is animated less often), and one not
+// looked at closely this frame keeps the colour it last gave for as long.
 #pragma once
 
 #include "../env/Lights.hpp"
@@ -71,8 +75,9 @@ namespace wxl_livingazeroth::spelllights
                      kRibbonColourTrack = 0x24, kRibbonAlphaTrack = 0x38;                       // M2Ribbon (the file's)
     constexpr size_t kTextureStride = 0x10, kTextureName = 0x08;                                // M2Texture
     constexpr size_t kFileLightStride = 0x9C;                                                   // M2Light (type u16 at +0)
-    constexpr size_t kParticleStride = 0x1DC, kParticleTexture = 0x16, kParticleBlend = 0x28,
+    constexpr size_t kParticleStride = 0x1DC, kParticleTexture = 0x16, kParticleBlend = 0x28, kParticleLifespan = 0x98,
                      kParticleColourTrack = 0x104, kParticleAlphaTrack = 0x114, kParticleScaleTrack = 0x124; // M2Particle
+    constexpr float kHoldSeconds = 0.5f;   // animated this recently: drawn; looked at this recently: its colour holds
 
     /// The exe's own instructions that read what this reads: the feature stays off unless every one is as expected.
     struct Guard { uintptr_t va; uint8_t size; uint8_t bytes[24]; const char* what; };
@@ -90,9 +95,11 @@ namespace wxl_livingazeroth::spelllights
         unsigned inFlight = 0, impact = 0;                                  // the missile lists' lengths
         unsigned shown = 0, looked = 0, lit = 0, fading = 0;                // drawn by the client this frame; of those the nearest looked at closely; giving light; gone, fading out
         unsigned inRange = 0, merged = 0, clusters = 0, dropped = 0, drawn = 0; // the frame's lights: in range, merged into clusters, over the cap, drawn
+        unsigned leaving = 0, waiting = 0, overflow = 0, cellRoom = 0;      // of those drawn, fading out of the kept set; wanted but no room in a grid cell yet; dropped at once (no room); spell lights a grid cell holds
         unsigned files = 0, filesWaiting = 0;                               // model files known; spell visuals' files still loading
         unsigned textures = 0, texturesWaiting = 0, texturesRead = 0;       // glow colours known; waiting; read this frame
-        int      spellRows = -1, itemRows = -1;                             // SpellVisualEffectName / ItemVisualEffects rows read
+        int      spellRows = -1, itemRows = -1, objectRows = -1;            // SpellVisualEffectName / ItemVisualEffects / GameObjectDisplayInfo rows read
+        unsigned clientEffects = 0, objectModels = 0;                       // files of the client's own effects (HARDCODED), of game objects
         double   ms = 0.0, msAverage = 0.0, msMost = 0.0;                   // this frame; over the last second
         double   msFind = 0.0, msTextures = 0.0, msModels = 0.0, msMerge = 0.0; // this frame's steps: finding them, glow colours, each model, merge and cap
     };
@@ -106,7 +113,7 @@ namespace wxl_livingazeroth::spelllights
     /// Forget everything (world left, feature off).
     void Reset();
 
-    struct Drawn { std::string path; spelllight::Kind kind; float pos[3]; float color[3]; float radius; unsigned sources; float distance; };
+    struct Drawn { std::string path; spelllight::Kind kind; float pos[3]; float color[3]; float radius; unsigned sources; float distance; float presence; bool kept; };
     /// This frame's drawn spell lights, by score.
     const std::vector<Drawn>& DrawnLights();
 
@@ -120,7 +127,7 @@ namespace wxl_livingazeroth::spelllights
     // --- tests -------------------------------------------------------------------------------------------------------------
     struct ClientView { const void* scene = nullptr; const void* missiles[2] = {}; };
     using FileReader = bool (*)(const char* path, std::vector<uint8_t>& out);
-    /// Where model textures and the two tables are read from (default: the client's archives, render/BlpTexture).
+    /// Where model textures and the three tables are read from (default: the client's archives, render/BlpTexture).
     void SetFileReader(FileReader read);
     /// The indoor test for the lights (default env/Lights IsIndoor; null: every spell light outdoors).
     void SetIndoorTest(bool (*isIndoor)(const float pos[3]));
