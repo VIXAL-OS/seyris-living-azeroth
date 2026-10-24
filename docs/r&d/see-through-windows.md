@@ -928,8 +928,8 @@ changing a window more than twice. By group (the line it prints; the names its M
 | 55 | Interior_F303 | 2 | 41% | 22 (12) | 0 | 95 |
 | 75 | Rogue | 5 | 36% | 45 (15) | 0 | 95 |
 | 78 | The Forlorn Cavern (a hall) | 4 (9) | 42% | 17 (6) | 0 | 31 |
-| 65 | Interior_K306 (the Commons) | 73 (33) | 31% | 108 (7) | 4 | 26, 29, 66 .. 89 |
-| 60 | The Great Forge's ring | 28 (1) | 17% | 44 (16) | 3 | 11, 18, 19, 64, 103 |
+| 65 | Interior_K306 (the Great Forge and its ring; section 14) | 73 (33) | 31% | 108 (7) | 4 | 26, 29, 66 .. 89 |
+| 60 | The Great Forge (MOGN; the Commons' hall by the Stonefire Tavern) | 28 (1) | 17% | 44 (16) | 3 | 11, 18, 19, 64, 103 |
 | 61 | Interior_F33 | 26 (12) | 23% | 117 (21) | 8 | 20, 21, 23, 27, 62 |
 | 37 | Interior_D | 20 (14) | 48% | 98 (10) | 1 | 30, 38, 39, 58, 80 |
 | 8 | Ironforge (a hall) | 13 (5) | 56% | 60 (13) | 5 | 9, 47, 48, 49 |
@@ -957,3 +957,44 @@ the room each open window opened onto.
 **Only the game can confirm**: the walk into a room from inside (the client's interior walk taking ours), the rooms'
 lighting with the global put back, and how the chosen groups look; snapshots from the Commons would tell whether it can
 join.
+
+## 14. The Great Forge (2026-10-23, the first in-game report)
+
+"Ironforge windows don't work": the user on the Great Forge's ring (Ironforge 54.7, 57.6) before the herbalist's frosted
+windows, a snapshot (F11) with the camera in group 71 (`Interior_K65`, the herbalist's and the first aid trainer's shop,
+under its upper storey) and none of the 13 groups walked. Section 13 had two names swapped: the NPCs' places (the
+creature spawns in the WMO's space) put group 65 (`Interior_K306`) round the forge itself -- the gryphon master, the
+smiths, the enchanters, the herbalist, the miners and tailors in the shops round its ring -- and group 60 (MOGN "The Great
+Forge") at the Commons' hall by the Stonefire Tavern (the innkeeper, the barber). So the ring was left out at 31%, not 17%.
+
+**From where players stand.** The survey's eyes cover a group's whole box within 20 yd of a window; the ring's box is 186
+yd across, so most eyes look at its windows from across the forge or along its fronts. `SEETHROUGH_FRONTS` (seethrough_tests)
+puts the eyes before each window onto a room (2 .. 10 yd out, up to 60 degrees aside, at 1.8 and 3 yd over the group's
+floor) and walks along each window's front (3, 5 and 8 yd out, 15 yd either side, 7 yd a second, every window held as at
+runtime). The ring's ground-floor shop windows open from 59 .. 100% of the eyes 2 .. 4.5 yd before them (the herbalist's
+two 33 of 40 and 41 of 42, the enchanters' the same, the gryphon roost's (73) 26 of 26, the leatherworkers' and the miners'
+13 of 20 and 13 of 22); its narrow slits, upper storeys and high windows seldom (they stay frosted); of 219 walks along
+the fronts one changed a window more than twice. From the snapshot's camera the herbalist's two windows open (nine rays
+of nine see the shop). The ring (65) joins the table (14 groups, 61 rows); the shops looking out onto it don't (from inside
+them 8 .. 20% of the eyes: the rays through their glass cross the ring and meet the forge's far side, or nothing, past
+the near groups).
+
+**The room across the glass.** Most of the city's windows are glazed on both sides (a pane in the shop's group and one in
+the street's, half a yard apart). RoomBeyond took the smallest interior box holding the point past the glass, and the
+city's boxes overlap: the herbalist's windows went onto the Forlorn Cavern's box (78), not the ring, and 16 windows in
+all onto the wrong group. `GlazedPartner`: the group of the pane facing back across the glass (normals opposite within
+0.9, within 1.2 yd, not behind it) is the room beyond; RoomBeyond's box where there is none.
+
+**The budget.** From inside, a frame opens at most 16 windows (shared with the ways out), handed out in the windows'
+order; the ring has 73, 33 of them onto nothing, so the nearest shop's could find it spent. `PlanInside` now hands it to
+the nearest first, and in a group between rooms without ways out a window onto nothing takes none of it.
+
+**Where to stand** (`SEETHROUGH_SPOTS`: the eye 3 .. 6 yd before a window, at most 20 degrees aside, opening the most of
+its group's windows; the zone map's coordinates from WorldMapArea's bounds for Ironforge, the NPCs from the creature
+spawns): the forge's ring before the herbalist (54.2, 57.5, facing south-east), the enchanters (59.4, 45.4, east), the
+leatherworkers (40.7, 36.2, north-west), the miners (49.3, 29.3, north); inside the shops: the smithy (52.4, 86.8, north),
+the armour merchants' room (54.5, 88.1, east, by Lissyphus Finespindle), the guild master's (36.9, 83.9, north-east, by
+Jondor Steelbrow), the bag vendor's (37.5, 75.3, south-west, by Pithwick), the robe merchant's (38.8, 5.6, west, by Maeva
+Snowbraid), the warriors' room (59.1, 66.1, south, by the training dummies); upstairs: 36.9, 30.6 (west), 50.5, 78.1
+(south), 58.2, 90.7 (north), 35.4, 2.8 (south, by Talvash del Kissel); the halls: 58.7, 23.0 (west) and the Forlorn
+Cavern's (57.3, 65.8, north, on its upper floor).

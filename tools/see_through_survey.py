@@ -144,8 +144,13 @@ SEE_THROUGH = [
 # of a window, LookIn into the room beyond; walks through the group, the verdict held): Ironforge's 818 room windows, 500 of
 # them onto another room, open from 30% of the eyes, 64 of 804 walks changing a window more than twice. Taken: the groups
 # whose windows open from 35% of their eyes or more with no window changing more than twice on any walk (13 of 64); the
-# Commons (group 65, 73 windows onto the shops round it, 31%, 4 flickers), the Great Forge's ring (60, 17%), the Military
-# and Mystic Wards' halls (61, 97, 37: 23 .. 48%, 1 .. 8 flickers) and the rest left out until in-game snapshots say more.
+# Military and Mystic Wards' halls (61, 97, 37: 23 .. 48%, 1 .. 8 flickers) and the rest left out until in-game snapshots
+# say more. The Great Forge (group 65, MOGN "Interior_K306": the forge and the ring of shops round it, the gryphon master,
+# the smiths, the enchanters, the herbalist; its 73 windows onto them, 33 onto nothing) joined after the first in-game
+# report (2026-10-23, "Ironforge windows don't work", the user on the ring before the herbalist's windows): from where
+# players stand, 2 .. 4.5 yd before its ground-floor shop windows, 59 .. 100% of the eyes open them, and of 219 walks
+# along the fronts one changed a window more than twice (SEETHROUGH_FRONTS). (Group 60, MOGN "The Great Forge", is the
+# Commons' hall by the Stonefire Tavern: 17%, left out.)
 FROM_BETWEEN = 0x4
 IF = r"world\wmo\khazmodan\cities\ironforge\ironforge.wmo"
 SEE_THROUGH_GROUPS = [
@@ -163,6 +168,7 @@ SEE_THROUGH_GROUPS = [
     (IF, 55, "Ironforge: Interior_F303, onto the hall 95 (41%)"),
     (IF, 75, "Ironforge: the rogues' room, onto the hall 95 (36%)"),
     (IF, 78, "Ironforge: the Forlorn Cavern's hall (78), onto T_warriors 31 (42%)"),
+    (IF, 65, "Ironforge: the Great Forge (65), from its ring into the shops round it (its ground-floor shop windows from 59 .. 100% of the eyes 2 .. 4.5 yd before them)"),
 ]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO)
 

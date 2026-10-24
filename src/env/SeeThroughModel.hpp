@@ -502,12 +502,20 @@ namespace wxl_livingazeroth::seethrough
     /// no room behind them (interior -1).
     RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, size_t groupCount);
     /// The same with the root's MOGI (`groups`, `count`): a window of a group `between` flags (kSeeBetween) gets the room
-    /// beyond it (RoomBeyond) as its `interior` (-1: none, a fake), counted real or fake; the other groups' windows as above.
+    /// beyond it as its `interior` -- its glazed partner's group (GlazedPartner), else RoomBeyond's; -1: none, a fake --
+    /// counted real or fake; the other groups' windows as above.
     RootWindows BuildInside(uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count,
                             const std::vector<uint8_t>& between);
     /// The interior group beyond an interior group's window (its normal points out of its own group): the smallest box (not
     /// its own group's, not an exterior or skipped one) holding a point kProbes past its middle along its normal; -1: none.
     int RoomBeyond(const SeeWindow& w, const GroupInfo* groups, size_t count);
+    /// A window glazed on both sides (2026-10-23, Ironforge): the group of the pane on its other side -- an interior window
+    /// of another group (not skipped) facing back at it (normals opposite within kPartnerFacing), its middle within
+    /// kPartnerReach and not behind it -- or -1. Between rooms that group is the room beyond the window: the boxes of a
+    /// city's halls overlap, and the smallest holding the point past the glass was the wrong one for 16 of Ironforge's
+    /// windows (the herbalist's on the Great Forge's ring onto the Forlorn Cavern's box, not the ring).
+    constexpr float kPartnerFacing = 0.9f, kPartnerReach = 1.2f, kPartnerBehind = 0.05f;
+    int GlazedPartner(const SeeWindow& w, uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count);
     /// Whether the camera (WMO space) is inside a window's plane (its normal points out of the building) by kFacing.
     bool FacingIn(const SeeWindow& w, const float camLocal[3]);
     /// How far (yd) the camera may be from a window's middle for the street to open through it, and how many a frame.
@@ -530,9 +538,11 @@ namespace wxl_livingazeroth::seethrough
     bool FarthestDepth(const float (*corners)[3], int count, const float model[16], const float eye[3], const float viewProj[16], float& out);
     /// One interior group's windows from inside: facing in (FacingIn), on the screen and within the walk's rectangle
     /// (`walk`): kShut, with its own screen rectangle and depth; within kInsideRange of the camera with `budget` left (it
-    /// goes down by each): a candidate.
+    /// goes down by each), the nearest first: a candidate. `fakesFree` (a group between rooms without ways out): a window
+    /// with no room beyond it takes none of the budget (2026-10-23: the Great Forge's ring has 73 windows, 33 of them onto
+    /// nothing, and in the windows' order the nearest shop's could find the budget spent).
     void PlanInside(const SeeWindow* windows, uint32_t count, const float camLocal[3], const Rect& walk, const float model[16],
-                    const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out);
+                    const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out, bool fakesFree = false);
     /// The rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) on past its own pane,
     /// through the building (`groups`: every group's mesh, as LookIn), and what each meets first that the client draws from
     /// that side (a room's pane from behind is see-through). Front: it leaves by the building's own glass (an exterior

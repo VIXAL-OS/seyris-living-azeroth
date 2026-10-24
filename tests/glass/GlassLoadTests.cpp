@@ -420,7 +420,8 @@ namespace
         // headquarters, from outside and from inside; not Stormwind, a barn, a smithy or the inn's closed variant. Since
         // 2026-10-22 the stained glass's too: the chapel from outside and inside, Northrend's town hall from outside only; and
         // the frosted glass's (Phase B): the dwarven house from both, the zeppelin house from inside only; and (2026-10-23,
-        // Phase C, between rooms) Ironforge by its groups: the smithy's (47) 0x4, the Commons (65) none, the city 0x4 in all.
+        // Phase C, between rooms) Ironforge by its groups: the smithy's (47) 0x4, the Great Forge's (65, its ring) 0x4 since the
+        // first in-game report, the Commons' hall by the Stonefire Tavern (60) none, the city 0x4 in all.
         auto see = [](const char* wmo) { return gl::SeeThroughFlags(gl::PathHash(wmo)); };
         const uint32_t seeInn = see("World\\WMO\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo");
         const uint32_t seeHouse = see("world\\wmo\\azeroth\\buildings\\duskwood_humantwostory\\duskwood_humantwostory.wmo");
@@ -432,17 +433,19 @@ namespace
         const uint32_t seeZeppelin = see("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo");
         const uint32_t ironforge = gl::PathHash("World\\wmo\\KhazModan\\Cities\\Ironforge\\ironforge.wmo");
         const uint32_t seeCity = gl::SeeThroughFlags(ironforge), seeSmithy = gl::SeeThroughGroupFlags(ironforge, 47);
-        const uint32_t seeCommons = gl::SeeThroughGroupFlags(ironforge, 65), seeInnGroup = gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo"), 5);
+        const uint32_t seeForge = gl::SeeThroughGroupFlags(ironforge, 65);
+        const uint32_t seeCommons = gl::SeeThroughGroupFlags(ironforge, 60), seeInnGroup = gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn.wmo"), 5);
         const uint32_t seeNone = see("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo") | see("world\\wmo\\azeroth\\buildings\\human_barn_silo\\barn.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireblacksmith\\goldshireblacksmith.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo");
         std::snprintf(line, sizeof(line), "%s: SeeThroughBuildings.cdbc: %zu buildings; the inn's flags %u, a two-storey house's %u, a mage tower's %u, a "
                       "farmhouse's %u, the chapel's %u, Northrend's town hall's %u, the dwarven house's %u, the zeppelin house's %u; Stormwind, a barn, a "
-                      "smithy, the closed inn %u; Ironforge %u (%zu group rows), its smithy's group %u, the Commons' %u; the inn's group 5 %u (the WMO's)", via,
+                      "smithy, the closed inn %u; Ironforge %u (%zu group rows), its smithy's group %u, the Great Forge's %u, the Commons' %u; the inn's group 5 %u (the "
+                      "WMO's)", via,
                       gl::SeeThroughBuildings(), seeInn, seeHouse, seeTower, seeFarm, seeChapel, seeHall, seeHovel, seeZeppelin, seeNone, seeCity,
-                      gl::SeeThroughGroupRows(), seeSmithy, seeCommons, seeInnGroup);
+                      gl::SeeThroughGroupRows(), seeSmithy, seeForge, seeCommons, seeInnGroup);
         Check(gl::SeeThroughBuildings() == 48 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 &&
-              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 13 && seeSmithy == 4 && seeCommons == 0 &&
+              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 14 && seeSmithy == 4 && seeForge == 4 && seeCommons == 0 &&
               seeInnGroup == 3 && status.find("SeeThroughBuildings.cdbc: 48 buildings") != std::string::npos, line);
 
         // The lights panel's lines (the in-game report's).

@@ -798,6 +798,146 @@ namespace
                         row.lines.push_back(line);
                     }
             }
+            // Between rooms, where players stand (2026-10-23, Ironforge's Great Forge: "Ironforge windows don't work"; the user
+            // stood on the forge's ring before a shop's windows): SEETHROUGH_FRONTS, eyes before each of the group's windows
+            // onto a room (2 .. 10 yd out, up to 60 degrees aside, on the group's floor at 1.8 and 3 yd) and walks along each
+            // window's front (3, 5 and 8 yd out, 15 yd either side, on foot, 7 yd a second), every window held as the runtime
+            // holds it; SEETHROUGH_SPOTS, the eye before a window opening the most of the group's windows (a place to stand).
+            if (betweenGroup && (std::getenv("SEETHROUGH_FRONTS") || std::getenv("SEETHROUGH_SPOTS")))
+            {
+                auto flat = [](const st::SeeWindow& wi, float& nx, float& ny) {
+                    nx = wi.normal[0]; ny = wi.normal[1];
+                    const float l = std::sqrt(nx * nx + ny * ny);
+                    if (l < 0.3f) return false;
+                    nx /= l; ny /= l;
+                    return true;
+                };
+                auto eyeAt = [&](const st::SeeWindow& wi, float back, float side, float h, float eye[3]) {
+                    float nx, ny;
+                    if (!flat(wi, nx, ny)) return false;
+                    const float x = wi.center[0] - back * nx - side * ny, y = wi.center[1] - back * ny + side * nx;
+                    bool found = false;
+                    const float floorZ = b.Ground(x, y, wi.center[2] + 1.0f, roomOnly, &found);
+                    if (!found || floorZ < wi.center[2] - 4.0f) return false;   // its own storey's floor
+                    eye[0] = x; eye[1] = y; eye[2] = floorZ + h;
+                    return eye[2] < box.hi[2];
+                };
+                auto opens = [&](uint32_t i, const float eye[3]) {
+                    st::Sight s;
+                    look(i, eye, s);
+                    return st::SightOpen(s, false);
+                };
+                auto facing = [&](uint32_t i, const float eye[3]) {
+                    const float d[3] = { eye[0] - w[i].center[0], eye[1] - w[i].center[1], eye[2] - w[i].center[2] };
+                    return w[i].interior >= 0 && st::FacingIn(w[i], eye) && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= st::kInsideRange * st::kInsideRange;
+                };
+                unsigned nearEyes = 0, nearOpen = 0, midEyes = 0, midOpen = 0, frames = 0, openFrames = 0, changesAll = 0, flickerWalks = 0, walksDone = 0;
+                std::vector<unsigned> winNear(n, 0), winNearOpen(n, 0);
+                float bestEye[3] = {};
+                unsigned bestOpen = 0, bestFacing = 0;
+                std::string bestList;
+                for (uint32_t j = 0; j < n; ++j)
+                {
+                    if (w[j].interior < 0) continue;
+                    for (const float back : { 2.0f, 3.0f, 4.5f, 6.0f, 8.0f, 10.0f })
+                        for (const float aside : { -60.0f, -40.0f, -20.0f, 0.0f, 20.0f, 40.0f, 60.0f })
+                            for (const float h : { 1.8f, 3.0f })
+                            {
+                                const float a = aside * 3.14159265f / 180.0f;
+                                float eye[3];
+                                if (!eyeAt(w[j], back * std::cos(a), back * std::sin(a), h, eye) || !facing(j, eye)) continue;
+                                const bool o = opens(j, eye);
+                                (back <= 4.5f ? nearEyes : midEyes) += 1;
+                                (back <= 4.5f ? nearOpen : midOpen) += o ? 1 : 0;
+                                if (back <= 4.5f) { ++winNear[j]; winNearOpen[j] += o ? 1 : 0; }
+                                if (std::getenv("SEETHROUGH_SPOTS") && h == 1.8f && std::fabs(aside) <= 20.0f && back >= 3.0f && back <= 6.0f)
+                                {
+                                    unsigned op = 0, fc = 0;
+                                    std::string list;
+                                    for (uint32_t i = 0; i < n; ++i)
+                                    {
+                                        if (!facing(i, eye)) continue;
+                                        ++fc;
+                                        if (opens(i, eye)) { ++op; list += " " + std::to_string(w[i].ordinal); }
+                                    }
+                                    if (op > bestOpen || (op == bestOpen && fc < bestFacing))
+                                    {
+                                        bestOpen = op; bestFacing = fc; bestList = list;
+                                        for (int k = 0; k < 3; ++k) bestEye[k] = eye[k];
+                                    }
+                                }
+                            }
+                    if (!std::getenv("SEETHROUGH_FRONTS")) continue;
+                    // walks along its front
+                    float nx, ny;
+                    if (!flat(w[j], nx, ny)) continue;
+                    for (const float out : { 3.0f, 5.0f, 8.0f })
+                    {
+                        std::vector<st::Gate> gates(n);
+                        std::vector<uint8_t> last(n, 0), seen(n, 0);
+                        std::vector<unsigned> changes(n, 0);
+                        for (float t = -15.0f; t <= 15.0f; t += 7.0f / 60.0f)
+                        {
+                            float eye[3];
+                            if (!eyeAt(w[j], out, t, 2.5f, eye))
+                            {
+                                for (uint32_t i = 0; i < n; ++i) { gates[i] = st::Gate{}; seen[i] = 0; }
+                                continue;
+                            }
+                            for (uint32_t i = 0; i < n; ++i)
+                            {
+                                if (!facing(i, eye)) { gates[i] = st::Gate{}; seen[i] = 0; continue; }
+                                st::Sight sg;
+                                look(i, eye, sg);
+                                const bool held = st::Hold(gates[i], st::SightOpen(sg, gates[i].seen && gates[i].open), 1.0f / 60.0f);
+                                if (seen[i]) changes[i] += held != (last[i] != 0) ? 1 : 0;
+                                last[i] = held ? 1 : 0;
+                                seen[i] = 1;
+                                ++frames;
+                                openFrames += held ? 1 : 0;
+                            }
+                        }
+                        ++walksDone;
+                        bool flick = false;
+                        for (uint32_t i = 0; i < n; ++i) { changesAll += changes[i]; flick = flick || changes[i] > 2; }
+                        flickerWalks += flick ? 1 : 0;
+                    }
+                }
+                char line[700];
+                if (std::getenv("SEETHROUGH_FRONTS"))
+                {
+                    unsigned mostly = 0, real = 0;
+                    std::string weak;
+                    for (uint32_t i = 0; i < n; ++i)
+                    {
+                        if (w[i].interior < 0 || !winNear[i]) continue;
+                        ++real;
+                        if (winNearOpen[i] * 4 >= winNear[i] * 3) ++mostly;
+                        else weak += " " + std::to_string(w[i].ordinal) + "(" + std::to_string(winNearOpen[i]) + "/" + std::to_string(winNear[i]) + ")";
+                    }
+                    std::snprintf(line, sizeof(line), "    fronts: group %3u %-22s 2 .. 4.5 yd before its windows open %u of %u (%.0f%%), 6 .. 10 yd %u of %u (%.0f%%); "
+                                  "%u of %u windows from 3/4 of their near eyes; walks along the fronts: open %u of %u frames, changed %u times, %u of %u walks "
+                                  "changed one more than twice; weakest:%s", g, g < b.names.size() ? b.names[g].c_str() : "", nearOpen, nearEyes,
+                                  nearEyes ? 100.0 * nearOpen / nearEyes : 0.0, midOpen, midEyes, midEyes ? 100.0 * midOpen / midEyes : 0.0, mostly, real, openFrames, frames, changesAll,
+                                  flickerWalks, walksDone, weak.substr(0, 300).c_str());
+                    row.betweenLines.push_back(line);
+                    // (SEETHROUGH_FRONTS=2: each window's)
+                    if (std::getenv("SEETHROUGH_FRONTS")[0] == '2')
+                        for (uint32_t i = 0; i < n; ++i)
+                        {
+                            if (w[i].interior < 0 || !winNear[i]) continue;
+                            std::snprintf(line, sizeof(line), "      window %4u (z %5.1f, %.2f x %.2f yd, onto %d): open from %u of %u eyes 2 .. 4.5 yd before it",
+                                          w[i].ordinal, w[i].center[2], 2 * w[i].halfWidth, 2 * w[i].halfHeight, w[i].interior, winNearOpen[i], winNear[i]);
+                            row.betweenLines.push_back(line);
+                        }
+                }
+                if (std::getenv("SEETHROUGH_SPOTS") && bestOpen)
+                {
+                    std::snprintf(line, sizeof(line), "    spot: group %3u %-22s stand at %.2f %.2f %.2f: %u of the %u windows it faces open:%s", g,
+                                  g < b.names.size() ? b.names[g].c_str() : "", bestEye[0], bestEye[1], bestEye[2], bestOpen, bestFacing, bestList.c_str());
+                    row.betweenLines.push_back(line);
+                }
+            }
             // walks through the room: across it along x and along y at a quarter, half and three quarters of its box, the
             // camera 2.5 yd over the floor (on foot) and 5 (mounted), 7 yd a second, a frame each 1/60 s; each window facing
             // in within kInsideRange held as the runtime holds it (as if the camera looked at it)
@@ -1155,6 +1295,20 @@ int main(int argc, char** argv)
         CHECK(street && n == 2 && street[0].ordinal == 4 && street[0].interior == 2 && street[1].ordinal == 5 && street[1].interior == -1);
         const st::SeeWindow* shop = r.Group(2, n);
         CHECK(shop && n == 1 && shop->interior == -1 && r.real == 1 && r.fake == 1);
+        // (2026-10-23) glazed on both sides: the pane on the window's other side names the room where boxes overlap (a hall's
+        // box over the street in front of the shop: the smallest box alone took the hall, as for Ironforge's herbalist)
+        const st::GroupInfo overlap[] = { groups[0], groups[1], groups[2], groups[3], { 0x2000, { 0, -8, 0 }, { 10, 8, 20 } } };
+        w.group = 2; w.center[0] = 10.5f; w.normal[0] = -1;
+        CHECK(st::RoomBeyond(w, overlap, 5) == 4 && st::GlazedPartner(w, path, all, overlap, 5) == 1);
+        w.group = 1; w.center[0] = 9.5f; w.normal[0] = 1;
+        CHECK(st::GlazedPartner(w, path, all, overlap, 5) == 2);
+        w.center[0] = -49.5f; w.normal[0] = -1;
+        CHECK(st::GlazedPartner(w, path, all, overlap, 5) == -1 && st::GlazedPartner(w, path, all, nullptr, 5) == -1);
+        w.center[0] = 12.0f; w.normal[0] = 1;   // the shop's pane behind it, not across its glass
+        CHECK(st::GlazedPartner(w, path, all, overlap, 5) == -1);
+        const st::RootWindows paired = st::BuildInside(path, all, overlap, 5, { 0, 0, 1, 0, 0 });
+        const st::SeeWindow* shopPaired = paired.Group(2, n);
+        CHECK(shopPaired && n == 1 && shopPaired->interior == 1 && paired.real == 1);
         // unmarked everywhere: as before (no room behind a room's own glass)
         const st::RootWindows plain = st::BuildInside(path, all, 4);
         CHECK(plain.real == 0 && plain.fake == 0 && plain.Group(1, n)->interior == -1);
@@ -1439,6 +1593,20 @@ int main(int argc, char** argv)
         Camera(back, at, 1.0f, 16.0f / 9.0f, vp);
         st::PlanInside(&w, 1, back, { -1, -1, 1, 1 }, kIdentity, back, vp, budget, plan);
         CHECK(plan[0].state == st::kUnseen && budget == 4);
+        // (2026-10-23) the budget to the nearest first, whatever the windows' order; a fake between rooms takes none of it
+        {
+            st::SeeWindow row[4] = { MakeWindow(0, 0.05f, 2, 0, -1, 0, 1, 1, -1, 18), MakeWindow(2.5f, 0.05f, 2, 0, -1, 0, 1, 1, -1, 19),
+                                     MakeWindow(-2.5f, 0.05f, 2, 0, -1, 0, 1, 1, -1, 20), MakeWindow(1.0f, 0.05f, 2, 0, -1, 0, 1, 1, -1, 21) };
+            row[0].interior = 3; row[1].interior = 3; row[2].interior = 3; row[3].interior = -1;
+            const float near5[3] = { 2.5f, 5, 2 }, ahead[3] = { 2.5f, 0, 2 };
+            Camera(near5, ahead, 1.4f, 16.0f / 9.0f, vp);
+            unsigned two = 2;
+            st::PlanInside(row, 4, near5, { -1, -1, 1, 1 }, kIdentity, near5, vp, two, plan, true);
+            CHECK(two == 0 && plan[1].candidate && plan[0].candidate && !plan[2].candidate && !plan[3].candidate && plan[3].state == st::kShut);
+            two = 2;
+            st::PlanInside(row, 4, near5, { -1, -1, 1, 1 }, kIdentity, near5, vp, two, plan);   // (fakes take their share)
+            CHECK(two == 0 && plan[1].candidate && plan[3].candidate && !plan[0].candidate && !plan[2].candidate);
+        }
         float depth = 0;
         float quad[4][3];
         st::Corners(w, 0.0f, quad);
@@ -2089,7 +2257,8 @@ int main(int argc, char** argv)
             // any case, from outside and inside; not its closed variant, Stormwind or nothing
             std::printf("  SeeThroughBuildings.cdbc: %zu buildings\n", gl::SeeThroughBuildings());
             CHECK(gl::SeeThroughBuildings() == 48);   // (2026-10-22: 24, with stained glass 33, with frosted glass 47; 2026-10-23 Ironforge's groups)
-            CHECK(gl::SeeThroughGroupRows() == 13 && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween);
+            CHECK(gl::SeeThroughGroupRows() == 14 && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
+                  gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 65) == st::kSeeBetween);   // (+ the Great Forge, 2026-10-23)
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo")) == st::kSeeFromInside);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\chapel\\redridgechapel.wmo")) == 3);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\northrend\\buildings\\human\\nd_human_townhall\\nd_human_townhall.wmo")) == st::kSeeFromOutside);

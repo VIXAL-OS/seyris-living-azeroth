@@ -103,7 +103,8 @@ namespace wxl_livingazeroth::seethrough
                 s.halfHeight = w.halfHeight;
                 s.thickness = w.thickness;
                 const bool beyond = inside && between && groups && w.group < between->size() && (*between)[w.group];
-                s.interior = beyond ? RoomBeyond(s, groups, count) : inside ? -1 : InteriorBehind(s.center, s.normal, groups, count);
+                const int partner = beyond ? GlazedPartner(s, path, all, groups, count) : -1;
+                s.interior = beyond ? (partner >= 0 ? partner : RoomBeyond(s, groups, count)) : inside ? -1 : InteriorBehind(s.center, s.normal, groups, count);
                 s.outer = inside ? OuterBehind(s, path, all) : 0.0f;
                 r.windows.push_back(s);
             }
@@ -152,6 +153,27 @@ namespace wxl_livingazeroth::seethrough
                             const std::vector<uint8_t>& between)
     {
         return Build(path, all, groups, count, true, &between);
+    }
+
+    int GlazedPartner(const SeeWindow& w, uint32_t path, const std::vector<glass::Window>& all, const GroupInfo* groups, size_t count)
+    {
+        if (!groups || !Finite3(w.center) || !Finite3(w.normal)) return -1;
+        int best = -1;
+        float bestDistance = 0.0f;
+        for (const glass::Window& o : all)
+        {
+            if (o.path != path || (o.flags & kWindowExterior) || o.group == w.group || o.group >= count || !Finite3(o.center) || !Finite3(o.normal))
+                continue;
+            if (groups[o.group].flags & client::kSkippedGroups) continue;
+            if (Dot(o.normal, w.normal) > -kPartnerFacing) continue;   // not facing back at it
+            const float d[3] = { o.center[0] - w.center[0], o.center[1] - w.center[1], o.center[2] - w.center[2] };
+            if (Dot(d, w.normal) < -kPartnerBehind) continue;           // behind it: not the other side of its glass
+            const float distance = std::sqrt(Dot(d, d));
+            if (distance > kPartnerReach || (best >= 0 && distance >= bestDistance)) continue;
+            best = static_cast<int>(o.group);
+            bestDistance = distance;
+        }
+        return best;
     }
 
     int RoomBeyond(const SeeWindow& w, const GroupInfo* groups, size_t count)
@@ -659,10 +681,11 @@ namespace wxl_livingazeroth::seethrough
     }
 
     void PlanInside(const SeeWindow* windows, uint32_t count, const float camLocal[3], const Rect& walk, const float model[16],
-                    const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out)
+                    const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out, bool fakesFree)
     {
         out.assign(count, WindowPlan{});
         if (!windows || !Finite3(camLocal)) return;
+        std::vector<std::pair<float, uint32_t>> inRange;   // (distance, window): the budget goes to the nearest first
         for (uint32_t i = 0; i < count; ++i)
         {
             const SeeWindow& w = windows[i];
@@ -676,12 +699,17 @@ namespace wxl_livingazeroth::seethrough
             p.clip = clip;
             p.screen = screen;
             FarthestDepth(quad, 4, model, eye, viewProj, p.depth);
+            if (fakesFree && w.interior < 0) continue;   // (nothing beyond it: shut, without a share of the budget)
             const float d[3] = { camLocal[0] - w.center[0], camLocal[1] - w.center[1], camLocal[2] - w.center[2] };
-            if (std::sqrt(Dot(d, d)) <= kInsideRange && budget > 0)
-            {
-                p.candidate = true;
-                --budget;
-            }
+            const float distance = std::sqrt(Dot(d, d));
+            if (distance <= kInsideRange) inRange.emplace_back(distance, i);
+        }
+        std::stable_sort(inRange.begin(), inRange.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& [distance, i] : inRange)
+        {
+            if (!budget) break;
+            out[i].candidate = true;
+            --budget;
         }
     }
 

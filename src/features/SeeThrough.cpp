@@ -871,7 +871,7 @@ namespace wxl_livingazeroth::seethrough
             std::memcpy(f.model, model, sizeof(f.model));
             f.haveCam = true;
             std::vector<WindowPlan> plan;
-            PlanInside(windows, count, cam, FromCRect(crect), model, eye, viewProj, g_insideBudget, plan);
+            PlanInside(windows, count, cam, FromCRect(crect), model, eye, viewProj, g_insideBudget, plan, between && !waysOut);
             std::vector<SightMesh> building;   // (the building round each candidate for its rays)
             for (uint32_t i = 0; i < count; ++i)
             {
