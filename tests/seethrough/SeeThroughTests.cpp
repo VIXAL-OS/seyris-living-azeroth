@@ -706,7 +706,7 @@ namespace
             for (uint32_t i = 0; i < n; ++i) around[i] = b.Near(w[i], w[i].interior >= 0 ? w[i].interior : static_cast<int>(g));
             auto look = [&](uint32_t i, const float eye[3], st::Sight& s) {
                 const st::SightPoints* sp = i < points.size() && points[i].n ? &points[i] : nullptr;
-                if (w[i].interior >= 0) st::LookIn(w[i], eye, around[i].data(), around[i].size(), sp, s);
+                if (w[i].interior >= 0) st::LookIn(w[i], eye, around[i].data(), around[i].size(), sp, s, st::RoomReach(eye, b.groups[static_cast<size_t>(w[i].interior)]));
                 else st::LookOut(w[i], eye, around[i].data(), around[i].size(), sp, s);
             };
             const bool betweenGroup = between[g] != 0;
@@ -1717,6 +1717,28 @@ int main(int argc, char** argv)
         CHECK(s.missHit == st::RoomMesh::kBack && s.missDepth > 0.0f);
         st::LookIn(over, low, rooms, 2, nullptr, s);   // (no roof: the void)
         CHECK(s.front == 6 && s.back == 3 && !st::SightOpen(s, false));
+        // (2026-10-24) between rooms, a hall's far side past kVoidReach (Ironforge's Great Forge seen from a shop on its
+        // ring: 66 .. 180 yd): within kVoidReach its rays meet nothing (the void: against); as far as the hall's box reaches
+        // (RoomReach), its far wall from inside. A room no larger than that looks as far as before.
+        {
+            std::vector<float> hv;
+            std::vector<uint16_t> hi;
+            AddRect(hv, hi, 1, 100, -50, 50, -50, 50, -1);   // the hall's far wall (y 100), facing back at the shop
+            st::RoomMesh hall;
+            CHECK(hall.Build(hv.data(), static_cast<uint32_t>(hv.size() / 3), hi.data(), static_cast<uint32_t>(hi.size()), all(hi)));
+            const st::SightMesh halls[1] = { { &hall, false } };
+            const st::SeeWindow shop = MakeWindow(0, 0, 1.5f, 0, 1, 0, 0.8f, 1.0f, 0, 30);   // its normal out of the shop, into the hall
+            const float inside[3] = { 0, -3, 1.5f };
+            st::LookIn(shop, inside, halls, 1, nullptr, s);
+            CHECK(s.back == 9 && !st::SightOpen(s, false));
+            const st::GroupInfo hallBox{ 0x2000, { -60, 0, -50 }, { 60, 120, 60 } };
+            const float reach = st::RoomReach(inside, hallBox);
+            CHECK(reach > 140.0f && reach < st::kRoomReach);
+            st::LookIn(shop, inside, halls, 1, nullptr, s, reach);
+            CHECK(s.front == 9 && st::SightOpen(s, false));
+            const st::GroupInfo small{ 0x2000, { -5, 0, 0 }, { 5, 8, 4 } }, huge{ 0x2000, { -900, -900, -50 }, { 900, 900, 50 } };
+            CHECK(st::RoomReach(inside, small) == st::kVoidReach && st::RoomReach(inside, huge) == st::kRoomReach);
+        }
         // a dormer wholly over the ceiling: nothing of it seen, all against
         const st::SeeWindow dormer = MakeWindow(0, -0.2f, 5.0f, 0, -1, 0, 0.6f, 0.5f, 0, 16);
         st::LookIn(dormer, low, roofed, 3, nullptr, s);
@@ -2257,7 +2279,7 @@ int main(int argc, char** argv)
             // any case, from outside and inside; not its closed variant, Stormwind or nothing
             std::printf("  SeeThroughBuildings.cdbc: %zu buildings\n", gl::SeeThroughBuildings());
             CHECK(gl::SeeThroughBuildings() == 48);   // (2026-10-22: 24, with stained glass 33, with frosted glass 47; 2026-10-23 Ironforge's groups)
-            CHECK(gl::SeeThroughGroupRows() == 14 && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
+            CHECK(gl::SeeThroughGroupRows() == 20 && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 71) == st::kSeeBetween && gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 47) == st::kSeeBetween &&
                   gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\khazmodan\\cities\\ironforge\\ironforge.wmo"), 65) == st::kSeeBetween);   // (+ the Great Forge, 2026-10-23)
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\kalimdor\\buildings\\orczeppelinhouse\\orczeppelinhouse.wmo")) == st::kSeeFromInside);
             CHECK(gl::SeeThroughFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\chapel\\redridgechapel.wmo")) == 3);

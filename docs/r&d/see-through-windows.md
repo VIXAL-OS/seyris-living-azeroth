@@ -998,3 +998,19 @@ Jondor Steelbrow), the bag vendor's (37.5, 75.3, south-west, by Pithwick), the r
 Snowbraid), the warriors' room (59.1, 66.1, south, by the training dummies); upstairs: 36.9, 30.6 (west), 50.5, 78.1
 (south), 58.2, 90.7 (north), 35.4, 2.8 (south, by Talvash del Kissel); the halls: 58.7, 23.0 (west) and the Forlorn
 Cavern's (57.3, 65.8, north, on its upper floor).
+
+**Out of the shops (2026-10-24).** "Ironforge windows now seem to work from outside but not inside": from the ring into
+the herbalist's they opened, from inside the herbalist's (snapshot 20261024-005227: the camera in group 71 looking out
+at its windows 858 and 859) they stayed the client's glass. Two causes. The shops round the ring weren't in the table
+(only the ring itself, 65, was). And from a shop the rays cross the forge and meet its far side 66 .. 180 yd out (the
+downward ones the ring's floor 8 yd out), while LookIn followed a ray at most kVoidReach (60 yd) and took one meeting
+nothing there for the void: against. Between rooms a ray now looks as far as the room's box reaches from the eye
+(`RoomReach`: its farthest corner, grown by kNearMargin; at least kVoidReach, at most kRoomReach, 300 yd). From the
+snapshot's camera 858 and 859 open, nine rays of nine (were 0 and 5 of 9); the herbalist's from 71% of the survey's
+eyes (was 17%); on WARP (GLASS_SNAPSHOT) the forge through 4,888 of 4,888 of their open glass pixels. The ring's shops
+out onto it, by the first chosen ones' rule (35% of their eyes or more, no window changing more than twice on any walk
+nor on the walks along their fronts): the enchanters' (26, 72%, at 60.4, 44.6), the leatherworkers' (66, 63%, at 40.3,
+34.8), the miners' (68, 66%, at 49.7, 28.1), the tailors' upper room (69, 42%, at 43.1, 29.1), the herbalist's (71, 71%,
+at 55.2, 58.5) and an upper room by it (76, 66%, at 58.3, 53.2); left out 67 (20%, two walks flickering), 72 (18%), 74
+(4%) and 89 (19%). The table: 20 groups, 67 rows. Their upper windows seen from the ground floor stay shut (their rays
+meet the upper floor's underside).

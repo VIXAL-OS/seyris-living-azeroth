@@ -925,7 +925,9 @@ namespace wxl_livingazeroth::seethrough
                         if (!meshes) why = Counts::kNoMesh;
                         else
                         {
-                            LookIn(windows[i], cam, building.data(), building.size(), points && i < points->size() ? &(*points)[i] : nullptr, sight);
+                            // (as far as the room's box reaches: a hall's far walls, RoomReach)
+                            LookIn(windows[i], cam, building.data(), building.size(), points && i < points->size() ? &(*points)[i] : nullptr, sight,
+                                   room < r->groups.size() ? RoomReach(cam, r->groups[room]) : kVoidReach);
                             if (!Held(instance, group, i, sight, held)) { why = Counts::kBlind; ++g_now.betweenBlind; }
                             else
                             {

@@ -418,6 +418,11 @@ namespace wxl_livingazeroth::seethrough
     constexpr uint8_t kGlassTag = 1;
     /// How far past a window a ray from outside looks for anything at all (yd): meeting nothing, it shows the void.
     constexpr float kVoidReach = 60.0f;
+    /// Between rooms the room beyond may be a hall far larger than that (2026-10-24, "Ironforge windows now seem to work from
+    /// outside but not inside": from the herbalist's on the Great Forge's ring the rays cross the forge and meet its far
+    /// side 66 .. 180 yd out, past kVoidReach, so they counted as the void): a window's rays look as far as the room's box
+    /// reaches from the eye (RoomReach), at most kRoomReach.
+    constexpr float kRoomReach = 300.0f;
     /// From outside, the rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) past its
     /// own outer pane, through the building (`groups`: every group's mesh), what each meets first that the client draws
     /// from that side: a pane seen from behind is see-through and passed (the window's own inner pane, a dormer's sloped one
@@ -425,7 +430,11 @@ namespace wxl_livingazeroth::seethrough
     /// next room's through a doorway or a stair's opening, or a room's pane from inside. Back (against): any surface from
     /// behind, a room's from outside or the shell's from inside (the roof, an outer wall: the void shows through it), or
     /// nothing at all within kVoidReach. None: the building's outside from outside (out by an opening).
-    void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out);
+    void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out,
+                float reach = kVoidReach);
+    /// Between rooms: how far LookIn's rays look for the room beyond -- its box's farthest corner from `eye`, grown by
+    /// kNearMargin; at least kVoidReach, at most kRoomReach.
+    float RoomReach(const float eye[3], const GroupInfo& room);
     // Stained glass (2026-10-22: the Redridge chapel, Northshire Abbey, Northrend's town hall and barracks): their walls are
     // a yard and more thick, the room's opening behind the glass smaller than the glass, so a ray through the glass near its
     // edge met the inner face of the wall round that opening from behind (the chapel's tall windows: a third of their rays)

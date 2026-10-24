@@ -127,7 +127,8 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   name one group of a WMO: 13 of Ironforge's, chosen by a survey of every window's views and walks). After the first
   in-game report the Great Forge's ring joined (into the shops round it, where players stand before their windows), a
   window's room is the group of the pane across its glass where it is glazed on both sides, and the frame's budget goes
-  to the nearest windows first.
+  to the nearest windows first. Since 24 October the shops round the ring open out onto the forge too: their rays look as
+  far as the room beyond reaches (the forge's far side lies 66 .. 180 yd off), not at most 60 yd.
 - **Darker nights** (22 October 2026): the night's ambient light, sky, clouds and water darker so lamps and lit windows
   matter (`[LivingAzeroth.Storm]` `NightDarkness`, 0.35; 0 = the client's nights exactly), through the client's own
   day-night colours as the storms shade them, so the fog, the sky and the models stay consistent; half as much in capital

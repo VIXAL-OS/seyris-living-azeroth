@@ -150,7 +150,11 @@ SEE_THROUGH = [
 # report (2026-10-23, "Ironforge windows don't work", the user on the ring before the herbalist's windows): from where
 # players stand, 2 .. 4.5 yd before its ground-floor shop windows, 59 .. 100% of the eyes open them, and of 219 walks
 # along the fronts one changed a window more than twice (SEETHROUGH_FRONTS). (Group 60, MOGN "The Great Forge", is the
-# Commons' hall by the Stonefire Tavern: 17%, left out.)
+# Commons' hall by the Stonefire Tavern: 17%, left out.) And the shops round the ring out onto it (2026-10-24, "Ironforge
+# windows now seem to work from outside but not inside"): their rays cross the forge to its far side, 66 .. 180 yd, past
+# the void's reach, until LookIn looked as far as the room's box (RoomReach); since, the herbalist's from 71% of the eyes
+# (was 17%), and the shops taken as the first ones were: from 35% of their eyes or more, no window changing more than
+# twice on any walk, nor on the walks along their fronts. Left out: 67 (20%, flickers), 72 (18%), 74 (4%), 89 (19%).
 FROM_BETWEEN = 0x4
 IF = r"world\wmo\khazmodan\cities\ironforge\ironforge.wmo"
 SEE_THROUGH_GROUPS = [
@@ -169,6 +173,12 @@ SEE_THROUGH_GROUPS = [
     (IF, 75, "Ironforge: the rogues' room, onto the hall 95 (36%)"),
     (IF, 78, "Ironforge: the Forlorn Cavern's hall (78), onto T_warriors 31 (42%)"),
     (IF, 65, "Ironforge: the Great Forge (65), from its ring into the shops round it (its ground-floor shop windows from 59 .. 100% of the eyes 2 .. 4.5 yd before them)"),
+    (IF, 26, "Ironforge: the enchanters' shop on the Great Forge's ring (26), out onto the forge (72%)"),
+    (IF, 66, "Ironforge: the leatherworkers' shop on the Great Forge's ring (66), out onto the forge (63%)"),
+    (IF, 68, "Ironforge: the miners' shop on the Great Forge's ring (68), out onto the forge (66%)"),
+    (IF, 69, "Ironforge: the tailors' upper room on the Great Forge's ring (69), out onto the forge (42%)"),
+    (IF, 71, "Ironforge: the herbalist's and first aid shop on the Great Forge's ring (71), out onto the forge (71%)"),
+    (IF, 76, "Ironforge: an upper room on the Great Forge's ring (76), out onto the forge (66%)"),
 ]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO)
 

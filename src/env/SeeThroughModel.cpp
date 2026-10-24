@@ -838,11 +838,26 @@ namespace wxl_livingazeroth::seethrough
         }
     }
 
-    void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out)
+    float RoomReach(const float eye[3], const GroupInfo& room)
+    {
+        if (!Finite3(eye)) return kVoidReach;
+        float far2 = 0.0f;
+        for (int c = 0; c < 8; ++c)
+        {
+            const float p[3] = { (c & 1) ? room.hi[0] + kNearMargin : room.lo[0] - kNearMargin, (c & 2) ? room.hi[1] + kNearMargin : room.lo[1] - kNearMargin,
+                                 (c & 4) ? room.hi[2] + kNearMargin : room.lo[2] - kNearMargin };
+            const float d[3] = { p[0] - eye[0], p[1] - eye[1], p[2] - eye[2] };
+            far2 = std::max(far2, Dot(d, d));
+        }
+        const float far = std::sqrt(far2);
+        return std::isfinite(far) ? std::min(std::max(far, kVoidReach), kRoomReach) : kVoidReach;
+    }
+
+    void LookIn(const SeeWindow& w, const float eye[3], const SightMesh* groups, size_t count, const SightPoints* points, Sight& out, float reach)
     {
         // (past its own outer pane: on its glass points, a hair; on its rectangle, its thickness too)
         const float skip = points && points->n > 0 ? 0.02f : 0.05f + w.thickness;
-        Rays(w, eye, groups, count, points, skip, skip, kVoidReach, false, [](Met m) {
+        Rays(w, eye, groups, count, points, skip, skip, std::isfinite(reach) && reach > 0.0f ? reach : kVoidReach, false, [](Met m) {
             switch (m)
             {
             case Met::kRoomFront: case Met::kRoomPane: return RoomMesh::kFront;
