@@ -4,7 +4,7 @@ This is a modified version of [Seyris Living Azeroth](https://github.com/Morfium
 Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications are released under the same license.
 
 - **Who:** VIXAL-OS, with AI coding assistants (Claude and Codex).
-- **When:** 7–12 October 2026.
+- **When:** 7–24 October 2026.
 - **What it's based on:** upstream `main` at `b16c590`. Every change is its own commit on top of it, so the git
   history is the full record of what changed and when.
 - **Target:** the 3.3.5a client (build 12340), played on ChromieCraft.
