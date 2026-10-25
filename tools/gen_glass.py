@@ -939,7 +939,7 @@ ROOM_SKIPPED = 0x10008   # MOGP flags: exterior groups (0x8) and 0x10000 groups,
 # glass looking into the shops beyond. A room's own window shows the room beyond it, the interior group the see-through
 # walk's RoomBeyond finds along its normal, when that room is the smaller: a street's window a shop's, a shop's window its
 # own.) And a room as big as a district (its box's diagonal over ROOM_PART_SPAN yd: Stormwind's Trade District street,
-# Orgrimmar's Drag, the Exodar's halls) is no one room: its windows are cut into parts, the windows within ROOM_PART_GAP
+# Orgrimmar's streets, the Exodar's halls) is no one room: its windows are cut into parts, the windows within ROOM_PART_GAP
 # yd of each other's rectangle one part (GlassWindows.Part, 1 ..; 0 a room whole), each its own fake room.
 ROOM_PART_SPAN = 100.0
 ROOM_PART_GAP = 6.0

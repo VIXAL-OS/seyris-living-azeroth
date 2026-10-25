@@ -1583,14 +1583,14 @@ still. 191 stays open through the swings (98%).
 **Fake rooms in a district** (gen_glass `window_room`, `room_parts`; GlassWindows' Part column). This fixes a regression
 in la-room-uniform. A room's own window took its own group as its room, and to the WMO a city street is a room, so each
 street's windows shared one fake-room key. The Trade District's 76 windows were one room: lit or dark all at once, with
-one layout behind every window. The biggest such key was group 3 of the Wintergrasp fortress (nd_winterorc_fortress.wmo),
-with 482 windows. Two rules now:
+one layout behind every window. The biggest such key was group 3 of Warsong Hold (nd_winterorc_fortress.wmo, in the Borean
+Tundra), with 482 windows. Two rules now:
 - An interior window takes the room beyond it when that room's box is smaller than its own group's. The Trade District's
   30 shop windows now name their 13 shops.
 - A room whose box's diagonal passes 100 yd is cut into parts. Windows within 6 yd of each other are one part, and each
   part is its own key.
 
-Over every WMO there were 660 room keys before and 1,681 now. The most windows on one key is now 192 (the same fortress's
+Over every WMO there were 660 room keys before and 1,681 now. The most windows on one key is now 192 (the same hold's
 group 13, whose windows chain along it within 6 yd of each other). The Trade District's street had 1 key and now has 30
 (13 shops, 17 parts). Seen through from outside, a part is a room as one (RoomKey: room + part x 4096).
 
