@@ -436,6 +436,15 @@ without GlassLead the see-through windows' per-pixel redraw keeps the glass mask
 without SeeThroughBuildings no building's windows go see-through.
 After editing, press "Reload light tables from disk" in the lights panel.
 
+**With HD art packs** (2026-10-25): the tables are made from the files the install loads. `tools/mpq_chain.py` says
+which version of a file a chain of archives (the stock client, then the patches in load order) loads;
+`gen_glass.py <scan> --chain <chain>` reads the window textures that way (Project Reforged B repaints 105 of the 109:
+only GlassMaterials' masks and colours and GlassPanes' lights change), and `tools/chain_scan.py` makes a map scan with
+a pack's WMOs and map tiles in it for packs that remodel buildings (Reforged D), for gen_glass.py,
+gen_window_lights.py and see_through_survey.py. Such a set is installed with the packs, never over the stock tables
+without them. The see-through redraw's lead mask is built from a texture's largest mip of at most 256 x 256
+(`glass::kLeadMaxSide`), the size its rules were tuned at, so an HD window costs no more than its stock one.
+
 ### GlassMaterials.cdbc — `GlassMaterials.xml`
 
 Which WMO textures are glass, per texture (wherever it's used: dungeons and instances too). Nearly

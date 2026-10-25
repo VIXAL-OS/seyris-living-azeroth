@@ -200,20 +200,22 @@ namespace wxl_livingazeroth::blp
         return true;
     }
 
-    /// A BLP2 file's top level as RGB (0..1, as stored: three floats a texel, rows top down; alpha left out), its size
-    /// in w and h: what the see-through redraw's lead mask is built from (env/GlassModel LeadMask). The same formats as
-    /// AverageColour; false if the bytes aren't such a file or the level is cut short.
-    inline bool DecodeTop(const uint8_t* file, size_t size, std::vector<float>& rgb, uint32_t& w, uint32_t& h)
+    /// A BLP2 file's mip level `level` (0 = the top) as RGB (0..1, as stored: three floats a texel, rows top down; alpha
+    /// left out), its size in w and h. The same formats as AverageColour; false if the bytes aren't such a file or the
+    /// level is missing or cut short.
+    inline bool DecodeLevel(const uint8_t* file, size_t size, uint32_t level, std::vector<float>& rgb, uint32_t& w, uint32_t& h)
     {
         constexpr size_t kHeader = 148 + 1024;
         rgb.clear();
-        if (!file || size < kHeader || std::memcmp(file, "BLP2", 4) != 0) return false;
+        if (!file || size < kHeader || std::memcmp(file, "BLP2", 4) != 0 || level >= 16) return false;
         auto u32 = [&](size_t at) { uint32_t v; std::memcpy(&v, file + at, 4); return v; };
         const uint8_t compression = file[8], alphaType = file[10];
         w = u32(12);
         h = u32(16);
         if (!w || !h || w > 4096 || h > 4096) return false;
-        const uint32_t offset = u32(20), length = u32(84);
+        w = std::max<uint32_t>(1, w >> level);
+        h = std::max<uint32_t>(1, h >> level);
+        const uint32_t offset = u32(20 + 4 * level), length = u32(84 + 4 * level);
         if (!length || offset + static_cast<size_t>(length) > size) return false;
         const uint8_t* src = file + offset;
         rgb.assign(static_cast<size_t>(w) * h * 3, 0.0f);
@@ -250,5 +252,25 @@ namespace wxl_livingazeroth::blp
             rgb[i * 3 + 2] = (c & 0xFF) / 255.0f;
         }
         return true;
+    }
+
+    /// The top level (DecodeLevel 0).
+    inline bool DecodeTop(const uint8_t* file, size_t size, std::vector<float>& rgb, uint32_t& w, uint32_t& h)
+    {
+        return DecodeLevel(file, size, 0, rgb, w, h);
+    }
+
+    /// What the see-through redraw's lead mask is built from (env/GlassModel LeadMask): the largest level no wider or
+    /// taller than `maxSide` (the file's own mip, else the smallest the file has). An HD art pack's 1024 x 1024 window
+    /// (2026-10-25: Project Reforged B) then costs a 512 x 512 mask, not four times that, and a quarter of the decoding;
+    /// the stock textures (256 x 256 and less) decode at their top level as before.
+    inline bool DecodeAtMost(const uint8_t* file, size_t size, uint32_t maxSide, std::vector<float>& rgb, uint32_t& w, uint32_t& h)
+    {
+        for (uint32_t level = 0; level < 16; ++level)
+        {
+            if (!DecodeLevel(file, size, level, rgb, w, h)) return level > 0 && DecodeLevel(file, size, level - 1, rgb, w, h);
+            if (std::max(w, h) <= maxSide || (w == 1 && h == 1)) return true;
+        }
+        return false;
     }
 }

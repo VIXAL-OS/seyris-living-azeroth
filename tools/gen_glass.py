@@ -122,6 +122,9 @@ Usage:
   python gen_glass.py <scan> --texture-list <out.txt>       the candidate textures to extract
   python gen_glass.py <scan> --group-list <out.txt>         the group files of WMOs with glass not extracted yet
   python gen_glass.py <scan> <textures> [data dir] [--sheets <dir>]
+  python gen_glass.py <scan> --chain <chain file> [data dir] [--chain-work <dir>] [--sheets <dir>]
+        the same, with the textures the install loads: the chain's version of each (mpq_chain.py; HD art packs,
+        2026-10-25). The stock set is the chain of the stock archives alone (or <textures> = their copies).
         writes GlassMaterials.cdbc, GlassPanes.cdbc, GlassWindows.cdbc, RoomStyles.cdbc and GlassBuildings.cdbc
         (--sheets: contact sheets of each texture and its mask)
   python gen_glass.py <scan> --rooms [data dir]             only RoomStyles.cdbc and GlassBuildings.cdbc
@@ -2170,6 +2173,21 @@ def texture_list(scan):
     return sorted(out)
 
 
+def chain_textures(scan, chain_file, work=None):
+    """The candidate textures as the install loads them: each one's winning version in the chain (mpq_chain.py: the
+    stock archives or copies of them, then the patches in load order), extracted to <work>/textures in this tool's
+    layout. Returns that folder; reports which layer each came from."""
+    import mpq_chain
+    work = Path(work) if work else Path(os.environ.get("TEMP", ".")) / ("la-glass-" + chain_file.stem)
+    chain = mpq_chain.Chain(str(chain_file), cache=str(work / "_lists"))
+    names = texture_list(scan)
+    got = chain.extract(names, str(work / "textures"), flat=True)
+    layers = collections.Counter(layer for layer, _size in got.values())
+    print(f"{len(got)} of {len(names)} candidate textures from {chain_file.name}: " +
+          ", ".join(f"{n} {Path(layer).name}" for layer, n in layers.most_common()))
+    return work / "textures"
+
+
 def titan_report(prows):
     """The titan maps' panes: backlit, titan glass facing the sky, other glass."""
     for m, name in sorted(TITAN_MAPS.items()):
@@ -2244,7 +2262,7 @@ def main():
     rest = sys.argv[1:]
     while rest:
         a = rest.pop(0)
-        if a in ("--group-list", "--texture-list", "--sheets"):
+        if a in ("--group-list", "--texture-list", "--sheets", "--chain", "--chain-work"):
             options[a] = rest.pop(0) if rest else sys.exit(f"{a} needs a path")
         elif a in ("--rooms", "--windows", "--window-rooms", "--lead"):
             options[a] = True
@@ -2272,10 +2290,15 @@ def main():
     if "--window-rooms" in options:
         write_window_rooms(scan, Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "data")
         return
-    if len(argv) < 2:
-        sys.exit(__doc__)
-    textures = Path(argv[1])
-    folder = Path(argv[2]) if len(argv) > 2 else Path(__file__).resolve().parent.parent / "data"
+    if "--chain" in options:
+        # The textures the install will load: the chain's winning version of each candidate (mpq_chain.py).
+        textures = chain_textures(scan, Path(options["--chain"]), options.get("--chain-work"))
+        folder = Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "data"
+    else:
+        if len(argv) < 2:
+            sys.exit(__doc__)
+        textures = Path(argv[1])
+        folder = Path(argv[2]) if len(argv) > 2 else Path(__file__).resolve().parent.parent / "data"
     sheets = options.get("--sheets")
     mrows, by_kind, skipped = materials_table(scan, textures, sheets)
     print(f"{len(mrows)} glass textures: " + ", ".join(f"{by_kind[k]} {KIND_NAMES[k]}" for k in sorted(by_kind)))

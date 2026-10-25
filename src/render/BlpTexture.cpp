@@ -3,6 +3,7 @@
 #include "BlpColour.hpp"
 #include "game/Io.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -104,8 +105,14 @@ namespace wxl_livingazeroth::blp
         else if (h.compression != 1 && h.compression != 3) { error = "unknown BLP compression"; return nullptr; }
 
         UINT mips = 1;
+        // (a level whose data runs past the file's end ends the chain there: an HD art pack's 1024 x 2048 window,
+        // Reforged B's jlo_icec_window, lists a 12th level it doesn't have; 2026-10-25)
+        // No more levels than the size has (1024 x 1024: 11): HD packs' files list a twelfth, and Direct3D refuses a
+        // texture with more levels than that (D3DERR_INVALIDCALL; 2026-10-25, Reforged B's 1024 x 1024 windows).
+        UINT most = 1;
+        for (uint32_t side = std::max(h.width, h.height); side > 1; side >>= 1) ++most;
         if (h.hasMips)
-            while (mips < 16 && h.mipOffset[mips] && h.mipSize[mips]) ++mips;
+            while (mips < most && h.mipOffset[mips] && h.mipSize[mips] && h.mipOffset[mips] + static_cast<size_t>(h.mipSize[mips]) <= file.size()) ++mips;
 
         // A level that can't be locked (seen on a tester's setup, likely a D3D9 translation layer) ends
         // the chain there: the texture is created again with only the levels before it. Level 0 failing

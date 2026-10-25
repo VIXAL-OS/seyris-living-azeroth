@@ -1619,7 +1619,7 @@ namespace wxl_livingazeroth::seethrough
             std::vector<float> rgb;
             uint32_t w = 0, h = 0;
             const char* why = !blp::ReadBytes(path, file) ? "can't read the file"
-                            : !blp::DecodeTop(file.data(), file.size(), rgb, w, h) ? "can't decode it"
+                            : !blp::DecodeAtMost(file.data(), file.size(), glass::kLeadMaxSide, rgb, w, h) ? "can't decode it"
                             : !glass::LeadMask(rgb.data(), w, h, *m, *rule, mask) ? "no texel in its rectangles" : nullptr;
             if (!why && !(lt.tex = LeadUpload(dev, std::move(mask), w, h))) why = "can't make the texture";
             if (why)

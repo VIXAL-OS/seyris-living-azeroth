@@ -3612,7 +3612,7 @@ namespace
             gl::Material m;
             std::vector<uint8_t> mask;
             float mean[3] = {};
-            if (!wxl_livingazeroth::blp::DecodeTop(file.data(), file.size(), rgb, w, h) || !MaterialRow(mt, t, m) ||
+            if (!wxl_livingazeroth::blp::DecodeAtMost(file.data(), file.size(), gl::kLeadMaxSide, rgb, w, h) || !MaterialRow(mt, t, m) ||
                 !gl::LeadMask(rgb.data(), w, h, m, LeadRuleOf(lt, t), mask) || !wxl_livingazeroth::blp::AverageColour(file.data(), file.size(), mean))
             { ++wrong; worst += " " + flat + " (unread)"; continue; }
             double sum[3] = {};
@@ -3680,7 +3680,7 @@ namespace
             gl::Material m;
             std::vector<uint8_t> mask;
             const gl::LeadRule rule = LeadRuleOf(lt, t);
-            if (!wxl_livingazeroth::blp::DecodeTop(file.data(), file.size(), rgb, w, h) || !MaterialRow(mt, t, m) || !gl::LeadMask(rgb.data(), w, h, m, rule, mask))
+            if (!wxl_livingazeroth::blp::DecodeAtMost(file.data(), file.size(), gl::kLeadMaxSide, rgb, w, h) || !MaterialRow(mt, t, m) || !gl::LeadMask(rgb.data(), w, h, m, rule, mask))
             { notes += " " + flat + " (unread)"; continue; }
             auto share = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
                 double n = 0, g = 0;
@@ -3742,7 +3742,7 @@ namespace
             uint32_t w = 0, h = 0;
             gl::Material m;
             std::vector<uint8_t> mask;
-            if (!wxl_livingazeroth::blp::DecodeTop(file.data(), file.size(), rgb, w, h) || !MaterialRow(mt, t, m) || m.kind != gl::kStained ||
+            if (!wxl_livingazeroth::blp::DecodeAtMost(file.data(), file.size(), gl::kLeadMaxSide, rgb, w, h) || !MaterialRow(mt, t, m) || m.kind != gl::kStained ||
                 !gl::LeadMask(rgb.data(), w, h, m, gl::StainedFallbackRule(), mask))
             { fallbackNotes += " " + flat + " (unread)"; continue; }
             ++fallbackRead;
@@ -3910,7 +3910,7 @@ namespace
         std::vector<float> texRgb;
         std::vector<uint8_t> leadMask;
         uint32_t tw = 0, th = 0;
-        if (!ReadTable(data / "GlassLead.cdbc", lt) || !wxl_livingazeroth::blp::DecodeTop(blp.data(), blp.size(), texRgb, tw, th) ||
+        if (!ReadTable(data / "GlassLead.cdbc", lt) || !wxl_livingazeroth::blp::DecodeAtMost(blp.data(), blp.size(), gl::kLeadMaxSide, texRgb, tw, th) ||
             !gl::LeadMask(texRgb.data(), tw, th, m, LeadRuleOf(lt, "dungeons\\textures\\windows\\mm_elwynn_wnd_ext__01.blp"), leadMask))
         { Check(false, "the inn's glass: its lead mask (GlassLead.cdbc's rectangles, the texture decoded)"); return; }
 
@@ -4745,7 +4745,7 @@ namespace
         uint32_t tw = 0, th = 0;
         gl::LeadRule leadRule = LeadRuleOf(lt, texture);
         if (leadRule.rects.empty() && m.kind == gl::kStained) leadRule = gl::StainedFallbackRule();
-        if (!wxl_livingazeroth::blp::DecodeTop(blp.data(), blp.size(), texRgb, tw, th) ||
+        if (!wxl_livingazeroth::blp::DecodeAtMost(blp.data(), blp.size(), gl::kLeadMaxSide, texRgb, tw, th) ||
             (!leadRule.rects.empty() && !gl::LeadMask(texRgb.data(), tw, th, m, leadRule, leadMask)))
         { Check(false, std::string(label) + ": the lead mask"); return; }
 
@@ -4773,7 +4773,13 @@ namespace
             // (no stencil: the game's depth surface may have none, 2026-10-22; the tint goes by the depth)
             FAILED(d->CreateDepthStencilSurface(kS, kS, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE, &depth, nullptr)) ||
             FAILED(d->CreateOffscreenPlainSurface(kS, kS, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, nullptr)))
-        { Check(false, std::string(label) + ": WARP resources " + why.substr(0, 120)); return; }
+        {
+            // which one (2026-10-25: the HD textures' runs)
+            std::string what = !glassTex ? "the glass texture: " + blpError : !white || !backTex ? "a small texture" : !ps || !other ? "a shader" :
+                               (sc.tint > 0.0f && !tintShader) ? "the tint shader" : "a surface";
+            Check(false, std::string(label) + ": WARP resources (" + what + ") " + why.substr(0, 120));
+            return;
+        }
         IDirect3DTexture9* leadTex = nullptr;
         st::FrostBuffer frostBuf;
         if (!leadMask.empty())

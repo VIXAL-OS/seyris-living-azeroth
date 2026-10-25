@@ -92,6 +92,10 @@ namespace wxl_livingazeroth::glass
     constexpr float kLeadDark = 0.18f, kLeadLine = 0.15f;
     constexpr int kLeadClose = 5;
     constexpr float kLeadColour = 0.3f;
+    // The mask is built from the texture's largest level no wider or taller than this (blp::DecodeAtMost): the size the
+    // rules above were tuned at (the stock windows are 256 x 256), so an HD art pack's 1024 x 1024 window costs the same
+    // mask and the same closing (kLeadClose texels) as its stock version (2026-10-25).
+    constexpr uint32_t kLeadMaxSide = 256;
     struct LeadRule
     {
         std::vector<LeadRect> rects;
