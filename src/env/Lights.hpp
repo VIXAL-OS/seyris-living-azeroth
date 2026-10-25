@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+struct WxlLightListV1;   // LightList.hpp: the "chromie.light-list" service (its header shared with the extensions reading it)
+
 namespace wxl_livingazeroth::lights
 {
     /// One CM2Light as the client holds it. Colours are linear floats as the client stores them.
@@ -196,6 +198,19 @@ namespace wxl_livingazeroth::lights
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene);
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene,
                         const std::vector<OwnLight>& own);
+    /// With `windows` too: those as lit windows' lights (features/Windows: ranked below the rest, never flickering here).
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene,
+                        const std::vector<OwnLight>& own, const std::vector<FrameLight>& windows);
+
+    /// The lights other extensions light and reflect by (2026-10-25, for Modern Water's lamps on the water): LightList.hpp's
+    /// "chromie.light-list" v1, published from WXL_Load. Active() as WxlLightV1s, in its order, refilled at the end of every
+    /// Update (and UpdateForTests): position, colour (brightness, fade and flicker in), radius and falloff as drawn; flags
+    /// Indoor (ActiveLight::indoor), Window (window), Moving (the spell lights and the lantern); Flash never (a strike is
+    /// in it as a plain light). Empty while our lights are off (the panel, the compare key) and out of the world. Read on
+    /// the main thread; the array stays until the next Update. The struct lives as long as the process.
+    WxlLightListV1& LightList();
+    /// Before a loading screen (Extension's OnWorldLeave): the list empties at once (Update keeps it empty out of the world).
+    void OnWorldLeave();
 
     /// The player's own lights as Update takes them this frame: the lantern's (features/Lantern Current), or none.
     void LanternLights(std::vector<OwnLight>& out);

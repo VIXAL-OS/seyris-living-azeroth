@@ -12,6 +12,11 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
 ## What changed
 - **Startup and compatibility** for this client, and a rain signal other WarcraftXL modules can read
   (`chromie.rain-signal` v1; the modified Modern Water module uses it for raindrops on the water).
+- **Our lights for other modules** (25 October 2026): the point lights we draw each frame (lamps, torches, lit
+  windows, spell lights, the lantern, lightning) as a list other WarcraftXL modules can read (`chromie.light-list` v1,
+  `src/LightList.hpp`, the same header as Modern Water's; the modified Modern Water module reflects our lamps on the
+  water by it). Each light's position, colour as drawn, radius and falloff, flagged indoor, window or moving; it is
+  empty while our point lights are off (the climate panel, the compare key) and outside the world.
 - **Surface cover** (snow, sand, ash, mud):
   - Speed: only changed cells are uploaded, empty cover is skipped, and the light scan is spread over several frames.
   - Looks: a soft outer edge that dissolves in patches fixed to the ground, a depth pull against z-fighting far off,
@@ -280,6 +285,7 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
     snapshot and the 30-second log line record its state.
   - Their status in the lights panel, the overview page, the 30-second log line and the snapshot; `tests/lumen`.
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
-  see-through windows, tree shadows, spell lights, the memory readout, the lantern, distant lights, the compare key and wet surfaces.
+  see-through windows, tree shadows, spell lights, the memory readout, the lantern, distant lights, the compare key, wet
+  surfaces and the light list other modules read.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

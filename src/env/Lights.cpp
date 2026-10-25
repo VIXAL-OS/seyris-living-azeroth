@@ -1,5 +1,6 @@
 #include "Lights.hpp"
 
+#include "../LightList.hpp"
 #include "../features/DoodadLightTable.hpp"
 #include "../features/GrassPerf.hpp"
 #include "../features/Lantern.hpp"
@@ -1220,6 +1221,15 @@ namespace wxl_livingazeroth::lights
             g_stats.frameLights = 0;
         }
 
+        // Tests: FrameLights as lit windows' lights (AddWindowLights' candidates: ranked below the rest), after the scene's.
+        void AddWindowLightsForTests(const std::vector<FrameLight>& windows, std::vector<Candidate>& cands)
+        {
+            const size_t first = cands.size();
+            AddFrameLights(windows, cands);
+            for (size_t k = first; k < cands.size(); ++k) { cands[k].frame = false; cands[k].moving = false; cands[k].window = true; }
+            g_stats.frameLights = 0;
+        }
+
         // The rest of a frame's update, from its candidates: merging, the drawn list, the strikes, baking, the grid.
         void Finish(const float eye[3], std::vector<Candidate>& cands, double tCand)
         {
@@ -1424,10 +1434,39 @@ namespace wxl_livingazeroth::lights
     {
         float g_around = 0.0f;   // LightAround at the player's chest, the last Update's
 
+        // The light list other extensions read (LightList.hpp): Active() as the last Update left it.
+        std::vector<WxlLightV1> g_published;
+
+        uint32_t __cdecl PublishedLights(const WxlLightV1** lights)
+        {
+            if (lights) *lights = g_published.empty() ? nullptr : g_published.data();
+            return static_cast<uint32_t>(g_published.size());
+        }
+
+        WxlLightListV1 g_lightList{ sizeof(WxlLightListV1), sizeof(WxlLightV1), &PublishedLights };
+
+        // At the end of an update: Active() copied out, flagged. (At most kMaxPool lights: the vector's room is kept.)
+        void Publish()
+        {
+            g_published.resize(g_active.size());
+            for (size_t i = 0; i < g_active.size(); ++i)
+            {
+                const ActiveLight& l = g_active[i];
+                WxlLightV1& p = g_published[i];
+                std::memcpy(p.position, l.pos, sizeof(p.position));
+                std::memcpy(p.colour, l.color, sizeof(p.colour));
+                p.radius = l.radius;
+                p.falloff = l.falloff;
+                const bool spell = i < g_isFrame.size() && g_isFrame[i];
+                p.flags = (l.indoor ? kWxlLightIndoor : 0u) | (l.window ? kWxlLightWindow : 0u) | (spell || l.own ? kWxlLightMoving : 0u);
+            }
+        }
+
         // Out of the world or our lights off (the panel, the compare key): nothing drawn, nothing kept, the grid empty (the
-        // shaders then give the client's own lights back), the spell lights forgotten, the far lamps too.
+        // shaders then give the client's own lights back), the spell lights forgotten, the far lamps too, none published.
         void Off()
         {
+            g_published.clear();
             g_transient.clear();
             g_sources.clear();
             g_walk.Abandon();
@@ -1556,31 +1595,44 @@ namespace wxl_livingazeroth::lights
         Finish(eye, cands, tCand);
         const float chest[3] = { snap.playerPos[0], snap.playerPos[1], snap.playerPos[2] + 1.2f };
         g_around = LightAround(chest, lantern::kAroundReach);
+        Publish();
     }
 
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame)
     {
-        UpdateForTests(eye, dt, frame, {}, {});
+        UpdateForTests(eye, dt, frame, {}, {}, {});
     }
 
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene)
     {
-        UpdateForTests(eye, dt, frame, scene, {});
+        UpdateForTests(eye, dt, frame, scene, {}, {});
     }
 
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene,
                         const std::vector<OwnLight>& own)
+    {
+        UpdateForTests(eye, dt, frame, scene, own, {});
+    }
+
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene,
+                        const std::vector<OwnLight>& own, const std::vector<FrameLight>& windows)
     {
         g_active.clear();
         if (!g_settings.enabled) { Off(); return; }
         g_time += dt;
         std::vector<Candidate> cands;
         AddSceneLightsForTests(scene, cands);
+        AddWindowLightsForTests(windows, cands);
         AddFrameLights(frame, cands);
         AddOwnLights(own, cands);
         g_stats.inRange = static_cast<unsigned>(cands.size());
         Finish(eye, cands, grassperf::Now());
+        Publish();
     }
+
+    WxlLightListV1& LightList() { return g_lightList; }
+
+    void OnWorldLeave() { g_published.clear(); }
 
     float LightAround(const float pos[3], float reach)
     {

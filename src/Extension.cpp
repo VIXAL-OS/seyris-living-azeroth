@@ -79,6 +79,7 @@
 #include "render/SceneDepth.hpp"
 #include "render/ShaderPatch.hpp"
 #include "wxl_seyris/CdbcApi.hpp"
+#include "LightList.hpp"
 #include "RainSignal.hpp"
 #include <chrono>
 #include <cmath>
@@ -284,6 +285,7 @@ namespace
         wxl_livingazeroth::fields::OnWorldLeave();
         wxl_livingazeroth::storm::OnWorldLeave(); // its bolt models go while the world's scene is still there
         wxl_livingazeroth::spelllights::Reset();  // the scene's models go with the world
+        wxl_livingazeroth::lights::OnWorldLeave(); // the light list other extensions read: none over the loading screen
     }
 
     void __cdecl OnDeviceLost(void* /*user*/, const void* /*args*/)
@@ -312,6 +314,8 @@ int __cdecl WXL_Load(const WXL_Api* api)
     if (!api) return 0;
     g_api = api;
     if (api->PublishInterface) api->PublishInterface(kWxlRainSignalName, kWxlRainSignalVersion, &g_rainSignal);
+    // Our point lights for other extensions (Modern Water's lamps on the water): env/Lights refills it every frame.
+    if (api->PublishInterface) api->PublishInterface(kWxlLightListName, kWxlLightListVersion, &wxl_livingazeroth::lights::LightList());
 
     // The overview first among the pages (pages are listed in registration order).
     wxl_livingazeroth::debug::RegisterOverview(api);

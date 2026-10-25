@@ -12,6 +12,9 @@
 //  5. The compare key: every switch off through its own path and back as it was; a switch changed in a panel meanwhile
 //     kept; its chat lines; the settings through config::Apply (the new keys, their defaults, described without bracketed
 //     section names), and no setting read or written by a toggle.
+//  5b. The light list other extensions read (LightList.hpp, "chromie.light-list" v1, for Modern Water): Active() bit for bit
+//     in its order, after merging, with its flags (indoor, windows, the spells and the lantern moving, a strike plain); the
+//     same array until the next update; empty with our lights off, by the compare key, leaving and out of the world.
 //  6. On WARP (the CPU rasterizer behind D3D9On12, no GPU), contact sheets with --sheet <folder>:
 //      a. the lantern in a dark cave: the stock lit M2 shader as features/ModelLights patches it, its light texture from
 //         env/Lights' grid; without it, with it, with a torch beside it, and at noon outdoors (lit, but nothing);
@@ -40,6 +43,7 @@
 #include "wxl/PluginApi.h"
 #include "wxl_seyris/CdbcApi.hpp"
 #include "wxl_seyris/SettingsApi.hpp"
+#include "LightList.hpp"
 
 #include <windows.h>
 #include <d3d9.h>
@@ -593,6 +597,119 @@ namespace
         la::seethrough::Config().fromInside = 0;
         la::spelllights::Config().enabled = 0;
         cmp::ResetForTests();
+    }
+
+    // --- 5b. the light list other extensions read (LightList.hpp: Modern Water's lamps on the water) -----------------------
+    bool SpellModel(const void* m) { const uintptr_t v = reinterpret_cast<uintptr_t>(m); return v >= 0x9000 && v < 0xA000; }
+
+    // What differs between the published list and Active() as it stands (empty: nothing): the count, then each light in
+    // Active()'s order, its numbers as drawn (bit for bit) and its flags (Moving: the spell lights, models 0x9000.., and the
+    // lantern; Flash never).
+    std::string ListDiffers()
+    {
+        const WxlLightV1* p = reinterpret_cast<const WxlLightV1*>(static_cast<uintptr_t>(0x10));
+        const uint32_t n = li::LightList().Lights(&p);
+        const std::vector<li::ActiveLight>& a = li::Active();
+        if (n != a.size()) return F("%u published, %zu drawn", n, a.size());
+        if (!n) return p ? "none, but the pointer isn't null" : "";
+        if (!p) return "a null array";
+        std::string out;
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            const li::ActiveLight& l = a[i];
+            const WxlLightV1& q = *reinterpret_cast<const WxlLightV1*>(reinterpret_cast<const char*>(p) + static_cast<size_t>(i) * li::LightList().lightSize);
+            const uint32_t want = (l.indoor ? kWxlLightIndoor : 0u) | (l.window ? kWxlLightWindow : 0u) | (l.own || SpellModel(l.model) ? kWxlLightMoving : 0u);
+            if (std::memcmp(q.position, l.pos, sizeof(q.position)) || std::memcmp(q.colour, l.color, sizeof(q.colour)) || q.radius != l.radius ||
+                q.falloff != l.falloff || q.flags != want)
+                out += F(" light %u (flags %u, want %u)", i, q.flags, want);
+        }
+        return out;
+    }
+
+    void LightListForOthers()
+    {
+        std::printf("-- 5b. the light list other extensions read\n");
+        WxlLightListV1& list = li::LightList();
+        Check(std::strcmp(kWxlLightListName, "chromie.light-list") == 0 && kWxlLightListVersion == 1 && list.size == sizeof(WxlLightListV1) &&
+              list.lightSize == sizeof(WxlLightV1) && sizeof(WxlLightV1) == 36 && list.Lights,
+              F("\"%s\" v%u: %u bytes, a light every %u bytes, its Lights set", kWxlLightListName, kWxlLightListVersion, list.size, list.lightSize));
+        li::Config() = li::Settings{};
+        la::spelllights::Config().enabled = 1;
+        ln::Config() = ln::Settings{};
+        ln::ResetForTests();
+        const float feet[3] = { 300.0f, 400.0f, 20.0f };
+        const std::vector<li::OwnLight> own = LanternAt(feet, 0.0f, false, 0.0f);
+        const float eye[3] = { feet[0] - 6.0f, feet[1] - 5.0f, feet[2] + 4.0f };
+        li::Config().enabled = 0;
+        li::UpdateForTests(eye, 1.0f / 60.0f, {}, {}, own);
+        const WxlLightV1* p = nullptr;
+        Check(list.Lights(&p) == 0 && !p && ListDiffers().empty(), "our lights off: none, the array null");
+        li::Config().enabled = 1;
+
+        // A night street: a torch, one inside a house (indoor), two a third of a yard apart (they merge: the list is after
+        // merging), two lit windows, two spells cast, the lantern, a lightning strike.
+        std::vector<li::FrameLight> scene, windows, spells;
+        scene.push_back(Torch(feet[0] + 10.0f, feet[1], feet[2] + 2.0f, reinterpret_cast<const void*>(0x1000)));
+        scene.push_back(Torch(feet[0] + 20.0f, feet[1] + 6.0f, feet[2] + 1.0f, reinterpret_cast<const void*>(0x1010)));
+        scene.back().indoor = 1;
+        scene.push_back(Torch(feet[0] - 8.0f, feet[1] + 9.0f, feet[2] + 2.0f, reinterpret_cast<const void*>(0x1020)));
+        scene.push_back(Torch(feet[0] - 7.7f, feet[1] + 9.0f, feet[2] + 2.0f, reinterpret_cast<const void*>(0x1030)));
+        for (int k = 0; k < 2; ++k)
+        {
+            li::FrameLight w = Torch(feet[0] + 4.0f + k * 6.0f, feet[1] + 14.0f, feet[2] + 3.0f, nullptr);
+            w.color[0] = 0.9f; w.color[1] = 0.6f; w.color[2] = 0.3f; w.radius = 10.0f;
+            windows.push_back(w);
+            li::FrameLight s = Torch(feet[0] + 2.0f, feet[1] - 3.0f - k * 4.0f, feet[2] + 1.5f, reinterpret_cast<const void*>(static_cast<uintptr_t>(0x9000 + k * 16)));
+            s.color[0] = 0.3f; s.color[1] = 0.5f; s.color[2] = 1.0f; s.radius = 7.0f;
+            spells.push_back(s);
+        }
+        const float strike[3] = { feet[0] + 30.0f, feet[1] - 20.0f, feet[2] + 25.0f };
+        const float white[3] = { 2.0f, 2.1f, 2.4f };
+        li::AddTransient(strike, white, 60.0f);
+        li::UpdateForTests(eye, 1.0f / 60.0f, spells, scene, own, windows);
+        const uint32_t n = list.Lights(&p);
+        unsigned indoor = 0, window = 0, moving = 0, flash = 0, strikes = 0;
+        for (uint32_t i = 0; p && i < n; ++i)
+        {
+            indoor += (p[i].flags & kWxlLightIndoor) ? 1 : 0;
+            window += (p[i].flags & kWxlLightWindow) ? 1 : 0;
+            moving += (p[i].flags & kWxlLightMoving) ? 1 : 0;
+            flash += (p[i].flags & kWxlLightFlash) ? 1 : 0;
+            strikes += p[i].colour[2] == white[2] && p[i].radius == 60.0f && !p[i].flags ? 1 : 0;
+        }
+        const std::string diff = ListDiffers();
+        Check(diff.empty() && n == 9, F("published as drawn: %u lights (4 torches, two merged, 2 windows, 2 spells, the lantern, a strike), "
+                                         "each one's position, colour, radius, falloff and flags%s", n, diff.c_str()));
+        Check(indoor == 1 && window == 2 && moving == 3 && flash == 0 && strikes == 1,
+              F("flags: %u indoor (the house's torch), %u windows, %u moving (the spells and the lantern), the strike plain (%u), Flash on none (%u)",
+                indoor, window, moving, strikes, flash));
+        const WxlLightV1* again = nullptr;
+        Check(list.Lights(&again) == n && again == p && list.Lights(nullptr) == n, "asked again before the next update: the same array (a null pointer only counts)");
+
+        li::UpdateForTests(eye, 1.0f / 60.0f, spells, scene, own, windows);
+        Check(ListDiffers().empty() && list.Lights(&p) == 8, F("the next frame: refilled, the strike gone (%u)", list.Lights(nullptr)));
+
+        // The compare key: off with the rest (our lights' own switch), back on.
+        static WXL_Api api = MakeApi();
+        cmp::Install(&api);
+        cmp::ResetForTests();
+        cmp::Toggle("the test");
+        li::UpdateForTests(eye, 1.0f / 60.0f, spells, scene, own, windows);
+        Check(li::Config().enabled == 0 && list.Lights(&p) == 0 && !p, "the compare key off: none published");
+        cmp::Toggle("the test");
+        li::UpdateForTests(eye, 1.0f / 60.0f, spells, scene, own, windows);
+        Check(li::Config().enabled == 1 && list.Lights(nullptr) == 8 && ListDiffers().empty(), F("on again: all back (%u)", list.Lights(nullptr)));
+        cmp::ResetForTests();
+
+        // Leaving the world: the loading screen's hook empties it at once, Update out of the world keeps it empty.
+        li::OnWorldLeave();
+        Check(list.Lights(&p) == 0 && !p, F("leaving the world (OnWorldLeave): none at once (%zu still drawn until the next update)", li::Active().size()));
+        li::UpdateForTests(eye, 1.0f / 60.0f, spells, scene, own, windows);
+        la::world::Snapshot out{};
+        li::Update(1.0f / 60.0f, out);
+        Check(!out.inWorld && list.Lights(&p) == 0 && !p && li::Active().empty(), "out of the world (Update): none, none drawn");
+        la::spelllights::Config().enabled = 0;
+        ln::ResetForTests();
     }
 
     // --- 6. WARP ------------------------------------------------------------------------------------------------------------
@@ -1258,6 +1375,7 @@ int main(int argc, char** argv)
     DistantRules();
     TablesThroughTheReader(pos[1]);
     CompareKey();
+    LightListForOthers();
     ShaderSlots();
     if (warp)
     {
