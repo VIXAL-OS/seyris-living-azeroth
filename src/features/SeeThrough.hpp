@@ -143,6 +143,19 @@ namespace wxl_livingazeroth::seethrough
     };
     /// Last frame's walked groups, nearest the camera first.
     void LastWalked(std::vector<WalkedGroup>& out);
+    /// Every placed WMO's group the client drew last frame (Wmo.RenderGroup, any building, in the table or not; 2026-10-24:
+    /// a snapshot at Valkyrion named Dalaran, the see-through walk's last group, 1,372 yd off, not the vrykul tower in
+    /// front of the camera): its path, group, MOGI flags and box, the instance's m_invMat (world -> its space, row vectors),
+    /// the group's name (MOGN, when loaded), its glass batches (GlassMaterials' textures) and whether the table names its WMO.
+    struct DrawnGroup
+    {
+        std::string wmo, name;
+        uint32_t group = 0, flags = 0, glassBatches = 0, batches = 0;
+        float lo[3] = {}, hi[3] = {};
+        float invMat[16] = {};
+        bool inTable = false;
+    };
+    void LastDrawn(std::vector<DrawnGroup>& out);
     /// The blurred copy (frosted glass's) read back: its mean colour over the frame and within each open frosted window's
     /// screen rectangle last frame, and when it was taken (after how many of the frame's WMO batch draws, how many of them
     /// the opened rooms'); and the panel's diagnostics. A device read: a snapshot's, not every frame's.

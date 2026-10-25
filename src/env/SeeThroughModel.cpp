@@ -152,6 +152,7 @@ namespace wxl_livingazeroth::seethrough
             const uint32_t own = w.group < groupFlags.size() ? groupFlags[w.group] : 0u;
             const uint32_t room = w.interior >= 0 && static_cast<size_t>(w.interior) < groupFlags.size() ? groupFlags[static_cast<size_t>(w.interior)] : 0u;
             w.unlisted = ((own | room) & w.see & kSeeFromOutside) == 0;
+            w.masked = w.unlisted && ((own | room) & kSeeFromOutside) != 0;
             listed += w.unlisted ? 0 : 1;
         }
         return listed;
@@ -633,7 +634,7 @@ namespace wxl_livingazeroth::seethrough
 
     void PlanWindows(const SeeWindow* windows, uint32_t count, const float camLocal[3], const float boxLo[3], const float boxHi[3],
                      const Rect& walk, const float model[16], const float eye[3], const float viewProj[16], unsigned& budget,
-                     std::vector<WindowPlan>& out)
+                     std::vector<WindowPlan>& out, bool planMasked)
     {
         out.assign(count, WindowPlan{});
         if (!windows || !Finite3(camLocal)) return;
@@ -646,13 +647,14 @@ namespace wxl_livingazeroth::seethrough
             WindowPlan& p = out[i];
             // (a window the table doesn't open from outside is left as the client draws it, not even projected: a city's
             // thousands cost about a millisecond a frame projected; its batch then isn't drawn whole, see SeeThrough)
-            if (w.unlisted || !Facing(w, camLocal)) continue;
+            if ((w.unlisted && !(planMasked && w.masked)) || !Facing(w, camLocal)) continue;
             float quad[4][3];
             Corners(w, kQuadGrow, quad);
             Rect screen, clip;
             if (!ScreenRect(quad, 4, model, eye, viewProj, screen) || !Overlap(screen, walk, clip)) continue;
             p.clip = clip;
             p.state = kShut;
+            if (w.unlisted) { p.blocked = true; continue; }   // (whole rooms: its own row shuts it, and so its room)
             const float d[3] = { camLocal[0] - w.center[0], camLocal[1] - w.center[1], camLocal[2] - w.center[2] };
             if (w.interior >= 0 && inRange && Dot(d, d) <= kRange * kRange) eligible.emplace_back(Dot(d, d), i);
         }
@@ -662,6 +664,64 @@ namespace wxl_livingazeroth::seethrough
             if (budget == 0) break;
             out[e.second].candidate = true;
             --budget;
+        }
+    }
+
+    int RoomKey(const SeeWindow& w) { return w.interior >= 0 ? w.interior : static_cast<int>(w.group); }
+
+    void RoomSight(const Sight* sights, size_t n, bool& opens, bool& stays)
+    {
+        opens = stays = sights && n > 0;
+        for (size_t i = 0; i < n && (opens || stays); ++i)
+        {
+            opens = opens && SightOpen(sights[i], false);
+            stays = stays && SightOpen(sights[i], true);
+        }
+    }
+
+    bool HoldRoom(Gate& g, bool opens, bool stays, float dt, bool holdShut)
+    {
+        if (!g.seen) { g = Gate{}; g.seen = true; g.open = opens; return g.open; }
+        if (g.open)
+        {
+            if (stays) { g.pending = false; g.held = 0.0f; return true; }
+            if (!holdShut) { g.pending = false; g.held = 0.0f; g.open = false; return false; }
+            if (!g.pending) { g.pending = true; g.held = 0.0f; }
+            g.held += std::isfinite(dt) && dt > 0.0f ? std::min(dt, 1.0f) : 0.0f;
+            if (g.held >= kGateHold) { g.open = false; g.pending = false; g.held = 0.0f; }
+            return g.open;
+        }
+        if (!opens) { g.pending = false; g.held = 0.0f; return false; }
+        if (!g.pending) { g.pending = true; g.held = 0.0f; }
+        g.held += std::isfinite(dt) && dt > 0.0f ? std::min(dt, 1.0f) : 0.0f;
+        if (g.held >= kGateHold) { g.open = true; g.pending = false; g.held = 0.0f; }
+        return g.open;
+    }
+
+    void PlanRooms(const SeeWindow* windows, uint32_t count, const float camLocal[3], std::vector<WindowPlan>& plan,
+                   const std::vector<uint8_t>& openable, float reach, unsigned& budget, std::vector<RoomPlan>& rooms)
+    {
+        rooms.clear();
+        if (!windows || plan.size() < count || !Finite3(camLocal)) return;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            WindowPlan& p = plan[i];
+            if (p.state != kShut || i >= openable.size() || !openable[i]) { p.candidate = false; continue; }
+            const int key = RoomKey(windows[i]);
+            auto it = std::find_if(rooms.begin(), rooms.end(), [key](const RoomPlan& r) { return r.key == key; });
+            if (it == rooms.end()) { rooms.push_back(RoomPlan{}); it = rooms.end() - 1; it->key = key; it->nearest = std::numeric_limits<float>::max(); }
+            const float d[3] = { camLocal[0] - windows[i].center[0], camLocal[1] - windows[i].center[1], camLocal[2] - windows[i].center[2] };
+            const float distance = std::sqrt(Dot(d, d));
+            it->nearest = std::min(it->nearest, distance);
+            it->windows.push_back(i);
+            it->blocked = it->blocked || p.blocked || !p.candidate || !(distance <= reach);
+        }
+        std::stable_sort(rooms.begin(), rooms.end(), [](const RoomPlan& a, const RoomPlan& b) { return a.nearest < b.nearest; });
+        for (RoomPlan& r : rooms)
+        {
+            r.funded = !r.blocked && r.windows.size() <= budget;
+            if (r.funded) budget -= static_cast<unsigned>(r.windows.size());
+            else for (const uint32_t i : r.windows) plan[i].candidate = false;
         }
     }
 

@@ -99,8 +99,9 @@ namespace wxl_livingazeroth::glass
             {"NormalX", 8, WXL_CDBC_FIELD_VALUE},    {"NormalY", 9, WXL_CDBC_FIELD_VALUE},    {"NormalZ", 10, WXL_CDBC_FIELD_VALUE},
             {"HalfWidth", 11, WXL_CDBC_FIELD_VALUE}, {"HalfHeight", 12, WXL_CDBC_FIELD_VALUE}, {"Flags", 13, WXL_CDBC_FIELD_VALUE},
             {"Panes", 14, WXL_CDBC_FIELD_VALUE},     {"Comment", 15, WXL_CDBC_FIELD_STRING},  {"Thickness", 16, WXL_CDBC_FIELD_VALUE},
+            {"Room", 17, WXL_CDBC_FIELD_VALUE},      // (2026-10-24: the room it shows, -1 none; a file without it: none)
         };
-        constexpr WXL_SeyrisCdbcDefinition kWindowDef = { "GlassWindows", kWindowsFile, kWindowFields, 17 };
+        constexpr WXL_SeyrisCdbcDefinition kWindowDef = { "GlassWindows", kWindowsFile, kWindowFields, 18 };
         // Where a glass texture's panes are, for the see-through redraw's lead mask (tools/gen_glass.py GLASS_LEAD,
         // LEAD_LAYOUTS; 2026-10-21): one row per rectangle. Optional: without it the redraw keeps the light's mask.
         constexpr const char* kLeadFile = "DBFilesClient\\GlassLead.cdbc";
@@ -1355,6 +1356,7 @@ namespace wxl_livingazeroth::glass
             auto F = [&](const void* row, const char* f, float missing) { return cdbcload::Float(cdbc, t, row, f, missing); };
             windowsRead = true;
             windowRows = cdbc->RowCount(t);
+            const bool haveRoom = cdbcload::Has(cdbc, t, "Room");
             for (uint32_t i = 0, n = windowRows; i < n; ++i)
             {
                 const void* row = cdbc->RowAt(t, i);
@@ -1371,6 +1373,7 @@ namespace wxl_livingazeroth::glass
                 w.halfWidth = F(row, "HalfWidth", 0.0f);
                 w.halfHeight = F(row, "HalfHeight", 0.0f);
                 w.thickness = F(row, "Thickness", 0.0f);
+                w.room = haveRoom ? static_cast<int>(cdbc->Value(t, row, "Room", 0)) : -1;
                 const bool kind = w.kind == Kind::kClear || w.kind == kLeaded || w.kind == kFrosted || w.kind == kStained;
                 noWmo += w.path ? 0 : 1;
                 otherKind += w.path && !kind ? 1 : 0;
@@ -1384,7 +1387,7 @@ namespace wxl_livingazeroth::glass
             cdbc->Release(t);
         }
         const bool haveWindows = !windows.empty();
-        g_windows.Build(std::move(windows));
+        g_windows.Build(std::move(windows), g_settings.wholeRooms != 0);
         g_tableDirty = true;
         {
             char line[400];
@@ -1485,6 +1488,14 @@ namespace wxl_livingazeroth::glass
     {
         ++g_frame;
         g_panesUp = false;
+        // WholeRooms changed (the panel, a reload): the table's keys again, and everything keyed by them (the window lights)
+        if ((g_settings.wholeRooms != 0) != g_windows.WholeRooms() && g_windows.Windows())
+        {
+            std::vector<Window> all = g_windows.All();
+            g_windows.Build(std::move(all), g_settings.wholeRooms != 0);
+            g_tableDirty = true;
+            ++g_generation;
+        }
         const world::Snapshot& snap = world::Current();
         g_inWorld = snap.inWorld && snap.mapId >= 0;
         // The rooms' clock: the hour and the night as the rooms (and the window lights with them) show them, steady

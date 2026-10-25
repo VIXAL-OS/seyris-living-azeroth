@@ -297,6 +297,22 @@ class Windows(unittest.TestCase):
         self.assertAlmostEqual(w.hh, 1.075 + g.W_MARGIN, places=5)
         corners_inside(self, w)
 
+    def test_the_room_a_window_shows(self):
+        # (GlassWindows.Room, 2026-10-24, whole rooms' key: the see-through walk's InteriorBehind) groups: 0 the exterior
+        # shell, 1 a big hall, 2 a small room inside it behind the window, 3 a 0x10000 group there too (never a room)
+        infos = [(0x8, (-20, -20, 0), (20, 20, 20), ""), (0x2000, (-10, -10, 0), (0, 10, 10), "hall"),
+                 (0x2000, (-3, -2, 0), (0, 2, 4), "room"), (0x10000, (-3, -2, 0), (0, 2, 4), "")]
+        # an exterior window at x 0.1 facing +x: 1 yd behind it (x -0.9) the small room and the hall; the smaller
+        self.assertEqual(g.window_room((0.1, 0, 2), (1, 0, 0), True, 0, infos), 2)
+        # beside the small room (y 5): the hall
+        self.assertEqual(g.window_room((0.1, 5, 2), (1, 0, 0), True, 0, infos), 1)
+        # 2.6 yd off the hall, 1 and 2 yd behind still outside every box (0.25 yd larger): none
+        self.assertEqual(g.window_room((2.6, 15, 2), (1, 0, 0), True, 0, infos), -1)
+        # 1 yd behind out of the boxes, 2 yd behind in the hall: the hall (the second probe)
+        self.assertEqual(g.window_room((1.5, 5, 2), (1, 0, 0), True, 0, infos), 1)
+        # a room's own window (seen from inside): its group
+        self.assertEqual(g.window_room((0.1, 0, 2), (1, 0, 0), False, 2, infos), 2)
+
     def test_a_facades_windows_08_yd_apart_stay_two(self):
         ws = windows_of({0: (0x8, [(0, wall_x(0.0, 0.0, 1.5, 1, 3)), (0, wall_x(0.0, 2.3, 3.8, 1, 3))])})
         self.assertEqual([len(w.panes) for w in ws], [1, 1])

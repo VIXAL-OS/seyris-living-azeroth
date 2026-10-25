@@ -199,7 +199,16 @@ namespace wxl_livingazeroth::windows
                 uint32_t seed = r.seed;
                 if (style) { c.style = style; c.building = b; c.flags = b->flags; seed = b->seed; }
                 else { c.style = &glass::DefaultStyle(); c.building = nullptr; c.flags = 0; ++g_unresolved; }
-                c.hash = glass::LitHash(r.cell[0], r.cell[1], static_cast<float>(seed & 1023u), static_cast<float>((seed >> 10) & 1023u));
+                // (its window's fake-room key, as the shader reads it: with whole rooms its room's, so the light dims with the
+                // whole room; a cell of a window not in the table, or of no building, its own)
+                float kx = r.cell[0], ky = r.cell[1];
+                uint32_t ko = 0, kg = 0;
+                if (b && b->path && glass::Windows().KeyOf(b->path, static_cast<uint32_t>(r.cell[0]), ko, kg))
+                {
+                    kx = static_cast<float>(ko);
+                    ky = static_cast<float>(kg);
+                }
+                c.hash = glass::LitHash(kx, ky, static_cast<float>(seed & 1023u), static_cast<float>((seed >> 10) & 1023u));
                 c.share = r.share;
                 c.frosted = (r.flags & kCellFrosted) != 0;
                 c.stained = (r.flags & kCellStained) != 0;

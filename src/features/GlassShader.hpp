@@ -393,13 +393,16 @@ namespace wxl_livingazeroth::glass
             "\n        max r19.x, r19.x, c175.x"
             "\n      endif";
         // ... and found: open when its bit is in c219.w (bits + 0.5, from ordinal c219.z: k = ordinal - first >= 0 and
+        // (2026-10-24, whole rooms: the entry's 3.w is its fake room's key, so its own ordinal is read from texel 6.x)
         // frac(c219.w / 2^(k + 1)) >= 0.5; the half keeps a set bit's value a quarter or more from the boundary for k = 0,
         // so a GPU's approximate exp can't flip it: env/SeeThroughModel's OpenBit is the twin; none past kReplayBits); r29.w
         // its share of the fake room and of the glow hidden: none for an open window (the real room behind it) or one the
         // batch wouldn't have looked up, all for any other.
         const std::string replayOpen = !replay ? std::string() :
             "\n          if b11"
-            "\n            add r19.x, r13.w, -c219.z"
+            "\n            add r22.x, r22.x, c208.x"
+            "\n            texldl r19, r22, s13"
+            "\n            add r19.x, r19.x, -c219.z"
             "\n            max r19.y, r19.x, -c175.x"
             "\n            add r19.y, r19.y, c175.x"
             "\n            exp r19.y, -r19.y"
@@ -634,7 +637,8 @@ namespace wxl_livingazeroth::glass
             "\n          texldl r30, r22, s13"
             "\n          add r22.x, r22.x, c208.x"
             "\n          texldl r20, r22, s13" + replayOpen +
-            // lit or dark: the exact hash of the key and the seed, P(M(P(M(x)) + M(y))) with M mod 289 and P the
+            // lit or dark: the exact hash of the key (its fake room's: 3.w and 5.w, a room's one with whole rooms) and the
+            // seed, P(M(P(M(x)) + M(y))) with M mod 289 and P the
             // permutation (34 v + 1) v (every step a whole number below 2^22: the same bits everywhere), then
             // h = (k + 0.5) / 289 against the dark band: at or below lo (c203.w) dark, above hi (c200.w) lit, between
             // part lit, saturate((h - lo) slope + base) (c212.w, c213.w): a room fading

@@ -261,6 +261,7 @@ namespace wxl_livingazeroth::seethrough
                                             // outer glass behind it (OuterBehind; 0: none)
         bool unlisted = false;              // from outside: its room isn't one the table opens from outside (ListOutside)
         uint32_t see = ~0u;                 // its own window row's Flags (MaskWindows: the ways it may open, 0 none); ~0: no row
+        bool masked = false;                // from outside: unlisted by its own row alone, its room listed (ListOutside)
     };
     constexpr uint32_t kWindowExterior = 0x1;   // GlassWindows.Flags
     // "Northshire Abbey framerate looks awesome but it does flicker between fake rooms and outside" (the user, 2026-10-22,
@@ -504,16 +505,18 @@ namespace wxl_livingazeroth::seethrough
         bool candidate = false;   // facing, on the screen, in range, with a room: open it (budget allowing)
         Rect screen;       // from inside (PlanInside): the window's own screen rectangle, and its farthest depth
         float depth = 0.0f;
+        bool blocked = false;     // whole rooms: on the screen but never to open this frame (its own window row), so its room can't
     };
     /// The plan for one exterior group's windows: the camera (WMO space), the group's box, the walk's rectangle, the
     /// matrices; `budget` windows may still open this frame (it goes down by each candidate), the nearest first (since
     /// 2026-10-24: a city's group has hundreds of windows, and in their order the nearest could find it spent). A window
     /// that isn't listed (ListOutside) takes none of it and is left kUnseen, not even projected (Dalaran's 3,826 cost about
     /// a millisecond a frame projected), so the whole-glass redraw mustn't draw a batch with one see-through (BatchUnlisted).
-    /// Candidates' states are kShut until the runtime has opened them (kOpened).
+    /// Candidates' states are kShut until the runtime has opened them (kOpened). `planMasked` (whole rooms): a window
+    /// unlisted by its own row alone (`masked`) is planned too, kShut and blocked, never a candidate, so it holds its room shut.
     void PlanWindows(const SeeWindow* windows, uint32_t count, const float camLocal[3], const float boxLo[3], const float boxHi[3],
                      const Rect& walk, const float model[16], const float eye[3], const float viewProj[16], unsigned& budget,
-                     std::vector<WindowPlan>& out);
+                     std::vector<WindowPlan>& out, bool planMasked = false);
     /// The client's frustum rectangle for a walk rectangle: (clip + 1) / 2, as {minY, minX, maxY, maxX} (CRect's order).
     void FrustumRect(const Rect& clip, float out[4]);
     /// A walk rectangle from the client's CRect ({minY, minX, maxY, maxX}) and back.
@@ -576,6 +579,44 @@ namespace wxl_livingazeroth::seethrough
     /// nothing, and in the windows' order the nearest shop's could find the budget spent).
     void PlanInside(const SeeWindow* windows, uint32_t count, const float camLocal[3], const Rect& walk, const float model[16],
                     const float eye[3], const float viewProj[16], unsigned& budget, std::vector<WindowPlan>& out, bool fakesFree = false);
+
+    // --- whole rooms (2026-10-24, SeeThroughWholeRooms) -----------------------------------------------------------------
+    // "in general can we have all windows in a room behave the same? like either they're all see through or they're not, and
+    // if they're not then have their lights either all on or off" (the user, 2026-10-24, before Curiosities & Moore from its
+    // walkway: of the windows on its wall one showed the real room and the others fake ones, some lit, some dark). Each
+    // window opened on its own verdict, so a room showed real through one window and fake through the next. As one, a room's
+    // windows on the screen open together, only when every one of them is seen through (none opened onto the void or onto a
+    // wall from behind), and stay shut together otherwise. A room's key: the room behind the window (from outside, and from
+    // inside a window onto another room), or for a way out onto the street the room the camera is in.
+    int RoomKey(const SeeWindow& w);
+    /// Over the sights of a room's windows on the screen this frame: whether every one passes the open test (`opens`) and
+    /// the stay test (`stays`: SightOpen with wasOpen); both false for none.
+    void RoomSight(const Sight* sights, size_t n, bool& opens, bool& stays);
+    /// A room's held verdict: it opens once `opens` has held kGateHold seconds (the first verdict at once); when `stays`
+    /// fails it shuts at once, so no window is ever held open over the void or a wall seen from behind (the runtime's). With
+    /// `holdShut` it shuts only once that has held kGateHold seconds, `g.pending` meanwhile, its windows that still pass the
+    /// stay test open alone (RoomWindowOpen): the survey's other way, which flickered more as a viewer sees it (each
+    /// failing window shutting alone), so not taken. The verdict that stands.
+    bool HoldRoom(Gate& g, bool opens, bool stays, float dt, bool holdShut = false);
+    /// Whether a window of a room stands open: the room open (HoldRoom) and, while it is shutting (`g.pending` on an open
+    /// gate), the window's own rays still passing the stay test.
+    inline bool RoomWindowOpen(const Gate& g, bool roomOpen, const Sight& own) { return roomOpen && (!g.pending || SightOpen(own, true)); }
+    /// One room's windows on the screen this frame (indices into the plan's windows), the nearest one's distance, whether
+    /// one of them can't open (beyond the reach, or blocked) and whether the budget went to it.
+    struct RoomPlan
+    {
+        int key = -1;
+        float nearest = 0.0f;
+        std::vector<uint32_t> windows;
+        bool blocked = false, funded = false;
+    };
+    /// A frame's plan (PlanWindows or PlanInside, given budget enough for every window) by room (RoomKey): the windows on
+    /// the screen (kShut) that `openable` names (a room behind, or a way out, the table opens), nearest room first. A window
+    /// of them beyond `reach` (kRange from outside, kInsideRange from inside) or blocked blocks its room. Then `budget`
+    /// goes to the rooms whole, nearest first: a room blocked or needing more than is left gets none, and its windows'
+    /// candidate is cleared (the budget goes down by each funded room's windows).
+    void PlanRooms(const SeeWindow* windows, uint32_t count, const float camLocal[3], std::vector<WindowPlan>& plan,
+                   const std::vector<uint8_t>& openable, float reach, unsigned& budget, std::vector<RoomPlan>& rooms);
     /// The rays from `eye` through the window's sight points (`points` with n > 0, else kSight's) on past its own pane,
     /// through the building (`groups`: every group's mesh, as LookIn), and what each meets first that the client draws from
     /// that side (a room's pane from behind is see-through). Front: it leaves by the building's own glass (an exterior

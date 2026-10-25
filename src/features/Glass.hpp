@@ -103,6 +103,9 @@ namespace wxl_livingazeroth::glass
         int   frostedRooms = 1;         // behind frosted glass a heavily blurred room, its lamp a soft glow (not a dungeon's)
         int   stainedRooms = 1;         // behind stained glass a faint room tinted by its colours (not a dungeon's, not titan glass lit from behind)
         float darkRoomLight = 0.12f;    // a dark room at night keeps this share of a lit one's light: the moon's and the night's at its window
+        // Whole rooms (2026-10-24): a room's windows as one: from outside and inside see-through together or not at all
+        // (features/SeeThrough), and behind them the fake rooms lit or dark together (GlassWindows' Room: one key a room)
+        int   wholeRooms = 1;
     };
     Settings& Config();
 

@@ -126,6 +126,7 @@ Usage:
         (--sheets: contact sheets of each texture and its mask)
   python gen_glass.py <scan> --rooms [data dir]             only RoomStyles.cdbc and GlassBuildings.cdbc
   python gen_glass.py <scan> --windows [data dir]           only GlassWindows.cdbc (no textures needed)
+  python gen_glass.py <scan> --window-rooms [data dir]      only GlassWindows.cdbc's Room column, its other columns as they are
   python gen_glass.py --lead [data dir]                     only GlassLead.cdbc (LEAD_LAYOUTS: no scan, no textures)
 """
 import collections
@@ -926,6 +927,14 @@ W_SLAB_MIN, W_SLAB_MAX = 0.08, 1.0   # yd: within these (a flat pane's 0.08; a c
 W_TWIN = 0.9        # |cos|: windows of one group facing within ~25 degrees of each other, or of each other's way back
                     # (the two faces of one sheet), are one where one's middle lies in the other's lookup (twins())
 WIN_EXTERIOR = 0x1  # GlassWindows.Flags: the window's group is an exterior one (MOGP 0x8, not 0x2000)
+# The room a window shows (GlassWindows.Room, 2026-10-24: "in general can we have all windows in a room behave the same?",
+# the user; WholeRooms keys a room's fake rooms by it, so they're lit or dark together): an exterior window's the interior
+# group whose box (ROOM_BOX_MARGIN yd larger) holds a point ROOM_PROBES yd behind its middle, the smallest, as the see-through
+# walk's (env/SeeThroughModel InteriorBehind: kProbes, kBoxMargin, client::kSkippedGroups); a room's own window (seen from
+# inside), its group; -1: none modelled behind it (a fake window).
+ROOM_PROBES = (1.0, 2.0)
+ROOM_BOX_MARGIN = 0.25
+ROOM_SKIPPED = 0x10008   # MOGP flags: exterior groups (0x8) and 0x10000 groups, never a window's room
 
 
 def f32(x):
@@ -1815,9 +1824,9 @@ ROOM_STYLES = ["u", "u", "u"] + ["f"] * 21 + ["s"]
 #  Brightness Spread DarkShare Shelves Curtains Divider Plain LateHours NightCap Comment
 GLASS_BUILDINGS = ["u", "u", "u", "f", "f", "f", "u", "u", "u", "u", "u", "s", "s"]
 #  ID MapID UniqueID PosX PosY PosZ Group Style Seed Flags AreaID Wmo Comment
-GLASS_WINDOWS = ["u", "s", "u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "u", "u", "s", "f"]
+GLASS_WINDOWS = ["u", "s", "u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "f", "u", "u", "s", "f", "i"]
 #  ID Wmo Group Ordinal Kind CenterX CenterY CenterZ NormalX NormalY NormalZ HalfWidth HalfHeight Flags Panes Comment
-#  Thickness
+#  Thickness Room (2026-10-24: the room it shows, window_room; -1 none)
 GLASS_LEAD = ["u", "s", "f", "f", "f", "f", "f", "f", "s"]
 #  ID Texture U0 V0 U1 V1 Dark Line Comment (2026-10-21: the see-through redraw's panes, one row per rectangle)
 
@@ -1971,6 +1980,25 @@ def panes_table(scan, light_of):
     return rows, by_map, len(wmos_with), why_none
 
 
+def window_room(center, normal, exterior, group, infos):
+    """The room a window shows (ROOM_PROBES above): `infos` the root's group_infos; -1 none."""
+    if not exterior:
+        return group
+    for depth in ROOM_PROBES:
+        p = [center[k] - normal[k] * depth for k in range(3)]
+        best, volume = -1, 0.0
+        for gi, (fl, lo, hi, _name) in enumerate(infos):
+            if fl & ROOM_SKIPPED:
+                continue
+            if all(lo[k] - ROOM_BOX_MARGIN <= p[k] <= hi[k] + ROOM_BOX_MARGIN for k in range(3)):
+                v = (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2])
+                if best < 0 or v < volume:
+                    best, volume = gi, v
+        if best >= 0:
+            return best
+    return -1
+
+
 def windows_table(scan):
     """(rows, report) of GlassWindows: every window of every root the scan places, per WMO file (WMO space), by path
     and ordinal."""
@@ -1984,12 +2012,14 @@ def windows_table(scan):
         report["WMOs"] += 1
         path = wmo.lower().replace("/", BS)
         base = path.split(BS)[-1][:-4]
+        infos = group_infos(flat(scan, wmo).read_bytes())
         for w in windows:
             n = len(w.panes)
             rows.append([0, path, w.group, w.ordinal, w.kind, *w.center, *w.normal, w.hw, w.hh,
                          WIN_EXTERIOR if w.exterior else 0, n,
                          "%s: group %d %s %d pane%s" % (base, w.group, KIND_NAMES[w.kind], n, "" if n == 1 else "s") +
-                         (", tile %d of %d" % w.tile if w.tile else ""), w.thickness])
+                         (", tile %d of %d" % w.tile if w.tile else ""), w.thickness,
+                         window_room(w.center, w.normal, w.exterior, w.group, infos)])
             report["tiles" if w.tile else "merged" if n > 1 else "single"] += 1
             if w.tile and w.tile[0] == 1:
                 report["cut"] += 1
@@ -1999,6 +2029,31 @@ def windows_table(scan):
     for i, r in enumerate(rows):
         r[0] = i + 1
     return rows, report
+
+
+def write_window_rooms(scan, folder):
+    """GlassWindows.cdbc's Room column from the scan's roots (window_room), every other column as the file has it (its
+    rows, their order and values)."""
+    path = folder / "GlassWindows.cdbc"
+    fields, raw, string_at = io.read(path.read_bytes())
+    if fields not in (len(GLASS_WINDOWS) - 1, len(GLASS_WINDOWS)):
+        sys.exit(f"{path}: {fields} columns, not {len(GLASS_WINDOWS) - 1} or {len(GLASS_WINDOWS)}")
+    infos, rows, counts = {}, [], collections.Counter()
+    for r in raw:
+        vals = []
+        for k, t in enumerate(GLASS_WINDOWS[:-1]):
+            vals.append(string_at(r[k]) if t == "s" else io.as_float(r[k]) if t == "f" else r[k])
+        wmo = vals[1]
+        if wmo not in infos:
+            root = flat(scan, wmo)
+            infos[wmo] = group_infos(root.read_bytes()) if root.exists() else None
+        g = infos[wmo]
+        room = window_room(vals[5:8], vals[8:11], bool(vals[13] & WIN_EXTERIOR), vals[2], g) if g is not None else -1
+        counts["no root in the scan" if g is None else "a room" if room >= 0 else "none"] += 1
+        rows.append(vals + [room])
+    print(f"{len(rows)} windows: " + ", ".join(f"{n} {k}" for k, n in counts.most_common()) +
+          f"; {sum(1 for v in infos.values() if v is None)} WMOs not in the scan")
+    write(path, io.build(GLASS_WINDOWS, [tuple(r) for r in rows]))
 
 
 def write_windows(scan, folder):
@@ -2117,7 +2172,7 @@ def main():
         a = rest.pop(0)
         if a in ("--group-list", "--texture-list", "--sheets"):
             options[a] = rest.pop(0) if rest else sys.exit(f"{a} needs a path")
-        elif a in ("--rooms", "--windows", "--lead"):
+        elif a in ("--rooms", "--windows", "--window-rooms", "--lead"):
             options[a] = True
         else:
             argv.append(a)
@@ -2139,6 +2194,9 @@ def main():
         return
     if "--windows" in options:
         write_windows(scan, Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "data")
+        return
+    if "--window-rooms" in options:
+        write_window_rooms(scan, Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "data")
         return
     if len(argv) < 2:
         sys.exit(__doc__)

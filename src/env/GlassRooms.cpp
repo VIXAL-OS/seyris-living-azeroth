@@ -436,12 +436,100 @@ namespace wxl_livingazeroth::glass
         }
     }
 
-    void WindowTable::Build(std::vector<Window> windows)
+    namespace
+    {
+        // Whole rooms: each window's key (WindowTable::Build), its own unless `whole`.
+        size_t AssignKeys(std::vector<Window>& ws, bool whole)
+        {
+            for (Window& w : ws) { w.keyOrdinal = w.ordinal; w.keyGroup = w.group; }
+            if (!whole) return 0;
+            // a room's: its lowest ordinal's
+            std::unordered_map<uint64_t, uint32_t> first;   // (path << 32 | room) -> window
+            for (uint32_t i = 0; i < ws.size(); ++i)
+            {
+                if (ws[i].room < 0) continue;
+                const uint64_t k = (static_cast<uint64_t>(ws[i].path) << 32) | static_cast<uint32_t>(ws[i].room);
+                auto it = first.find(k);
+                if (it == first.end() || ws[i].ordinal < ws[it->second].ordinal) first[k] = i;
+            }
+            size_t shared = 0;
+            for (Window& w : ws)
+            {
+                if (w.room < 0) continue;
+                const Window& f = ws[first[(static_cast<uint64_t>(w.path) << 32) | static_cast<uint32_t>(w.room)]];
+                w.keyOrdinal = f.ordinal;
+                w.keyGroup = f.group;
+                shared += &w != &f ? 1 : 0;
+            }
+            // the openings of windows with no room: by WMO and group, those touching (union-find), their lowest ordinal's
+            std::unordered_map<uint64_t, std::vector<uint32_t>> byGroup;
+            for (uint32_t i = 0; i < ws.size(); ++i)
+                if (ws[i].room < 0) byGroup[(static_cast<uint64_t>(ws[i].path) << 32) | ws[i].group].push_back(i);
+            std::vector<uint32_t> parent(ws.size());
+            for (uint32_t i = 0; i < ws.size(); ++i) parent[i] = i;
+            auto find = [&parent](uint32_t x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+            for (const auto& kv : byGroup)
+            {
+                const std::vector<uint32_t>& list = kv.second;
+                for (size_t a = 0; a < list.size(); ++a)
+                {
+                    const Window& p = ws[list[a]];
+                    float along[3], up[3];
+                    WindowFrame(p.normal, along, up);
+                    for (size_t b = a + 1; b < list.size(); ++b)
+                    {
+                        const Window& q = ws[list[b]];
+                        const float d[3] = { q.center[0] - p.center[0], q.center[1] - p.center[1], q.center[2] - p.center[2] };
+                        const float reach = p.halfWidth + q.halfWidth + p.halfHeight + q.halfHeight + kOpeningGap;
+                        if (Dot3(d, d) > reach * reach) continue;
+                        if (Dot3(p.normal, q.normal) < kOpeningFacing) continue;
+                        if (std::fabs(Dot3(d, p.normal)) > kOpeningPlane) continue;
+                        if (std::fabs(Dot3(d, along)) > p.halfWidth + q.halfWidth + kOpeningGap) continue;
+                        if (std::fabs(Dot3(d, up)) > p.halfHeight + q.halfHeight + kOpeningGap) continue;
+                        const uint32_t ra = find(list[a]), rb = find(list[b]);
+                        if (ra != rb) parent[std::max(ra, rb)] = std::min(ra, rb);
+                    }
+                }
+            }
+            std::unordered_map<uint32_t, uint32_t> lowest;   // root -> its lowest ordinal's window
+            for (const auto& kv : byGroup)
+                for (const uint32_t i : kv.second)
+                {
+                    const uint32_t r = find(i);
+                    auto it = lowest.find(r);
+                    if (it == lowest.end() || ws[i].ordinal < ws[it->second].ordinal) lowest[r] = i;
+                }
+            for (const auto& kv : byGroup)
+                for (const uint32_t i : kv.second)
+                {
+                    const Window& f = ws[lowest[find(i)]];
+                    ws[i].keyOrdinal = f.ordinal;
+                    ws[i].keyGroup = f.group;
+                    shared += f.ordinal != ws[i].ordinal ? 1 : 0;
+                }
+            return shared;
+        }
+    }
+
+    bool WindowTable::KeyOf(uint32_t path, uint32_t ordinal, uint32_t& keyOrdinal, uint32_t& keyGroup) const
+    {
+        const auto it = m_byOrdinal.find((static_cast<uint64_t>(path) << 32) | ordinal);
+        if (it == m_byOrdinal.end()) return false;
+        keyOrdinal = m_windows[it->second].keyOrdinal;
+        keyGroup = m_windows[it->second].keyGroup;
+        return true;
+    }
+
+    void WindowTable::Build(std::vector<Window> windows, bool wholeRooms)
     {
         using namespace rooms;
         m_windows = std::move(windows);
         m_grids.clear();
         m_texels.clear();
+        m_byOrdinal.clear();
+        m_wholeRooms = wholeRooms;
+        m_shared = AssignKeys(m_windows, wholeRooms);
+        for (uint32_t i = 0; i < m_windows.size(); ++i) m_byOrdinal[(static_cast<uint64_t>(m_windows[i].path) << 32) | m_windows[i].ordinal] = i;
         // by WMO and group
         std::unordered_map<uint64_t, std::vector<uint32_t>> byGroup;
         for (uint32_t i = 0; i < m_windows.size(); ++i)
@@ -551,9 +639,10 @@ namespace wxl_livingazeroth::glass
                     float* e = &m_texels[entryAt * 4];
                     Rows(w, e, e + 4, e + 8);
                     const RoomBox box = RoomBoxOf(w.halfWidth, w.halfHeight);
-                    e[12] = w.halfWidth + kMargin; e[13] = w.halfHeight + kMargin; e[14] = Thickness(w); e[15] = static_cast<float>(w.ordinal);
+                    e[12] = w.halfWidth + kMargin; e[13] = w.halfHeight + kMargin; e[14] = Thickness(w); e[15] = static_cast<float>(w.keyOrdinal);
                     e[16] = box.halfWidth; e[17] = box.floor; e[18] = box.ceiling; e[19] = w.kind == kFrosted ? 1.0f : 0.0f;
-                    e[20] = w.center[0]; e[21] = w.center[1]; e[22] = w.center[2]; e[23] = static_cast<float>(w.group);
+                    e[20] = w.center[0]; e[21] = w.center[1]; e[22] = w.center[2]; e[23] = static_cast<float>(w.keyGroup);
+                    e[24] = static_cast<float>(w.ordinal); e[25] = static_cast<float>(w.group);
                     entryAt += kEntryTexels;
                 }
             }

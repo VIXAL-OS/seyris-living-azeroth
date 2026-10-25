@@ -1944,14 +1944,14 @@ namespace
                 if (const gl::WindowTable::Grid* og = table.Find(w.path, w.group))
                 {
                     const int oe = table.Lookup(*og, w.center);
-                    stainedInOther += oe >= 0 && static_cast<uint32_t>(table.Texel(oe + 3)[3]) == w.ordinal ? 1 : 0;
+                    stainedInOther += oe >= 0 && static_cast<uint32_t>(table.Texel(oe + 6)[0]) == w.ordinal ? 1 : 0;   // (6.x its ordinal)
                 }
             const gl::WindowTable::Grid* g = table.Find(w.path, w.group, w.kind == gl::kStained);
             if (!g) { ++none; continue; }
             worst = std::max(worst, g->worst);
             const int e = table.Lookup(*g, w.center);
             if (e < 0) ++none;
-            else if (static_cast<uint32_t>(table.Texel(e + 3)[3]) == w.ordinal) { ++found; roomsFound += room ? 1 : 0; stainedFound += w.kind == gl::kStained ? 1 : 0; }
+            else if (static_cast<uint32_t>(table.Texel(e + 6)[0]) == w.ordinal) { ++found; roomsFound += room ? 1 : 0; stainedFound += w.kind == gl::kStained ? 1 : 0; }
             else ++other;
         }
         for (const gl::Window& w : table.All())
@@ -1973,7 +1973,8 @@ namespace
         const int otherFound = found - stainedFound, others = static_cast<int>(windows.size()) - kinds[gl::kStained];
         // (the clear, leaded and frosted found at their middles: 98.1% before 2026-10-24, 97.8% since; Dalaran's 1,910 surrounds,
         // 1,898 of them found, left the table, the 185 others not found as before)
-        Check(wt.fields == 17 && windows.size() > 5000 && insane == 0 && duplicate == 0 && dense && stainedBefore == 0 &&
+        // (18 columns since 2026-10-24: Room, the room each window shows, whole rooms' key)
+        Check(wt.fields == 18 && windows.size() > 5000 && insane == 0 && duplicate == 0 && dense && stainedBefore == 0 &&
               worst <= static_cast<uint32_t>(gl::rooms::kMaxPerCell) && none == 0 && otherFound >= others * 97 / 100 &&
               roomsFound >= rooms * 99 / 100 && stainedFound >= kinds[gl::kStained] * 80 / 100 && stainedInOther == 0 && table.Height() <= 4096, line);
         // The windows the user named: Ironforge's frosted, Dalaran's and Stormwind's (its cathedral's) stained, a dwarven
@@ -4864,7 +4865,9 @@ namespace
         // c181..c183: the view's rows)
         rh::Rooms rooms;
         rooms.Textures(d, textures, 0);
-        rooms.Table(d, all);
+        // (GLASS_WHOLE_ROOMS=1: the table's keys as WholeRooms makes them, a room's windows one fake room; else each its own)
+        const char* whole = std::getenv("GLASS_WHOLE_ROOMS");
+        rooms.Table(d, all, whole && std::atoi(whole) != 0);
         gl::Settings s;
         gl::Inputs in;
         in.sun[0] = -0.4f; in.sun[1] = 0.3f; in.sun[2] = 0.86f; Norm(in.sun);

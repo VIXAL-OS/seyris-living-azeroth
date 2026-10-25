@@ -124,11 +124,11 @@ namespace roomharness
                 if (*t) { (*t)->Release(); *t = nullptr; }
         }
 
-        /// The table of these windows (their WMO space the world's) on the device.
-        bool Table(IDirect3DDevice9* dev, std::vector<gl::Window> windows)
+        /// The table of these windows (their WMO space the world's) on the device; `wholeRooms` its keys as WholeRooms makes them.
+        bool Table(IDirect3DDevice9* dev, std::vector<gl::Window> windows, bool wholeRooms = false)
         {
             if (tableTex) { tableTex->Release(); tableTex = nullptr; }
-            table.Build(std::move(windows));
+            table.Build(std::move(windows), wholeRooms);
             if (FAILED(dev->CreateTexture(gl::rooms::kWidth, table.Height(), 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &tableTex, nullptr)) || !tableTex)
                 return false;
             D3DLOCKED_RECT lr{};

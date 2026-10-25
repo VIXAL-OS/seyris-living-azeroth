@@ -158,6 +158,15 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   0.4 s when its window joins or leaves the light's set, instead of popping, and a window takes another's place only when
   it lights the player's spot half as well again; sixteen windows' patches at once, not twelve ("lots of pop-in when i
   move", in Stormwind's Wizard's Sanctum).
+- **A room's windows as one** (24 October 2026): "in general can we have all windows in a room behave the same?" Seen
+  through from outside or inside, a room's windows now open together, and only when the room is really seen through every
+  one of them; otherwise they all keep their glass (`WholeRooms`, on by default). Behind the glass, in any building, a
+  room's fake rooms are lit or dark together, furnished alike, and go dark together as the night goes on, their window
+  lights with them; so are the panes of one window (a vrykul tower's window at Valkyrion showed a lit room behind one pane
+  and a dark one behind the other). Rooms that would come and go as one stay shut: in Dalaran, Curiosities & Moore and the
+  Threads of Fate's main rooms and upper floors, Cartier & Co., the Violet Gate, the Purple Parlor and Vargoth's Retreat
+  from outside ("Threads of Fate is actually more flickery now"), and the orcs' great halls. A snapshot now names the
+  building actually in front of the camera, not the last one the see-through windows looked at.
 - **Dalaran's rooms open window by window** (24 October 2026): a room opened from the street with all its windows, so one
   window that flickers kept a whole room shut ("the Violet Gate windows work fine from the inside but not from the
   outside"). The see-through table can now keep single windows shut while their room opens. The Violet Gate's two halls

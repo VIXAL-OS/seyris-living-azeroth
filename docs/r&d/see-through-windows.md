@@ -360,12 +360,11 @@ per-pixel redraw the default again.
 **The roadmap** (2026-10-24). Done: from outside and from inside (sections 3 .. 8), more buildings (9), Phase A stained
 glass (10), Phase B frosted glass (11), Phase C between rooms in Ironforge (13, 14), Phase D Dalaran, room by room, all
 three at once (15); the first reports from Dalaran: the window light's choice (16), the stone surrounds that were frosted
-windows (18), the floor light's fades (19). Next: in-game reports from Dalaran (the Lounge's windows far apart in their
-batch, the stained glass's whole-texture lead mask); more than sixteen windows a batch in the redraw (a second constant, if
-the largest WMO variant's slots allow: 2,024 of 2,048 now); in-game reports from the rooms added from outside once the
-surrounds went (Curiosities & Moore, the Threads of Fate, the Lounge's hall, the Silver Enclave's hall: section 18); the
-Violet Gate's halls, the upstairs rooms, the Lounge's hall and Vargoth's Retreat opened window by window (section 21),
-their in-game reports; the Violet Citadel from outside (23% once its flickering windows are shut); Lumenveil's queue after
+windows (18), the floor light's fades (19), rooms whole (22). Next: in-game reports of whole rooms (the rooms kept from
+outside, the fake rooms lit or dark together); a swing survey from inside (the rooms' ways out as one, from inside, have
+no flicker measure yet); in-game reports from Dalaran (the Lounge's windows far apart in their batch, the stained glass's
+whole-texture lead mask); more than sixteen windows a batch in the redraw (a second constant, if the largest WMO
+variant's slots allow: 2,027 of 2,048 now); Lumenveil's queue after
 the see-through phases.
 
 ## 8. From inside: the street through the windows
@@ -1418,3 +1417,113 @@ window rows, the kept windows without one. "Dalaran from the scan": 177 listed, 
 room's windows opening from its spot. "Curiosities & Moore's walkway": room 9 listed, 1948 shut by its own row, 1947
 listed. glass_load_tests: the rows through both readers (the linked one and the DLL's), and the file without its Window
 column (no window rows; the rooms' rows as they are).
+
+## 22. Rooms whole (2026-10-24)
+
+"in general can we have all windows in a room behave the same? like either they're all see through or they're not, and
+if they're not then have their lights either all on or off" (the user, before Curiosities & Moore from its walkway,
+snapshot 20261024-205742: of the windows on its wall one showed the real room, the others fake rooms, some lit, some
+dark), then "Threads of Fate is actually more flickery now than it used to be sadly" (on a mount by its entrance,
+snapshot 20261024-210018) and, at Valkyrion in the Storm Peaks, "this valkyr window is very weird lol" (one two-pane
+window, a dark fake room behind one pane and a lit one behind the other).
+
+**See-through as one** (`WholeRooms`, 1 by default; features/SeeThrough WalkRooms and WalkInsideRooms, env/SeeThroughModel
+PlanRooms, RoomSight, HoldRoom). A room's key is the room behind the window (from outside, and from inside a window onto
+another room), or for a way out onto the street the room the camera is in. Each frame the windows on the screen are
+grouped by room. The budget goes to rooms whole, nearest first. A room with a window too far (60 yd outside, 40 inside),
+or held shut by a window row, gets none. Every window of a funded room is looked through. The room opens once every one
+of them has passed the open test (5 rays of 9 seeing in) for 0.35 s, and shuts the frame one of them fails the stay test
+(3 rays). Then all its windows are opened (the walk on into the room through each) or none.
+
+The choice: never show the void. A window whose rays meet the room from behind, or nothing, would show the sky through
+the wall if opened, so a room opens only when all its windows on the screen can, and never stays open over one that
+can't. The other way (drawing the room's walls double-sided behind such a window) can't help where rays meet nothing, and
+changes the client's own draw. A held shut was surveyed too: the room shutting only once a failure held 0.35 s, its
+failing windows shut alone meanwhile. As a viewer sees it that flickered more (each failing window shut alone, then the
+room), so it isn't used. A window seen edge-on counts like any other: it holds its room shut while it's on the screen.
+
+**Measured as a viewer sees it** (seethrough_tests SEETHROUGH_ROOMS). Street views: from each window's street eyes,
+looking at that window, the room's windows facing there within 60 yd and on the screen (84 by 54 degrees). Swings: players
+on every level before each of the room's windows (at most 24 spots a room), the camera 16 yd out at 30 degrees or 10 at
+20, swung 60 degrees either way and back at 30 a second, looking at the room. A frame changes when any of the room's
+windows on the screen on it and the last changes; a run flickers when that happens more than twice. By window is the old
+rule (each window held on its own); as one is the new. From inside: each eye on the room's floor looking eight ways, the
+room's windows on that screen; no swing survey from inside yet.
+
+**The rule and the cut.** A room is listed from outside when as one it opens from 35% of its street views or more and at
+most 25% of its swings flicker. 25%: the Threads of Fate's side room (11), "works fine afaict", flickered in 26.7% of its
+swings by window as a viewer sees it, 20.0% as one; the cut sits just under the one data point the user called fine. The
+window rows (section 21) are gone: a window held shut by its row would hold its room shut whenever on the screen, and
+the room is judged whole instead.
+
+| room (Dalaran) | street views as one | swings flickering, by window -> as one | |
+|---|---|---|---|
+| Curiosities & Moore (6) | 61% | 26% -> 43% (1984, never seen through, comes and goes) | out |
+| its other room (7) | 50% | 25% -> 7% | kept |
+| Curiosities & Moore upstairs (9) | 1% | 27% -> 0% (shut) | out |
+| the Threads of Fate (10) | 62% | 19% -> 29% (1966, 1973) | out |
+| its side room (11) | 62% | 27% -> 20% | kept |
+| the Threads of Fate upstairs (13) | 1% | 22% -> 0% (shut; 82% of views mixed before) | out |
+| Cartier & Co. (19), the Violet Gate (53, 54) | 0.4%, 7%, 2% | 75%, 94%, 100% -> 0% | out from outside, kept from inside |
+| the Lounge's hall (55), upper rooms (57, 58) | 40%, 100%, 100% | 10%, 13%, 19% -> 20%, 7.5%, 6% | kept |
+| the Silver Enclave's hall (78) | 60% | 4% -> 4% | kept |
+| the Purple Parlor (89), Vargoth's Retreat (90) | 0% | 85%, 94% -> 0% | out |
+
+At the user's Threads of Fate snapshot (the camera swung 40 degrees either way along its own arc round the mounted
+player): room 10 by window never changed but showed mixed (some windows real, some fake) on 247 of 480 frames; room 13
+changed twice and was mixed on 292. As one both are out: no changes, nothing mixed. At the Curiosities & Moore walkway,
+room 9 from both of the user's earlier cameras: its three windows facing them, shut as one.
+
+Every building in the table (outside: rooms opening as one from 35% of street views; flicker: the mean over its rooms of
+swings flickering; inside: rooms opening from 35% of views):
+
+| building | outside, rooms: open before -> after | flicker by window (views mixed) -> as one | inside, rooms: before -> after |
+|---|---|---|---|
+| the inns (Goldshire, Duskwood, Redridge, Westfall, Stratholme) | 6: 5 -> 5 | 3 .. 7% (18 .. 20%) -> 0 .. 3% | 6: 6 -> 6 (Stratholme 9) |
+| the two-storey houses (five) | 5: 5 -> 5 | 0% (2 .. 4%) -> 0% | 5: 5 -> 5 |
+| the mage towers (seven) | 1: 1 -> 1 | 0% (9%) -> 0% | 1: 1 -> 1 |
+| the farmhouses (six) | 1: 1 -> 1 | 0 .. 8% (32%) -> 0% | 1: 1 -> 1 |
+| Redridge's prison camp headquarters | 1: 1 -> 1 | 86% (32%) -> 6% | 1: 1 -> 1 |
+| Redridge's chapel | 1: 1 -> 1 | 25% (35%) -> 0% | 1: 1 -> 1 |
+| Northshire Abbey, New Hearthglen's | 7: 5 -> 3 | 64% (25%) -> 0% | 6: 5 -> 5 |
+| Northrend's barracks (two) | 2: 2 -> 0 | 30% (75%) -> as one 11 .. 12% of views | 2: 2 -> 2 |
+| Northrend's town hall | 1: 1 -> 1 | 100% (26%) -> 25% | - |
+| the Isle of Conquest's keep | 2: 2 -> 0 | 100% (70%) -> as one 10 .. 12% of views | - |
+| Wintergarde's house | 1: 1 -> 1 | 0% (13%) -> 0% | 1: 1 -> 1 |
+| Valgarde's inn | 2: 0 -> 0 | - | - |
+| the dwarven houses (two) | 1: 1 -> 0 | 78% (60%) -> 22% (as one 27% of views) | 1: 1 -> 1 |
+| the Taunka's longhouse | 1: 1 -> 0 | 14% (34%) -> 14% (as one 30%) | 1: 1 -> 1 |
+| the orcs' huts (two) | 1: 1 -> 1 | 0% (22%) -> 0% | 1: 1 -> 1 |
+| the orcs' great halls (two) | 2: 2 -> 0 | 27% (44%) -> 50, 46% | - (out of the table) |
+| the orcs' two-storey and zeppelin houses (five) | - | - | 1: 1 -> 1 |
+| the vrykul longhouses (two) | 1: 1 -> 1 | 21, 22% (19%) -> 15, 8% | - |
+| Ironforge (between rooms) | - | - | 34: 30 -> 29 |
+| Dalaran | 15: 15 -> 6 | 43% (43%) -> 11% | 5: 5 -> 5 |
+
+In all, from outside 109 rooms opened from 35% of street views before and 83 as one now; from inside 130 and 129. The
+buildings listed whole stay listed whole: a room of theirs under 35% as one still opens where it can, as one, and steadily
+(the abbey's libraries, the barracks, the keep, the dwarven houses, the Taunka's longhouse). Of them only the orcs' great
+halls flicker as one (50 and 46% of swings, opening from 19 and 14% of street views): out of the table (47 buildings now).
+
+**Fake rooms as one** (any building, see-through or not). GlassWindows.cdbc has a Room column (`tools/gen_glass.py
+--window-rooms`): the room each window shows, by the walk's own test (InteriorBehind: 10,062 of the 14,572 windows have
+one; Dalaran's 2,225 street windows all agree with the walk's). With `WholeRooms` the window table gives a room's windows
+one fake-room key, the lowest ordinal's (WindowTable::Build): the shader's lit hash and its layout (curtains, furniture,
+depth) come from the key (texel 3.w and 5.w), so a room is lit or dark, and furnished, the same through every window, and
+goes dark at once as the night goes on; the window lights in front take the same key (features/Windows: KeyOf). Windows
+with no room behind them that are one opening (the same group, facing within ~45 degrees, within 0.3 yd of each other's
+rectangle and plane) share a key too: 11,191 windows share one. The see-through redraw's open bits read each window's own
+ordinal from texel 6 (two more instructions in the redraw's variants: 2,027 slots of 2,048 in the largest).
+
+The vrykul tower at Valkyrion (nd_vrykul_tower_02snow.wmo, the map scan's placement 2321693, 16 yd from the user's
+position): its one exterior group has three windows and no room behind them; its upper two-pane window is two of them,
+ordinal 0 (one pane, facing 22 degrees aside) and 1 (two panes), overlapping. Before, each its own key: lit hashes 0.849
+and 0.441 with the placement's seed, one above the night's dark share, one below (one pane lit, one dark), and different
+layouts. As one opening they share ordinal 0's key: 0.849 both, the same room. The glass harness's snapshot view of it
+(GLASS_WHOLE_ROOMS 0 and 1) shows the split by day: the right pane a different room box before, one room after.
+
+**The snapshot's building.** At Valkyrion the snapshot named Dalaran, group 63, 1,372 yd away: the see-through walk's
+last group, the tower not in the table. The snapshot now also lists the WMO groups the client drew last frame
+(Wmo.RenderGroup, any building): the one under the screen's centre and the one nearest the camera, each with its group's
+name, its glass batches and whether the table names it, and outside a building takes the one under the centre (or the
+nearest) as its view unless the walk's group is the same building or no farther.

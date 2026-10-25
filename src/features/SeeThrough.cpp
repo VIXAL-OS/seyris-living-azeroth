@@ -21,6 +21,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace wxl_livingazeroth::seethrough
@@ -84,7 +85,7 @@ namespace wxl_livingazeroth::seethrough
             int outdoors = -1;       // -1 no walk from inside seen, 0 no outdoors (the frustum view's depth < 0), 1 drawn
             // Each window on the screen and facing the camera: open, or why it's shut (the panel's list, so an in-game check
             // says what happened: "see-through windows don't seem to work anymore now", the user, 2026-10-21).
-            enum Why : uint8_t { kOpen, kFake, kFar, kBudget, kUnloaded, kNoMesh, kBlind, kNotReached, kFrostOff };
+            enum Why : uint8_t { kOpen, kFake, kFar, kBudget, kUnloaded, kNoMesh, kBlind, kNotReached, kFrostOff, kRoom };
             struct Note
             {
                 uint32_t ordinal = 0;
@@ -646,6 +647,22 @@ namespace wxl_livingazeroth::seethrough
             return open;
         }
 
+        // Whole rooms (WholeRooms, 2026-10-24: env/SeeThroughModel PlanRooms, RoomSight, HoldRoom): each room's held verdict
+        // by its instance, the side it's seen from, the group walked and its key; one not looked at for a second afresh.
+        std::unordered_map<uint64_t, GateEntry> g_roomGates;
+        Gate& RoomGate(const void* instance, bool inside, uint32_t group, int key)
+        {
+            const ULONGLONG now = GetTickCount64();
+            if (g_roomGates.size() > 4096) g_roomGates.clear();
+            const uint64_t k = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 24) ^ (static_cast<uint64_t>(inside ? 1 : 0) << 23) ^
+                               (static_cast<uint64_t>(inside ? group : 0) << 11) ^ static_cast<uint64_t>(static_cast<uint32_t>(key) & 0x7FF);
+            GateEntry& e = g_roomGates[k];
+            if (e.tick && now - e.tick > 1000) e.gate = Gate{};
+            e.tick = now;
+            return e.gate;
+        }
+        bool WholeRooms() { return glass::Config().wholeRooms != 0; }
+
         // From outside: the room seen through the window from here, the rays followed on through the building (LookIn:
         // "dormers still switch between the fake rooms and the real ones", 2026-10-22), the verdict held.
         bool SeenThrough(const void* instance, uint32_t group, uint32_t index, const SeeWindow& w, const float eye[3],
@@ -659,6 +676,12 @@ namespace wxl_livingazeroth::seethrough
         // drawn is one (BeginGroupDraw): the frame's room batches (Counts::roomBatches).
         std::vector<uint64_t> g_roomKeys;
         bool g_drawingRoom = false;
+        // Every placed group the client draws this frame (BeginGroupDraw), for a snapshot's nearest building (LastDrawn),
+        // and last frame's (Update swaps them).
+        struct DrawnRef { const void* root = nullptr; const void* instance = nullptr; int group = 0; };
+        std::vector<DrawnRef> g_drawn, g_lastDrawn;
+        std::unordered_set<uint64_t> g_drawnKeys;
+        constexpr size_t kMaxDrawn = 1024;
         void NoteRoom(const void* instance, uint32_t room)
         {
             const uint64_t k = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 16) ^ room;
@@ -719,6 +742,102 @@ namespace wxl_livingazeroth::seethrough
             return g_targetSeen;
         }
 
+        // From outside, whole rooms (WholeRooms): the group's windows on the screen by room (PlanRooms: the budget to rooms
+        // whole, a room with a window too far or held shut by its own row gets none), each room's windows looked through
+        // (LookIn) and the room held as one (HoldRoom: open once every window of it has passed the open test for kGateHold
+        // seconds, shut at once when one fails the stay test), then every window of an open room opened (the walk on into
+        // the room through each), every window of a shut one left shut.
+        void WalkRooms(void* root, const void* instance, const RootEntry& r, uint32_t group, const SeeWindow* windows, uint32_t count,
+                       const float cam[3], const float model[16], const float eye[3], const float viewProj[16], const float crect[4], GroupFrame& f)
+        {
+            std::vector<WindowPlan> plan;
+            unsigned all = count;
+            PlanWindows(windows, count, cam, r.groups[group].lo, r.groups[group].hi, FromCRect(crect), model, eye, viewProj, all, plan, true);
+            std::vector<uint8_t> openable(count);
+            for (uint32_t i = 0; i < count; ++i) openable[i] = windows[i].interior >= 0 ? 1 : 0;
+            std::vector<RoomPlan> rooms;
+            PlanRooms(windows, count, cam, plan, openable, kRange, g_budget, rooms);
+            f.states.assign(count, kUnseen);
+            for (uint32_t i = 0; i < count; ++i)
+                if (plan[i].state == kShut && windows[i].interior < 0)
+                {
+                    f.states[i] = kShut;
+                    ++g_now.shut;
+                    NoteWindow(g_now, windows[i].ordinal, Counts::kFake);
+                }
+            const bool lineOfSight = g_settings.redraw != 0;
+            std::vector<SightMesh> building;
+            std::vector<Sight> sights;
+            std::vector<Counts::Why> whys;
+            for (const RoomPlan& rp : rooms)
+            {
+                const uint32_t room = static_cast<uint32_t>(rp.key);
+                const size_t n = rp.windows.size();
+                sights.assign(n, Sight{});
+                whys.assign(n, Counts::kRoom);
+                bool ready = rp.funded;
+                if (!rp.funded)
+                    for (size_t k = 0; k < n; ++k)
+                    {
+                        const uint32_t i = rp.windows[k];
+                        const float d[3] = { cam[0] - windows[i].center[0], cam[1] - windows[i].center[1], cam[2] - windows[i].center[2] };
+                        if (plan[i].blocked) whys[k] = Counts::kRoom;
+                        else if (DistanceToBox(cam, r.groups[group].lo, r.groups[group].hi) > kRange || (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) > kRange * kRange) whys[k] = Counts::kFar;
+                        else if (!rp.blocked) whys[k] = Counts::kBudget;
+                    }
+                else if (!Enterable(static_cast<const uint8_t*>(root), static_cast<const uint8_t*>(instance), room, r.groupCount))
+                {
+                    ready = false;
+                    whys.assign(n, Counts::kUnloaded);
+                }
+                else
+                    for (size_t k = 0; k < n && ready; ++k)
+                    {
+                        const uint32_t i = rp.windows[k];
+                        if (windows[i].kind == glass::kFrosted && !FrostOn()) { ready = false; whys[k] = Counts::kFrostOff; ++g_now.frostShut; break; }
+                        if (!lineOfSight) continue;
+                        if (!BuildingOf(r, root, r.Near(r.windows, &windows[i]), building)) { ready = false; whys[k] = Counts::kNoMesh; break; }
+                        const std::vector<SightPoints>* points = PointsOf(r, root, group, windows, count);
+                        LookIn(windows[i], cam, building.data(), building.size(), points && i < points->size() ? &(*points)[i] : nullptr, sights[k]);
+                    }
+                bool opens = ready, stays = ready;
+                if (ready && lineOfSight) RoomSight(sights.data(), n, opens, stays);
+                Gate& gate = RoomGate(instance, false, group, rp.key);
+                const bool wasOpen = gate.seen && gate.open;
+                const bool open = HoldRoom(gate, opens, stays, g_frameSeconds, false);   // (shut at once: no window held open over the void)
+                bool anyOpened = false;
+                for (size_t k = 0; k < n; ++k)
+                {
+                    const uint32_t i = rp.windows[k];
+                    const WindowPlan& p = plan[i];
+                    bool opened = false;
+                    Counts::Why why = whys[k];
+                    if (open)
+                    {
+                        float clip[4], frustum[4];
+                        ToCRect(p.clip, clip);
+                        FrustumRect(p.clip, frustum);
+                        opened = OpenWindow(root, room, group, clip, frustum);
+                        why = opened ? Counts::kOpen : Counts::kNotReached;
+                        if (opened && windows[i].kind == glass::kFrosted) NoteRect(g_now, windows[i].ordinal, false, p.clip);
+                    }
+                    else if (ready && lineOfSight && !SightOpen(sights[k], wasOpen)) { why = Counts::kBlind; ++g_now.blind; }
+                    // (held: the room's verdict isn't this window's own this frame: it passes, the room shut by another or held)
+                    const bool held = ready && lineOfSight && open != SightOpen(sights[k], wasOpen);
+                    NoteWindow(g_now, windows[i].ordinal, why, ready ? &sights[k] : nullptr, held);
+                    f.states[i] = opened ? kOpened : kShut;
+                    ++(opened ? g_now.opened : g_now.shut);
+                    f.opened += opened ? 1 : 0;
+                    anyOpened = anyOpened || opened;
+                }
+                if (anyOpened) NoteRoom(instance, room);
+            }
+            g_now.groupsAdded += g_added;
+            g_added = 0;
+            if (f.opened && !g_everOpened++ && g_api)
+                g_api->Log(WXL_LOG_INFO, kTag, "see-through windows: the first window opened (%u of %u in group %u, whole rooms)", f.opened, count, group);
+        }
+
         void Walk(void* root, uint32_t group, float* rect)
         {
             uint32_t interiorPass = 1, cullValid = 0;
@@ -755,6 +874,11 @@ namespace wxl_livingazeroth::seethrough
             std::memcpy(f.model, model, sizeof(f.model));
             f.haveCam = true;
             std::vector<WindowPlan> plan;
+            if (WholeRooms())
+            {
+                WalkRooms(root, instance, *r, group, windows, count, cam, model, eye, viewProj, crect, f);
+                return;
+            }
             PlanWindows(windows, count, cam, r->groups[group].lo, r->groups[group].hi, FromCRect(crect), model, eye, viewProj, g_budget, plan);
             f.states.assign(count, kUnseen);
             std::vector<SightMesh> building;   // (the building round each candidate for its rays)
@@ -832,6 +956,128 @@ namespace wxl_livingazeroth::seethrough
             reinterpret_cast<ViewFn>(client::kMergeIntoFrustumRect)(&view);
         }
 
+        // From inside, whole rooms (WholeRooms): the group's windows on the screen this reach, not decided at an earlier one,
+        // by room (PlanRooms: a way out onto the street the room the camera is in, a window onto another room that room;
+        // only those the table opens; one held shut by its own row holds its room shut), each looked through (LookOut, LookIn
+        // as far as the room's box) and held as one (HoldRoom), then all of an open room's opened, all of a shut one's shut.
+        void WalkInsideRooms(void* root, const void* instance, const RootEntry& r, uint32_t group, const SeeWindow* windows, uint32_t count,
+                             const float cam[3], const float model[16], const float eye[3], const float viewProj[16], const float crect[4],
+                             GroupFrame& f, bool waysOut, bool between, int interiorArg)
+        {
+            std::vector<WindowPlan> plan;
+            unsigned all = count;
+            PlanInside(windows, count, cam, FromCRect(crect), model, eye, viewProj, all, plan, between && !waysOut);
+            std::vector<uint8_t> openable(count, 0);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                if (f.states[i] != kUnseen || plan[i].state != kShut) continue;   // (decided at an earlier reach, or not seen from this one)
+                const bool onto = windows[i].interior >= 0;
+                const bool allowed = onto ? between : waysOut;
+                if (!allowed)
+                {
+                    f.states[i] = kShut;
+                    if (!onto && between) { ++g_now.betweenFake; NoteWindow(g_now, windows[i].ordinal, Counts::kFake, nullptr, false, true); }
+                    continue;
+                }
+                openable[i] = 1;
+                if (!(windows[i].see & (onto ? kSeeBetween : kSeeFromInside))) plan[i].blocked = true;   // (its own row: never, so its room neither)
+            }
+            std::vector<RoomPlan> rooms;
+            PlanRooms(windows, count, cam, plan, openable, kInsideRange, g_insideBudget, rooms);
+            std::vector<SightMesh> building;
+            std::vector<Sight> sights;
+            std::vector<Counts::Why> whys;
+            for (const RoomPlan& rp : rooms)
+            {
+                const bool onto = windows[rp.windows[0]].interior >= 0;   // (a way out's key is the group itself)
+                const uint32_t room = onto ? static_cast<uint32_t>(rp.key) : group;
+                const size_t n = rp.windows.size();
+                sights.assign(n, Sight{});
+                whys.assign(n, Counts::kRoom);
+                bool ready = rp.funded;
+                if (!rp.funded)
+                    for (size_t k = 0; k < n; ++k)
+                    {
+                        const uint32_t i = rp.windows[k];
+                        const float d[3] = { cam[0] - windows[i].center[0], cam[1] - windows[i].center[1], cam[2] - windows[i].center[2] };
+                        if (plan[i].blocked) whys[k] = Counts::kRoom;
+                        else if ((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) > kInsideRange * kInsideRange) whys[k] = Counts::kFar;
+                        else if (!rp.blocked) whys[k] = Counts::kBudget;
+                    }
+                else if (onto && !Enterable(static_cast<const uint8_t*>(root), static_cast<const uint8_t*>(instance), room, r.groupCount))
+                {
+                    ready = false;
+                    whys.assign(n, Counts::kUnloaded);
+                    g_now.betweenUnloaded += static_cast<unsigned>(n);
+                }
+                else
+                    for (size_t k = 0; k < n && ready; ++k)
+                    {
+                        const uint32_t i = rp.windows[k];
+                        if (windows[i].kind == glass::kFrosted && !FrostOn()) { ready = false; whys[k] = Counts::kFrostOff; ++g_now.frostShut; break; }
+                        if (!BuildingOf(r, root, r.Near(r.inside, &windows[i]), building)) { ready = false; whys[k] = Counts::kNoMesh; break; }
+                        const std::vector<SightPoints>* points = PointsOf(r, root, group, windows, count);
+                        const SightPoints* sp = points && i < points->size() ? &(*points)[i] : nullptr;
+                        if (windows[i].interior >= 0)
+                            LookIn(windows[i], cam, building.data(), building.size(), sp, sights[k],
+                                   room < r.groups.size() ? RoomReach(cam, r.groups[room]) : kVoidReach);
+                        else LookOut(windows[i], cam, building.data(), building.size(), sp, sights[k]);
+                    }
+                bool opens = ready, stays = ready;
+                if (ready) RoomSight(sights.data(), n, opens, stays);
+                Gate& gate = RoomGate(instance, true, group, rp.key);
+                const bool wasOpen = gate.seen && gate.open;
+                const bool open = HoldRoom(gate, opens, stays, g_frameSeconds, false);   // (shut at once: no window held open over the void)
+                bool anyOpened = false;
+                for (size_t k = 0; k < n; ++k)
+                {
+                    const uint32_t i = rp.windows[k];
+                    const WindowPlan& p = plan[i];
+                    bool opened = false;
+                    Counts::Why why = whys[k];
+                    if (open)
+                    {
+                        if (windows[i].interior >= 0)
+                        {
+                            float clip[4], frustum[4];
+                            ToCRect(p.clip, clip);
+                            FrustumRect(p.clip, frustum);
+                            opened = OpenWindow(root, room, group, clip, frustum, interiorArg, true);
+                        }
+                        else
+                        {
+                            PortalView view = ViewOf(p.screen, p.depth);
+                            AddWayOut(view);
+                            opened = true;
+                        }
+                        why = opened ? Counts::kOpen : Counts::kNotReached;
+                        if (opened && windows[i].kind == glass::kFrosted) NoteRect(g_now, windows[i].ordinal, true, p.screen);
+                    }
+                    else if (ready && !SightOpen(sights[k], wasOpen))
+                    {
+                        why = Counts::kBlind;
+                        if (windows[i].interior >= 0) ++g_now.betweenBlind; else ++g_now.insideBlind;
+                    }
+                    const bool held = ready && open != SightOpen(sights[k], wasOpen);
+                    NoteWindow(g_now, windows[i].ordinal, why, ready ? &sights[k] : nullptr, held, true);
+                    if (windows[i].interior >= 0) NoteRoomOf(g_now, windows[i].interior);
+                    f.states[i] = opened ? kOpened : kShut;
+                    if (opened) ++f.opened;
+                    if (windows[i].interior >= 0)
+                    {
+                        ++(opened ? g_now.betweenOpened : g_now.betweenShut);
+                        anyOpened = anyOpened || opened;
+                    }
+                    else
+                    {
+                        ++(opened ? g_now.insideOpened : g_now.insideShut);
+                        if (!opened && (why == Counts::kFar || why == Counts::kBudget)) ++g_now.insideFar;
+                    }
+                }
+                if (anyOpened) NoteRoom(instance, room);
+            }
+        }
+
         // After the client's walk from inside reached `group` through `rect` (any depth): each of its own windows facing the
         // camera from inside, on the screen within `rect` and in range, decided once a frame (at the first reach that sees
         // it), opens as a way out where the street is seen through it.
@@ -878,6 +1124,11 @@ namespace wxl_livingazeroth::seethrough
             std::memcpy(f.model, model, sizeof(f.model));
             f.haveCam = true;
             std::vector<WindowPlan> plan;
+            if (WholeRooms())
+            {
+                WalkInsideRooms(root, instance, *r, group, windows, count, cam, model, eye, viewProj, crect, f, waysOut, between, interiorArg);
+                return;
+            }
             PlanInside(windows, count, cam, FromCRect(crect), model, eye, viewProj, g_insideBudget, plan, between && !waysOut);
             std::vector<SightMesh> building;   // (the building round each candidate for its rays)
             for (uint32_t i = 0; i < count; ++i)
@@ -1728,6 +1979,9 @@ namespace wxl_livingazeroth::seethrough
         g_deferral.ResetCounts();
         g_deferral.EndLoop();
         g_lastFrame.swap(g_frame);   // (last frame's walks kept a frame for a snapshot: LastWalked)
+        g_lastDrawn.swap(g_drawn);   // (and the groups drawn: LastDrawn)
+        g_drawn.clear();
+        g_drawnKeys.clear();
         g_frame.clear();
         g_roomKeys.clear();
         if (g_roots.size() > 2048) { g_roots.clear(); g_lastFrame.clear(); }   // only here: nothing of this frame points at them now
@@ -1769,6 +2023,12 @@ namespace wxl_livingazeroth::seethrough
     {
         g_draw = DrawCtx{};
         g_drawingRoom = false;
+        if (root && instanceArg && group >= 0 && g_drawn.size() < kMaxDrawn)
+        {
+            const void* instance = static_cast<const uint8_t*>(instanceArg) - client::kDefInvMat;
+            if (g_drawnKeys.insert((static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 16) ^ static_cast<uint32_t>(group)).second)
+                g_drawn.push_back({ root, instance, group });
+        }
         if (!g_roomKeys.empty() && instanceArg && group >= 0)
         {
             const void* at = static_cast<const uint8_t*>(instanceArg) - client::kDefInvMat;
@@ -1871,6 +2131,8 @@ namespace wxl_livingazeroth::seethrough
                         "first box)##stinside", &g_settings.fromInside);
         api->UiCheckbox("between rooms, with the box above: a window from one room or indoor street into another (Ironforge's shops) opens "
                         "onto it (SeeThroughBetweenRooms)##stbetween", &g_settings.betweenRooms);
+        api->UiCheckbox("whole rooms: a room's windows on the screen open together, only when it's seen through every one, and its fake "
+                        "rooms go dark together at night (WholeRooms)##stwhole", &glass::Config().wholeRooms);
         std::vector<std::string> lines;
         StatusLines(lines);
         for (const std::string& l : lines) ui::Text(api, l.c_str());
@@ -2032,11 +2294,15 @@ namespace wxl_livingazeroth::seethrough
             static const char* const kWhy[] = { "open", "shut: fake (nothing modelled behind it)", "shut: too far", "shut: over the frame's budget",
                                                 "shut: its room's group not loaded", "shut: its room's surfaces not read yet (one room a frame)",
                                                 "shut: its room isn't seen through it from here", "shut: the walk didn't reach its room",
-                                                "shut: frosted glass, its see-through off (SeeThroughFrosted 0, the whole-glass redraw, or its blur can't run here)" };
+                                                "shut: frosted glass, its see-through off (SeeThroughFrosted 0, the whole-glass redraw, or its blur can't run here)",
+                                                "shut with its room (WholeRooms): another of its windows on the screen isn't seen through from here, is too far "
+                                                "or can't open, or the room's opening is held" };
             static const char* const kWhyInside[] = { "open: a way out, the street behind its glass", "-", "shut: too far (40 yd)", "shut: over the frame's budget",
                                                       "-", "shut: the room's or the building's surfaces not all read yet (one a frame)",
                                                       "shut: the street isn't seen through it from here", "-",
-                                                      "shut: frosted glass, its see-through off (SeeThroughFrosted 0, the whole-glass redraw, or its blur can't run here)" };
+                                                      "shut: frosted glass, its see-through off (SeeThroughFrosted 0, the whole-glass redraw, or its blur can't run here)",
+                                                      "shut with its room (WholeRooms): another of the room's windows on the screen isn't seen through from here, is "
+                                                      "too far or can't open, or the room's opening is held" };
             char onto[120] = "";
             if (n.room >= 0)
                 std::snprintf(onto, sizeof(onto), " (onto group %d%s%s%s)", n.room, n.roomName[0] ? " " : "", n.roomName, n.why == Counts::kOpen ? ", another room" : "");
@@ -2061,6 +2327,54 @@ namespace wxl_livingazeroth::seethrough
                       "batches deferred, %u redrawn; faults %u", g_status, state, static_cast<unsigned>(glass::SeeThroughBuildings()), g_last.opened,
                       g_last.insideOpened, g_last.deferred, g_last.redrawn, g_faults);
         return line;
+    }
+
+    void LastDrawn(std::vector<DrawnGroup>& out)
+    {
+        out.clear();
+        std::unordered_map<const void*, std::vector<uint8_t>> glassOf;
+        for (const DrawnRef& d : g_lastDrawn)
+        {
+            const auto* r = static_cast<const uint8_t*>(d.root);
+            DrawnGroup g;
+            char path[260];
+            const void* infos = nullptr;
+            uint32_t count = 0;
+            if (!ReadPath(r, path) || !path[0] || !ReadFloats(reinterpret_cast<uintptr_t>(d.instance) + client::kDefInvMat, 16, g.invMat) ||
+                !ReadPtr(reinterpret_cast<uintptr_t>(r + client::kRootGroupInfo), infos) || !infos ||
+                !ReadU32(reinterpret_cast<uintptr_t>(r + client::kRootGroupCount), count) || static_cast<uint32_t>(d.group) >= count || count > client::kMaxGroups)
+                continue;
+            GroupInfo info;
+            if (!ReadGroupInfos(static_cast<const uint8_t*>(infos) + client::kGroupInfoStride * static_cast<uint32_t>(d.group), 1, &info)) continue;
+            g.wmo = path;
+            g.group = static_cast<uint32_t>(d.group);
+            g.flags = info.flags;
+            std::memcpy(g.lo, info.lo, sizeof(g.lo));
+            std::memcpy(g.hi, info.hi, sizeof(g.hi));
+            char name[32];
+            GroupName(d.root, g.group, name);
+            g.name = name;
+            g.inTable = glass::SeeThroughFlags(glass::PathHash(path)) != 0;
+            // its glass batches: the group's MOBA entries whose material's texture is glass (GlassMaterials.cdbc)
+            auto it = glassOf.find(d.root);
+            if (it == glassOf.end()) it = glassOf.emplace(d.root, GlassMaterials(r)).first;
+            const uint8_t* groupObj = nullptr;
+            GroupArrays a;
+            if (ReadGroupArrays(r, g.group, groupObj, a) && a.batchCount && a.batchCount <= 4096)
+            {
+                std::vector<uint8_t> batches(client::kMobaStride * static_cast<size_t>(a.batchCount));
+                if (CopyOut(a.batches, batches.data(), batches.size()))
+                {
+                    g.batches = a.batchCount;
+                    for (uint32_t b = 0; b < a.batchCount; ++b)
+                    {
+                        const uint8_t material = batches[client::kMobaStride * b + client::kMobaMaterial];
+                        g.glassBatches += material < it->second.size() && it->second[material] ? 1 : 0;
+                    }
+                }
+            }
+            out.push_back(std::move(g));
+        }
     }
 
     void LastWalked(std::vector<WalkedGroup>& out)

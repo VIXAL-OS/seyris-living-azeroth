@@ -535,6 +535,7 @@ Trim under 0.15 yd² is left out.
 | Panes | how many pieces of glass make it (for the editor) |
 | Comment | the WMO, the group, the kind and the panes (and a cut window's tile); never read |
 | Thickness | how far off its plane (yd) the lookup finds the window: its glass's depth off the plane + 0.05, 0.08 .. 1 (a flat pane's 0.08, so a neighbour at a slant isn't in it). A pixel is in a window within 0.03 yd of its rectangle and this of its plane; where two hold it, the lower ordinal's. 0.3 without it. Appended |
+| Room | the room the window shows: an exterior window's the interior group whose box (0.25 yd larger) holds a point 1, else 2 yd behind its middle, the smallest (the see-through walk's own test); a room's own window (seen from inside) its group; -1 none modelled behind it. With `WholeRooms` a room's windows share one fake-room key (the lowest ordinal's: lit or dark, and its layout, together; the window lights in front with them), and so do the windows with no room that are one opening (the same group, facing within ~45 degrees, within 0.3 yd of each other's rectangle: a two-pane window cut in two). `python tools/gen_glass.py <scan> --window-rooms [data dir]` writes it into the file as it is. -1 or without it: no rooms (each window its own key but for openings). Appended 2026-10-24 |
 
 On the 2026-10-17 scan: 16,559 windows in 276 WMOs and 840 groups (509 clear, 2,944 leaded, 7,119
 frosted, 5,987 stained: Dalaran 2,558, Silvermoon 1,151, Stormwind 320, the abbeys, chapels and
@@ -682,8 +683,10 @@ flags: from outside, from inside onto the street, or between rooms; thirteen onc
 (the same day: four more from outside, after a camera swung round a player on a walkway showed three others flicker);
 seventeen with window rows (the same day, the Window column): the Violet Gate's halls from outside too, Curiosities &
 Moore's and the Threads of Fate's upper rooms, the Lounge's hall and Vargoth's Retreat, with their flickering windows
-(20, those of the Purple Parlor with them) shut one by one. A WMO not here keeps its windows as they are. Every
-placement of a WMO counts, on every map.
+(20, those of the Purple Parlor with them) shut one by one; eleven since whole rooms (the same day, `WholeRooms`: a
+room's windows open together or not at all, so rooms are judged whole: no window rows, six rooms from outside, four from
+inside, one between rooms), and the orcs' great halls out (they flicker as one): 47 buildings. A WMO not here keeps its
+windows as they are. Every placement of a WMO counts, on every map.
 
 | Field | Meaning |
 |---|---|
@@ -692,7 +695,7 @@ placement of a WMO counts, on every map.
 | Flags | 0x1 from outside (its windows open onto the room behind them; on a group's row, the windows of the exterior groups into that room, or that exterior group's own windows: Dalaran's rooms one by one), 0x2 from inside (its rooms' own windows open onto the street), 0x4 between rooms (an interior group's windows open onto the interior group beyond them: Ironforge's shops and halls); 0 = none (as if the row weren't there) |
 | Comment | which building (or group); never read |
 | Group | -1: the whole WMO; else this group of it alone (a group's flags are the WMO's and its own). A file without the column: every row the whole WMO's |
-| Window | -1: none; else one window of the WMO, by its ordinal (GlassWindows': its index in the WMO), on a row of its own that names no building: its Flags are the ways that window may open (0 = never), a mask over its room's and its group's rows, never adding a way. Group says the window's group, for the reader (not read). Appended 2026-10-24; a file without the column has no window rows. Needs the DLL of the same day: an older one reads such a row as a group row with Flags 0 and skips it, so its room opens whole |
+| Window | -1: none; else one window of the WMO, by its ordinal (GlassWindows': its index in the WMO), on a row of its own that names no building: its Flags are the ways that window may open (0 = never), a mask over its room's and its group's rows, never adding a way. Group says the window's group, for the reader (not read). Appended 2026-10-24; a file without the column has no window rows. Needs the DLL of the same day: an older one reads such a row as a group row with Flags 0 and skips it, so its room opens whole. With `WholeRooms` a window shut by its row holds its whole room shut while it's on the screen; the table has none since |
 
 ## CrystalMaterials.cdbc — `CrystalMaterials.xml`
 

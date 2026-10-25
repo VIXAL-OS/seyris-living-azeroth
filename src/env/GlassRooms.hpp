@@ -12,7 +12,9 @@
 //
 // The room's identity is the window's: its ordinal in its WMO and its group (the table's), hashed with the building's
 // seed (env/GlassModel's LitHash) for whether it's lit at night; tools/gen_window_lights.py gives each window light the
-// same keys (WindowRooms.cdbc), so the light in front dims exactly with the rooms behind its glass.
+// same keys (WindowRooms.cdbc), so the light in front dims exactly with the rooms behind its glass. Since whole rooms
+// (WholeRooms, 2026-10-24) a room's windows share one key, its first window's (GlassWindows' Room: WindowTable::Build),
+// and features/Windows maps each light's window to it (WindowTable::KeyOf): a room lit or dark through all its windows.
 #pragma once
 
 #include "GlassModel.hpp"
@@ -34,6 +36,11 @@ namespace wxl_livingazeroth::glass
         float normal[3] = { 1, 0, 0 };      // unit; the shader puts the room on the side away from the eye
         float halfWidth = 0.5f, halfHeight = 0.5f;   // in WindowFrame's axes
         float thickness = 0.0f;             // how far off its plane the lookup reaches (yd; 0: rooms::kThickness)
+        int room = -1;                      // the room it shows (GlassWindows' Room, 2026-10-24: the interior group behind an
+                                            // exterior window, a room's own window's group; -1 none modelled)
+        // The fake room's key (WindowTable::Build; whole rooms: a room's windows one key, its first window's, and so are the
+        // panes of one opening with no room behind; else its own): the hash's (ordinal, group) for lit or dark and the layout.
+        uint32_t keyOrdinal = 0, keyGroup = 0;
     };
 
     /// The window's axes (the table's, the generator's and the shader's): along = unit(-n.y, n.x, 0), or x when n is
@@ -147,7 +154,10 @@ namespace wxl_livingazeroth::glass
     /// A cell lists its windows by ordinal: where two overlap the shader takes the lower (as gen_window_lights does);
     ///   4: (the room's half width, its floor, its ceiling (yd about the window's middle), 1 frosted: a room only for a
     ///      batch that lets frosted windows have one, c26.y);
-    ///   5: (its middle xyz, its group).
+    ///   5: (its middle xyz, its group);
+    ///   6: (its ordinal, its group) (2026-10-24: the see-through redraw's open bits read the ordinal here).
+    /// 3.w and 5.w are its fake room's key (Window::keyOrdinal, keyGroup): its own ordinal and group, or with whole rooms
+    /// its room's (the lit hash and the layout the same through all a room's windows).
     /// Stained windows have grids of their own (Find's `stained`): a stained batch's pixel finds only them, any other
     /// batch's never (so the others find what they found before stained glass had rooms).
     class WindowTable
@@ -162,7 +172,16 @@ namespace wxl_livingazeroth::glass
             uint32_t windows = 0, entries = 0, worst = 0;   // windows, entries over its cells, the most in a cell
         };
         static constexpr uint32_t kStainedGrid = 0x80000000u;   // a stained window's group in its grid's key
-        void Build(std::vector<Window> windows);
+        /// `wholeRooms` (WholeRooms, 2026-10-24: "in general can we have all windows in a room behave the same?"): the
+        /// windows of one room (path, Room) take one key, the lowest ordinal's; the windows with no room behind them that
+        /// are one opening (the same group, facing within ~45 degrees, within kOpeningGap yd of each other's rectangle
+        /// and plane: a vrykul tower's two-pane window cut in two at its mullion, 2026-10-24) one too. Else each its own.
+        void Build(std::vector<Window> windows, bool wholeRooms = false);
+        /// A window's fake-room key by its WMO and ordinal (false: no such window; the key its own then).
+        bool KeyOf(uint32_t path, uint32_t ordinal, uint32_t& keyOrdinal, uint32_t& keyGroup) const;
+        /// How many windows share another's key (whole rooms), and whether the table was built so.
+        size_t SharedKeys() const { return m_shared; }
+        bool WholeRooms() const { return m_wholeRooms; }
         const Grid* Find(uint32_t path, uint32_t group, bool stained = false) const;
         /// The texels (RGBA), kWidth x Height().
         const std::vector<float>& Texels() const { return m_texels; }
@@ -180,9 +199,15 @@ namespace wxl_livingazeroth::glass
         static uint64_t Key(uint32_t path, uint32_t group) { return (static_cast<uint64_t>(path) << 32) | group; }
         std::vector<Window> m_windows;
         std::unordered_map<uint64_t, Grid> m_grids;
+        std::unordered_map<uint64_t, uint32_t> m_byOrdinal;   // (path << 32 | ordinal) -> its index
         std::vector<float> m_texels;
         int m_height = 1;
+        size_t m_shared = 0;
+        bool m_wholeRooms = false;
     };
+    /// Whole rooms' openings (WindowTable::Build): two windows with no room behind them are one opening within this many
+    /// yd of each other's rectangle and plane, facing within ~45 degrees (kOpeningFacing: the normals' dot).
+    constexpr float kOpeningGap = 0.3f, kOpeningPlane = 0.5f, kOpeningFacing = 0.7f;
 
     /// The shader's ray through a window into its room (the CPU's twin): the point and the way to the eye in WMO space
     /// (unit), the table's entry, the room's depth: which face it meets (RoomFace), how far along the ray (yd), where (the

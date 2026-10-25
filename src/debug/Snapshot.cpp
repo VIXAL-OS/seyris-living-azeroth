@@ -255,6 +255,33 @@ namespace wxl_livingazeroth::snapshot
             }
         }
 
+        // A point's distance to a box (0 inside), and where a ray first enters one (its t; false: never, or behind).
+        float BoxDistance(const float p[3], const float lo[3], const float hi[3])
+        {
+            float s = 0.0f;
+            for (int k = 0; k < 3; ++k)
+            {
+                const float d = p[k] < lo[k] ? lo[k] - p[k] : p[k] > hi[k] ? p[k] - hi[k] : 0.0f;
+                s += d * d;
+            }
+            return std::sqrt(s);
+        }
+        bool RayBox(const float o[3], const float d[3], const float lo[3], const float hi[3], float& t)
+        {
+            float t0 = 0.0f, t1 = 1e30f;
+            for (int k = 0; k < 3; ++k)
+            {
+                if (std::fabs(d[k]) < 1e-8f) { if (o[k] < lo[k] || o[k] > hi[k]) return false; continue; }
+                float a = (lo[k] - o[k]) / d[k], b = (hi[k] - o[k]) / d[k];
+                if (a > b) std::swap(a, b);
+                t0 = std::max(t0, a);
+                t1 = std::min(t1, b);
+                if (t0 > t1) return false;
+            }
+            t = t0;
+            return true;
+        }
+
         void Building(Text& t, const CameraNow& c)
         {
             t("");
@@ -271,7 +298,33 @@ namespace wxl_livingazeroth::snapshot
             if (inBuilding)
                 for (const auto& w : walked)
                     if (w.inside && _stricmp(w.wmo.c_str(), viewer.c_str()) == 0) { primary = &w; break; }
-            if (!primary && !inBuilding && !walked.empty()) primary = &walked.front();
+            // every group the client drew last frame, any building (2026-10-24: at Valkyrion the walk's last group was Dalaran's,
+            // 1,372 yd off): the one under the screen's centre (the first box the view's middle ray enters, within 500 yd) and
+            // the one nearest the camera (its box)
+            std::vector<seethrough::DrawnGroup> drawn;
+            seethrough::LastDrawn(drawn);
+            const seethrough::DrawnGroup* nearest = nullptr;
+            const seethrough::DrawnGroup* centre = nullptr;
+            float nearestD = 0.0f, centreT = 0.0f, nearestLocal[3] = {}, centreLocal[3] = {};
+            if (c.valid)
+                for (const auto& g : drawn)
+                {
+                    float local[3], dir[3], hit = 0.0f;
+                    Apply(g.invMat, c.pos, 1.0f, local);
+                    Apply(g.invMat, c.forward, 0.0f, dir);
+                    const float d = BoxDistance(local, g.lo, g.hi);
+                    if (!nearest || d < nearestD) { nearest = &g; nearestD = d; std::memcpy(nearestLocal, local, sizeof(local)); }
+                    if (RayBox(local, dir, g.lo, g.hi, hit) && hit <= 500.0f && (!centre || hit < centreT))
+                    { centre = &g; centreT = hit; std::memcpy(centreLocal, local, sizeof(local)); }
+                }
+            const seethrough::DrawnGroup* pick = centre ? centre : nearest;
+            const float* pickLocal = centre ? centreLocal : nearestLocal;
+            const float pickD = pick ? BoxDistance(pickLocal, pick->lo, pick->hi) : 0.0f;
+            // (outside any building: the see-through walk's nearest group when it's the same building or no farther; else the
+            // group drawn under the screen's centre, or nearest)
+            if (!primary && !inBuilding && !walked.empty() &&
+                (!pick || _stricmp(walked.front().wmo.c_str(), pick->wmo.c_str()) == 0 || walked.front().distance <= pickD + 5.0f))
+                primary = &walked.front();
             WmoView v;
             std::string how;
             if (primary)
@@ -285,6 +338,18 @@ namespace wxl_livingazeroth::snapshot
                 char line[200];
                 std::snprintf(line, sizeof(line), "the see-through walk %s last frame (s_camPosLocal, s_mapObjToWorld), %.1f yd from the group's box",
                               primary->inside ? "from inside (the camera's building)" : "from outside (the nearest group it visited)", primary->distance);
+                how = line;
+            }
+            else if (!inBuilding && pick)
+            {
+                v.wmo = pick->wmo;
+                v.group = static_cast<int>(pick->group);
+                v.inside = false;
+                float model[16];
+                if (Invert(pick->invMat, model)) ViewFromModel(model, pickLocal, c, v);
+                char line[300];
+                std::snprintf(line, sizeof(line), "the WMO group the client drew last frame %s (%.1f yd from its box; the see-through walk didn't visit it: "
+                              "no windows' states)", centre ? "under the screen's centre" : "nearest the camera", pickD);
                 how = line;
             }
             else if (inBuilding && c.valid)
@@ -328,6 +393,16 @@ namespace wxl_livingazeroth::snapshot
             }
             if (inBuilding && (!primary || _stricmp(primary->wmo.c_str(), viewer.c_str()) != 0))
                 t("the camera's building (the client's): %s", viewer.c_str());
+            auto drawnLine = [&](const char* what, const seethrough::DrawnGroup& g, const float local[3], float along) {
+                char extra[64] = "";
+                if (along >= 0.0f) std::snprintf(extra, sizeof(extra), ", %.1f yd along the view", along);
+                t("drawn %s: %s group %u%s%s (%s), %.1f yd from its box%s; its glass batches %u of %u; in SeeThroughBuildings.cdbc: %s", what, g.wmo.c_str(),
+                  g.group, g.name.empty() ? "" : " ", g.name.c_str(), (g.flags & sc::kExteriorGroup) ? "exterior" : "interior",
+                  BoxDistance(local, g.lo, g.hi), extra, g.glassBatches, g.batches, g.inTable ? "yes" : "no");
+            };
+            t("drawn last frame: %zu WMO groups (Wmo.RenderGroup)", drawn.size());
+            if (centre) drawnLine("under the screen's centre", *centre, centreLocal, centreT);
+            if (nearest) drawnLine("nearest the camera", *nearest, nearestLocal, -1.0f);
         }
 
         void TimeAndWeather(Text& t, const world::Snapshot& s)
@@ -374,8 +449,8 @@ namespace wxl_livingazeroth::snapshot
             t("storm: Enabled %d, Darkness %.2f, NightDarkness %.2f, Flashes %d, Thunder %d, Haze %.2f", s.enabled, s.darkness, s.nightDarkness, s.flashes,
               s.thunder, s.haze);
             const glass::Settings& gl = glass::Config();
-            t("glass: Enabled %d, FakeInteriors %d, LitRoomsAtNight %d, FrostedRooms %d, StainedRooms %d, RoomShareDay %.2f, RoomShareNight %.2f",
-              gl.enabled, gl.fakeInteriors, gl.litRooms, gl.frostedRooms, gl.stainedRooms, gl.roomShareDay, gl.roomShareNight);
+            t("glass: Enabled %d, FakeInteriors %d, LitRoomsAtNight %d, FrostedRooms %d, StainedRooms %d, RoomShareDay %.2f, RoomShareNight %.2f, WholeRooms %d",
+              gl.enabled, gl.fakeInteriors, gl.litRooms, gl.frostedRooms, gl.stainedRooms, gl.roomShareDay, gl.roomShareNight, gl.wholeRooms);
         }
 
         void Panels(Text& t, const world::Snapshot& s)
