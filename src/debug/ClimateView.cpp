@@ -1,6 +1,7 @@
 #include "ClimateView.hpp"
 #include "Pages.hpp"
 
+#include "../env/AreaRemap.hpp"
 #include "../env/Climate.hpp"
 #include "../env/ClientWeather.hpp"
 #include "../env/Fields.hpp"
@@ -53,6 +54,7 @@ namespace wxl_livingazeroth::debug
                 n += std::snprintf(line + n, sizeof(line) - n, "%s %u", i ? " ->" : "", s.areaChain[i]);
             if (!s.areaCount) std::snprintf(line + n, sizeof(line) - n, " none");
             ui::Text(g_api, line);
+            ui::Text(g_api, arearemap::Status()); // an art pack's renumbered caves: the chain goes on at the stock area
 
             const uint32_t area = s.areaCount > 0 ? s.areaChain[0] : 0;
             const climate::Row& row = climate::For(area, s.mapId);

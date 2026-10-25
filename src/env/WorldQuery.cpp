@@ -1,5 +1,6 @@
 #include "WorldQuery.hpp"
 
+#include "AreaRemap.hpp"
 #include "game/World.hpp"
 #include "offsets/game/Weather.hpp"
 #include "offsets/game/World.hpp"
@@ -36,6 +37,7 @@ namespace wxl_livingazeroth::world
         constexpr uintptr_t kAreaMaxId   = 0x00AD3140;
         constexpr uintptr_t kAreaMinId   = 0x00AD3144;
         constexpr uintptr_t kAreaIdTable = 0x00AD3154;
+        constexpr size_t    kAreaContinentField = 0x04;
         constexpr size_t    kAreaParentField = 0x08;
         constexpr size_t    kAreaFlagsField = 0x10;
 
@@ -44,8 +46,9 @@ namespace wxl_livingazeroth::world
         constexpr uintptr_t kSubZoneText = 0x00BD0784;
 
         Snapshot g_snap;
+        AreaRecordFn g_areaSource = nullptr; // a test's stand-in AreaTable; nullptr: the client's
 
-        const uint8_t* AreaRecord(uint32_t id)
+        const uint8_t* ClientAreaRecord(uint32_t id)
         {
             const int32_t minId = *reinterpret_cast<const int32_t*>(kAreaMinId);
             const int32_t maxId = *reinterpret_cast<const int32_t*>(kAreaMaxId);
@@ -53,6 +56,8 @@ namespace wxl_livingazeroth::world
             if (!table || static_cast<int32_t>(id) < minId || static_cast<int32_t>(id) > maxId) return nullptr;
             return table[static_cast<int32_t>(id) - minId];
         }
+
+        const uint8_t* AreaRecord(uint32_t id) { return g_areaSource ? g_areaSource(id) : ClientAreaRecord(id); }
 
         const char* SafeText(uintptr_t global)
         {
@@ -118,18 +123,26 @@ namespace wxl_livingazeroth::world
 
     const Snapshot& Current() { return g_snap; }
 
+    void SetAreaRecordSource(AreaRecordFn fn) { g_areaSource = fn; }
+
     int AreaChain(uint32_t area, uint32_t* out, int max)
     {
-        // Walk up the parents; the cap guards against a malformed (cyclic) table.
+        // Walk up the parents; the cap and the repeat check guard against a malformed (cyclic) table or remap.
         int n = 0;
         while (area && n < max)
         {
+            for (int i = 0; i < n; ++i)
+                if (out[i] == area) return n;
             out[n++] = area;
             const uint8_t* rec = AreaRecord(area);
             if (!rec) break;
+            const uint32_t continent = *reinterpret_cast<const uint32_t*>(rec + kAreaContinentField);
             const uint32_t parent = *reinterpret_cast<const uint32_t*>(rec + kAreaParentField);
-            if (parent == area) break;
-            area = parent;
+            // An art pack's renumbered area (its record as the pack ships it) goes on at the stock area it replaced.
+            uint32_t next = parent;
+            arearemap::Next(area, continent, parent, next);
+            if (next == area) break;
+            area = next;
         }
         return n;
     }

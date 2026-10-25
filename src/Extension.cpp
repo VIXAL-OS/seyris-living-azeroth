@@ -30,6 +30,7 @@
 #include "debug/Overview.hpp"
 #include "debug/Pages.hpp"
 #include "debug/Snapshot.hpp"
+#include "env/AreaRemap.hpp"
 #include "env/ClientWeather.hpp"
 #include "env/Fog.hpp"
 #include "env/FogSettings.hpp"
@@ -131,6 +132,7 @@ namespace
             wxl_livingazeroth::grassdoodads::LoadOverrides(cdbc);
             wxl_livingazeroth::grassdensity::Load(cdbc);
             wxl_livingazeroth::cover::LoadTable(cdbc);
+            wxl_livingazeroth::arearemap::Load(cdbc); // before the tables whose lookups walk the area chain
             wxl_livingazeroth::climate::Load(cdbc);
             wxl_livingazeroth::fogsettings::Load(cdbc);
             wxl_livingazeroth::debug::SetClimateCdbc(cdbc);
@@ -175,6 +177,7 @@ namespace
         // The lantern, the distant lights and the compare key (2026-10-25), on a line of their own (the core's lines hold 1,000
         // characters).
         g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::compare::StatusLine());
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::arearemap::Status());
         g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::lantern::StatusLine());
         g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::distantlights::StatusLine());
     }

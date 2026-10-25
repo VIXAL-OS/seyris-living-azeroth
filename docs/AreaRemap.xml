@@ -1,0 +1,8 @@
+  <Table Name="AreaRemap" Build="12340">
+    <Field Name="ID" Type="int" IsIndex="true" />
+    <Field Name="AreaID" Type="int" />
+    <Field Name="ContinentID" Type="int" />
+    <Field Name="ParentID" Type="int" />
+    <Field Name="StockAreaID" Type="int" />
+    <Field Name="Comment" Type="string" />
+  </Table>

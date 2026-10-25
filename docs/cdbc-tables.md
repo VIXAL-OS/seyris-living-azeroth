@@ -765,6 +765,32 @@ and the time of day for testing.
 Generator: `tools/gen_default_climate.py` (one Global row; `--examples` adds Northrend, Outland,
 Winterspring, Dun Morogh, Tanaris, Stranglethorn, Swamp of Sorrows and Duskwood).
 
+## AreaRemap.cdbc — `AreaRemap.xml`
+
+Keeps every place's zone when an art pack renumbers the client's areas, so AreaClimate, FogSettings, WindProfile, the
+grass and the regional weather keep their rows there. Every lookup that walks the area chain (sub-area, zone, ...)
+asks this table at each link. Added 2026-10-25 for Project Reforged's M and S, which move 685 WMO groups (caves and
+dungeon entrances: Fargodeep Mine, Blackrock Mountain, Gnomeregan's and the Deadmines' entrances, the Caverns of
+Time ...) to 43 new areas with no parent zone, and give Uldaman's, the Deadmines' and Maraudon's instance areas a
+parent zone on the continent.
+
+| Field | Meaning |
+|---|---|
+| ID | row id |
+| AreaID | the area the client reports (the pack's AreaTable ID) |
+| ContinentID | its ContinentID in the pack's AreaTable |
+| ParentID | its ParentAreaID in the pack's AreaTable: with ContinentID, the row applies only when the client's record is the pack's |
+| StockAreaID | where the chain goes on instead of ParentID: the stock area the pack's area replaced; 0 = the chain ends here (as in the stock table) |
+| Comment | free text (the place and its stock chain); never read |
+
+A stock client's records never match a row (the new areas don't exist; the three instance areas have no parent), so
+the same file is shipped with and without the packs. The climate panel, the F11 snapshot and the 30 s log say how
+many areas a row applied to this session.
+
+Generator: `python tools/gen_area_remap.py <stock DBC folder> <pack DBC folder> [data dir]`, the folders holding
+AreaTable.dbc and WMOAreaTable.dbc as the install will load them (`tools/mpq_chain.py <chain> --extract`). It checks
+that every WMO group and every area resolves, stock ids only, to its stock chain. Test: `area_remap_tests`.
+
 ## FogSettings.cdbc — `FogSettings.xml`
 
 How the ground fog behaves and looks, per place and fog kind. Optional: without the file (or for

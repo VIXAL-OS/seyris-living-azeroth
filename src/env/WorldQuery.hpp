@@ -36,7 +36,12 @@ namespace wxl_livingazeroth::world
     /// The last snapshot Refresh() produced.
     const Snapshot& Current();
 
-    /// An area and its parents, most specific first (sub-area, zone, ...), from AreaTable.
-    /// Returns how many were written (0 for area 0).
+    /// An area and its parents, most specific first (sub-area, zone, ...), from AreaTable, with AreaRemap.cdbc's rows
+    /// applied (env/AreaRemap: an art pack's renumbered caves keep their zone). Returns how many were written (0 for area 0).
     int AreaChain(uint32_t area, uint32_t* out, int max);
+
+    /// Where AreaChain reads AreaTable records (on-disk column layout: ContinentID +0x04, ParentAreaID +0x08,
+    /// Flags +0x10): the client's table by default; a test's stand-in (nullptr = the client's again).
+    using AreaRecordFn = const uint8_t* (*)(uint32_t id);
+    void SetAreaRecordSource(AreaRecordFn fn);
 }

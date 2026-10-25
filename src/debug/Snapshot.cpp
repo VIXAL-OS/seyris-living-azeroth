@@ -4,6 +4,7 @@
 #include "Memory.hpp"
 #include "SnapshotView.hpp"
 #include "UiText.hpp"
+#include "../env/AreaRemap.hpp"
 #include "../env/ClientWeather.hpp"
 #include "../env/Climate.hpp"
 #include "../env/Fog.hpp"
@@ -236,6 +237,7 @@ namespace wxl_livingazeroth::snapshot
                 chain += part;
             }
             t("areas: %s (flags 0x%X)", chain.empty() ? "none" : chain.c_str(), s.areaFlags);
+            t("%s", arearemap::Status());
             t("position: %.3f %.3f %.3f", s.playerPos[0], s.playerPos[1], s.playerPos[2]);
             float facing = 0.0f;
             if (PlayerFacing(facing) && std::isfinite(facing)) t("facing: %.4f rad (%.1f degrees)", facing, Degrees(facing));
