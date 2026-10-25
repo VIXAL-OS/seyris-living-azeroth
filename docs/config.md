@@ -14,7 +14,8 @@ says why.
 Other WarcraftXL modules can read two things from Living Azeroth, with no setting of their own: the rain
 (`chromie.rain-signal` v1) and our point lights as drawn each frame (`chromie.light-list` v1, `src/LightList.hpp`: the
 lamps, torches, lit windows, spell lights, the lantern and lightning, each with its position, colour, radius and falloff,
-flagged indoor, window or moving; the modified Modern Water module reflects them on the water). The light list follows
+flagged indoor, window, moving or (a lightning strike's) flash; the modified Modern Water module reflects them on the
+water). The light list follows
 the lights panel's "our point lights": it is empty while they are off (in the panel or by the compare key) and outside
 the world.
 

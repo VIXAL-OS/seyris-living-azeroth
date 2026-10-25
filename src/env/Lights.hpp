@@ -205,8 +205,8 @@ namespace wxl_livingazeroth::lights
     /// The lights other extensions light and reflect by (2026-10-25, for Modern Water's lamps on the water): LightList.hpp's
     /// "chromie.light-list" v1, published from WXL_Load. Active() as WxlLightV1s, in its order, refilled at the end of every
     /// Update (and UpdateForTests): position, colour (brightness, fade and flicker in), radius and falloff as drawn; flags
-    /// Indoor (ActiveLight::indoor), Window (window), Moving (the spell lights and the lantern); Flash never (a strike is
-    /// in it as a plain light). Empty while our lights are off (the panel, the compare key) and out of the world. Read on
+    /// Indoor (ActiveLight::indoor), Window (window), Moving (the spell lights and the lantern), Flash (this frame's
+    /// lightning strikes, AddTransient's). Empty while our lights are off (the panel, the compare key) and out of the world. Read on
     /// the main thread; the array stays until the next Update. The struct lives as long as the process.
     WxlLightListV1& LightList();
     /// Before a loading screen (Extension's OnWorldLeave): the list empties at once (Update keeps it empty out of the world).

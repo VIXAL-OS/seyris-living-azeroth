@@ -15,7 +15,8 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
 - **Our lights for other modules** (25 October 2026): the point lights we draw each frame (lamps, torches, lit
   windows, spell lights, the lantern, lightning) as a list other WarcraftXL modules can read (`chromie.light-list` v1,
   `src/LightList.hpp`, the same header as Modern Water's; the modified Modern Water module reflects our lamps on the
-  water by it). Each light's position, colour as drawn, radius and falloff, flagged indoor, window or moving; it is
+  water by it). Each light's position, colour as drawn, radius and falloff, flagged indoor, window, moving or (a
+  lightning strike's) flash; it is
   empty while our point lights are off (the climate panel, the compare key) and outside the world.
 - **Surface cover** (snow, sand, ash, mud):
   - Speed: only changed cells are uploaded, empty cover is skipped, and the light scan is spread over several frames.

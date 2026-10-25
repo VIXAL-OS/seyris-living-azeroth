@@ -377,6 +377,7 @@ namespace wxl_livingazeroth::lights
         struct CellEntry { uint32_t cell; float score; uint16_t light; bool window; bool frame; };
         std::vector<char> g_isWindow;   // per active light: a window's
         std::vector<char> g_isFrame;    // per active light: a spell light's (FrameLight)
+        size_t g_firstStrike = 0;       // the active lights from here on are this frame's strikes (AddTransient)
 
         // The grid snaps to whole cells around the camera, so a cell only changes when lights do.
         // A light goes into every cell its radius reaches (circle vs square). A cell holding more than
@@ -1392,6 +1393,7 @@ namespace wxl_livingazeroth::lights
             windows::GetStats().lights = windowLights;
             // This frame's transient lights (strikes), after the scene's, while the pool has room: outdoors, never
             // baked, and ranked first in every cell they reach.
+            g_firstStrike = g_active.size();
             for (const ActiveLight& t : g_transient)
             {
                 if (g_active.size() >= static_cast<size_t>(kMaxPool)) break;
@@ -1458,7 +1460,8 @@ namespace wxl_livingazeroth::lights
                 p.radius = l.radius;
                 p.falloff = l.falloff;
                 const bool spell = i < g_isFrame.size() && g_isFrame[i];
-                p.flags = (l.indoor ? kWxlLightIndoor : 0u) | (l.window ? kWxlLightWindow : 0u) | (spell || l.own ? kWxlLightMoving : 0u);
+                p.flags = (l.indoor ? kWxlLightIndoor : 0u) | (l.window ? kWxlLightWindow : 0u) | (spell || l.own ? kWxlLightMoving : 0u) |
+                          (i >= g_firstStrike ? kWxlLightFlash : 0u);
             }
         }
 

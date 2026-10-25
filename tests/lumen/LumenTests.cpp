@@ -13,7 +13,8 @@
 //     kept; its chat lines; the settings through config::Apply (the new keys, their defaults, described without bracketed
 //     section names), and no setting read or written by a toggle.
 //  5b. The light list other extensions read (LightList.hpp, "chromie.light-list" v1, for Modern Water): Active() bit for bit
-//     in its order, after merging, with its flags (indoor, windows, the spells and the lantern moving, a strike plain); the
+//     in its order, after merging, with its flags (indoor, windows, the spells and the lantern moving, Flash on the strike
+//     and nothing else); the
 //     same array until the next update; empty with our lights off, by the compare key, leaving and out of the world.
 //  6. On WARP (the CPU rasterizer behind D3D9On12, no GPU), contact sheets with --sheet <folder>:
 //      a. the lantern in a dark cave: the stock lit M2 shader as features/ModelLights patches it, its light texture from
@@ -602,9 +603,24 @@ namespace
     // --- 5b. the light list other extensions read (LightList.hpp: Modern Water's lamps on the water) -----------------------
     bool SpellModel(const void* m) { const uintptr_t v = reinterpret_cast<uintptr_t>(m); return v >= 0x9000 && v < 0xA000; }
 
+    // The test's lightning strike (AddTransient): its colour and radius, which no other light here has.
+    const float kStrikeWhite[3] = { 2.0f, 2.1f, 2.4f };
+    constexpr float kStrikeRadius = 60.0f;
+    bool Strike(const float colour[3], float radius) { return !std::memcmp(colour, kStrikeWhite, sizeof(kStrikeWhite)) && radius == kStrikeRadius; }
+
+    // How many published lights carry `flag`.
+    unsigned Flagged(uint32_t flag)
+    {
+        const WxlLightV1* p = nullptr;
+        const uint32_t n = li::LightList().Lights(&p);
+        unsigned count = 0;
+        for (uint32_t i = 0; p && i < n; ++i) count += (p[i].flags & flag) ? 1 : 0;
+        return count;
+    }
+
     // What differs between the published list and Active() as it stands (empty: nothing): the count, then each light in
     // Active()'s order, its numbers as drawn (bit for bit) and its flags (Moving: the spell lights, models 0x9000.., and the
-    // lantern; Flash never).
+    // lantern; Flash: the strike, and nothing else).
     std::string ListDiffers()
     {
         const WxlLightV1* p = reinterpret_cast<const WxlLightV1*>(static_cast<uintptr_t>(0x10));
@@ -618,7 +634,8 @@ namespace
         {
             const li::ActiveLight& l = a[i];
             const WxlLightV1& q = *reinterpret_cast<const WxlLightV1*>(reinterpret_cast<const char*>(p) + static_cast<size_t>(i) * li::LightList().lightSize);
-            const uint32_t want = (l.indoor ? kWxlLightIndoor : 0u) | (l.window ? kWxlLightWindow : 0u) | (l.own || SpellModel(l.model) ? kWxlLightMoving : 0u);
+            const uint32_t want = (l.indoor ? kWxlLightIndoor : 0u) | (l.window ? kWxlLightWindow : 0u) | (l.own || SpellModel(l.model) ? kWxlLightMoving : 0u) |
+                                  (Strike(l.color, l.radius) ? kWxlLightFlash : 0u);
             if (std::memcmp(q.position, l.pos, sizeof(q.position)) || std::memcmp(q.colour, l.color, sizeof(q.colour)) || q.radius != l.radius ||
                 q.falloff != l.falloff || q.flags != want)
                 out += F(" light %u (flags %u, want %u)", i, q.flags, want);
@@ -664,30 +681,24 @@ namespace
             spells.push_back(s);
         }
         const float strike[3] = { feet[0] + 30.0f, feet[1] - 20.0f, feet[2] + 25.0f };
-        const float white[3] = { 2.0f, 2.1f, 2.4f };
-        li::AddTransient(strike, white, 60.0f);
+        li::AddTransient(strike, kStrikeWhite, kStrikeRadius);
         li::UpdateForTests(eye, 1.0f / 60.0f, spells, scene, own, windows);
         const uint32_t n = list.Lights(&p);
-        unsigned indoor = 0, window = 0, moving = 0, flash = 0, strikes = 0;
-        for (uint32_t i = 0; p && i < n; ++i)
-        {
-            indoor += (p[i].flags & kWxlLightIndoor) ? 1 : 0;
-            window += (p[i].flags & kWxlLightWindow) ? 1 : 0;
-            moving += (p[i].flags & kWxlLightMoving) ? 1 : 0;
-            flash += (p[i].flags & kWxlLightFlash) ? 1 : 0;
-            strikes += p[i].colour[2] == white[2] && p[i].radius == 60.0f && !p[i].flags ? 1 : 0;
-        }
+        unsigned strikes = 0;
+        for (uint32_t i = 0; p && i < n; ++i) strikes += Strike(p[i].colour, p[i].radius) && p[i].flags == kWxlLightFlash ? 1 : 0;
+        const unsigned indoor = Flagged(kWxlLightIndoor), window = Flagged(kWxlLightWindow), moving = Flagged(kWxlLightMoving), flash = Flagged(kWxlLightFlash);
         const std::string diff = ListDiffers();
         Check(diff.empty() && n == 9, F("published as drawn: %u lights (4 torches, two merged, 2 windows, 2 spells, the lantern, a strike), "
                                          "each one's position, colour, radius, falloff and flags%s", n, diff.c_str()));
-        Check(indoor == 1 && window == 2 && moving == 3 && flash == 0 && strikes == 1,
-              F("flags: %u indoor (the house's torch), %u windows, %u moving (the spells and the lantern), the strike plain (%u), Flash on none (%u)",
-                indoor, window, moving, strikes, flash));
+        Check(indoor == 1 && window == 2 && moving == 3 && flash == 1 && strikes == 1,
+              F("flags: %u indoor (the house's torch), %u windows, %u moving (the spells and the lantern), Flash on %u: the strike, and only Flash (%u)",
+                indoor, window, moving, flash, strikes));
         const WxlLightV1* again = nullptr;
         Check(list.Lights(&again) == n && again == p && list.Lights(nullptr) == n, "asked again before the next update: the same array (a null pointer only counts)");
 
         li::UpdateForTests(eye, 1.0f / 60.0f, spells, scene, own, windows);
-        Check(ListDiffers().empty() && list.Lights(&p) == 8, F("the next frame: refilled, the strike gone (%u)", list.Lights(nullptr)));
+        Check(ListDiffers().empty() && list.Lights(&p) == 8 && Flagged(kWxlLightFlash) == 0,
+              F("the next frame: refilled, the strike gone and no Flash left (%u lights, %u flashes)", list.Lights(nullptr), Flagged(kWxlLightFlash)));
 
         // The compare key: off with the rest (our lights' own switch), back on.
         static WXL_Api api = MakeApi();
