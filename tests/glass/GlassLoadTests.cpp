@@ -447,7 +447,8 @@ namespace
         const uint32_t seeGate = gl::SeeThroughGroupFlags(dalaran, 53), seeWills = gl::SeeThroughGroupFlags(dalaran, 71), seeEnclave = gl::SeeThroughGroupFlags(dalaran, 78);
         const uint32_t maskShut = gl::SeeThroughWindowMask(dalaran, 1956), maskKept = gl::SeeThroughWindowMask(dalaran, 1958);
         const uint32_t maskElsewhere = gl::SeeThroughWindowMask(ironforge, 1956);
-        const uint32_t seeNone = see("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo") | see("world\\wmo\\azeroth\\buildings\\human_barn_silo\\barn.wmo") |
+        // (Stormwind since 2026-10-25: between rooms, its Trade District's street; checked below)
+        const uint32_t seeNone = (see("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo") & ~4u) | see("world\\wmo\\azeroth\\buildings\\human_barn_silo\\barn.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireblacksmith\\goldshireblacksmith.wmo") |
                                  see("world\\wmo\\azeroth\\buildings\\goldshireinn\\goldshireinn_closed.wmo");
         std::snprintf(line, sizeof(line), "%s: SeeThroughBuildings.cdbc: %zu buildings; the inn's flags %u, a two-storey house's %u, a mage tower's %u, a "
@@ -458,11 +459,14 @@ namespace
                       gl::SeeThroughBuildings(), seeInn, seeHouse, seeTower, seeFarm, seeChapel, seeHall, seeHovel, seeZeppelin, seeNone, seeCity,
                       gl::SeeThroughGroupRows(), seeSmithy, seeForge, seeCommons, seeInnGroup, seeDalaran, seeCartier, seeParlor, seeGate, seeWills, seeEnclave,
                       gl::SeeThroughWindowRows(), maskShut, maskKept, maskElsewhere);
-        Check(gl::SeeThroughBuildings() == 47 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 &&
-              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 31 && seeSmithy == 4 && seeForge == 4 && seeHerbalist == 4 && seeCommons == 0 &&
+        Check(gl::SeeThroughBuildings() == 48 && seeInn == 3 && seeHouse == 3 && seeTower == 3 && seeFarm == 3 && seeChapel == 3 && seeHall == 1 &&
+              seeHovel == 3 && seeZeppelin == 2 && seeNone == 0 && seeCity == 4 && gl::SeeThroughGroupRows() == 32 && seeSmithy == 4 && seeForge == 4 && seeHerbalist == 4 && seeCommons == 0 &&
               seeInnGroup == 3 && seeDalaran == 7 && seeCartier == 2 && seeParlor == 0 && seeGate == 2 && seeWills == 4 && seeEnclave == 1 &&
-              gl::SeeThroughWindowRows() == 0 && maskShut == ~0u && maskKept == ~0u && maskElsewhere == ~0u &&
-              status.find("SeeThroughBuildings.cdbc: 47 buildings, 0 window rows") != std::string::npos, line);
+              gl::SeeThroughWindowRows() == 17 && maskShut == ~0u && maskKept == ~0u && maskElsewhere == ~0u &&
+              gl::SeeThroughGroupFlags(gl::PathHash("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo"), 257) == 4 &&
+              gl::SeeThroughWindowMask(gl::PathHash("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo"), 331) == 0u &&
+              gl::SeeThroughWindowMask(gl::PathHash("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo"), 306) == ~0u &&
+              status.find("SeeThroughBuildings.cdbc: 48 buildings, 17 window rows") != std::string::npos, line);
 
         // Whole rooms (WholeRooms, 2026-10-24: on by default): a room's windows one fake-room key, its lowest ordinal's (the
         // Threads of Fate's room 10: 1962, 1963, 1966 and 1973), and the two halves of the vrykul tower's two-pane window at
@@ -482,6 +486,16 @@ namespace
                           k[2][0], k[3][0], k[4][0], k[5][0], k[6][0], k[7][0]);
             Check(found && wt.WholeRooms() && k[0][0] == 0 && k[1][0] == 0 && k[2][0] == 2 && k[3][0] == 1962 && k[4][0] == 1962 && k[5][0] == 1962 &&
                   k[6][0] == 1962 && k[7][0] == 1964 && wt.SharedKeys() > 1000, line);
+            // Stormwind's Trade District street (2026-10-25): its windows onto a shop the shop's key (the room beyond, the smaller:
+            // 200's 301, 316 .. 319 keyed 301; 191's 306 .. 308 keyed 306), its others parts of the street (a district-sized room
+            // cut in parts: the windows within 6 yd of each other one)
+            const uint32_t sw = gl::PathHash("world\\wmo\\azeroth\\buildings\\stormwind\\stormwind.wmo");
+            uint32_t s[6][2] = {};
+            const bool swFound = wt.KeyOf(sw, 301, s[0][0], s[0][1]) && wt.KeyOf(sw, 316, s[1][0], s[1][1]) && wt.KeyOf(sw, 319, s[2][0], s[2][1]) &&
+                                 wt.KeyOf(sw, 306, s[3][0], s[3][1]) && wt.KeyOf(sw, 308, s[4][0], s[4][1]) && wt.KeyOf(sw, 297, s[5][0], s[5][1]);
+            std::snprintf(line, sizeof(line), "%s: Stormwind's Trade District street: 301, 316, 319 keyed %u, %u, %u (the shop 200); 306, 308 keyed %u, %u (191); 297 %u",
+                          via, s[0][0], s[1][0], s[2][0], s[3][0], s[4][0], s[5][0]);
+            Check(swFound && s[0][0] == 301 && s[1][0] == 301 && s[2][0] == 301 && s[3][0] == 306 && s[4][0] == 306, line);
         }
 
         // The lights panel's lines (the in-game report's).
@@ -611,28 +625,20 @@ namespace
         LoadTests(cdbc, via, e, buildings, e.windows);
         LightTests(cdbc, via, db);
 
-        // 3. An older GlassWindows.cdbc, without Room (2026-10-24: no room keys, each window its own) and without Thickness
-        // too: LoadAppendOnly's probe and the fields that exist.
+        // 3. An older GlassWindows.cdbc: without Part (2026-10-25: a district-sized room one key), without Room too (2026-10-24:
+        // no room keys, each window its own but for openings) and without Thickness: LoadAppendOnly's probe and the fields that
+        // exist.
         const fs::path file = db / "GlassWindows.cdbc";
-        if (WriteTrimmed(windows, 1, file))
+        for (uint32_t drop = 1; drop <= 3; ++drop)
         {
+            if (!WriteTrimmed(windows, drop, file)) { Check(false, std::string(via) + ": an older GlassWindows.cdbc written"); continue; }
             gl::Load(cdbc);
-            char line[200];
-            std::snprintf(line, sizeof(line), "%s: GlassWindows.cdbc without its last column (Room): %zu windows of %zu, %zu sharing a room's key",
-                          via, gl::Windows().Windows(), e.windows, gl::Windows().SharedKeys());
-            // (the openings of windows with no room still share: every window is "no room" then)
+            char line[220];
+            std::snprintf(line, sizeof(line), "%s: GlassWindows.cdbc without its last %u column%s (%s): %zu windows of %zu, %zu sharing a key", via, drop,
+                          drop == 1 ? "" : "s", drop == 1 ? "Part" : drop == 2 ? "Room, Part" : "Thickness, Room, Part", gl::Windows().Windows(), e.windows,
+                          gl::Windows().SharedKeys());
             Check(gl::Windows().Windows() == e.windows, line);
         }
-        else Check(false, std::string(via) + ": an older GlassWindows.cdbc written");
-        if (WriteTrimmed(windows, 2, file))
-        {
-            gl::Load(cdbc);
-            char line[200];
-            std::snprintf(line, sizeof(line), "%s: GlassWindows.cdbc without its last two columns (Thickness, Room): %zu windows of %zu", via,
-                          gl::Windows().Windows(), e.windows);
-            Check(gl::Windows().Windows() == e.windows, line);
-        }
-        else Check(false, std::string(via) + ": an older GlassWindows.cdbc written (without Thickness)");
 
         DiagnosticTests(cdbc, via, db, windows, buildings);
 
@@ -647,7 +653,7 @@ namespace
             std::snprintf(line, sizeof(line), "%s: SeeThroughBuildings.cdbc without its last column (Window): %zu buildings, %zu group rows, %zu window rows, the "
                           "Violet Gate %u, its 1956 %#x", via, gl::SeeThroughBuildings(), gl::SeeThroughGroupRows(), gl::SeeThroughWindowRows(),
                           gl::SeeThroughGroupFlags(dalaran, 53), gl::SeeThroughWindowMask(dalaran, 1956));
-            Check(gl::SeeThroughBuildings() == 47 && gl::SeeThroughGroupRows() == 31 && gl::SeeThroughWindowRows() == 0 && gl::SeeThroughGroupFlags(dalaran, 53) == 2 &&
+            Check(gl::SeeThroughBuildings() == 48 && gl::SeeThroughGroupRows() == 32 && gl::SeeThroughWindowRows() == 0 && gl::SeeThroughGroupFlags(dalaran, 53) == 2 &&
                   gl::SeeThroughWindowMask(dalaran, 1956) == ~0u, line);
         }
         else Check(false, std::string(via) + ": an older SeeThroughBuildings.cdbc written (the file's six columns)");

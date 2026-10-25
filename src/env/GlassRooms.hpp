@@ -37,7 +37,9 @@ namespace wxl_livingazeroth::glass
         float halfWidth = 0.5f, halfHeight = 0.5f;   // in WindowFrame's axes
         float thickness = 0.0f;             // how far off its plane the lookup reaches (yd; 0: rooms::kThickness)
         int room = -1;                      // the room it shows (GlassWindows' Room, 2026-10-24: the interior group behind an
-                                            // exterior window, a room's own window's group; -1 none modelled)
+                                            // exterior window, a room's own window's group or the smaller room beyond it;
+                                            // -1 none modelled)
+        uint32_t part = 0;                  // its part of a district-sized room (GlassWindows' Part, 2026-10-25; 0: the room whole)
         // The fake room's key (WindowTable::Build; whole rooms: a room's windows one key, its first window's, and so are the
         // panes of one opening with no room behind; else its own): the hash's (ordinal, group) for lit or dark and the layout.
         uint32_t keyOrdinal = 0, keyGroup = 0;
@@ -173,7 +175,7 @@ namespace wxl_livingazeroth::glass
         };
         static constexpr uint32_t kStainedGrid = 0x80000000u;   // a stained window's group in its grid's key
         /// `wholeRooms` (WholeRooms, 2026-10-24: "in general can we have all windows in a room behave the same?"): the
-        /// windows of one room (path, Room) take one key, the lowest ordinal's; the windows with no room behind them that
+        /// windows of one room (path, Room and Part) take one key, the lowest ordinal's; the windows with no room behind them that
         /// are one opening (the same group, facing within ~45 degrees, within kOpeningGap yd of each other's rectangle
         /// and plane: a vrykul tower's two-pane window cut in two at its mullion, 2026-10-24) one too. Else each its own.
         void Build(std::vector<Window> windows, bool wholeRooms = false);

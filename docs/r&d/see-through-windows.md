@@ -1527,3 +1527,160 @@ last group, the tower not in the table. The snapshot now also lists the WMO grou
 (Wmo.RenderGroup, any building): the one under the screen's centre and the one nearest the camera, each with its group's
 name, its glass batches and whether the table names it, and outside a building takes the one under the centre (or the
 nearest) as its view unless the walk's group is the same building or no farther.
+
+## 23. Stormwind's Trade District (2026-10-25, Phase E)
+
+"The enterable shops in the Trade District..." (the user).
+
+**How it is built.** Stormwind is one WMO (stormwind.wmo, 286 groups; its one placement at -8931.6, 539.3, 102.0, turned
+218.5 degrees). Its streets are interior groups (flags 0x2040), as Ironforge's are, so its shop windows are on no
+building's outside. The Trade District's street is group 257 (cathstairs01 in the file; the client's area there is the
+Trade District), and its glass looks onto the smaller rooms beyond it: the shops and the rooms over them. Of its 76
+windows, 30 look onto 13 rooms and 46 onto nothing modelled (fake rooms). Only two of those rooms have glass of their own
+(244 and 248, four windows each, back onto the street), and no window joins one shop to another. So the three ways come
+to one that opens (between rooms: from the street into a shop), one surveyed and left shut (from a shop out to the
+street), and one with no windows (shop to shop). The file's group names are the artists' (three Trade District rooms are
+called Mage Quarter, Cathedral of Light and The Slaughtered Lamb); the rows go by group number.
+
+**The survey** (SEETHROUGH_ROOMS' between-rooms block, new for this). Eyes stand on every level near the room's windows:
+the street, its stairs and its walkways, each upward face from 14 yd under a window to 1 yd over it. Street views and
+swings are taken as from outside (section 22), with the room's windows as one. The cut is the same: 35% of views, 25% of
+swings.
+
+| room (the file's name) | Stormwind map | windows | views as one | swings flickering, by window -> as one | open in the swings, as one | |
+|---|---|---|---|---|---|---|
+| 191 (Taventrance21) | 62.3, 67.3 | 3 | 67.4% | 0% -> 0% | 98% | opens |
+| 199 (cellar05) | 63.9, 69.1 | 5 | 43.2% | 56.5% -> 4.3% | 0.4% | opens |
+| 200 (Mage Quarter) | 63.1, 74.5 | 5 | 41.4% | 47.9% -> 6.2% | 0.6% | opens |
+| 278 (The Slaughtered Lamb) | 61.4, 64.7 | 2 | 24.7% | 50.0% -> 5.3% | 8.7% | shut |
+| 279 (CryptRm01, over it) | 61.4, 64.9 | 1 | 18.5% | 15.0% -> 15.0% | 6.8% | shut |
+| 245, 202, 203 | 60.3, 75.0; 64.2, 76.8; 64.7, 71.6 | 1 each | 9.5%, 8.3%, 4.8% | 5.6%, 5.6%, 0% | | shut: 3 .. 6 yd past the glass, the back of a wall |
+| 68 (NEH02) | 58.8, 68.8 | 3 | 2.1% | 57.7% -> 3.8% | | shut |
+| 62, 201, 244, 249 | | 1, 3, 2, 2 | 0% | | | shut |
+
+From inside, out to the street: 244 and 248 open from 10.2% and 9.5% of their eyes' views as one, under 35%. They are
+left as they are: Stormwind's rows give no way from inside.
+
+**Rows.** SeeThroughBuildings lists Stormwind's group 257 between rooms (Flags 4; the 48th building). It also has 17
+window rows (Flags 0) for 257's windows onto the ten shut rooms (62, 68, 201, 202, 203, 244, 245, 249, 278, 279), so those
+keep the client's glass and their fake rooms. 94 rows: 32 group rows and 17 window rows, all the window rows Stormwind's.
+Before, no window in Stormwind was listed and every shop showed a fake room. Now the three shops above open from the
+street.
+
+**Where to stand** (SEETHROUGH_SPOTS):
+
+| shop | stand at: Stormwind map (world) | facing | the window looked at | its windows |
+|---|---|---|---|---|
+| 191 | 62.4, 68.5 (-8789.5, 638.8, 94.6) | north | 9 yd up, 6 yd away | 306 .. 308 |
+| 199 | 63.3, 70.0 (-8806.4, 623.4, 94.6) | east | 11 yd up, 6 yd away | 303, 324, 325, 329, 330 |
+| 200 | 64.0, 74.5 (-8858.3, 610.7, 93.1) | west | 12 yd up, 6 yd away | 301, 316 .. 319 |
+
+All three are upper rooms over the street. Their windows sit high in the street's wall, so they show best from the street
+below, looking up. 199 and 200 have five windows each, spread along the wall. As the camera swings, one of them soon
+fails and the room stays shut as one (open in 0.4% and 0.6% of the swings' frames), so they open with the camera held
+still. 191 stays open through the swings (98%).
+
+**Fake rooms in a district** (gen_glass `window_room`, `room_parts`; GlassWindows' Part column). This fixes a regression
+in la-room-uniform. A room's own window took its own group as its room, and to the WMO a city street is a room, so each
+street's windows shared one fake-room key. The Trade District's 76 windows were one room: lit or dark all at once, with
+one layout behind every window. The biggest such key was group 3 of the Wintergrasp fortress (nd_winterorc_fortress.wmo),
+with 482 windows. Two rules now:
+- An interior window takes the room beyond it when that room's box is smaller than its own group's. The Trade District's
+  30 shop windows now name their 13 shops.
+- A room whose box's diagonal passes 100 yd is cut into parts. Windows within 6 yd of each other are one part, and each
+  part is its own key.
+
+Over every WMO there were 660 room keys before and 1,681 now. The most windows on one key is now 192 (the same fortress's
+group 13, whose windows chain along it within 6 yd of each other). The Trade District's street had 1 key and now has 30
+(13 shops, 17 parts). Seen through from outside, a part is a room as one (RoomKey: room + part x 4096).
+
+**Proofs.**
+- seethrough_tests "Stormwind's Trade District from the scan": the rows list 257's windows onto 191, 199 and 200 between
+  rooms and none of the 17, and from each spot that shop's windows open as one. The building counts are 48 buildings, 32
+  group rows and 17 window rows.
+- glass_load_tests: the same counts through both readers, and Stormwind's 257 between rooms. The keys: 301, 316 and 319
+  share 301's, and 306 and 308 share 306's.
+- test_gen_glass: the room a window shows (the interior beyond it), and a district cut into parts.
+- The whole suite passes. The profiler's timing test failed once under load and passed when run alone.
+
+## 24. Occlusion queries instead of the nine rays (design note, 2026-10-25; not built)
+
+The question: per window, count the room's pixels seen through its opening with a Direct3D 9 occlusion query, read a
+frame late, instead of LookIn's nine rays.
+
+**What it measures.** Coverage: the share of the window's pixels whose first surface past the glass is a face of its room
+seen from the front. The nine rays measure the same thing at nine points (5 to open, 3 to stay); a query measures every
+pixel. Each window draws into a small target of our own: a quarter of the screen, with its own depth-stencil, so the
+client's buffers and states are untouched.
+1. The window's glass quad, writing stencil, counted. This is query A: the window's pixels.
+2. The building's near surfaces past the glass plane (a user clip plane at the glass), both faces, depth only, where the
+   stencil is set.
+3. The room's faces, back faces culled, with the depth test EQUAL, counted. This is query B.
+
+Coverage = B / A. The meshes are the sight meshes the rays use now (RoomMesh and BuildingOf, from the scan), put in a
+static vertex buffer once per building. They go in the default pool, so there's no system-memory copy in the 32-bit
+address space, and are rebuilt on a device reset (OnDeviceLost).
+
+**Where it plugs into RenderThroughPortals.** The walk keeps its shape: hkWalk, Walk or WalkInside, PlanRooms, the gate
+for each room, then OpenWindow (the client's walk into the room through each window). Only LookIn and RoomSight change:
+- The gate reads each window's last finished coverage, keyed as RoomGate is (instance, side, group) plus the window's
+  ordinal, with the frame it was measured.
+- The walk lists the windows to measure: the funded rooms' windows and the open ones.
+- The draws can't run in the walk, which runs while the client culls, before anything is drawn this frame. They go in the
+  deferral's Replay, which already runs once a frame after the WMO batches, with the frame's matrices, and saves and puts
+  back the device's state.
+- The next frame reads the results with GetData, without a flush. A query that isn't done keeps its last value.
+- A window with no result yet counts as shut. The 0.35 s hold covers that wait (about 20 frames at 60).
+
+The price of the frame's delay is that a window turning to show the void shuts a frame late (two if the GPU lags).
+Today's rule is to never show the void (section 22). Two things keep that to rare cases:
+- a stay threshold with a margin, say 0.6 coverage to stay and 0.9 to open;
+- shutting everything when the camera jumps (a teleport, or the camera snapping in off a wall).
+
+**Cost per window.** Three draws and two queries (A could be computed instead), plus a scissor and a stencil reference.
+The near surfaces go through the vertex shader twice. A Dalaran room is 700 .. 10,800 triangles, so 16 windows measured
+come to up to about 350k triangles a frame, at almost no fill (quarter size, scissored to the window). On the GPU that
+is of the order of 0.1 .. 0.3 ms. On the CPU it is about 50 draw calls (the client makes thousands), roughly 0.3 .. 0.5 ms
+in the D3D9 runtime and driver. Memory is about 1 MB for the target plus the buildings' meshes (a few MB for Dalaran). The
+rays cost about 10 us a window now (0.93 us a ray). The queries are dearer on the CPU and add GPU time where the rays use
+none, so they are not a saving.
+
+**Modelling it offline.** Instead of nine rays, the swing survey would cast one ray per query pixel in the window's
+screen rectangle, through the glass polygon. Each ray is classed as passes 2 and 3 class it, and coverage is the share
+that see the room. Frame t's gate gets frame t-1's coverage, as the query's delay gives. At quarter size, a window 6 yd
+away is about 100 x 60 pixels: about 6 ms a window-frame at 1 us a ray, or about 1.4 hours on one thread for Stormwind's
+block. So use a 24 x 24 grid per window (about 0.6 ms, about 9 minutes) and check it against full resolution on a
+sample. The same two numbers come out (views as one, swings flickering), so the results compare directly with the tables
+above, and the open and stay thresholds can be swept.
+
+**Would the shut rooms open steadily?** Mostly not. Their trouble is what is behind the glass, not how it is sampled.
+- Curiosities & Moore upstairs (9) and the Threads of Fate upstairs (13): 1948 and 1932 see their rooms only within a
+  narrow cone of views (19% of street views). Outside it, their rays meet surfaces from behind 2 .. 3 yd on: 0 of 9 from
+  the user's second camera. A pixel count says about 0 there too. Every swing still crosses the cone's edges, so the
+  windows change just as often.
+- The Violet Gate's halls (53, 54) from outside open as one from only 7% and 2% of street views, because three of each
+  hall's four tall windows fail from most views. A finer count can't make the room fill glass it doesn't fill. Opening
+  them means showing the void over part of the glass.
+- Stormwind's 202, 203 and 245: the back of a wall 3 .. 6 yd past the glass. That is the same case.
+- Northshire Abbey's rooms that fell under 35% as one, and others with deep openings: here sampling plays a part. A jamb
+  or lining across one or two of the nine rays moves the count by 11 .. 22%; the reveal and lining rules (sections 17 and
+  19) exist for that. A pixel count moves a few percent as a jamb slides across, so these would flicker less and those
+  rules could go. How much less is the first thing the offline model should answer.
+- The survey's flicker is mostly at cone edges: a run counts as flickering when it changes more than twice, that is, when
+  it crosses a band of views. That is geometry, not jitter; the hold already filters jitter.
+
+**Conclusion.** Queries are a better instrument, not a different answer. What would let the shut rooms open steadily is
+to stop deciding per window:
+- draw the room behind each window in reach;
+- mark, per pixel, where its front faces are what lies behind the glass (pass 3 into a mask target instead of a query);
+- let the see-through redraw go clear only on those pixels, with the fake room elsewhere.
+
+The void then never shows and nothing flips. The costs:
+- the room drawn every frame for each such window;
+- the redraw reading a mask texture where it now reads open bits;
+- a window that can be part real room, part fake.
+
+The recommended order:
+1. Build the offline coverage model first (no game code) and measure how much of the remaining flicker is sampling.
+2. Build the queries only if that share is large.
+3. The per-pixel mask is the change that would let the shut rooms open.

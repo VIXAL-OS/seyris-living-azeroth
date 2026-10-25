@@ -655,8 +655,8 @@ namespace wxl_livingazeroth::seethrough
         {
             const ULONGLONG now = GetTickCount64();
             if (g_roomGates.size() > 4096) g_roomGates.clear();
-            const uint64_t k = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 24) ^ (static_cast<uint64_t>(inside ? 1 : 0) << 23) ^
-                               (static_cast<uint64_t>(inside ? group : 0) << 11) ^ static_cast<uint64_t>(static_cast<uint32_t>(key) & 0x7FF);
+            const uint64_t k = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instance)) << 32) ^ (static_cast<uint64_t>(inside ? 1 : 0) << 31) ^
+                               (static_cast<uint64_t>(inside ? group : 0) << 20) ^ static_cast<uint64_t>(static_cast<uint32_t>(key) & 0xFFFFFu);
             GateEntry& e = g_roomGates[k];
             if (e.tick && now - e.tick > 1000) e.gate = Gate{};
             e.tick = now;
@@ -772,7 +772,7 @@ namespace wxl_livingazeroth::seethrough
             std::vector<Counts::Why> whys;
             for (const RoomPlan& rp : rooms)
             {
-                const uint32_t room = static_cast<uint32_t>(rp.key);
+                const uint32_t room = static_cast<uint32_t>(windows[rp.windows[0]].interior);   // (the key holds its part too)
                 const size_t n = rp.windows.size();
                 sights.assign(n, Sight{});
                 whys.assign(n, Counts::kRoom);
@@ -991,7 +991,7 @@ namespace wxl_livingazeroth::seethrough
             for (const RoomPlan& rp : rooms)
             {
                 const bool onto = windows[rp.windows[0]].interior >= 0;   // (a way out's key is the group itself)
-                const uint32_t room = onto ? static_cast<uint32_t>(rp.key) : group;
+                const uint32_t room = onto ? static_cast<uint32_t>(windows[rp.windows[0]].interior) : group;
                 const size_t n = rp.windows.size();
                 sights.assign(n, Sight{});
                 whys.assign(n, Counts::kRoom);

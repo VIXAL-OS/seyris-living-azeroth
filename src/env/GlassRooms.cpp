@@ -443,12 +443,15 @@ namespace wxl_livingazeroth::glass
         {
             for (Window& w : ws) { w.keyOrdinal = w.ordinal; w.keyGroup = w.group; }
             if (!whole) return 0;
-            // a room's: its lowest ordinal's
-            std::unordered_map<uint64_t, uint32_t> first;   // (path << 32 | room) -> window
+            // a room's (its part's, in a district-sized one): its lowest ordinal's
+            auto roomKey = [](const Window& w) {
+                return (static_cast<uint64_t>(w.path) << 32) | ((static_cast<uint64_t>(static_cast<uint32_t>(w.room)) & 0xFFFu) << 20) | (w.part & 0xFFFFFu);
+            };
+            std::unordered_map<uint64_t, uint32_t> first;   // (path, room, part) -> window
             for (uint32_t i = 0; i < ws.size(); ++i)
             {
                 if (ws[i].room < 0) continue;
-                const uint64_t k = (static_cast<uint64_t>(ws[i].path) << 32) | static_cast<uint32_t>(ws[i].room);
+                const uint64_t k = roomKey(ws[i]);
                 auto it = first.find(k);
                 if (it == first.end() || ws[i].ordinal < ws[it->second].ordinal) first[k] = i;
             }
@@ -456,7 +459,7 @@ namespace wxl_livingazeroth::glass
             for (Window& w : ws)
             {
                 if (w.room < 0) continue;
-                const Window& f = ws[first[(static_cast<uint64_t>(w.path) << 32) | static_cast<uint32_t>(w.room)]];
+                const Window& f = ws[first[roomKey(w)]];
                 w.keyOrdinal = f.ordinal;
                 w.keyGroup = f.group;
                 shared += &w != &f ? 1 : 0;

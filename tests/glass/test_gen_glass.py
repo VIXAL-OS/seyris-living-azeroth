@@ -312,6 +312,17 @@ class Windows(unittest.TestCase):
         self.assertEqual(g.window_room((1.5, 5, 2), (1, 0, 0), True, 0, infos), 1)
         # a room's own window (seen from inside): its group
         self.assertEqual(g.window_room((0.1, 0, 2), (1, 0, 0), False, 2, infos), 2)
+        # (2026-10-25) a big hall's own window (1) looking into the small room beyond it (2, along its normal): that room; the
+        # small room's own window looking out into the hall: its own (the hall is the bigger)
+        self.assertEqual(g.window_room((-4.0, 0, 2), (1, 0, 0), False, 1, infos), 2)
+        self.assertEqual(g.window_room((-2.0, 0, 2), (-1, 0, 0), False, 2, infos), 2)
+
+    def test_a_district_is_cut_in_parts(self):
+        # (2026-10-25) a room 200 yd across (Stormwind's Trade District street): its windows within 6 yd of each other's
+        # rectangle one part, numbered by their first; a room under 100 yd whole (part 0)
+        infos = [(0x2000, (-100, -100, 0), (100, 100, 20), "street"), (0x2000, (0, 0, 0), (10, 10, 5), "shop")]
+        ws = [(0, (0, 0, 2), 1.0, 1.0), (0, (3, 0, 2), 1.0, 1.0), (0, (50, 0, 2), 1.0, 1.0), (1, (5, 5, 2), 1.0, 1.0), (-1, (9, 9, 2), 1.0, 1.0)]
+        self.assertEqual(g.room_parts(ws, infos), [1, 1, 2, 0, 0])
 
     def test_a_facades_windows_08_yd_apart_stay_two(self):
         ws = windows_of({0: (0x8, [(0, wall_x(0.0, 0.0, 1.5, 1, 3)), (0, wall_x(0.0, 2.3, 3.8, 1, 3))])})

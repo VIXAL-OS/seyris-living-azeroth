@@ -97,6 +97,7 @@ namespace wxl_livingazeroth::seethrough
                 s.ordinal = w.ordinal;
                 s.group = w.group;
                 s.kind = w.kind;
+                s.part = w.part;
                 for (int k = 0; k < 3; ++k) { s.center[k] = w.center[k]; s.normal[k] = w.normal[k]; }
                 glass::WindowFrame(s.normal, s.along, s.up);
                 s.halfWidth = w.halfWidth;
@@ -667,7 +668,11 @@ namespace wxl_livingazeroth::seethrough
         }
     }
 
-    int RoomKey(const SeeWindow& w) { return w.interior >= 0 ? w.interior : static_cast<int>(w.group); }
+    int RoomKey(const SeeWindow& w)
+    {
+        // (a part of a district-sized room above the groups' indices: 4096 a part)
+        return (w.interior >= 0 ? w.interior : static_cast<int>(w.group)) + static_cast<int>(w.part & 0x7FFFu) * 4096;
+    }
 
     void RoomSight(const Sight* sights, size_t n, bool& opens, bool& stays)
     {

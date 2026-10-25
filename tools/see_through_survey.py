@@ -272,10 +272,32 @@ SEE_THROUGH_GROUPS += [
     (DAL, 54, "Dalaran: the Violet Gate's other hall, from inside onto the street (as one 100%), stained glass", FROM_INSIDE),
     (DAL, 71, "Dalaran: the Underbelly's Circle of Wills, through its window into Cantrips & Crows (70; as one 100%), frosted glass", FROM_BETWEEN),
 ]
+# Stormwind's Trade District (2026-10-25, Phase E: "The enterable shops in the Trade District..."). Stormwind is one WMO
+# (stormwind.wmo, 286 groups, placed once); its districts' streets are interior groups lit as the outdoors (MOGP 0x2040)
+# and its shops interior groups beside them. The Trade District's street is group 257 (MOGN cathstairs01; the client's
+# name "Trade District"), 210 x 235 yd; its shop windows are its own glass, looking into the shops beyond (RoomBeyond),
+# so from the street they open between rooms, as Ironforge's; the shops have no glass of their own onto the street (but
+# two small rooms, 244 and 248, onto the street from 10 and 9% of views). From seethrough_tests' SEETHROUGH_ROOMS between
+# rooms (eyes 2 .. 10 yd before each window on every level of the street under it, looking at it; the camera swung
+# round players before them, 30 degrees a second), by the whole-rooms rule (35% of views as one, at most 25% of swings
+# flickering as one): three shops open from the street: 191 (MOGN Taventrance21: as one 67% of views, no swing
+# flickering, open 98% of the swings' frames), 199 (cellar05: 43%, 4%) and 200 (MOGN Mage Quarter: 41%, 6%). Out: 278
+# (25%), 279 (19%), 245, 202, 203 (5 .. 10%: their windows look at the back of a wall 3 .. 6 yd behind the glass), 62,
+# 68, 201, 244, 249 (0 .. 2%). The street's windows onto those are shut by rows of their own below (with whole rooms each
+# holds its own room shut, no other).
+SW = r"world\wmo\azeroth\buildings\stormwind\stormwind.wmo"
+SEE_THROUGH_GROUPS += [
+    (SW, 257, "Stormwind: the Trade District's street, onto its shops (191, 199 and 200 as one from 67, 43 and 41% of views; the "
+              "others' windows shut below)", FROM_BETWEEN),
+]
 # Single windows (2026-10-24): (wmo, its group, its ordinal in the WMO, comment, Flags: the ways it may open, 0 none). A
 # window's row only takes ways away from its room's and group's rows (env/SeeThroughModel MaskWindows); with whole rooms
-# a window shut by its row holds its room shut whenever it's on the screen. None since whole rooms (above).
-SEE_THROUGH_WINDOWS = []
+# a window shut by its row holds its room shut whenever it's on the screen. Since whole rooms, only the Trade District
+# street's windows onto the shops that don't open as one (2026-10-25).
+_SW_SHUT = [(62, (327,)), (68, (315, 367, 368)), (201, (298, 341, 343)), (202, (297,)), (203, (299,)), (244, (344, 345)), (245, (300,)),
+            (249, (357, 359)), (278, (331, 362)), (279, (369,))]
+SEE_THROUGH_WINDOWS = [(SW, 257, ordinal, "Stormwind: the Trade District's street onto room %d, shut: it opens as one from too few views" % room, 0)
+                       for room, ordinals in _SW_SHUT for ordinal in ordinals]
 SEE_THROUGH_COLUMNS = ["u", "s", "u", "s", "i", "i"]   # ID Wmo Flags Comment Group (-1: the whole WMO) Window (-1: none)
 
 

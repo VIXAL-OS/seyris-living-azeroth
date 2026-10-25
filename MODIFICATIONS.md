@@ -158,6 +158,11 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   0.4 s when its window joins or leaves the light's set, instead of popping, and a window takes another's place only when
   it lights the player's spot half as well again; sixteen windows' patches at once, not twelve ("lots of pop-in when i
   move", in Stormwind's Wizard's Sanctum).
+- **Stormwind's Trade District shops** (25 October 2026): from the Trade District's street, three of its shops are seen
+  through their windows, each shop's windows together (Stormwind's streets are indoor spaces to the game, so these open
+  as Ironforge's shops do, between rooms, with `SeeThroughFromInside` and `SeeThroughBetweenRooms`). The other shops'
+  windows look at the back of a wall a few yards behind the glass and stay as they were. In Stormwind and the other big
+  cities the fake rooms behind the windows are now lit and dark shop by shop, not a whole district at once.
 - **A room's windows as one** (24 October 2026): "in general can we have all windows in a room behave the same?" Seen
   through from outside or inside, a room's windows now open together, and only when the room is really seen through every
   one of them; otherwise they all keep their glass (`WholeRooms`, on by default). Behind the glass, in any building, a

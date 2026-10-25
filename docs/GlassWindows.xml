@@ -17,4 +17,5 @@
     <Field Name="Comment" Type="string" />
     <Field Name="Thickness" Type="float" />
     <Field Name="Room" Type="int" />
+    <Field Name="Part" Type="int" />
   </Table>

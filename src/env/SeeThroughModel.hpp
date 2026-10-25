@@ -262,6 +262,7 @@ namespace wxl_livingazeroth::seethrough
         bool unlisted = false;              // from outside: its room isn't one the table opens from outside (ListOutside)
         uint32_t see = ~0u;                 // its own window row's Flags (MaskWindows: the ways it may open, 0 none); ~0: no row
         bool masked = false;                // from outside: unlisted by its own row alone, its room listed (ListOutside)
+        uint32_t part = 0;                  // its part of a district-sized room (GlassWindows' Part, 2026-10-25): whole rooms' key
     };
     constexpr uint32_t kWindowExterior = 0x1;   // GlassWindows.Flags
     // "Northshire Abbey framerate looks awesome but it does flicker between fake rooms and outside" (the user, 2026-10-22,
@@ -587,7 +588,8 @@ namespace wxl_livingazeroth::seethrough
     // window opened on its own verdict, so a room showed real through one window and fake through the next. As one, a room's
     // windows on the screen open together, only when every one of them is seen through (none opened onto the void or onto a
     // wall from behind), and stay shut together otherwise. A room's key: the room behind the window (from outside, and from
-    // inside a window onto another room), or for a way out onto the street the room the camera is in.
+    // inside a window onto another room), or for a way out onto the street the room the camera is in; in a district-sized
+    // room (2026-10-25, Stormwind's Trade District street), the part of it the window is in (GlassWindows' Part).
     int RoomKey(const SeeWindow& w);
     /// Over the sights of a room's windows on the screen this frame: whether every one passes the open test (`opens`) and
     /// the stay test (`stays`: SightOpen with wasOpen); both false for none.
