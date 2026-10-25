@@ -1,5 +1,6 @@
 #include "Overview.hpp"
 
+#include "Compare.hpp"
 #include "DepthView.hpp"
 #include "Memory.hpp"
 #include "Pages.hpp"
@@ -50,6 +51,7 @@ namespace wxl_livingazeroth::debug
             const world::Snapshot& s = world::Current();
             char line[320];
             snapshot::DrawButton(g_api, "##snapov");
+            compare::DrawButton(g_api, "##compareov");
             g_api->UiSeparator();
             if (!s.inWorld)
             {

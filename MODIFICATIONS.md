@@ -242,7 +242,23 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
   and Direct3D resources by feature (`operator new` counted in this module alone). On the overview page, in the log
   every 30 s with the zone, and in snapshots; a chat warning and a snapshot when it runs low
   (`[LivingAzeroth.Memory]`).
+- **From Lumenveil's list, the ideas only** (25 October 2026; its code is GPL v2):
+  - A lantern at your belt (`[LivingAzeroth.Lantern]`, F7): one warm light at the player's hip through our point lights,
+    following the player every frame. It lights itself at night and in dark places (caves, crypts, mines) and gives way
+    where our lights already light the place; by day outdoors it gives nothing, however it was lit. In env/Lights it is
+    the player's own light: never merged with a torch beside it, first in every grid cell it reaches (in the scene's
+    places, not the spell lights'), through the same knee, its flicker in its colour only. The key's choice holds until
+    the light changes; a chat line says what it did.
+  - Distant night lights (`[LivingAzeroth.DistantLights]`): past our lights' 256 yards, the lit windows
+    (`WindowLights.cdbc`) and lamps (the light scan's far list: the lights of the models out to 1500 yards, noted every
+    couple of seconds) of towns are small glows in their own colours, fading in as the point lights fade out, with the
+    night and out with the distance fog, merged and capped, in one batched draw of their own after the window glow,
+    hidden by what stands in front.
+  - The compare key (`CompareKey`, F8): one press switches every visual effect off through its own switch, the next
+    back on as they were (a panel change meanwhile kept), with a chat line; the saved settings are never touched. The
+    snapshot and the 30-second log line record its state.
+  - Their status in the lights panel, the overview page, the 30-second log line and the snapshot; `tests/lumen`.
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
-  see-through windows, tree shadows, spell lights, the memory readout.
+  see-through windows, tree shadows, spell lights, the memory readout, the lantern, distant lights and the compare key.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

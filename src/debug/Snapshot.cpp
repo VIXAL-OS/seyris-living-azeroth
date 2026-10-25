@@ -1,5 +1,6 @@
 #include "Snapshot.hpp"
 
+#include "Compare.hpp"
 #include "Memory.hpp"
 #include "SnapshotView.hpp"
 #include "UiText.hpp"
@@ -12,8 +13,10 @@
 #include "../env/SeeThroughModel.hpp"
 #include "../env/Storm.hpp"
 #include "../env/WorldQuery.hpp"
+#include "../features/DistantLights.hpp"
 #include "../features/Glass.hpp"
 #include "../features/GroundFog.hpp"
+#include "../features/Lantern.hpp"
 #include "../features/ModelLights.hpp"
 #include "../features/SeeThrough.hpp"
 #include "../features/SpellLights.hpp"
@@ -438,6 +441,10 @@ namespace wxl_livingazeroth::snapshot
         {
             t("");
             t("Settings");
+            // The compare key first: with every effect off for a comparison, the values below are the off ones.
+            std::vector<std::string> lines;
+            compare::SnapshotLines(lines);
+            for (const std::string& l : lines) t("%s", l.c_str());
             const seethrough::Settings& st = seethrough::Config();
             t("see-through: SeeThroughWindows %d, SeeThroughFromInside %d, SeeThroughBetweenRooms %d, SeeThroughRedraw %d, SeeThroughOpacity %.2f, SeeThroughStainedTint %.2f, "
               "SeeThroughFrosted %d, SeeThroughFrostBlur %.2f", st.enabled, st.fromInside, st.betweenRooms, st.redraw, st.opacity, st.stainedTint, st.frosted, st.frostBlur);
@@ -486,6 +493,8 @@ namespace wxl_livingazeroth::snapshot
             t("%s", modellights::StatusLine());
             lines.clear();
             spelllights::SnapshotLines(lines);
+            lantern::SnapshotLines(lines);
+            distantlights::SnapshotLines(lines);
             for (const std::string& l : lines) t("%s", l.c_str());
             t("");
             t("Surface cover panel");

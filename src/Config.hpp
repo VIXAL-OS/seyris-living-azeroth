@@ -19,6 +19,8 @@ namespace wxl_livingazeroth::config
     constexpr const char* kSectionGlass = "LivingAzeroth.Glass";
     constexpr const char* kSectionSpellLights = "LivingAzeroth.SpellLights";
     constexpr const char* kSectionMemory = "LivingAzeroth.Memory";
+    constexpr const char* kSectionLantern = "LivingAzeroth.Lantern";
+    constexpr const char* kSectionDistantLights = "LivingAzeroth.DistantLights";
 
     /// Reads the runtime defaults into the features' tunables. Call once, after every extension
     /// has loaded (first OnFrame): the settings interface belongs to another extension.

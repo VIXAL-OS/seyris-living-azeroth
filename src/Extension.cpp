@@ -15,6 +15,7 @@
 #include "Config.hpp"
 
 #include "debug/ClimateView.hpp"
+#include "debug/Compare.hpp"
 #include "debug/DepthView.hpp"
 #include "debug/LightEditor.hpp"
 #include "debug/LightsView.hpp"
@@ -45,6 +46,7 @@
 #include "env/Wind.hpp"
 #include "env/WorldQuery.hpp"
 #include "features/Crystal.hpp"
+#include "features/DistantLights.hpp"
 #include "features/DoodadFade.hpp"
 #include "features/DoodadLightTable.hpp"
 #include "features/GrassDensity.hpp"
@@ -53,6 +55,7 @@
 #include "features/GrassInstanced.hpp"
 #include "features/GrassMotion.hpp"
 #include "features/GrassPerf.hpp"
+#include "features/Lantern.hpp"
 #include "features/ModelLights.hpp"
 #include "features/SurfaceCover.hpp"
 #include "features/ModelIce.hpp"
@@ -165,6 +168,11 @@ namespace
                    wxl_livingazeroth::seethrough::StatusLine(), wxl_livingazeroth::treeshadows::LogLine(), wxl_livingazeroth::spelllights::StatusLine());
         g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: in %s%s%s: %s", zone, sub ? ", " : "", sub ? s.subZoneText : "",
                    wxl_livingazeroth::memory::LogPart());
+        // The lantern, the distant lights and the compare key (2026-10-25), on a line of their own (the core's lines hold 1,000
+        // characters).
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::compare::StatusLine());
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::lantern::StatusLine());
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::distantlights::StatusLine());
     }
 
     // Between frames: the safe moment to swap the depth surface the next world pass will bind.
@@ -196,6 +204,11 @@ namespace
         namespace prof = wxl_livingazeroth::prof;
         namespace mem = wxl_livingazeroth::memuse;
         mem::Scope envMemory(mem::kEnv);   // what the world snapshot and the client's weather allocate
+        {
+            // The compare key first: the switches it flips then hold for this whole frame.
+            mem::Scope memory(mem::kPanels);
+            wxl_livingazeroth::compare::Update();
+        }
         wxl_livingazeroth::clientweather::Apply();
         wxl_livingazeroth::doodadfade::Update();
         const auto& snap = wxl_livingazeroth::world::Refresh();
@@ -241,7 +254,9 @@ namespace
                 mem::Scope memory(mem::kIce);
                 wxl_livingazeroth::crystal::Update(); // the night the crystals' inner glow goes by
             }
+            wxl_livingazeroth::lantern::Update(dt, snap);   // its key and rules: the light env/Lights takes next
             wxl_livingazeroth::lights::Update(dt, snap);
+            wxl_livingazeroth::distantlights::Update(snap); // the far glows, from the windows and the light scan's far lamps
         }
         {
             prof::Scope scope(prof::kOursCoverFill);
@@ -274,6 +289,7 @@ namespace
         wxl_livingazeroth::postaa::OnDeviceLost();
         wxl_livingazeroth::groundfog::OnDeviceLost();
         wxl_livingazeroth::windowglow::OnDeviceLost();
+        wxl_livingazeroth::distantlights::OnDeviceLost();
         wxl_livingazeroth::sunshafts::OnDeviceLost();
         wxl_livingazeroth::glassshafts::OnDeviceLost();
         wxl_livingazeroth::seethrough::OnDeviceLost();
@@ -333,6 +349,8 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_livingazeroth::groundfog::Install(api);
     // Window glow: at the same point, right after the fog (its link calls ours).
     wxl_livingazeroth::windowglow::Install(api);
+    // Distant night lights: there too, after the window glow (its bright pass never sees them).
+    wxl_livingazeroth::distantlights::Install(api);
     // Sun shafts: there too, between the fog and the window glow (the deck's result is this frame's).
     wxl_livingazeroth::sunshafts::Install(api);
     // Coloured shafts through sunlit window glass, in the room's air: right after the sun shafts.
@@ -347,8 +365,10 @@ int __cdecl WXL_Load(const WXL_Api* api)
     // Surface cover spike: draws at the end of the world scene (before anti-aliasing's pass).
     wxl_livingazeroth::cover::Install(api);
 
-    // The snapshot key (debug/Snapshot): the window's messages.
+    // The snapshot key (debug/Snapshot), the compare key (debug/Compare) and the lantern's key: the window's messages.
     wxl_livingazeroth::snapshot::Install(api);
+    wxl_livingazeroth::compare::Install(api);
+    wxl_livingazeroth::lantern::Install(api);
     // The memory readout (debug/Memory): its guards against the client's code, read before any detour is armed.
     wxl_livingazeroth::memory::Install(api);
 

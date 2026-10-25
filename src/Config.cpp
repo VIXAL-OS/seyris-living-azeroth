@@ -1,5 +1,6 @@
 #include "Config.hpp"
 
+#include "debug/Compare.hpp"
 #include "debug/Memory.hpp"
 #include "debug/Snapshot.hpp"
 #include "debug/WindView.hpp"
@@ -9,6 +10,7 @@
 #include "env/Storm.hpp"
 #include "env/ThunderDsp.hpp"
 #include "features/Crystal.hpp"
+#include "features/DistantLights.hpp"
 #include "features/DoodadFade.hpp"
 #include "features/FogWake.hpp"
 #include "features/GroundFog.hpp"
@@ -21,6 +23,7 @@
 #include "features/TerrainWetness.hpp"
 #include "features/TreeShadows.hpp"
 #include "features/Glass.hpp"
+#include "features/Lantern.hpp"
 #include "features/SeeThrough.hpp"
 #include "features/SpellLights.hpp"
 #include "features/SunShafts.hpp"
@@ -188,6 +191,11 @@ namespace wxl_livingazeroth::config
             snapshot::Settings& k = snapshot::Config();
             const float key = Float(s, "SnapshotKey", "The key that writes a snapshot for a bug report: where you are, the camera (in the nearest building's own space too), the time, the server's weather and ours, the settings that matter, the frame rate and the see-through, fog and storm panels' status, to Logs\\la-snapshots\\<date>-<time>.txt in the game folder, announced in chat. A Windows virtual-key code: 122 = F11, 123 = F12, 0 = no key (the overview page has a button too). The key still reaches the game.", static_cast<float>(k.key));
             k.key = std::isfinite(key) && key >= 0.0f && key < 256.0f ? static_cast<int>(key + 0.5f) : 0;
+        }
+        {
+            compare::Settings& c = compare::Config();
+            const float key = Float(s, "CompareKey", "The key that switches every Living Azeroth visual effect off and, pressed again, back on, so you can compare any scene with the client's own look in one press; a line in chat says which, and the snapshot records it. Each effect goes off through its own switch, as its panel's checkbox would; your saved settings aren't touched, and a switch you change in a panel meanwhile keeps your change. A Windows virtual-key code: 119 = F8, 0 = no key (the overview page has a button too). The key still reaches the game.", static_cast<float>(c.key));
+            c.key = std::isfinite(key) && key >= 0.0f && key < 256.0f ? static_cast<int>(key + 0.5f) : 0;
         }
 
         // Ground fog renderer. Where fog forms and its kinds' values come from FogSettings.cdbc.
@@ -379,6 +387,33 @@ namespace wxl_livingazeroth::config
             l.maxLights = l.maxLights < 0 ? 0 : (l.maxLights > spelllight::kMaxLightsCap ? spelllight::kMaxLightsCap : l.maxLights);
         }
 
+        // The belt lantern: one warm light at the player's hip in the dark.
+        {
+            const char* f = kSectionLantern;
+            lantern::Settings& l = lantern::Config();
+            l.enabled = In(s, f, "Enabled", "A lantern at your belt: one warm light at your hip that follows you, through our point lights (it needs them on), lighting the ground, walls, models and the fog round you in the dark. By day outdoors it gives nothing, however it was lit, and it gives way where torches and lamps already light the place.", l.enabled);
+            const float key = In(s, f, "Key", "The key that lights the lantern and puts it out; a line in chat says which. With Automatic on, the key's choice holds until the light changes (nightfall or daybreak, into or out of a dark place), then the lantern looks after itself again. A Windows virtual-key code: 118 = F7, 0 = no key (the lights panel's Lantern section has a button too). The key still reaches the game.", static_cast<float>(l.key));
+            l.key = std::isfinite(key) && key >= 0.0f && key < 256.0f ? static_cast<int>(key + 0.5f) : 0;
+            l.automatic = In(s, f, "Automatic", "The lantern lights itself at night and in dark places (caves, crypts, mines, indoors without light) and goes out where it's light. 0 = only the key lights it.", l.automatic);
+            l.strength = In(s, f, "Strength", "Your multiplier on the lantern's light (1 = a warm light a little under a torch's).", l.strength);
+            l.radius = In(s, f, "Radius", "How far the lantern's light reaches, in yards.", l.radius);
+        }
+
+        // Distant night lights: towns' lamps and lit windows as glows past our lights' reach.
+        {
+            const char* f = kSectionDistantLights;
+            distantlight::Settings& d = distantlights::Config();
+            d.enabled = In(s, f, "Enabled", "At night, past our point lights' reach (256 yards), the lamps and lit windows of towns are small glows in their own colours, so a town reads from far away: fading in as the point lights fade out, with the night, and out with the distance fog. Drawn in one batch after the fog, hidden by the hills and walls in front of them; not with the camera indoors or under water.", d.enabled);
+            d.windows = In(s, f, "Windows", "Lit windows glow (WindowLights.cdbc), as much as their rooms are lit.", d.windows);
+            d.lamps = In(s, f, "Lamps", "Lamps, torches, braziers and fires glow: the models with lights the light scan finds out to MaxDistance (needs our point lights on).", d.lamps);
+            d.strength = In(s, f, "Strength", "Your multiplier on the glows' brightness.", d.strength);
+            d.size = In(s, f, "Size", "Your multiplier on the glows' size (a lamp's core is about a yard across, never under a pixel and a quarter on the screen).", d.size);
+            d.maxDistance = In(s, f, "MaxDistance", "No glows farther than this (yards), nor past the client's far clip.", d.maxDistance);
+            d.maxLights = Whole(s, f, "MaxLights", "At most this many glows (0 .. 4096), the brightest and nearest first, after glows close together at that distance have merged.", d.maxLights);
+            d.fogPierce = In(s, f, "FogPierce", "How far into the client's distance fog the glows carry, in fog depths (the fog's end minus its start): at 1.5 a glow at the fog's end keeps half its light. Lamps shine through haze farther than the land shows.", d.fogPierce);
+            d.maxLights = d.maxLights < 0 ? 0 : (d.maxLights > distantlight::kMaxLightsCap ? distantlight::kMaxLightsCap : d.maxLights);
+        }
+
         // The memory readout: what uses the client's address space, and the warning before it runs out.
         {
             const char* f = kSectionMemory;
@@ -393,6 +428,6 @@ namespace wxl_livingazeroth::config
             m.warnMinutes = In(s, f, "WarnMinutes", "At most one warning in this many minutes, unless it gets worse (100 MB less free, or the largest free block halved).", m.warnMinutes);
         }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass, kSectionSpellLights, kSectionMemory);
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass, kSectionSpellLights, kSectionMemory, kSectionLantern, kSectionDistantLights);
     }
 }

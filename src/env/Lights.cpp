@@ -2,9 +2,11 @@
 
 #include "../features/DoodadLightTable.hpp"
 #include "../features/GrassPerf.hpp"
+#include "../features/Lantern.hpp"
 #include "../features/SpellLights.hpp"
 #include "../features/Windows.hpp"
 #include "Flame.hpp"
+#include "LanternModel.hpp"
 #include "SceneWalk.hpp"
 
 #include "game/Camera.hpp"
@@ -334,6 +336,7 @@ namespace wxl_livingazeroth::lights
             unsigned flames; // separate flames merged into it (lights of different models): FlameClusterScale
             int8_t given;   // indoor given (FrameLight): 0 = test it here (IsIndoor), 1 = outdoor, 2 = indoor
             bool  frame;    // a FrameLight (a spell light): merged and capped already; its own room in the grid
+            bool  own;      // the player's own light (OwnLight: the lantern): never merged or left out, first in its cells
         };
 
         double g_time = 0.0;
@@ -862,6 +865,95 @@ namespace wxl_livingazeroth::lights
         bool     g_buildTable = false;
         bool     g_sceneCheck = false;                 // the models' scene pointer (+0x28) is the scene's: resume checks it
 
+        // --- far lamps (SetFarRange; features/DistantLights) ---
+        // Per model file (its CM2Shared, checked against its header and the tables' generation): the lights a placed copy of
+        // it gives, in its own space, looked up once: its DoodadLightAssignment rows' lights, and its own point lights unless a
+        // row suppresses them. Most files have none, so most far models cost two reads and a lookup.
+        constexpr float    kFarFrom = 2.0f / 3.0f;     // of the range: the drawn lights fade out from here, the glows in
+        constexpr size_t   kMaxFarLights = 16384;
+        constexpr size_t   kMaxFarFiles = 8192;
+        struct FarPoint { float local[3]; float color[3]; float radius; };
+        struct FarProfile { const uint8_t* header = nullptr; uint32_t generation = 0; std::vector<FarPoint> points; };
+        std::unordered_map<const void*, FarProfile> g_farProfiles;
+        std::vector<FarLight> g_far, g_farBuilding;
+        std::unordered_set<const void*> g_farSeen;     // models with lights taken this pass (a restart walks them again)
+        FarStats g_farStats, g_farBuild;
+        float    g_farRange = 0.0f;                    // SetFarRange
+        bool     g_farPass = false;                    // the pass under way notes far lamps too
+        double   g_farLast = -1e12;                    // when the last far pass began (ms)
+        unsigned g_farPasses = 0;
+
+        const FarProfile& Profile(const uint8_t* m, const void* shared, const uint8_t* hdr)
+        {
+            if (g_farProfiles.size() > kMaxFarFiles) g_farProfiles.clear();
+            FarProfile& p = g_farProfiles[shared];
+            const uint32_t generation = lighttable::Generation();
+            if (p.header == hdr && p.generation == generation) return p;
+            p.header = hdr;
+            p.generation = generation;
+            p.points.clear();
+            ++g_farBuild.files;
+            SceneModel sm;
+            sm.model = m;
+            Describe(m, sm);
+            bool suppress = false;
+            if (g_buildTable && sm.path[0])
+                for (const lighttable::Assignment* a : RowsFor(sm.path))
+                {
+                    if (a->flags & lighttable::kSuppressModelLights) suppress = true;
+                    const lighttable::Properties* pr = a->lightId ? lighttable::FindProperties(a->lightId) : nullptr;
+                    if (!pr) continue;
+                    FarPoint fp{};
+                    AttachmentPosition(hdr, a->attachType, a->attachIndex, a->offset, fp.local);
+                    fp.color[0] = ((pr->color >> 16) & 0xFF) / 255.0f * pr->intensity;
+                    fp.color[1] = ((pr->color >> 8) & 0xFF) / 255.0f * pr->intensity;
+                    fp.color[2] = (pr->color & 0xFF) / 255.0f * pr->intensity;
+                    fp.radius = pr->radius > 0.0f ? pr->radius : g_settings.radius;
+                    p.points.push_back(fp);
+                }
+            if (suppress) return p;
+            uint32_t count = 0;
+            const uint8_t* fileLights = nullptr;
+            if (!Get(hdr, kHdrLights, count) || !count || count > 64 || !Get(hdr, kHdrLights + 4, fileLights) || !fileLights) return p;
+            for (uint32_t l = 0; l < count; ++l)
+            {
+                const uint8_t* fl = fileLights + l * kFileLight;
+                uint16_t type = 0;
+                FarPoint fp{};
+                float color[3], intensity = 1.0f;
+                if (!Get(fl, kFileType, type) || type != 1 || !Get(fl, kFilePos, fp.local)) continue;
+                if (!FirstTrackValue(fl + kFileDiffuse, color, sizeof(color))) continue;
+                FirstTrackValue(fl + kFileIntensity, &intensity, sizeof(intensity));
+                for (int c = 0; c < 3; ++c) fp.color[c] = color[c] * intensity;
+                if (fp.color[0] + fp.color[1] + fp.color[2] <= 0.01f) continue;
+                fp.radius = g_settings.radius;
+                p.points.push_back(fp);
+            }
+            return p;
+        }
+
+        // A root model in the far band: its lights where its world matrix puts them.
+        void TakeFar(const uint8_t* m, const float world[16])
+        {
+            ++g_farBuild.models;
+            const void* shared = nullptr;
+            const uint8_t* hdr = nullptr;
+            if (!Get(m, dd::off::kInstModel, shared) || !shared || !Get(shared, dd::off::kModelHeader, hdr) || !hdr) return;
+            const FarProfile& p = Profile(m, shared, hdr);
+            if (p.points.empty() || !g_farSeen.insert(m).second) return;
+            ++g_farBuild.withLights;
+            const float scale = MatrixScale(world);
+            for (const FarPoint& fp : p.points)
+            {
+                if (g_farBuilding.size() >= kMaxFarLights) return;
+                FarLight l{};
+                Mul(fp.local, world, l.pos);
+                std::memcpy(l.color, fp.color, sizeof(l.color));
+                l.radius = fp.radius * (scale > 0.0f ? scale : 1.0f);
+                g_farBuilding.push_back(l);
+            }
+        }
+
         void BeginScan()
         {
             g_building.clear();
@@ -870,6 +962,17 @@ namespace wxl_livingazeroth::lights
             g_buildMs = 0.0;
             g_buildFrames = g_buildAttached = g_buildAtRest = 0;
             g_buildTable = !lighttable::AllAssignments().empty();
+            // Every kFarSeconds a pass notes the far lamps too (they don't move; the near lights' passes stay as quick).
+            const double now = grassperf::Now();
+            g_farPass = g_farRange > 0.0f && now - g_farLast >= kFarSeconds * 1000.0;
+            if (g_farPass)
+            {
+                g_farLast = now;
+                g_farBuilding.clear();
+                g_farSeen.clear();
+                g_farBuild = FarStats{};
+                g_farBuild.range = g_farRange;
+            }
         }
 
         void Take(const SceneModel& sm)
@@ -930,6 +1033,7 @@ namespace wxl_livingazeroth::lights
                     AddChildren(m, center, range, children, 1, attached);
                     for (const SceneModel& c : children) Take(c);
                 }
+                if (g_farPass && g_farRange > 0.0f && sm.distance > range * kFarFrom && sm.distance <= g_farRange) TakeFar(m, sm.world);
             }
             double NowMs() { return grassperf::Now(); }
         };
@@ -957,6 +1061,15 @@ namespace wxl_livingazeroth::lights
             g_stats.spellModelsLeft = g_buildStats.spellModelsLeft;
             g_lastAttached = hooks.attached;
             hooks.attached = 0;
+            if (g_farPass)
+            {
+                if (g_farRange > 0.0f) g_far.swap(g_farBuilding);
+                g_farBuild.lights = static_cast<unsigned>(g_far.size());
+                g_farBuild.ms = g_buildMs;
+                g_farBuild.passes = ++g_farPasses;
+                g_farStats = g_farBuild;
+                g_farPass = false;
+            }
             return true;
         }
     }
@@ -1064,6 +1177,40 @@ namespace wxl_livingazeroth::lights
             }
         }
 
+        // The player's own light (OwnLight: the lantern) as this frame's candidate: moving, never baked, its indoor verdict given,
+        // its flicker smooth (in its colour only: Finish reports no dip for it).
+        void AddOwnLights(const std::vector<OwnLight>& own, std::vector<Candidate>& cands)
+        {
+            g_stats.own = 0;
+            for (const OwnLight& o : own)
+            {
+                if (!(o.radius > 0.0f)) continue;
+                Candidate c{};
+                std::memcpy(c.pos, o.pos, sizeof(c.pos));
+                for (int k = 0; k < 3; ++k) c.color[k] = o.color[k] > 0.0f ? o.color[k] : 0.0f;
+                c.weight = 1.0f;
+                c.radius = o.radius;
+                c.falloff = 1.0f;
+                c.spotDir[0] = 0.0f; c.spotDir[1] = 0.0f; c.spotDir[2] = -1.0f;
+                c.cosOuter = -2.0f; c.spotScale = 1.0f;
+                c.flickerMode = o.flicker > 0.0f ? lighttable::kFlickerSmooth : lighttable::kFlickerOff;
+                c.flickerSpeed = o.flickerSpeed > 0.0f ? o.flickerSpeed : 1.0f;
+                c.flickerAmount = std::clamp(o.flicker, 0.0f, 1.0f);
+                c.scale = 1.0f;
+                c.model = nullptr;
+                c.bake = false;
+                c.moving = true;
+                c.window = false;
+                c.night = 1.0f;
+                c.flames = 1;
+                c.given = o.indoor ? 2 : 1;
+                c.frame = false;
+                c.own = true;
+                cands.push_back(c);
+                ++g_stats.own;
+            }
+        }
+
         // Tests: FrameLights as the scene's own lights (a torch's: the scene's merge, no flicker, unbaked).
         void AddSceneLightsForTests(const std::vector<FrameLight>& scene, std::vector<Candidate>& cands)
         {
@@ -1101,7 +1248,7 @@ namespace wxl_livingazeroth::lights
                 for (size_t k = 0; k < cands.size(); ++k)
                 {
                     std::memcpy(&original[k * 3], cands[k].pos, 3 * sizeof(float));
-                    if (cands[k].cosOuter > -1.5f || cands[k].frame) continue;
+                    if (cands[k].cosOuter > -1.5f || cands[k].frame || cands[k].own) continue;
                     int c[3];
                     cellOf(cands[k].pos, c);
                     cells.push_back({ keyOf(c[0], c[1], c[2]), static_cast<uint32_t>(k) });
@@ -1110,7 +1257,7 @@ namespace wxl_livingazeroth::lights
             }
             for (size_t a = 0; a < cands.size() && inv > 0.0f; ++a)
             {
-                if (cands[a].weight <= 0.0f || cands[a].cosOuter > -1.5f || cands[a].frame) continue;
+                if (cands[a].weight <= 0.0f || cands[a].cosOuter > -1.5f || cands[a].frame || cands[a].own) continue;
                 float wa = cands[a].color[0] + cands[a].color[1] + cands[a].color[2];
                 int ca[3];
                 cellOf(&original[a * 3], ca);
@@ -1166,7 +1313,7 @@ namespace wxl_livingazeroth::lights
 
             // Every light in range, fading out over the last third of the range. They stay in the scan's
             // order (stable between scans, so the grid doesn't reshuffle every frame); only past kMaxPool
-            // do the farthest from the camera drop out, never a spell light (they're few: their own cap).
+            // do the farthest from the camera drop out, never a spell light (they're few: their own cap) nor the player's own.
             std::vector<std::pair<float, size_t>> order;
             for (size_t k = 0; k < cands.size(); ++k)
                 if (cands[k].weight > 0.0f)
@@ -1178,7 +1325,7 @@ namespace wxl_livingazeroth::lights
             if (order.size() > static_cast<size_t>(kMaxPool))
             {
                 const size_t before = order.size();
-                const auto rest = std::stable_partition(order.begin(), order.end(), [&](const std::pair<float, size_t>& o) { return cands[o.second].frame; });
+                const auto rest = std::stable_partition(order.begin(), order.end(), [&](const std::pair<float, size_t>& o) { return cands[o.second].frame || cands[o.second].own; });
                 const size_t frames = static_cast<size_t>(rest - order.begin());
                 const size_t room = frames < static_cast<size_t>(kMaxPool) ? kMaxPool - frames : 0;
                 if (static_cast<size_t>(order.end() - rest) > room)
@@ -1215,9 +1362,10 @@ namespace wxl_livingazeroth::lights
                 l.falloff = c.falloff > 0.0f ? c.falloff : 1.0f;
                 std::memcpy(l.spotDir, c.spotDir, sizeof(l.spotDir));
                 l.cosOuter = c.cosOuter; l.spotScale = c.spotScale;
-                l.dip = 1.0f - flicker;
+                l.dip = c.own ? 0.0f : 1.0f - flicker;   // (the lantern isn't in a WMO's baked light: that doesn't dip with it)
                 l.model = c.model;
                 l.window = c.window;
+                l.own = c.own;
                 l.indoor = g_settings.indoorSkipsTerrain && (c.given ? c.given == 2 : IsIndoor(l.pos));
                 indoorCount += l.indoor ? 1 : 0;
                 windowLights += c.window ? 1 : 0;
@@ -1225,7 +1373,8 @@ namespace wxl_livingazeroth::lights
                 // A window ranks below a torch of the same brightness (full cells keep the torch). A night-only light ranks by
                 // its colour at full night, so the choice doesn't change while the night fades in.
                 const float lum = (c.color[0] + c.color[1] + c.color[2]) * g_settings.brightness / std::max(c.night, kNightOff);
-                g_baseLum.push_back(c.window ? lum * windows::kWindowRank : lum);
+                // (the player's own light first in every cell it reaches, as a strike's: a full cell drops its weakest torch)
+                g_baseLum.push_back(c.own ? 1000.0f + lum : c.window ? lum * windows::kWindowRank : lum);
                 g_wantBake.push_back(!c.moving && (c.bake || g_settings.bakeAll) ? 1 : 0);
                 g_isWindow.push_back(c.window ? 1 : 0);
                 g_isFrame.push_back(c.frame ? 1 : 0);
@@ -1271,16 +1420,37 @@ namespace wxl_livingazeroth::lights
         g_transient.push_back(l);
     }
 
-    void Update(float dt, const world::Snapshot& snap)
+    namespace
     {
-        g_active.clear();
-        if (!snap.inWorld || !g_settings.enabled)
+        float g_around = 0.0f;   // LightAround at the player's chest, the last Update's
+
+        // Out of the world or our lights off (the panel, the compare key): nothing drawn, nothing kept, the grid empty (the
+        // shaders then give the client's own lights back), the spell lights forgotten, the far lamps too.
+        void Off()
         {
             g_transient.clear();
             g_sources.clear();
             g_walk.Abandon();
             spelllights::Reset();
+            g_around = 0.0f;
+            g_far.clear();
+            g_farBuilding.clear();
+            g_farProfiles.clear();
+            g_farPass = false;
+            g_farLast = -1e12;
+            g_stats.own = 0;
+            g_stats.frameLights = 0;
+            g_stats.active = 0;
             if (g_grid.cells) { g_grid = Grid{ 0.0f, 0.0f, 16.0f, 0, 0, {}, {}, g_grid.generation + 1 }; }
+        }
+    }
+
+    void Update(float dt, const world::Snapshot& snap)
+    {
+        g_active.clear();
+        if (!snap.inWorld || !g_settings.enabled)
+        {
+            Off();
             return;
         }
         float eye[3] = { snap.playerPos[0], snap.playerPos[1], snap.playerPos[2] };
@@ -1375,28 +1545,87 @@ namespace wxl_livingazeroth::lights
         frame.clear();
         spelllights::Update(dt, snap, eye, frame);
         AddFrameLights(frame, cands);
+        // The player's lantern (features/Lantern: its key and rules ran earlier this frame).
+        static std::vector<OwnLight> own;
+        LanternLights(own);
+        AddOwnLights(own, cands);
         g_stats.inRange = static_cast<unsigned>(cands.size());
 
         const double tCand = grassperf::Now();
         g_stats.candMs = tCand - t0;
         Finish(eye, cands, tCand);
+        const float chest[3] = { snap.playerPos[0], snap.playerPos[1], snap.playerPos[2] + 1.2f };
+        g_around = LightAround(chest, lantern::kAroundReach);
     }
 
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame)
     {
-        UpdateForTests(eye, dt, frame, {});
+        UpdateForTests(eye, dt, frame, {}, {});
     }
 
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene)
     {
+        UpdateForTests(eye, dt, frame, scene, {});
+    }
+
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene,
+                        const std::vector<OwnLight>& own)
+    {
         g_active.clear();
+        if (!g_settings.enabled) { Off(); return; }
         g_time += dt;
         std::vector<Candidate> cands;
         AddSceneLightsForTests(scene, cands);
         AddFrameLights(frame, cands);
+        AddOwnLights(own, cands);
         g_stats.inRange = static_cast<unsigned>(cands.size());
         Finish(eye, cands, grassperf::Now());
     }
+
+    float LightAround(const float pos[3], float reach)
+    {
+        if (!pos || !(reach > 0.0f)) return 0.0f;
+        float sum = 0.0f;
+        for (size_t i = 0; i < g_active.size(); ++i)
+        {
+            const ActiveLight& l = g_active[i];
+            if (l.own || l.window || (i < g_isFrame.size() && g_isFrame[i])) continue;   // (spell lights: an enchant on your own weapon isn't a lit place)
+            const float dx = l.pos[0] - pos[0], dy = l.pos[1] - pos[1], dz = l.pos[2] - pos[2];
+            const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (!(d < reach)) continue;
+            const float t = 1.0f - d / reach;
+            sum += (l.color[0] + l.color[1] + l.color[2]) * (1.0f / 3.0f) * t * t;
+        }
+        return sum;
+    }
+
+    float LastAround() { return g_around; }
+
+    void LanternLights(std::vector<OwnLight>& out)
+    {
+        out.clear();
+        lantern::Light lamp{};
+        if (!lantern::Current(lamp)) return;
+        OwnLight o{};
+        std::memcpy(o.pos, lamp.pos, sizeof(o.pos));
+        std::memcpy(o.color, lamp.color, sizeof(o.color));
+        o.radius = lamp.radius;
+        o.indoor = lamp.indoors;
+        o.flicker = lantern::kFlicker;
+        o.flickerSpeed = lantern::kFlickerSpeed;
+        out.push_back(o);
+    }
+
+    void SetFarRange(float yards)
+    {
+        const float r = std::isfinite(yards) && yards > 0.0f ? yards : 0.0f;
+        if (r <= 0.0f && g_farRange > 0.0f) { g_far.clear(); g_farBuilding.clear(); g_farStats = FarStats{}; g_farPass = false; g_farLast = -1e12; }
+        g_farRange = r;
+    }
+
+    const std::vector<FarLight>& FarLights() { return g_far; }
+    const FarStats& GetFarStats() { return g_farStats; }
+    void SetFarLightsForTests(const std::vector<FarLight>& list) { g_far = list; g_farStats.lights = static_cast<unsigned>(list.size()); }
 
     int SpellSlotsPerCell()
     {
@@ -1467,7 +1696,7 @@ namespace wxl_livingazeroth::lights
             top.light = a * std::fmax(l.color[0], std::fmax(l.color[1], l.color[2]));
             top.distance = distance;
             std::memcpy(top.color, l.color, sizeof(top.color));
-            top.model = l.model ? ModelPath(l.model) : (l.window ? "(a window)" : "");
+            top.model = l.model ? ModelPath(l.model) : (l.own ? "(your lantern)" : l.window ? "(a window)" : "");
             out.strongest.push_back(top);
             std::sort(out.strongest.begin(), out.strongest.end(), [](const LightAt::Top& x, const LightAt::Top& y) { return x.light > y.light; });
             if (out.strongest.size() > 3) out.strongest.pop_back();
@@ -1492,6 +1721,11 @@ namespace wxl_livingazeroth::lights
                       "the limit (%u entries left out); %u table lights in range, %u indoor",
                       st.active, kMaxPool, st.poolDropped, st.inRange, st.frameLights, st.spellModelsLeft, st.merged, st.clusteredFlames, st.flameClusters,
                       st.busiestCell, st.fullCells, st.droppedFromCells, st.tableLights, st.indoor);
+        out.emplace_back(line);
+        const FarStats& fs = g_farStats;
+        std::snprintf(line, sizeof(line), "the player's own lights (the lantern) this frame: %u; the light round the player %.2f; far lamps (for the distant glows): %s, "
+                      "the last far pass %u lights from %u of %u models out to %.0f yd (%u files looked up; the pass %.2f ms in all), %u far passes",
+                      st.own, g_around, g_farRange > 0.0f ? "noted" : "not asked for", fs.lights, fs.withLights, fs.models, fs.range, fs.files, fs.ms, fs.passes);
         out.emplace_back(line);
         std::snprintf(line, sizeof(line), "every shader's knee on our summed light: above %.2f its brightest channel goes toward %.2f (one torch passes it only within a yard of its flame)",
                       kLampKneeStart, kLampKneeStart + kLampKneeRoom);

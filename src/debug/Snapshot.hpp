@@ -7,7 +7,8 @@
 //    frame), with the placement and the windows open there (debug/SnapshotView: the lines the harnesses read back);
 //  - the time of day, the server's weather and Living Azeroth's (the climate's, the storm's phase, darker nights);
 //  - the settings that matter (see-through, fog, storm, glass), the frame rate, and the see-through, fog and storm
-//    panels' status lines as they read.
+//    panels' status lines as they read; the compare key's state first among the settings (2026-10-25: all effects off
+//    for a comparison, and which were on), the lantern's and the distant lights' lines with the lights panel's.
 //  - the memory readout (debug/Memory): the address space by owner, Direct3D's texture memory, the client's caches (its
 //    largest textures named), Living Azeroth's own use by feature (2026-10-25). The memory warning asks for one too.
 // The key: SnapshotKey, a Windows virtual-key code (F11 by default; 0 = none), read from the window's messages (OnInput)

@@ -3,7 +3,8 @@
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
 sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]`, `[LivingAzeroth.Windows]`,
-`[LivingAzeroth.Shafts]`, `[LivingAzeroth.Glass]`, `[LivingAzeroth.SpellLights]` and `[LivingAzeroth.Memory]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
+`[LivingAzeroth.Shafts]`, `[LivingAzeroth.Glass]`, `[LivingAzeroth.SpellLights]`, `[LivingAzeroth.Memory]`, `[LivingAzeroth.Lantern]` and
+`[LivingAzeroth.DistantLights]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
 The ini sets what each launch starts with. The debug panels (F9) still change everything at
@@ -58,6 +59,7 @@ says why.
 | TreeShadowsFarRate | 10 | Most redraws a second of the far trees' shadow map (0 = every frame). |
 | DebugWindArrows | 0 | Debug: draw the wind as arrows around the player. |
 | SnapshotKey | 122 | The key that writes a snapshot for a bug report (2026-10-22, "one key (and a panel button) that writes your exact situation to a file so bug reports don't need guessing"): where you are (map, zone, area, position, facing), the camera (its position, where it looks, its field of view, and in the nearest building's own space too: the building the camera is in, or the nearest one the see-through walks visited, with the windows open there), the time of day, the server's weather and Living Azeroth's, the settings that matter (see-through, fog, storm, glass), the frame rate and the see-through, fog and glass status lines, to `Logs\la-snapshots\<date>-<time>.txt` in the game folder, announced in chat. A Windows virtual-key code: 122 = F11, 123 = F12, 0 = no key; the overview page and the see-through section have a button too. The key still reaches the game. glass_tests (`GLASS_SNAPSHOT`) and seethrough_tests (`SEETHROUGH_SNAPSHOT`) draw a snapshot's view again. |
+| CompareKey | 119 | The compare key (2026-10-25, from Lumenveil's list: "one key for all effects off/on"): one press switches every Living Azeroth visual effect off, so you see the scene as the client draws it, and the next press switches them back on; a line in chat says which, the snapshot (F11) and the 30-second log line record it. Each effect goes off through its own switch, as its panel's checkbox would (the ground fog and fog wake, storms, darker nights, our point lights with the window lights, spell lights and the lantern on them, the window glow, distant lights, sun shafts, glass and see-through windows, crystals, clear ice, waterfall hats, wet ground, the surface cover, tree shadows, grass motion, denser and thinned grass, the doodad fade, anti-aliasing, mount wings' depth: `debug/Compare.cpp`), so each runs its own off path. The values it found come back on the second press; a switch you changed in a panel meanwhile keeps your change. Nothing is read from or written to this file by the key: your saved settings stay as they are. The instanced grass renderer stays on (it draws the client's own plants alike), and so does the raised grass distance (a patch of the client's code at start-up). A Windows virtual-key code: 119 = F8 (the client binds nothing to it; the core's panel is F9, the snapshot F11), 0 = no key; the overview page has a button too. The key still reaches the game. |
 
 ## `[LivingAzeroth.Fog]`: the ground fog renderer
 
@@ -259,6 +261,65 @@ it costs; the snapshot (F11) and the 30-second log line carry the same status, t
 | MergeDistance | 1.5 | Spell lights closer than this (yards) merge into one with the square root of their summed light; two merged stay merged up to 1.3 times this apart. |
 | Enchants | 1 | Weapon enchants' glows light what's round them too, weakly. |
 | EnchantStrength | 0.35 | Your multiplier on the enchants' light (they're small and always on). |
+
+## `[LivingAzeroth.Lantern]`: a lantern at your belt
+
+From Lumenveil's list (the idea only: "a lantern on the player (key)"). One warm light (2400 K, a little under a torch's)
+at your right hip, following you every frame, through our point lights (the lights panel's "our point lights" must be
+on): the ground, the walls, models, the snow and the fog round you light up in the dark. It lights itself at night and
+in dark places (the client says you're indoors: a cave, a crypt, a mine) and goes out where it's light: by day outdoors
+it gives nothing, however it was lit, and where our lights already light the place (a hearth and candles round you,
+a lamp-lit street: their light within 15 yards) it gives way and stays out. The light round you is smoothed over a second
+and a half, so walking past a torch in a mine doesn't put it out. In a building's interiors it only fills where the
+baked light is darker than its own, as every light of ours does, so a lit room's walls look as they did.
+
+It follows the same rules as every light of ours: it ranks first in every cell of the lights' grid it reaches (a full
+cell drops its weakest torch instead), in the scene's places, never a spell light's; it never merges with a torch beside
+it; their sum goes through the same knee on every surface; it's indoor when you are (off the terrain, the cover and the
+fog outside, as a cellar's torch). Its flicker is gentle and only in its colour, so the WMO interiors' baked light doesn't
+pulse with it.
+
+The key lights it and puts it out, with a line in chat. With `Automatic` on, the key's choice holds until the light
+changes (nightfall or daybreak, into or out of a dark place), then the lantern looks after itself again. The lights
+panel's **Lantern** section changes all of this at runtime and says why it shines or doesn't; the snapshot (F11) and
+the 30-second log line carry the same status.
+
+| Key | Default | Meaning |
+|---|---|---|
+| Enabled | 1 | A lantern at your belt: one warm light at your hip that follows you, through our point lights, lighting the ground, walls, models and the fog round you in the dark. By day outdoors it gives nothing, however it was lit, and it gives way where torches and lamps already light the place. |
+| Key | 118 | The key that lights the lantern and puts it out; a line in chat says which. A Windows virtual-key code: 118 = F7 (the client binds nothing to it), 0 = no key; the Lantern section has a button too. The key still reaches the game. |
+| Automatic | 1 | The lantern lights itself at night and in dark places (caves, crypts, mines, indoors without light) and goes out where it's light. 0 = only the key lights it. |
+| Strength | 1 | Your multiplier on the lantern's light. |
+| Radius | 8 | How far the lantern's light reaches, in yards. |
+
+## `[LivingAzeroth.DistantLights]`: towns' lights from far away at night
+
+From Lumenveil's list (the idea only: "towns visible from far away at night"). Our point lights reach 256 yards, fading
+over the last third; past that a town at night was dark, its lamps' models not drawn that far and nothing lighting its
+streets. Now, from two thirds of that range out, each lit window (`WindowLights.cdbc`, as much as its rooms are lit, seen
+from in front) and each lamp, torch, brazier and fire (the light scan's far list: every couple of seconds it also notes
+the lights of the models out to `MaxDistance`, their `DoodadLightAssignment` rows' and their own, each model file looked
+up once) is a small glow in its own colour: a bright core and a faint halo, never under a pixel and a quarter across. They
+fade in as the point lights fade out, with the night (the client's own window fade), and out with the client's distance
+fog, which they pierce farther than the land (`FogPierce`), and before the far clip. Glows close together at that
+distance merge (the candle ring's rule: the square root of their summed light), and the brightest, nearest `MaxLights`
+are drawn.
+
+They're drawn in one batch at the weather render's entry, after the fog, the sun shafts and the window glow, with their
+own small pixel shader (nothing in the world's shaders changes), tested against the scene's depth so hills and walls in
+front hide them; not with the camera indoors or under water. The lights panel's **Distant lights** section changes all of
+this at runtime and shows what's drawn and what it costs; the snapshot and the 30-second log line carry the same status.
+
+| Key | Default | Meaning |
+|---|---|---|
+| Enabled | 1 | At night, past our point lights' reach, the lamps and lit windows of towns are small glows in their own colours, so a town reads from far away. |
+| Windows | 1 | Lit windows glow (`WindowLights.cdbc`), as much as their rooms are lit. |
+| Lamps | 1 | Lamps, torches, braziers and fires glow: the models with lights the light scan finds out to `MaxDistance` (needs our point lights on). |
+| Strength | 1 | Your multiplier on the glows' brightness. |
+| Size | 1 | Your multiplier on the glows' size (a lamp's core is about a yard across). |
+| MaxDistance | 1500 | No glows farther than this (yards), nor past the client's far clip. |
+| MaxLights | 1024 | At most this many glows (0 .. 4096), the brightest and nearest first, after glows close together have merged. |
+| FogPierce | 1.5 | How far into the client's distance fog the glows carry, in fog depths (its end minus its start): at 1.5 a glow at the fog's end keeps half its light. |
 
 ## `[LivingAzeroth.Memory]`: what uses the client's memory
 

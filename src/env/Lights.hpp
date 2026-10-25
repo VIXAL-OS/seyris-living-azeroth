@@ -142,6 +142,7 @@ namespace wxl_livingazeroth::lights
         // outward), how far it reaches before terrain or a WMO. Valid for this frame. Null = none.
         const float* occlusion = nullptr;
         bool  window = false; // a lit window's light (features/Windows): ranks below the others in a full grid cell
+        bool  own = false;    // the player's own light (features/Lantern, OwnLight)
     };
 
     /// Whether a point lies in an indoor WMO group: the client's own viewer locate (core
@@ -174,10 +175,57 @@ namespace wxl_livingazeroth::lights
         int   indoor;
     };
 
+    /// The player's own light this frame (2026-10-25: the belt lantern, features/Lantern), as Update takes it: never merged
+    /// with the scene's lights (a torch walked past would pull it along), never left out of the pool, ranked first in every
+    /// grid cell it reaches, in the scene's places (never a spell light's), never baked; its flicker in its colour only, no
+    /// dip (the WMO interiors' baked light pulses with each flame's dip: not with a lantern that isn't in it); indoor as given
+    /// (the client's verdict for the player: off the terrain, the cover and the fog outside, as every indoor light).
+    struct OwnLight
+    {
+        float pos[3];
+        float color[3];
+        float radius;
+        bool  indoor;
+        float flicker, flickerSpeed;   // how much its colour dips (0..1), and the pace (x the default)
+    };
+
     /// Tests: Update's merge, drawn list and grid over `frame` alone, from `eye` (no scan, no client reads); with `scene`,
-    /// those as the scene's own lights too (merged by the scene's rules, never flickering, unbaked).
+    /// those as the scene's own lights too (merged by the scene's rules, never flickering, unbaked); with `own`, the
+    /// player's. Our lights off (Settings::enabled 0): Update's off path, as in game (the lists and the grid emptied).
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame);
     void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene);
+    void UpdateForTests(const float eye[3], float dt, const std::vector<FrameLight>& frame, const std::vector<FrameLight>& scene,
+                        const std::vector<OwnLight>& own);
+
+    /// The player's own lights as Update takes them this frame: the lantern's (features/Lantern Current), or none.
+    void LanternLights(std::vector<OwnLight>& out);
+
+    /// Our light round a point (the lantern's "is this place lit already"): over the drawn lights but the player's own, the
+    /// windows' and the strikes', each one's brightness (its colour's channels' mean) x (1 - distance / reach)^2.
+    float LightAround(const float pos[3], float reach);
+    /// LightAround at the player's chest (LanternModel kAroundReach) after the last Update; 0 with our lights off.
+    float LastAround();
+
+    // --- far lamps (2026-10-25: features/DistantLights) ---------------------------------------------------------------------
+    /// While > 0 (yd), the light scan's walk also notes, at most every kFarSeconds, the lights of the models from two thirds
+    /// of the range out to this far: their DoodadLightAssignment rows' and their own point lights (each model file's looked
+    /// up once, by its file), where the scan finds them, for the distant glows. Models attached to others and spell visuals
+    /// aren't looked at. 0: none (the list empties).
+    void SetFarRange(float yards);
+    constexpr double kFarSeconds = 2.0;
+    struct FarLight { float pos[3]; float color[3]; float radius; };
+    /// The last far pass's lights (static: their models don't move).
+    const std::vector<FarLight>& FarLights();
+    struct FarStats
+    {
+        unsigned models = 0, withLights = 0, lights = 0, files = 0;   // the last far pass: models in its band, of them with lights, their lights; files looked up
+        float    range = 0.0f;                                        // its far edge
+        double   ms = 0.0;                                            // its share of the walk's time, all its slices
+        unsigned passes = 0;                                          // since our lights came on
+    };
+    const FarStats& GetFarStats();
+    /// Tests: the far list as given.
+    void SetFarLightsForTests(const std::vector<FarLight>& list);
 
     /// Room for spell lights in each grid cell, after the scene's Settings::maxPerCell: kSpellSlotsPerCell as far as the
     /// shaders' kMaxPerCellCap allows, while spell lights are on (0: none; they rank with the scene's lights then). A cell's
@@ -220,6 +268,7 @@ namespace wxl_livingazeroth::lights
         double   scanMs = 0.0;                                                // the last scan pass, all its slices
         unsigned scanFrames = 0, scanRestarts = 0;                            // the frames it took; times it went back to the head
         unsigned frameLights = 0, spellModelsLeft = 0;                        // this frame's FrameLights (spell lights); models the scan left to them
+        unsigned own = 0;                                                     // this frame's OwnLights (the lantern)
     };
 
     /// Every model the client's M2 scene holds near a point: map doodads, WMO doodads, game objects
