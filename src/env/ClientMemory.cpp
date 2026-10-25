@@ -96,6 +96,7 @@ namespace wxl_livingazeroth::clientmem
                 phase = "the Gx device";
                 const uintptr_t dev = P(at.gxDevicePtr);
                 out.baseMip = dev ? U32(dev + kDevBaseMip) : 0;
+                out.deviceEx = dev && U32(dev) == 0x00A2F500u; // CGxDeviceD3d9Ex: textures in the default pool
                 if (out.baseMip > 15) out.baseMip = 0;
 
                 phase = "the textures";

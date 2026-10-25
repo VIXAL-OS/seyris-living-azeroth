@@ -47,6 +47,11 @@ namespace wxl_livingazeroth::grassinst
         constexpr uintptr_t kGxRsSet         = 0x00685F50; // thiscall(device, state, value)
         constexpr int       kGxStateTexture0 = 0x15;
         constexpr uintptr_t kGxFlushState    = 0x006A5940; // thiscall(device): the engine's cached state -> D3D
+        // gxApi "D3D9Ex" makes the device a CGxDeviceD3d9Ex (vtable 0xA2F500), with its own copy of that flush (the
+        // CGxDeviceD3d one, 0xA2E718, is the default). Calling the other class's copy would push state its own cache
+        // never saw, so the flush follows the device's class.
+        constexpr uintptr_t kGxFlushStateEx  = 0x006A9860;
+        constexpr uintptr_t kGxVtableD3d9Ex  = 0x00A2F500;
         constexpr uintptr_t kGxCaps          = 0x00532AF0; // thiscall(device) -> caps
         constexpr size_t    kCapsSwapColor   = 0x14;       // == 1: the bake swaps red and blue
 
@@ -349,6 +354,13 @@ namespace wxl_livingazeroth::grassinst
         }
 
         void* GxDevice() { return *reinterpret_cast<void**>(kGxDevicePtr); }
+
+        /// The engine's state flush of this device's class (see kGxFlushStateEx).
+        void FlushState(void* gxDev)
+        {
+            const bool ex = gxDev && *reinterpret_cast<const uintptr_t*>(gxDev) == kGxVtableD3d9Ex;
+            reinterpret_cast<void(__fastcall*)(void*, void*)>(ex ? kGxFlushStateEx : kGxFlushState)(gxDev, nullptr);
+        }
 
         template <class Fn> Fn EngineVirtual(void* gxDev, size_t byteOffset)
         {
@@ -1599,7 +1611,7 @@ namespace wxl_livingazeroth::grassinst
             prof::Scope scope(prof::kOursGrassBind);
             if (!BindAnchor(gxDev)) return nullptr;
             reinterpret_cast<RsSetFn>(kGxRsSet)(gxDev, nullptr, kGxStateTexture0, gxTex);
-            reinterpret_cast<FlushFn>(kGxFlushState)(gxDev, nullptr);
+            FlushState(gxDev);
 
             if (!g_frameCaptured)
             {
@@ -2049,7 +2061,7 @@ namespace wxl_livingazeroth::grassinst
         prof::Enter(prof::kOursGrassBind);
         if (!BindAnchor(gxDev)) { prof::Leave(prof::kOursGrassBind); ++g_frameStats.fallbackFailed; return false; }
         reinterpret_cast<RsSetFn>(kGxRsSet)(gxDev, nullptr, kGxStateTexture0, gxTex);
-        reinterpret_cast<FlushFn>(kGxFlushState)(gxDev, nullptr);
+        FlushState(gxDev);
 
         // Everything the client would draw with is on the device now; swap in the instanced
         // shader and streams, and put back exactly what was there so the engine's view of the

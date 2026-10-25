@@ -152,8 +152,9 @@ namespace wxl_livingazeroth::memory
             if (!g_firstCachesLogged && g_api && g_caches.read && g_caches.textures)
             {
                 g_firstCachesLogged = true;
-                g_api->Log(WXL_LOG_INFO, kTag, "memory: the client's caches, first read (%.2f ms, %s): %u textures, %s MB managed, %s MB render targets; "
+                g_api->Log(WXL_LOG_INFO, kTag, "memory: the client's caches, first read (%.2f ms, %s): %u textures, %s MB %s, %s MB render targets; "
                            "%u M2 models (%s MB of files); %u WMO roots", g_caches.ms, g_caches.why, g_caches.textures, Mb(g_caches.managedBytes).c_str(),
+                           g_caches.deviceEx ? "in the default pool (D3D9Ex)" : "managed",
                            Mb(g_caches.targetBytes).c_str(), g_caches.m2Models, Mb(g_caches.m2FileBytes).c_str(), g_caches.wmoRoots);
             }
         }
@@ -373,11 +374,12 @@ namespace wxl_livingazeroth::memory
                 out.push_back(Format("The client's caches: %s", g_cachesPasses ? c.why : "not read yet"));
                 return;
             }
-            out.push_back(Format("The client's caches (read %s%s, in %.2f ms; %s): %s textures with a Direct3D texture (of %s), %s MB, each a managed texture: "
-                                 "a copy in video memory and Direct3D's copy in this address space; render targets %s MB more (%u, video memory only); "
+            out.push_back(Format("The client's caches (read %s%s, in %.2f ms; %s): %s textures with a Direct3D texture (of %s), %s MB, %s; render targets %s MB more (%u, video memory only); "
                                  "%s MB of them uncompressed",
                                  g_settings.cachesSeconds > 0.0f ? Format("every %.0f s, ", g_settings.cachesSeconds).c_str() : "for snapshots and warnings, ",
                                  Ago(c.tick).c_str(), c.ms, c.why, Count(c.created).c_str(), Count(c.textures).c_str(), Mb(c.managedBytes).c_str(),
+                                 c.deviceEx ? "each in the default pool (gxApi D3D9Ex): video memory only, no copy in this address space"
+                                            : "each a managed texture: a copy in video memory and Direct3D's copy in this address space",
                                  Mb(c.targetBytes).c_str(), c.targets, Mb(c.UncompressedBytes()).c_str()));
             int order[cm::kKinds];
             for (int k = 0; k < cm::kKinds; ++k) order[k] = k;

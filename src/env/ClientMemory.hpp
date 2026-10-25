@@ -86,7 +86,9 @@ namespace wxl_livingazeroth::clientmem
         uint32_t created = 0;            // with a D3D texture
         uint32_t onAtlas = 0;            // sharing an atlas's (counted with it, not again)
         uint32_t targets = 0;            // render targets (the default pool)
-        uint64_t managedBytes = 0, targetBytes = 0;
+        uint64_t managedBytes = 0, targetBytes = 0;   // managedBytes: every texture that isn't a render target
+        bool     deviceEx = false;   // gxApi "D3D9Ex" (CGxDeviceD3d9Ex, vtable 0xA2F500): those are in the default pool,
+                                     // video memory only (0x6A5FE0), not managed: no copy in the address space
         uint64_t kindBytes[kKinds] = {};
         uint32_t kindCount[kKinds] = {};
         uint64_t formatBytes[kFormats] = {};
@@ -134,6 +136,10 @@ namespace wxl_livingazeroth::clientmem
         {"ITexCreate: the flags (+0x2C), render target (bit 7) the default pool, the format into +0x24", 0x006A2C30, 16,
          {0x8B, 0x4E, 0x2C, 0x33, 0xD2, 0x84, 0xC9, 0xBF, 0x01, 0x00, 0x00, 0x00, 0x89, 0x46, 0x24, 0x89}},
         {"ITexCreate: the D3D texture into +0x38", 0x006A2D63, 6, {0x8B, 0x4D, 0xF0, 0x89, 0x4E, 0x38}},
+        // gxApi "D3D9Ex": CGxDeviceD3d9Ex::ITexCreate (0x6A5FE0) makes them in D3DPOOL_DEFAULT, into the same +0x38.
+        {"Ex ITexCreate: D3DPOOL_DEFAULT (push 0)", 0x006A6041, 2, {0x6A, 0x00}},
+        {"Ex ITexCreate: the D3D texture into +0x38", 0x006A6082, 3, {0x89, 0x56, 0x38}},
+        {"the Ex device class's vtable (0xA2F500) starts with 0x6A7100", 0x00A2F500, 4, {0x00, 0x71, 0x6A, 0x00}},
         {"ITexWHDStartEnd: the width at +0x14", 0x006A5EF6, 3, {0x8B, 0x42, 0x14}},
         {"ITexWHDStartEnd: the height at +0x18", 0x006A5F03, 3, {0x8B, 0x42, 0x18}},
         {"ITexWHDStartEnd: the flags at +0x2C", 0x006A5F08, 3, {0x8B, 0x42, 0x2C}},
