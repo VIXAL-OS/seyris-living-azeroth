@@ -15,6 +15,7 @@
 // water) are hidden by it, as they would be by an opaque wing. Not while the player is faded (stealth, a ghost: the
 // instance's own alpha below 1).
 #include "PlayerDepth.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "../debug/Pages.hpp"
 
@@ -93,6 +94,7 @@ namespace wxl_livingazeroth::playerdepth
 
         void __fastcall hkBatch(void* ctx, void* edx)
         {
+            memuse::Scope memory(memuse::kRender);
             void* previous = g_drawCtx;
             void* instance = nullptr;
             g_drawCtx = g_playerRoot && ctx && ReadPtr(reinterpret_cast<uintptr_t>(ctx) + kCtxInstance, instance) && instance &&
@@ -103,6 +105,7 @@ namespace wxl_livingazeroth::playerdepth
 
         void __fastcall hkDraw(void* device, void* edx, uint32_t* batch, int indexed)
         {
+            memuse::Scope memory(memuse::kRender);
             g_origDraw(device, edx, batch, indexed);
             if (!g_drawCtx) return;
             const uintptr_t ctx = reinterpret_cast<uintptr_t>(g_drawCtx);

@@ -3,7 +3,7 @@
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
 sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]`, `[LivingAzeroth.Windows]`,
-`[LivingAzeroth.Shafts]`, `[LivingAzeroth.Glass]` and `[LivingAzeroth.SpellLights]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
+`[LivingAzeroth.Shafts]`, `[LivingAzeroth.Glass]`, `[LivingAzeroth.SpellLights]` and `[LivingAzeroth.Memory]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
 The ini sets what each launch starts with. The debug panels (F9) still change everything at
@@ -259,6 +259,42 @@ it costs; the snapshot (F11) and the 30-second log line carry the same status, t
 | MergeDistance | 1.5 | Spell lights closer than this (yards) merge into one with the square root of their summed light; two merged stay merged up to 1.3 times this apart. |
 | Enchants | 1 | Weapon enchants' glows light what's round them too, weakly. |
 | EnchantStrength | 0.35 | Your multiplier on the enchants' light (they're small and always on). |
+
+## `[LivingAzeroth.Memory]`: what uses the client's memory
+
+The client is 32-bit and large-address-aware: it runs out at about 4 GB of address space, whatever RAM the computer
+has, and usually before that, when no free block is left as big as something it asks for (a texture, a model's
+buffer). HD texture and model packs are the usual cause. The memory readout says what uses the space, from inside the
+process (`debug/Memory`):
+
+- **The address space**, walked with `VirtualQuery` every `WalkSeconds`, a quarter of a millisecond a frame
+  (`env/AddressSpace`): what's committed, reserved and free; the largest free block and how many free blocks are 64 MB
+  or more; each image (the client, WarcraftXL, each extension, Direct3D, the graphics driver, Windows' own DLLs), each
+  mapped file, and private memory (heaps and `VirtualAlloc`, where Direct3D keeps its copies of managed textures) with
+  its largest allocations. Windows' own counters for the process (private bytes, working set) as the external memory
+  log has them, and Direct3D's available texture memory.
+- **The client's caches**, read every `ClientCachesSeconds` in one pass (`env/ClientMemory`, every instruction it
+  relies on checked first): its textures, sized as the client makes them, by kind (characters, items, creatures, the
+  world, terrain, the composited character skins...) and by format (compressed or not), the largest named; each is a
+  managed texture, in video memory and, as Direct3D's system-memory copy, in this address space too. The GxTex reuse
+  cache, the vertex and index pools, the M2 models (their files are kept in memory) and the WMO roots.
+- **Living Azeroth's own use by feature**: its heap (every allocation charged to the feature that made it) and its
+  Direct3D textures, surfaces and buffers. The other modules can't be told apart inside the heap; they show as their
+  images.
+
+On the overview page (its memory section), in the log every 30 seconds (the line after the status line, which now
+starts with the zone and sub-zone, to line the external memory log up with where you were), and in every snapshot
+(F11: everything, the largest textures, images and allocations named). Below `WarnFreeMB` free or a largest block under
+`WarnLargestFreeMB`, a line in chat says so and a snapshot is written, so a crash for lack of memory leaves evidence.
+
+| Key | Default | Meaning |
+|---|---|---|
+| Readout | 1 | The memory readout above. 0 = off (no walks, no reads, no warnings). |
+| WalkSeconds | 5 | Seconds between walks of the address space (each walk is spread over frames, about a quarter of a millisecond in each). |
+| ClientCachesSeconds | 30 | Seconds between reads of the client's texture and model caches (one pass in one frame, a millisecond or two with thousands of textures; at least 5). 0 = only for snapshots and warnings. |
+| WarnFreeMB | 400 | Below this much free address space (MB), a line in chat warns once and a snapshot is written. 0 = no warning for it. |
+| WarnLargestFreeMB | 64 | The same when the largest free block falls below this (MB): a fragmented address space fails before it's full. 0 = no warning for it. |
+| WarnMinutes | 10 | At most one warning in this many minutes, unless it gets worse (100 MB less free, or the largest free block halved). |
 
 ## `[LivingAzeroth.Shafts]`: sun shafts
 

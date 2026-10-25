@@ -1,5 +1,6 @@
 #include "Snapshot.hpp"
 
+#include "Memory.hpp"
 #include "SnapshotView.hpp"
 #include "UiText.hpp"
 #include "../env/ClientWeather.hpp"
@@ -498,6 +499,17 @@ namespace wxl_livingazeroth::snapshot
             for (const std::string& l : lines) t("%s", l.c_str());
         }
 
+        // What uses the client's address space (debug/Memory), the client's caches read again now: lines may be long, so
+        // written whole.
+        void MemoryNow(Text& t)
+        {
+            t("");
+            t("Memory (the client's 32-bit address space, Direct3D, the client's caches, Living Azeroth's own)");
+            std::vector<std::string> lines;
+            memory::SnapshotLines(lines);
+            for (const std::string& l : lines) t.Raw(l + "\n");
+        }
+
         std::wstring GameFolder()
         {
             wchar_t exe[MAX_PATH];
@@ -537,6 +549,7 @@ namespace wxl_livingazeroth::snapshot
             TimeAndWeather(t, s);
             SettingsNow(t);
             Panels(t, s);
+            MemoryNow(t);
 
             const std::wstring folder = GameFolder() + L"\\Logs";
             CreateDirectoryW(folder.c_str(), nullptr);

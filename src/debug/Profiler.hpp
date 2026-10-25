@@ -16,6 +16,7 @@
 // frame to the modules it is spent in -- the game, the core, each extension.
 #pragma once
 
+#include "MemoryTag.hpp"
 #include "wxl/PluginApi.h"
 
 #include <cstdint>
@@ -75,13 +76,34 @@ namespace wxl_livingazeroth::prof
     /// the post-AA subscribes, so the UI scope opens first.
     void Install(const WXL_Api* api);
 
-    /// Manual scopes for our own work (main thread; ignored while the profiler is off).
+    /// The memory readout's feature (debug/MemoryTag.hpp) for one of our categories, -1 for the client's.
+    constexpr int MemoryTagOf(int c)
+    {
+        switch (c)
+        {
+        case kOursEnv: return memuse::kEnv;
+        case kOursLights: case kOursLightUpload: return memuse::kLights;
+        case kOursCoverFill: case kOursCoverDraw: case kOursCoverUpload: return memuse::kCover;
+        case kOursPost: return memuse::kRender;
+        case kOursFogField: case kOursFogDraw: case kOursFogUpload: case kOursFogLights: return memuse::kFog;
+        case kOursShafts: return memuse::kShafts;
+        case kOursGlassShafts: return memuse::kGlass;
+        case kOursTreeShadows: return memuse::kTreeShadows;
+        case kOursSpellLights: return memuse::kSpellLights;
+        case kDetailBake: case kOursGrassWind: case kOursGrassChunk: case kOursGrassPrep: case kOursGrassBind: case kOursGrassDraw: return memuse::kGrass;
+        default: return -1;
+        }
+    }
+
+    /// Manual scopes for our own work (main thread; ignored while the profiler is off). Each also charges what's
+    /// allocated inside it to its feature, profiler on or off.
     void Enter(int category);
     void Leave(int category);
     struct Scope
     {
+        memuse::Scope memory;
         int category;
-        explicit Scope(int c) : category(c) { Enter(category); }
+        explicit Scope(int c) : memory(MemoryTagOf(c)), category(c) { Enter(category); }
         ~Scope() { Leave(category); }
         Scope(const Scope&) = delete;
         Scope& operator=(const Scope&) = delete;

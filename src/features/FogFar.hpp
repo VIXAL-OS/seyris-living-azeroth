@@ -7,6 +7,7 @@
 // hollows, pools, water fog, steam, units and lights stay in the near field.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include <cstdint>
 
 struct IDirect3DDevice9;
@@ -37,4 +38,7 @@ namespace wxl_livingazeroth::fogfar
     float TopAt(float x, float y);
 
     void Release();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

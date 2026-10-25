@@ -8,6 +8,8 @@
 // Neither exists everywhere: without one, readable depth stays off under multisampling.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
+
 struct IDirect3DDevice9;
 struct IDirect3DSurface9;
 struct IDirect3DTexture9;
@@ -29,4 +31,7 @@ namespace wxl_livingazeroth::depthcopy
     /// Copies now. RESZ needs the source bound as the depth-stencil surface (it is during the world
     /// pass). False on failure.
     bool Copy(IDirect3DDevice9* dev);
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

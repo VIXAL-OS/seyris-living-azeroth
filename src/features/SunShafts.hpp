@@ -17,6 +17,7 @@
 // or sets.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 namespace wxl_livingazeroth::sunshafts
@@ -42,4 +43,7 @@ namespace wxl_livingazeroth::sunshafts
     void OnDeviceLost();
     /// The fog panel's section.
     void DrawPanelSection(const WXL_Api* api);
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

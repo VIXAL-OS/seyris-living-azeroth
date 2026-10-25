@@ -312,3 +312,11 @@ namespace wxl_livingazeroth::fogwake
         ui::Text(api, line);
     }
 }
+
+namespace wxl_livingazeroth::fogwake
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_tex);
+    }
+}

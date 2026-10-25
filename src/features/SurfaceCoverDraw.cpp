@@ -1,4 +1,5 @@
 #include "SurfaceCoverInternal.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "../debug/Profiler.hpp"
 #include "../env/Lights.hpp"
@@ -941,6 +942,7 @@ namespace wxl_livingazeroth::cover::detail
 
     void __cdecl hkGxDraw(void* batch, int indexed)
     {
+        memuse::Scope memory(memuse::kCover);
         if (g_projectedDepth) ++g_projectedDraws;
         g_origGxDraw(batch, indexed);
     }
@@ -949,6 +951,7 @@ namespace wxl_livingazeroth::cover::detail
 
     void __cdecl hkModelProjectedDraw(uint32_t a1, const uint32_t* color, uint32_t a3, uint32_t flags, float a5)
     {
+        memuse::Scope memory(memuse::kCover);
         const unsigned draws = g_projectedDraws;
         ++g_projectedDepth;
         g_origModelProjectedDraw(a1, color, a3, flags, a5);
@@ -958,6 +961,7 @@ namespace wxl_livingazeroth::cover::detail
 
     void __cdecl hkProjectedDraw(uint32_t a1, const uint32_t* color, uint32_t a3, uint32_t flags, float a5)
     {
+        memuse::Scope memory(memuse::kCover);
         const unsigned draws = g_projectedDraws;
         ++g_projectedDepth;
         g_origProjectedDraw(a1, color, a3, flags, a5);
@@ -1023,6 +1027,7 @@ namespace wxl_livingazeroth::cover::detail
 
     void __cdecl hkTerrainStage()
     {
+        memuse::Scope memory(memuse::kCover);
         // The patched terrain shaders read the ground moisture (features/TerrainWetness).
         {
             prof::Scope scope(prof::kOursLightUpload);
@@ -1038,6 +1043,7 @@ namespace wxl_livingazeroth::cover::detail
 
     void __cdecl OnWorldSceneEnd(void* /*user*/, const void* args)
     {
+        memuse::Scope memory(memuse::kCover);
         if (!g_settings.enabled || g_settings.drawPoint != 1) return;
         const auto* a = static_cast<const ev::WorldSceneEndArgs*>(args);
         auto* dev = static_cast<IDirect3DDevice9*>(a && a->device ? a->device : gx::RawDevice());
@@ -1068,5 +1074,19 @@ namespace wxl_livingazeroth::cover::detail
                              reinterpret_cast<void**>(&g_origModelProjectedDraw), WXL_HOOK_DEFAULT_PRIORITY))
             api->Log(WXL_LOG_WARN, kTag, "surface cover: model projected-texture hook failed; model ground projections stay hidden under the cover.");
         coverprints::Install(api); // the client's footprints on top of the cover
+    }
+}
+
+namespace wxl_livingazeroth::cover
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        for (const detail::Level& L : detail::g_levels)
+        {
+            out.Add(L.baseTex); out.Add(L.coverTex); out.Add(L.lookTex); out.Add(L.texWTex[0]); out.Add(L.texWTex[1]); out.Add(L.propsTex);
+        }
+        out.Add(detail::g_vb);
+        out.Add(detail::g_ib);
+        for (const auto& e : detail::g_textureCache) out.Add(e.second);   // (g_coverTextures' slots point into it)
     }
 }

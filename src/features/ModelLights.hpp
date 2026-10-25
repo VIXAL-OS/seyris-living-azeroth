@@ -7,6 +7,7 @@
 // grid cell's lights only (lights::CellGrid). The terrain reads the same texture's grid and lights.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 #include <d3d9.h>
@@ -62,4 +63,7 @@ namespace wxl_livingazeroth::modellights
     int& Probe();
     void InstallProbe(const WXL_Api* api);
     const char* ProbeLine();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

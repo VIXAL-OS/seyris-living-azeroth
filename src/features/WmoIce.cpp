@@ -1,4 +1,5 @@
 #include "WmoIce.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "Crystal.hpp"
 #include "Glass.hpp"
@@ -422,6 +423,7 @@ namespace wxl_livingazeroth::wmoice
 
         char __cdecl hkCull(void* record)
         {
+            memuse::Scope memory(memuse::kIce);
             const char culled = g_origCull(record);
             if (!g_depth || culled) return culled;
             modelice::Style style = modelice::Style::None;
@@ -472,6 +474,7 @@ namespace wxl_livingazeroth::wmoice
         // rooms the surface cover keeps out of (features/SurfaceCoverRooms).
         void __fastcall hkRenderGroup(void* root, void* edx, int group, void* instanceArg, void* list)
         {
+            memuse::Scope memory(memuse::kIce);
             bool began = false;
             if (glass::Config().enabled && glass::PatchedVariants() > 0 && g_depth == 0)
                 if (const RootIce* r = IceOf(static_cast<const uint8_t*>(root)); r && r->anyGlass)
@@ -502,6 +505,7 @@ namespace wxl_livingazeroth::wmoice
         template <RenderLeafFn* Orig>
         void __fastcall hkLoop(void* root, void* edx, void* group, int flag)
         {
+            memuse::Scope memory(memuse::kIce);
             const RootIce* saved = g_rootIce;
             const void* savedGroup = g_group;
             const bool savedIce = g_iceLoop, savedCrystal = g_crystalLoop;

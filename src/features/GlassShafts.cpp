@@ -1,4 +1,5 @@
 #include "GlassShafts.hpp"
+#include "../debug/MemoryTag.hpp"
 #include "GlassShaftShaders.hpp"
 
 #include "../debug/Profiler.hpp"
@@ -303,6 +304,7 @@ namespace wxl_livingazeroth::glassshafts
 
         void __fastcall hkWeather(void* self, void* edx)
         {
+            memuse::Scope memory(memuse::kGlass);
             g_inactive = WhyNot();
             if (!g_inactive)
             {
@@ -333,5 +335,13 @@ namespace wxl_livingazeroth::glassshafts
                            g_panes, g_texW, g_texH, g_ms, g_draws);
         g_line = line;
         return g_line.c_str();
+    }
+}
+
+namespace wxl_livingazeroth::glassshafts
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_tex);
     }
 }

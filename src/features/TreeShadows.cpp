@@ -1,5 +1,6 @@
 // Tree shadows that follow the wind. See TreeShadows.hpp and env/TreeShadowModel.hpp.
 #include "TreeShadows.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "../debug/Pages.hpp"
 #include "../debug/Profiler.hpp"
@@ -151,6 +152,7 @@ namespace wxl_livingazeroth::treeshadows
         // The client's own bands just drawn: ours after them, still inside CShadowCache::Update's PCF state.
         void __cdecl hkRenderBands(void* data)
         {
+            memuse::Scope memory(memuse::kTreeShadows);
             g_origRenderBands(data);
             if (!data) return;
             prof::Scope scope(prof::kOursTreeShadows);

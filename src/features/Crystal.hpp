@@ -41,6 +41,7 @@
 // would change the facets as copies come into view.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 #include <d3d9.h>
@@ -177,4 +178,7 @@ namespace wxl_livingazeroth::crystal
     const char* StatusLine();
     /// The panel section (the climate panel, under the ice).
     void DrawPanelSection(const WXL_Api* api);
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

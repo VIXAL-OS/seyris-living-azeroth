@@ -1,4 +1,5 @@
 #include "DepthView.hpp"
+#include "MemoryTag.hpp"
 #include "Pages.hpp"
 
 #include "../render/SceneDepth.hpp"
@@ -146,8 +147,16 @@ namespace wxl_livingazeroth::debug
                 ui::Text(g_api, "Overlay shader failed to compile (d3dcompiler_47.dll missing?).");
         }
 
-        void __cdecl OnWorldSceneEndThunk(void* /*user*/, const void* args) { OnWorldSceneEnd(args); }
-        void __cdecl OnWorldRenderEndThunk(void* /*user*/, const void* args) { OnWorldRenderEnd(args); }
+        void __cdecl OnWorldSceneEndThunk(void* /*user*/, const void* args)
+        {
+            memuse::Scope memory(memuse::kPanels);
+            OnWorldSceneEnd(args);
+        }
+        void __cdecl OnWorldRenderEndThunk(void* /*user*/, const void* args)
+        {
+            memuse::Scope memory(memuse::kPanels);
+            OnWorldRenderEnd(args);
+        }
     }
 
     void RegisterPanel(const WXL_Api* api)

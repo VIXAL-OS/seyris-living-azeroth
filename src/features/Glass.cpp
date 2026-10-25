@@ -1943,3 +1943,15 @@ namespace wxl_livingazeroth::glass
         return g_line.c_str();
     }
 }
+
+namespace wxl_livingazeroth::glass
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_tableTex);
+        out.Add(g_atlasTex);
+        out.Add(g_whiteTex);
+        for (const SetTextures& s : g_sets)
+            for (IDirect3DTexture9* t : s.tex) out.Add(t);
+    }
+}

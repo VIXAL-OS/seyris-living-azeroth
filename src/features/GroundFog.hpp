@@ -11,6 +11,7 @@
 // with the camera under water, or when a mod that draws its own fog or water is loaded.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 #include <string>
@@ -102,4 +103,7 @@ namespace wxl_livingazeroth::groundfog
     const DeckFrame& DeckThisFrame();
 
     void OnDeviceLost();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

@@ -1,5 +1,6 @@
 #include "Config.hpp"
 
+#include "debug/Memory.hpp"
 #include "debug/Snapshot.hpp"
 #include "debug/WindView.hpp"
 #include "env/Fields.hpp"
@@ -378,6 +379,20 @@ namespace wxl_livingazeroth::config
             l.maxLights = l.maxLights < 0 ? 0 : (l.maxLights > spelllight::kMaxLightsCap ? spelllight::kMaxLightsCap : l.maxLights);
         }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass, kSectionSpellLights);
+        // The memory readout: what uses the client's address space, and the warning before it runs out.
+        {
+            const char* f = kSectionMemory;
+            memory::Settings& m = memory::Config();
+            auto seconds = [](float v, float lo, float fallback) { return std::isfinite(v) ? (v < lo ? lo : (v > 3600.0f ? 3600.0f : v)) : fallback; };
+            m.enabled = In(s, f, "Readout", "What uses the client's memory: the 32-bit client runs out at about 4 GB of address space, whatever RAM the computer has, and usually sooner, when no free block is left as big as what it asks for. Walked every few seconds: what's free and the largest free block; the client itself, WarcraftXL, each extension, Direct3D and the graphics driver; the client's textures (by kind and format) and models; Living Azeroth's own use by feature. On the overview page, in the log every 30 seconds with the zone, and in snapshots. 0 = off.", m.enabled);
+            m.walkSeconds = seconds(In(s, f, "WalkSeconds", "Seconds between walks of the address space (each walk is spread over frames, about a quarter of a millisecond in each).", m.walkSeconds), 1.0f, 5.0f);
+            m.cachesSeconds = seconds(In(s, f, "ClientCachesSeconds", "Seconds between reads of the client's texture and model caches (one pass in one frame, a millisecond or two with thousands of textures; at least 5). 0 = only for snapshots and warnings.", m.cachesSeconds), 0.0f, 30.0f);
+            if (m.cachesSeconds > 0.0f && m.cachesSeconds < 5.0f) m.cachesSeconds = 5.0f;
+            m.warnFreeMB = In(s, f, "WarnFreeMB", "Below this much free address space (MB) a line in chat warns once and a snapshot is written to Logs\\la-snapshots, so a crash for lack of memory leaves evidence of what used it. 0 = no warning for it.", m.warnFreeMB);
+            m.warnLargestMB = In(s, f, "WarnLargestFreeMB", "The same when the largest free block of address space falls below this (MB): a big texture or buffer needs one block that size, so a fragmented address space fails before it's full. 0 = no warning for it.", m.warnLargestMB);
+            m.warnMinutes = In(s, f, "WarnMinutes", "At most one warning in this many minutes, unless it gets worse (100 MB less free, or the largest free block halved).", m.warnMinutes);
+        }
+
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass, kSectionSpellLights, kSectionMemory);
     }
 }

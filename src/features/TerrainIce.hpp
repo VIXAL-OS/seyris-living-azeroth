@@ -15,6 +15,7 @@
 // c215..c222 (ours), s14 (detail texture). Stock terrain shaders use r0..r9, c0..c13, s0..s8.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 #include <d3d9.h>
@@ -79,4 +80,7 @@ namespace wxl_livingazeroth::terrainice
     bool  Debug();
 
     const char* StatusLine();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

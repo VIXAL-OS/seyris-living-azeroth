@@ -1,4 +1,5 @@
 #include "GrassDoodads.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "GrassInstanced.hpp"
 #include "GrassPerf.hpp"
@@ -233,6 +234,7 @@ namespace wxl_livingazeroth::grassdoodads
         // colours. Also records the slot's doodads and analyses new ones.
         void __fastcall hkFill(void* slot, void* edx)
         {
+            memuse::Scope memory(memuse::kGrass);
             prof::Scope scope(prof::kDetailBake);
             uint32_t count = 0, instances = 0;
             const uintptr_t s = reinterpret_cast<uintptr_t>(slot);
@@ -304,6 +306,7 @@ namespace wxl_livingazeroth::grassdoodads
         // (root at v = 1, tip at v = 0, full wind and push); unused entries get it too.
         void __fastcall hkDraw(void* slot, void* edx)
         {
+            memuse::Scope memory(memuse::kGrass);
             prof::Enter(prof::kOursGrassPrep); // left before the draw
 
             // Instanced renderer: the slot's plants sit in our own static buffers (built on first

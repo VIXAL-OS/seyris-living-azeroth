@@ -710,3 +710,11 @@ namespace wxl_livingazeroth::crystal
         api->UiSliderFloat("crystal facets' size (x; they already grow with the crystal)", &g_settings.cellScale, kMinCellSetting, kMaxCellSetting);
     }
 }
+
+namespace wxl_livingazeroth::crystal
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_detail);
+    }
+}

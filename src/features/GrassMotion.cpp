@@ -1,6 +1,7 @@
 ﻿#include "GrassMotion.hpp"
 
 #include "GrassDoodads.hpp"
+#include "../debug/MemoryTag.hpp"
 #include "GrassInstanced.hpp"
 #include "GrassPerf.hpp"
 
@@ -218,6 +219,7 @@ namespace wxl_livingazeroth::grass
         // rest of its block; we fill c14..c18 (shipped with every chunk) and rebuild the wind grid.
         void __cdecl hkInitShaderConstants()
         {
+            memuse::Scope memory(memuse::kGrass);
             grassperf::OnPassBegin();
             g_origInit();
             prof::Scope scope(prof::kOursGrassWind);
@@ -320,6 +322,7 @@ namespace wxl_livingazeroth::grass
         // chunk rather than once per frame so nothing drawn between chunks can clobber it.
         void __cdecl hkChunkConstantUpload(const float* mtx, int group)
         {
+            memuse::Scope memory(memuse::kGrass);
             g_origChunk(mtx, group);
             if (group != 0) return; // the dormant point-light path isn't patched
             prof::Scope scope(prof::kOursGrassChunk);

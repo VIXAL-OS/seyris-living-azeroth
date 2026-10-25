@@ -284,6 +284,7 @@ namespace wxl_livingazeroth::cover::detail
     extern int                g_slotId[covertable::kMaxCoverTextures];        // the ID each slot holds (0 = free)
     extern unsigned           g_texturesInView;
     extern std::unordered_map<int, std::string> g_textureStatus;
+    extern std::unordered_map<int, IDirect3DTexture9*> g_textureCache; // the cover textures by ID (SurfaceCoverUpload)
     constexpr float kCoverTextureTile = 33.3333333f / 8.0f; // one repeat per terrain cell, like the terrain's layers
     void EnsureCoverTextures(IDirect3DDevice9* dev);
     // Recount which cover textures are around at the next draw (instead of within a second): a level

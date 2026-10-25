@@ -1,6 +1,7 @@
 #include "Overview.hpp"
 
 #include "DepthView.hpp"
+#include "Memory.hpp"
 #include "Pages.hpp"
 #include "Snapshot.hpp"
 #include "../env/ClientWeather.hpp"
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace wxl_livingazeroth::debug
 {
@@ -34,6 +36,14 @@ namespace wxl_livingazeroth::debug
 
         uint32_t PlayerArea(const world::Snapshot& s) { return s.areaCount > 0 ? s.areaChain[0] : 0; }
 
+        // The memory readout's section (debug/Memory), in the world or not.
+        void DrawMemory()
+        {
+            std::vector<std::string> lines;
+            memory::OverviewLines(lines);
+            for (const std::string& l : lines) ui::Text(g_api, l.c_str());
+        }
+
         // ------------------------------------------------------------------ the overview page
         void __cdecl DrawOverview(void* /*user*/)
         {
@@ -41,7 +51,13 @@ namespace wxl_livingazeroth::debug
             char line[320];
             snapshot::DrawButton(g_api, "##snapov");
             g_api->UiSeparator();
-            if (!s.inWorld) { ui::Text(g_api, "Not in the world."); return; }
+            if (!s.inWorld)
+            {
+                ui::Text(g_api, "Not in the world.");
+                g_api->UiSeparator();
+                DrawMemory();
+                return;
+            }
 
             // Where: names and the IDs table rows need.
             std::string chain;
@@ -107,6 +123,10 @@ namespace wxl_livingazeroth::debug
                               fog::AmountAt(k, s.playerPos[0], s.playerPos[1]), fog::TargetAt(k, s.playerPos[0], s.playerPos[1]));
                 ui::Text(g_api, line);
             }
+            g_api->UiSeparator();
+
+            // Memory: what uses the client's address space.
+            DrawMemory();
         }
 
         // ------------------------------------------------------------------ quick features

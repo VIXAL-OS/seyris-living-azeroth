@@ -8,6 +8,7 @@
 // Only the grid's own box (Box()) is valid -- outside it the wrap repeats other cells.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include <d3d9.h>
 
 namespace wxl_livingazeroth::moisturetex
@@ -38,4 +39,7 @@ namespace wxl_livingazeroth::moisturetex
 
     /// Drops the textures (device lost or replaced).
     void Release();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

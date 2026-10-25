@@ -273,3 +273,12 @@ namespace wxl_livingazeroth::depth
     unsigned OriginalFormat() { return g_originalFormat; }
     unsigned SwapCount()      { return g_swapCount; }
 }
+
+namespace wxl_livingazeroth::depth
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_texture);   // (g_surface is its level; g_original is the client's)
+        depthcopy::GpuMemory(out);
+    }
+}

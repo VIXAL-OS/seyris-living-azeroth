@@ -1,4 +1,5 @@
 #include "TerrainIce.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "GroundMaterialTable.hpp"
 #include "TerrainWetness.hpp"
@@ -141,6 +142,7 @@ namespace wxl_livingazeroth::terrainice
 
         void __fastcall hkChunkDraw(void* node, void* edx)
         {
+            memuse::Scope memory(memuse::kIce);
             float mask[4] = {};
             bool masked = false;
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
@@ -603,5 +605,13 @@ namespace wxl_livingazeroth::terrainice
                       !g_hooked ? "; chunk draw hook missing" : (g_detailFailed ? "; detail texture failed" : ""));
         g_status = line;
         return g_status.c_str();
+    }
+}
+
+namespace wxl_livingazeroth::terrainice
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_detail);
     }
 }

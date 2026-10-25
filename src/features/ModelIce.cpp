@@ -1,4 +1,5 @@
 #include "ModelIce.hpp"
+#include "../debug/MemoryTag.hpp"
 #include "Crystal.hpp"
 #include "DoodadFade.hpp"
 #include "Glass.hpp"
@@ -251,6 +252,7 @@ namespace wxl_livingazeroth::modelice
 
         void __fastcall hkBatch(void* ctx, void* edx)
         {
+            memuse::Scope memory(memuse::kIce);
             Entry* e = EntryFor(ctx);
             const Kind kind = e ? e->kind : Kind{};
             if (kind.hat && g_hideHats) { ++g_hatsHidden; return; }
@@ -263,6 +265,7 @@ namespace wxl_livingazeroth::modelice
 
         void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
         {
+            memuse::Scope memory(memuse::kIce);
             Entry* e = EntryFor(ctx);
             const Kind kind = e ? e->kind : Kind{};
             if (kind.hat && g_hideHats) { ++g_hatsHidden; return; }

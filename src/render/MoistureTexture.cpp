@@ -181,3 +181,13 @@ namespace wxl_livingazeroth::moisturetex
         return true;
     }
 }
+
+namespace wxl_livingazeroth::moisturetex
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_texture);
+        out.Add(g_farPixel);
+        out.Add(g_farVertex);
+    }
+}

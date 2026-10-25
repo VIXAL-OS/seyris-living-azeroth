@@ -1,4 +1,5 @@
 #include "GrassInstanced.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "GrassDensity.hpp"
 #include "GrassPerf.hpp"
@@ -1767,6 +1768,7 @@ namespace wxl_livingazeroth::grassinst
         constexpr uintptr_t kGrassPassTail = 0x00797280;
         void __cdecl hkGrassPassEnd()
         {
+            memuse::Scope memory(memuse::kGrass);
             FlushBatches();
             g_origPassEnd();
         }
@@ -1774,6 +1776,7 @@ namespace wxl_livingazeroth::grassinst
         // --- the bake verification ----------------------------------------------------------------
         void* __fastcall hkLock(void* dev, void* edx, void* buf)
         {
+            memuse::Scope memory(memuse::kGrass);
             void* p = g_origLock(dev, edx, buf);
             if (g_cap.armed && buf == g_cap.buf) g_cap.ptr = static_cast<uint8_t*>(p);
             return p;
@@ -1781,6 +1784,7 @@ namespace wxl_livingazeroth::grassinst
 
         uint32_t __fastcall hkUnlock(void* dev, void* edx, void* buf, int arg)
         {
+            memuse::Scope memory(memuse::kGrass);
             if (g_cap.armed && buf == g_cap.buf && g_cap.ptr)
             {
                 g_cap.data.resize(static_cast<size_t>(g_cap.vertices) * kBakedStride);
@@ -2306,4 +2310,17 @@ namespace wxl_livingazeroth::grassinst
 
     bool VerifyPending() { return g_cap.pending; }
     const std::string& VerifyReport() { return g_verifyReport; }
+}
+
+namespace wxl_livingazeroth::grassinst
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        for (const auto& g : g_geometry) { out.Add(g.second.vb); out.Add(g.second.ib); }
+        for (const Page& p : g_pages) { out.Add(p.vb); out.Add(p.tex); }
+        for (const Staging& s : g_staging) out.Add(s.surface);
+        out.Add(g_copyTex);
+        out.Add(g_iota);
+        out.Add(g_copyTable);
+    }
 }

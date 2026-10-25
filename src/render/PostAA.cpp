@@ -288,3 +288,11 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         pages::AddPanel("wxl-seyris-living-azeroth: anti-aliasing", &Panel);
     }
 }
+
+namespace wxl_livingazeroth::postaa
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_copy);   // (g_copySurface is its level)
+    }
+}

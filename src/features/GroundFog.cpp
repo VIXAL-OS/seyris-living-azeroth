@@ -1,4 +1,5 @@
 #include "GroundFog.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "../debug/Profiler.hpp"
 #include "../env/Climate.hpp"
@@ -2407,6 +2408,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         // ------------------------------------------------------------------ hooks
         void __fastcall hkLiquid(void* bank, void* edx, void* transform, int passType)
         {
+            memuse::Scope memory(memuse::kFog);
             if (passType == 1) g_drawThisFrame = Decide();
             const int saved = g_liquidPass;
             g_liquidPass = passType;
@@ -2619,6 +2621,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
 
         void __fastcall hkDraw(void* device, void* edx, uint32_t* batch, int indexed)
         {
+            memuse::Scope memory(memuse::kFog);
             if (g_liquidPass == 1 && g_drawThisFrame && g_settings.forceWaterDepth) gxstate::Force(gxstate::kDepthWrite, 1);
             if (g_tintWindow) TintFogColour();
             g_origDraw(device, edx, batch, indexed);
@@ -2662,6 +2665,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         // device draws inside belong to, while the window is open.
         void __fastcall hkBatch(void* ctx, void* edx)
         {
+            memuse::Scope memory(memuse::kFog);
             const void* const prevCtx = g_batchCtx;
             const bool prevStorm = g_batchStorm;
             g_batchCtx = ctx;
@@ -2673,6 +2677,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
 
         void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
         {
+            memuse::Scope memory(memuse::kFog);
             const void* const prevCtx = g_batchCtx;
             const bool prevStorm = g_batchStorm;
             g_batchCtx = ctx;
@@ -2697,6 +2702,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
 
         void __fastcall hkFrame(void* self, void* edx)
         {
+            memuse::Scope memory(memuse::kFog);
             EndTint();
             g_tintedShown = g_tinted; g_stormTintedShown = g_stormTinted; g_tintOtherShown = g_tintOther;
             g_tinted = g_stormTinted = g_tintOther = 0;
@@ -2709,6 +2715,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
 
         void __fastcall hkWeather(void* self, void* edx)
         {
+            memuse::Scope memory(memuse::kFog);
             // Above water the order is: water -> weather -> see-through models; under water the weather
             // comes before the water, and the fog stays off there (Decide).
             g_deckDrewInside = false;
@@ -2990,5 +2997,16 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
         g_glowW = g_glowH = 0;
         g_glowFailed = false;
         ReleaseProbe();
+    }
+}
+
+namespace wxl_livingazeroth::groundfog
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        for (IDirect3DTexture9* t : { g_deckTex, g_halfTex, g_brightTex, g_field, g_colorTex, g_topTex, g_lightTex, g_probeTex }) out.Add(t);
+        for (IDirect3DTexture9* t : g_glowTex) out.Add(t);
+        out.Add(g_noise);
+        out.Add(g_probeSys);
     }
 }

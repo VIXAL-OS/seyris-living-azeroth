@@ -1,4 +1,5 @@
 #include "WindowGlow.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "../env/WorldQuery.hpp"
 #include "../render/SceneDepth.hpp"
@@ -405,6 +406,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
 
         void __fastcall hkWeather(void* self, void* edx)
         {
+            memuse::Scope memory(memuse::kWindows);
             windows::Stats& st = windows::GetStats();
             float strength = 0.0f;
             st.glowInactive = WhyNot(strength);
@@ -428,4 +430,12 @@ float4 main(float2 uv : TEXCOORD0) : COLOR
     }
 
     void OnDeviceLost() { ReleaseAll(); }
+}
+
+namespace wxl_livingazeroth::windowglow
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        for (IDirect3DTexture9* t : g_tex) out.Add(t);
+    }
 }

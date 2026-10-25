@@ -18,6 +18,8 @@
 #include "debug/DepthView.hpp"
 #include "debug/LightEditor.hpp"
 #include "debug/LightsView.hpp"
+#include "debug/Memory.hpp"
+#include "debug/MemoryTag.hpp"
 #include "debug/Profiler.hpp"
 #include "debug/StormView.hpp"
 #include "debug/SurfaceView.hpp"
@@ -76,6 +78,7 @@
 #include "RainSignal.hpp"
 #include <chrono>
 #include <cmath>
+#include <cstring>
 
 namespace
 {
@@ -108,32 +111,41 @@ namespace
         done = true;
 
         // The panels: as pages of wxl-seyris-tools' control panel, or plain overlay panels without it.
-        wxl_livingazeroth::pages::Publish(g_api);
+        {
+            wxl_livingazeroth::memuse::Scope memory(wxl_livingazeroth::memuse::kPanels);
+            wxl_livingazeroth::pages::Publish(g_api);
+        }
 
-        const auto* cdbc = static_cast<const WXL_SeyrisCdbcApi*>(
-            g_api->GetInterface(WXL_SEYRIS_CDBC_INTERFACE_NAME, WXL_SEYRIS_CDBC_INTERFACE_VERSION));
-        wxl_livingazeroth::debug::SetWindCdbc(cdbc);
-        wxl_livingazeroth::wind::LoadProfiles(cdbc);
-        wxl_livingazeroth::grassdoodads::LoadOverrides(cdbc);
-        wxl_livingazeroth::grassdensity::Load(cdbc);
-        wxl_livingazeroth::cover::LoadTable(cdbc);
-        wxl_livingazeroth::climate::Load(cdbc);
-        wxl_livingazeroth::fogsettings::Load(cdbc);
-        wxl_livingazeroth::debug::SetClimateCdbc(cdbc);
-        wxl_livingazeroth::lighttable::Load(cdbc);
-        wxl_livingazeroth::windows::Load(cdbc);
-        wxl_livingazeroth::glass::Load(cdbc);
-        wxl_livingazeroth::glass::LogLoad(g_api);
-        wxl_livingazeroth::crystal::Load(cdbc);
-        wxl_livingazeroth::debug::SetLightsCdbc(cdbc);
-        wxl_livingazeroth::debug::SetLightEditorCdbc(cdbc);
+        // The tables (and what the features keep of them) are charged to the memory readout's "cdbc tables".
+        {
+            wxl_livingazeroth::memuse::Scope tables(wxl_livingazeroth::memuse::kTables);
+            const auto* cdbc = static_cast<const WXL_SeyrisCdbcApi*>(
+                g_api->GetInterface(WXL_SEYRIS_CDBC_INTERFACE_NAME, WXL_SEYRIS_CDBC_INTERFACE_VERSION));
+            wxl_livingazeroth::debug::SetWindCdbc(cdbc);
+            wxl_livingazeroth::wind::LoadProfiles(cdbc);
+            wxl_livingazeroth::grassdoodads::LoadOverrides(cdbc);
+            wxl_livingazeroth::grassdensity::Load(cdbc);
+            wxl_livingazeroth::cover::LoadTable(cdbc);
+            wxl_livingazeroth::climate::Load(cdbc);
+            wxl_livingazeroth::fogsettings::Load(cdbc);
+            wxl_livingazeroth::debug::SetClimateCdbc(cdbc);
+            wxl_livingazeroth::lighttable::Load(cdbc);
+            wxl_livingazeroth::windows::Load(cdbc);
+            wxl_livingazeroth::glass::Load(cdbc);
+            wxl_livingazeroth::glass::LogLoad(g_api);
+            wxl_livingazeroth::crystal::Load(cdbc);
+            wxl_livingazeroth::debug::SetLightsCdbc(cdbc);
+            wxl_livingazeroth::debug::SetLightEditorCdbc(cdbc);
+        }
 
         wxl_livingazeroth::config::Apply(g_api);
         wxl_livingazeroth::grassdistance::OnFirstFrame();
     }
 
     // Every 30 s in the world, one log line for diagnosing a report afterwards (the log is all a session leaves
-    // behind): where the player is, what the client says they stand on, and what the ice features touched.
+    // behind): where the player is (the zone and sub-zone too, to line the external memory log up with), what the
+    // client says they stand on, and what the ice features touched; then the memory readout's line (the core's log
+    // lines hold 1,000 characters, so it goes on its own).
     void LogStatusWhenDue()
     {
         static auto next = std::chrono::steady_clock::time_point{};
@@ -142,21 +154,37 @@ namespace
         next = now + std::chrono::seconds(30);
         const auto& s = wxl_livingazeroth::world::Current();
         if (!s.inWorld) return;
-        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s; %s; %s; %s",
+        wxl_livingazeroth::memuse::Scope memory(wxl_livingazeroth::memuse::kPanels);
+        const char* zone = s.zoneText && s.zoneText[0] ? s.zoneText : "(no zone)";
+        const bool sub = s.subZoneText && s.subZoneText[0] && std::strcmp(s.subZoneText, zone) != 0;
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: in %s%s%s (area %u), map %d at %.1f, %.1f, %.1f, terrain type %d, %s; %s; %s; %s; %s; %s; %s; %s; %s",
+                   zone, sub ? ", " : "", sub ? s.subZoneText : "", s.areaCount > 0 ? s.areaChain[0] : 0u,
                    s.mapId, s.playerPos[0], s.playerPos[1], s.playerPos[2], s.playerTerrainType, s.outdoors ? "outdoors" : "indoors",
                    wxl_livingazeroth::terrainice::StatusLine(), wxl_livingazeroth::modelice::StatusLine(),
                    wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine(), wxl_livingazeroth::crystal::StatusLine(),
                    wxl_livingazeroth::seethrough::StatusLine(), wxl_livingazeroth::treeshadows::LogLine(), wxl_livingazeroth::spelllights::StatusLine());
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: in %s%s%s: %s", zone, sub ? ", " : "", sub ? s.subZoneText : "",
+                   wxl_livingazeroth::memory::LogPart());
     }
 
     // Between frames: the safe moment to swap the depth surface the next world pass will bind.
     void __cdecl OnFrame(void* /*user*/, const void* /*args*/)
     {
+        namespace mem = wxl_livingazeroth::memuse;
         ResolveInterfacesOnce();
-        wxl_livingazeroth::grassperf::OnFrameEnd();
-        wxl_livingazeroth::grassinst::OnFrameEnd();
-        wxl_livingazeroth::depth::Update();
-        wxl_livingazeroth::modellights::EndFrame();
+        {
+            mem::Scope memory(mem::kGrass);
+            wxl_livingazeroth::grassperf::OnFrameEnd();
+            wxl_livingazeroth::grassinst::OnFrameEnd();
+        }
+        {
+            mem::Scope memory(mem::kRender);
+            wxl_livingazeroth::depth::Update();
+        }
+        {
+            mem::Scope memory(mem::kLights);
+            wxl_livingazeroth::modellights::EndFrame();
+        }
         LogStatusWhenDue();
     }
 
@@ -166,11 +194,19 @@ namespace
         const auto* a = static_cast<const ev::UpdateArgs*>(args);
         const float dt = a ? a->dt : 0.0f;
         namespace prof = wxl_livingazeroth::prof;
+        namespace mem = wxl_livingazeroth::memuse;
+        mem::Scope envMemory(mem::kEnv);   // what the world snapshot and the client's weather allocate
         wxl_livingazeroth::clientweather::Apply();
         wxl_livingazeroth::doodadfade::Update();
         const auto& snap = wxl_livingazeroth::world::Refresh();
-        wxl_livingazeroth::playerdepth::Update(snap.inWorld);
-        wxl_livingazeroth::treeshadows::Tick();
+        {
+            mem::Scope memory(mem::kRender);
+            wxl_livingazeroth::playerdepth::Update(snap.inWorld);
+        }
+        {
+            mem::Scope memory(mem::kTreeShadows);
+            wxl_livingazeroth::treeshadows::Tick();
+        }
         {
             prof::Scope scope(prof::kOursEnv);
             wxl_livingazeroth::climate::Update(snap);
@@ -189,18 +225,36 @@ namespace
         }
         {
             prof::Scope scope(prof::kOursLights);
-            wxl_livingazeroth::windows::Update(); // the night factor the window lights and glow follow
-            wxl_livingazeroth::glass::Update();   // the light through the glass, the panes near the camera
-            wxl_livingazeroth::seethrough::Update(); // last frame's windows opened and glass redrawn; its leftovers go
-            wxl_livingazeroth::crystal::Update(); // the night the crystals' inner glow goes by
+            {
+                mem::Scope memory(mem::kWindows);
+                wxl_livingazeroth::windows::Update(); // the night factor the window lights and glow follow
+            }
+            {
+                mem::Scope memory(mem::kGlass);
+                wxl_livingazeroth::glass::Update();   // the light through the glass, the panes near the camera
+            }
+            {
+                mem::Scope memory(mem::kSeeThrough);
+                wxl_livingazeroth::seethrough::Update(); // last frame's windows opened and glass redrawn; its leftovers go
+            }
+            {
+                mem::Scope memory(mem::kIce);
+                wxl_livingazeroth::crystal::Update(); // the night the crystals' inner glow goes by
+            }
             wxl_livingazeroth::lights::Update(dt, snap);
         }
         {
             prof::Scope scope(prof::kOursCoverFill);
             wxl_livingazeroth::cover::Update(dt, snap);
         }
+        // The memory readout: a slice of the address space's walk, the client's caches when due, the warnings (before the
+        // snapshot key: a warning's snapshot is written this frame).
+        wxl_livingazeroth::memory::Update(snap.inWorld);
         // The snapshot key (after seethrough::Update: last frame's walks and counts are whole).
-        wxl_livingazeroth::snapshot::Update(dt);
+        {
+            mem::Scope memory(mem::kPanels);
+            wxl_livingazeroth::snapshot::Update(dt);
+        }
     }
 
     // Main thread, before the client tears the world down for a loading screen: no background work
@@ -295,6 +349,8 @@ int __cdecl WXL_Load(const WXL_Api* api)
 
     // The snapshot key (debug/Snapshot): the window's messages.
     wxl_livingazeroth::snapshot::Install(api);
+    // The memory readout (debug/Memory): its guards against the client's code, read before any detour is armed.
+    wxl_livingazeroth::memory::Install(api);
 
     // Read-only addon functions (docs/lua-api.md): registered with every script context the client builds.
     wxl_livingazeroth::envlua::Register();

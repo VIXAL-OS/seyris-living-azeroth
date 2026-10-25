@@ -1,4 +1,5 @@
 #include "ThunderDsp.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include <windows.h>
 
@@ -314,6 +315,7 @@ namespace wxl_livingazeroth::thunderdsp
         // ours (the main thread's, while we're working) join our chain.
         void __cdecl hkAttach(void* channel, char* name)
         {
+            memuse::Scope memory(memuse::kEnv);
             unsigned slot = 0;
             uint32_t generation = 0;
             float pitch = 1.0f;
@@ -338,6 +340,7 @@ namespace wxl_livingazeroth::thunderdsp
         // The client tears its chains down before the sound engine releases its FMOD system: ours go with them.
         void __cdecl hkShutDown()
         {
+            memuse::Scope memory(memuse::kEnv);
             const bool had = g_pool.created;
             if (!g_broken) g_pool.Release(g_engine);
             else g_pool.Forget();

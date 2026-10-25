@@ -1,4 +1,5 @@
 #include "SurfaceCoverInternal.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include <atomic>
 #include <cstring>
@@ -86,12 +87,14 @@ namespace wxl_livingazeroth::cover::detail
 
         void __fastcall hkBuild(void* inst, void* edx, const float* ctx, const float* scale3, const float* translate3, float speed, float alpha)
         {
+            memuse::Scope memory(memuse::kCover);
             float lifted[16];
             g_origBuild(inst, edx, Lifted(inst, ctx, lifted), scale3, translate3, speed, alpha);
         }
 
         void __fastcall hkBuildSimple(void* inst, void* edx, const float* ctx, const float* scale3, const float* translate3, float speed, float alpha)
         {
+            memuse::Scope memory(memuse::kCover);
             float lifted[16];
             g_origBuildSimple(inst, edx, Lifted(inst, ctx, lifted), scale3, translate3, speed, alpha);
         }

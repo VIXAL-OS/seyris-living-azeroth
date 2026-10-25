@@ -4,7 +4,7 @@ This is a modified version of [Seyris Living Azeroth](https://github.com/Morfium
 Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications are released under the same license.
 
 - **Who:** VIXAL-OS, with AI coding assistants (Claude and Codex).
-- **When:** 7–24 October 2026.
+- **When:** 7–25 October 2026.
 - **What it's based on:** upstream `main` at `b16c590`. Every change is its own commit on top of it, so the git
   history is the full record of what changed and when.
 - **Target:** the 3.3.5a client (build 12340), played on ChromieCraft.
@@ -230,7 +230,14 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
 - **Panel text** (22 October 2026): the panels' lines wrap at the window's edge instead of running off it where the
   WarcraftXL core has `UiTextWrapped` (core v1.1.272 appended it to the extension API; `debug/UiText.hpp` checks the
   table's `structSize` first), else they're drawn as before. The lines themselves are unchanged.
+- **Memory readout** (25 October 2026, before HD texture packs): what uses the 32-bit client's address space, from
+  inside the process: the address space walked a slice a frame (free space, the largest free block, each image and
+  mapped file, private memory and its largest allocations), Direct3D's texture memory, the client's own texture, pool,
+  M2 and WMO caches (read as the decomp lays them out, its instructions checked first), and Living Azeroth's own heap
+  and Direct3D resources by feature (`operator new` counted in this module alone). On the overview page, in the log
+  every 30 s with the zone, and in snapshots; a chat warning and a snapshot when it runs low
+  (`[LivingAzeroth.Memory]`).
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
-  see-through windows, tree shadows, spell lights.
+  see-through windows, tree shadows, spell lights, the memory readout.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

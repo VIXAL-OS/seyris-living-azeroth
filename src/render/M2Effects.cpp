@@ -1,4 +1,5 @@
 #include "M2Effects.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include <cstring>
 
@@ -20,6 +21,7 @@ namespace wxl_livingazeroth::m2effects
 
         void __fastcall hkEffectLoad(void* effect, void* edx, const char* vertexName, const char* pixelName)
         {
+            memuse::Scope memory(memuse::kRender);
             // Recorded before the load: the shaders are created inside it.
             Effect e;
             e.object = reinterpret_cast<uintptr_t>(effect);

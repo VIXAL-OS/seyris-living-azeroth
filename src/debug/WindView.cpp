@@ -1,4 +1,5 @@
 #include "WindView.hpp"
+#include "MemoryTag.hpp"
 #include "Pages.hpp"
 
 #include "ShaderDump.hpp"
@@ -534,6 +535,7 @@ namespace wxl_livingazeroth::debug
 
         void __cdecl OnWorldSceneEnd(void* /*user*/, const void* args)
         {
+            memuse::Scope memory(memuse::kPanels);
             if (!g_showArrows) return;
             const world::Snapshot& s = world::Current();
             if (!s.inWorld) return;

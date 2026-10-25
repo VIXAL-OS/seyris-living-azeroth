@@ -1,4 +1,5 @@
 #include "LightEditor.hpp"
+#include "MemoryTag.hpp"
 
 #include "../env/Lights.hpp"
 #include "../env/WorldQuery.hpp"
@@ -191,6 +192,7 @@ namespace wxl_livingazeroth::debug
 
         void __cdecl OnWorldSceneEnd(void* /*user*/, const void* args)
         {
+            memuse::Scope memory(memuse::kPanels);
             if (!g_markerMode) return;
             const world::Snapshot& s = world::Current();
             if (!s.inWorld) return;

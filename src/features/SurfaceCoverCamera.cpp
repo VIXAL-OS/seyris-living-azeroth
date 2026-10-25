@@ -1,4 +1,5 @@
 #include "SurfaceCover.hpp"
+#include "../debug/MemoryTag.hpp"
 #include "SurfaceCoverInternal.hpp"
 
 #include <cmath>
@@ -28,6 +29,7 @@ namespace wxl_livingazeroth::cover::detail
 
         int __fastcall hkCollide(void* camera, void* edx, float* distance, const float* eye, const float* pivot, uint32_t flags)
         {
+            memuse::Scope memory(memuse::kCover);
             const float entry = distance ? *distance : 0.0f;
             const int hit = g_origCollide(camera, edx, distance, eye, pivot, flags);
             if (!g_settings.camera || !distance || !eye || !pivot || entry <= 0.0f) return hit;

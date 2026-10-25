@@ -9,6 +9,7 @@
 // along its own light: glass::LightOfPane).
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 namespace wxl_livingazeroth::glassshafts
@@ -19,4 +20,7 @@ namespace wxl_livingazeroth::glassshafts
     void OnDeviceLost();
     /// One line for the glass panel: drawing (how many panes, the cost), or why not.
     const char* StatusLine();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

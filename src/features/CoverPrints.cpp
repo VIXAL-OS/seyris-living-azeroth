@@ -1,4 +1,5 @@
 #include "CoverPrints.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "SurfaceCover.hpp"
 #include "../env/TerrainHeight.hpp"
@@ -120,6 +121,7 @@ namespace wxl_livingazeroth::coverprints
         void __cdecl hkStepPrint(uint32_t texture, const float* size, const float* position, float facing, uint32_t foot,
                                  int32_t terrainType, uint32_t activePlayer)
         {
+            memuse::Scope memory(memuse::kCover);
             ++g_steps;
             int32_t type = terrainType;
             if (!g_stepBroken && cover::SandPrints()) type = StepType(terrainType, position);
@@ -173,6 +175,7 @@ namespace wxl_livingazeroth::coverprints
         // The client's print draw: lifted onto the cover around it, put back right after.
         void __cdecl hkPrintDraw()
         {
+            memuse::Scope memory(memuse::kCover);
             if (!g_findBroken && !Find())
             {
                 g_findBroken = true;

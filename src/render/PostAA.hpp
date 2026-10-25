@@ -8,6 +8,7 @@
 // and readable depth isn't available anyway.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 namespace wxl_livingazeroth::postaa
@@ -33,4 +34,7 @@ namespace wxl_livingazeroth::postaa
     double LastMs();
 
     void RegisterPanel(const WXL_Api* api);
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

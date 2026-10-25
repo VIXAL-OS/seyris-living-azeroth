@@ -13,6 +13,7 @@
 // (render/DepthCopy: NVAPI or the driver's RESZ resolve).
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 namespace wxl_livingazeroth::depth
@@ -67,4 +68,7 @@ namespace wxl_livingazeroth::depth
     unsigned Height();
     unsigned OriginalFormat();   // D3DFORMAT of the automatic surface
     unsigned SwapCount();        // how many times the swap has been (re)applied, e.g. after resets
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

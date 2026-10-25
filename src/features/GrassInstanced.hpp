@@ -14,6 +14,7 @@
 // Plan and the disassembly it rests on: orchestration/docs/r&d/immersion/grass-instanced-renderer-plan.md
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "GrassDoodads.hpp"
 
 #include "wxl/PluginApi.h"
@@ -136,4 +137,7 @@ namespace wxl_livingazeroth::grassinst
     void RequestVerify();
     bool VerifyPending();
     const std::string& VerifyReport();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

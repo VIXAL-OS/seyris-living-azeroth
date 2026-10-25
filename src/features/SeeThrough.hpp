@@ -78,6 +78,7 @@
 //    under __try/__except; any fault switches it off for the session (the panel says where).
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 #include <cstdint>
@@ -164,4 +165,7 @@ namespace wxl_livingazeroth::seethrough
     /// placed instance's m_invMat (world -> its space, row vectors) and its groups' flags and boxes (MOGI). False when
     /// the camera is in none or it can't be read.
     bool ViewerBuilding(std::string& wmo, float invMat[16], std::vector<uint32_t>& flags, std::vector<float>& boxes);
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

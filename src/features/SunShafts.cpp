@@ -1,4 +1,5 @@
 #include "SunShafts.hpp"
+#include "../debug/MemoryTag.hpp"
 #include "SunShaftShaders.hpp"
 
 #include "../debug/Profiler.hpp"
@@ -463,6 +464,7 @@ namespace wxl_livingazeroth::sunshafts
 
         void __fastcall hkWeather(void* self, void* edx)
         {
+            memuse::Scope memory(memuse::kShafts);
             g_stats.inactive = WhyNot();
             if (!g_stats.inactive)
             {
@@ -544,5 +546,13 @@ namespace wxl_livingazeroth::sunshafts
         std::snprintf(line, sizeof(line), "the cloud deck: %s; light colour %.2f %.2f %.2f", g_stats.deck,
                       g_stats.colour[0], g_stats.colour[1], g_stats.colour[2]);
         ui::Text(api, line);
+    }
+}
+
+namespace wxl_livingazeroth::sunshafts
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        for (IDirect3DTexture9* t : g_tex) out.Add(t);
     }
 }

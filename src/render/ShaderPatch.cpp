@@ -1,4 +1,5 @@
 #include "ShaderPatch.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "game/Shader.hpp"
 
@@ -115,6 +116,7 @@ namespace wxl_livingazeroth::shaderpatch
 
         void __fastcall hkCreatePixel(void* device, void* edx, void* wrapper)
         {
+            memuse::Scope memory(memuse::kRender);
             if (wrapper && CreateWithTableRules(true, device, edx, wrapper, g_origCreatePixel)) return;
             g_origCreatePixel(device, edx, wrapper);
         }
@@ -188,6 +190,7 @@ namespace wxl_livingazeroth::shaderpatch
         // one call, then put the stock pointer/length back so the wrapper stays exactly as it was.
         void __fastcall hkCreateVertex(void* device, void* edx, void* wrapper)
         {
+            memuse::Scope memory(memuse::kRender);
             if (wrapper && CreateWithTableRules(false, device, edx, wrapper, g_origCreate)) return;
             if (wrapper)
             {

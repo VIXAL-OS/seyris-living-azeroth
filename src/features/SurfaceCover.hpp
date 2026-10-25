@@ -9,6 +9,7 @@
 // seams with the terrain and the cost. See orchestration docs/r&d/immersion/deformable-surfaces.md.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include <string>
 #include <vector>
 
@@ -101,4 +102,7 @@ namespace wxl_livingazeroth::cover
     /// draws in that pass with scene lighting on): VS c12 = (x, y, exponent, 0) with fog =
     /// min(pow(max(viewZ * x + y, 0), exponent), 1), and PS c2 = the fog colour. False if never read.
     bool SeenSceneFog(float vsFog[4], float psFogColor[4]);
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

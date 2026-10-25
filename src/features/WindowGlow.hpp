@@ -11,6 +11,7 @@
 // Glow (ffxGlow) on, half as strong by default (or off; windows::Settings::withClientGlow).
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "wxl/PluginApi.h"
 
 namespace wxl_livingazeroth::windowglow
@@ -19,4 +20,7 @@ namespace wxl_livingazeroth::windowglow
     void Install(const WXL_Api* api);
     /// Before IDirect3DDevice9::Reset: releases its targets and shaders.
     void OnDeviceLost();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

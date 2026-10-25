@@ -1,4 +1,5 @@
 #include "ModelLights.hpp"
+#include "../debug/MemoryTag.hpp"
 #include "ModelIce.hpp"
 
 #include "../env/Lights.hpp"
@@ -96,6 +97,7 @@ namespace wxl_livingazeroth::modellights
 
         void __cdecl OnM2BatchDraw(void* /*user*/, const void* args)
         {
+            memuse::Scope memory(memuse::kLights);
             if (!g_probe) return;
             const auto* a = static_cast<const wxl::events::M2BatchDrawArgs*>(args);
             auto* device = static_cast<IDirect3DDevice9*>(a ? a->device : nullptr);
@@ -1046,5 +1048,13 @@ namespace wxl_livingazeroth::modellights
             g_probeLine = line;
         }
         return g_probeLine.c_str();
+    }
+}
+
+namespace wxl_livingazeroth::modellights
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_texture);
     }
 }

@@ -1,4 +1,5 @@
 #include "DoodadFade.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "game/Gx.hpp"
 #include "../debug/UiText.hpp"
@@ -103,6 +104,7 @@ namespace wxl_livingazeroth::doodadfade
 
         void __cdecl hkFade(void* doodad, void* arg)
         {
+            memuse::Scope memory(memuse::kFog);
             g_origFade(doodad, arg);
             if (!Dissolving() || !doodad) return;
             uintptr_t instance = 0;
@@ -161,6 +163,7 @@ namespace wxl_livingazeroth::doodadfade
 
         void __fastcall hkBatch(void* ctx, void* edx)
         {
+            memuse::Scope memory(memuse::kFog);
             const bool on = Begin(ctx);
             g_origBatch(ctx, edx);
             if (on) End();
@@ -223,6 +226,7 @@ namespace wxl_livingazeroth::doodadfade
 
         void __fastcall hkDoodad(void* ctx, void* edx, void* elements, void* indices)
         {
+            memuse::Scope memory(memuse::kFog);
             const bool any = Dissolving() && !(g_fadeNow.empty() && g_fadePrev.empty());
             uintptr_t element = 0;
             uint32_t run = 0;

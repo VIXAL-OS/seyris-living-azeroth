@@ -443,3 +443,12 @@ namespace wxl_livingazeroth::fogfar
         g_lastBuild = 0;
     }
 }
+
+namespace wxl_livingazeroth::fogfar
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_field);
+        out.Add(g_colour);
+    }
+}

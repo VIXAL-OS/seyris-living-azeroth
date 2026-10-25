@@ -8,6 +8,8 @@
 //  - the time of day, the server's weather and Living Azeroth's (the climate's, the storm's phase, darker nights);
 //  - the settings that matter (see-through, fog, storm, glass), the frame rate, and the see-through, fog and storm
 //    panels' status lines as they read.
+//  - the memory readout (debug/Memory): the address space by owner, Direct3D's texture memory, the client's caches (its
+//    largest textures named), Living Azeroth's own use by feature (2026-10-25). The memory warning asks for one too.
 // The key: SnapshotKey, a Windows virtual-key code (F11 by default; 0 = none), read from the window's messages (OnInput)
 // and polled while the client's window has the focus, as the core's F9; never swallowed (a binding of the client's on the
 // same key still runs). The overview page and the see-through section have a button. Nothing here reaches addons.

@@ -1,4 +1,5 @@
 #include "GrassDistanceCap.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "../Config.hpp"
 
@@ -77,6 +78,7 @@ namespace wxl_livingazeroth::grassdistance
 
         void __cdecl hkParamInitialize()
         {
+            memuse::Scope memory(memuse::kGrass);
             if (!g_applied) Raise(false);
             g_origParamInit();
         }

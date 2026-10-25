@@ -1,4 +1,5 @@
 #include "Storm.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "Climate.hpp"
 #include "Fog.hpp"
@@ -170,6 +171,7 @@ namespace wxl_livingazeroth::storm
         // shade goes on them before the light block, the sky and the fog take them.
         void __cdecl hkBands()
         {
+            memuse::Scope memory(memuse::kEnv);
             if (!g_bandBroken)
             {
                 const bool active = !Identity(g_shade);

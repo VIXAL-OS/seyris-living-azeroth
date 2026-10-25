@@ -212,3 +212,11 @@ namespace wxl_livingazeroth::depthcopy
         }
     }
 }
+
+namespace wxl_livingazeroth::depthcopy
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        out.Add(g_destination);   // (g_source is the client's depth surface)
+    }
+}

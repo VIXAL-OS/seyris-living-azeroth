@@ -36,6 +36,7 @@
 //    and its panes (GlassPanes' kPaneBacklit) light the floor and the air from a light behind each (LightOfPane).
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "../env/GlassModel.hpp"
 #include "../env/GlassRooms.hpp"
 #include "GlassShader.hpp"
@@ -371,4 +372,7 @@ namespace wxl_livingazeroth::glass
     /// Titan glass's line: TitanBacklit, the backlit panes loaded and near the camera; last frame the backlit panes
     /// lighting the floor and the backlit batches drawn; Vezax's pulse now.
     const char* BacklitLine();
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }

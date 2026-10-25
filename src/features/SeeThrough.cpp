@@ -1,4 +1,5 @@
 #include "SeeThrough.hpp"
+#include "../debug/MemoryTag.hpp"
 
 #include "../env/SeeThroughModel.hpp"
 #include "../render/BlpColour.hpp"
@@ -1264,6 +1265,7 @@ namespace wxl_livingazeroth::seethrough
 
         void __fastcall hkWalk(void* root, void* edx, uint32_t group, uint32_t fromGroup, float* rect, uint32_t depth, int interior)
         {
+            memuse::Scope memory(memuse::kSeeThrough);
             g_origWalk(root, edx, group, fromGroup, rect, depth, interior);
             if (g_inWalk || !Active()) return;
             uint32_t interiorPass = 0;
@@ -1910,6 +1912,7 @@ namespace wxl_livingazeroth::seethrough
 
         void __fastcall hkScene(void* scene, void* edx, int pass)
         {
+            memuse::Scope memory(memuse::kSeeThrough);
             g_origScene(scene, edx, pass);
             if (pass != 0 || !g_deferral.Count()) return;
             const void* world = nullptr;
@@ -2497,5 +2500,17 @@ namespace wxl_livingazeroth::seethrough
         sys->UnlockRect();
         sys->Release();
         level->Release();
+    }
+}
+
+namespace wxl_livingazeroth::seethrough
+{
+    void GpuMemory(memuse::Gpu& out)
+    {
+        for (const auto& l : g_leadTextures) out.Add(l.second.tex);
+        out.Add(g_frost.blurred);
+        out.Add(g_frost.ping);
+        out.Add(g_frost.resolved);
+        out.Add(g_split.ib);
     }
 }

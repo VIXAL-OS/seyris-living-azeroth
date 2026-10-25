@@ -12,6 +12,7 @@
 // storm and the wind at the ground; in heavy rain there is next to no wake. Calm, dry fog is as before.
 #pragma once
 
+#include "../debug/MemoryUse.hpp"
 #include "../env/WorldQuery.hpp"
 
 #include "wxl/PluginApi.h"
@@ -54,4 +55,7 @@ namespace wxl_livingazeroth::fogwake
 
     void Release();
     void DrawPanelSection(const WXL_Api* api);
+
+    /// Its Direct3D resources, for the memory readout (debug/Memory).
+    void GpuMemory(memuse::Gpu& out);
 }
