@@ -45,7 +45,8 @@ the Exodar (each a city's one WMO).
 Inputs: <scan> (waterfall-scan's out folder: wmo-windows/ roots and groups, as gen_glass.py) and the data folder with
 GlassWindows.cdbc. Nothing here opens an MPQ.
 Usage:  python see_through_survey.py <scan> [data dir] [--wmo <path>]   (--wmo: one WMO's windows, one per line)
-        python see_through_survey.py --table [data dir]                 (writes SeeThroughBuildings.cdbc from SEE_THROUGH)
+        python see_through_survey.py --table [data dir] [--without <file of WMO paths>]
+                                                     (writes SeeThroughBuildings.cdbc from SEE_THROUGH, less those WMOs)
 """
 import collections
 import math
@@ -456,8 +457,20 @@ def survey(scan, data, only=None):
 def main():
     args = [a for a in sys.argv[1:]]
     if args and args[0] == "--table":
+        # --without <file>: WMO paths (one a line) to leave out, e.g. an art pack's remodels whose rooms the survey hasn't
+        # passed again (2026-10-25, Project Reforged D): a window opened over a remodel could show the void behind it.
+        without = set()
+        if "--without" in args:
+            k = args.index("--without")
+            without = {l.strip().lower().replace("/", "\\") for l in Path(args[k + 1]).read_text().splitlines()
+                       if l.strip() and not l.startswith("#")}
+            del args[k:k + 2]
         data = Path(args[1]) if len(args) > 1 else Path(__file__).resolve().parent.parent / "data"
-        rows = see_through_table()
+        rows = [r for r in see_through_table() if r[1].lower() not in without]
+        if without:
+            print(f"left out {len(see_through_table()) - len(rows)} row(s) of {len(without)} WMO(s) (--without)")
+            for i, r in enumerate(rows):
+                r[0] = i + 1
         print(f"{len(rows)} rows: {len(SEE_THROUGH)} buildings, {len(SEE_THROUGH_GROUPS)} group rows, {len(SEE_THROUGH_WINDOWS)} window rows")
         gg.write(data / "SeeThroughBuildings.cdbc", io.build(SEE_THROUGH_COLUMNS, [tuple(r) for r in rows]))
         return

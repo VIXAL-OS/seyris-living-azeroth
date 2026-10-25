@@ -280,7 +280,41 @@ KINDS = {
     "draeniwindow": (FROSTED, MATTE, "auto", None),
     "jlo_wtauren_window01": (FROSTED, MATTE, "auto", None),
     "tuskarr_windowsa": (FROSTED, MATTE, "hint", GOLD),
+    # Project Reforged D's remodels (2026-10-25; only in a scan with D, chain_scan.py): by eye from the D chain's contact
+    # sheet. The garrison's human lattice windows (blue and lit yellow, shutters either side), Warsong Gulch's and a
+    # Legion paladin chapel's stained glass, a rose window, Uther's shrine's glass and its golden hand, the dwarves' lit
+    # amber panes.
+    "lt_human_window1": (LEADED, 0, "auto", None),
+    "lt_human_window1_yellow": (LEADED, 0, "auto", None),
+    "8wsg_window02": (STAINED, 0, "auto", None),
+    "7af_pld_window": (STAINED, 0, "auto", None),
+    "round_window": (STAINED, 0, "auto", None),
+    "uthershrine_stainedglassexterior_diffuse": (STAINED, 0, "auto", None),
+    "uthershrine_stainedglasssymbolexterior_diffuse": (STAINED, 0, "auto", None),
+    "na_dwarf_windows01": (FROSTED, 0, "auto", None),
+    # ... and the window atlases its human remodels (Goldshire's and Lakeshire's inns, the houses, farms, barns, the
+    # smithy, the lumber mill) and the transport ship take from later expansions, numbered, so no name says window
+    # (NAMED_GLASS): leaded lattice panes, blue by day or lit amber, with their frames and shutters in the atlas. Found by
+    # eye among the 371 textures D's remodels of LA's glass buildings name (E:\HD-compare\work\la-hd\d-new-textures).
+    "8hu_pvp_arathibasinbg_blacksmith01_2144319": (LEADED, 0, "auto", None),
+    "8hu_pvp_arathibasinbg_blacksmith01_2144321": (LEADED, 0, "auto", None),
+    "8hu_pvp_arathibasinbg_blacksmith01_2144323": (LEADED, 0, "auto", None),
+    "8hu_pvp_arathibasinbg_blacksmith01_2144325": (LEADED, 0, "auto", None),
+    "9hu_human_barn01_3567023": (LEADED, 0, "auto", None),
+    "9hu_human_goldshireinn01_3719118": (LEADED, 0, "auto", None),
+    "9hu_human_goldshireinn01_3719123": (LEADED, 0, "auto", None),
+    "9hu_human_goldshireinn01_3719125": (LEADED, 0, "auto", None),
+    "9hu_human_goldshireinn01_3719130": (LEADED, 0, "auto", None),
+    "9hu_human_goldshireinn01_3719132": (LEADED, 0, "auto", None),
+    "10hu_transportship_4765755_glow": (LEADED, 0, "auto", None),
+    "10hu_transportship_4765766_glow": (LEADED, 0, "auto", None),
 }
+# Glass textures whose names don't say so (an art pack's numbered atlases): candidates by name all the same.
+NAMED_GLASS = {"8hu_pvp_arathibasinbg_blacksmith01_2144319", "8hu_pvp_arathibasinbg_blacksmith01_2144321",
+               "8hu_pvp_arathibasinbg_blacksmith01_2144323", "8hu_pvp_arathibasinbg_blacksmith01_2144325",
+               "9hu_human_barn01_3567023", "9hu_human_goldshireinn01_3719118", "9hu_human_goldshireinn01_3719123",
+               "9hu_human_goldshireinn01_3719125", "9hu_human_goldshireinn01_3719130", "9hu_human_goldshireinn01_3719132",
+               "10hu_transportship_4765755_glow", "10hu_transportship_4765766_glow"}
 # Candidates that aren't glass, and broken, burnt or abandoned glass.
 SKIP = {
     "bi_grimbatol_windows_02": "an opening painted black", "bridgewindow": "wood and iron", "dal_windowcutout": "stone lattice",
@@ -294,6 +328,9 @@ SKIP = {
     "jlo_bloodelf_windows_abndn": "abandoned", "mm_aduskwood_wnd_int__01": "abandoned (broken panes)",
     "mm_orc_awindow_01": "abandoned (torn)", "tuskarr_windowsbdestroyed": "destroyed", "wall_windowabandn": "abandoned",
     "silvermyst_inn_window01": "a ruined inn", "azr_window01": "ruins", "cer_window01": "ruins",
+    # Reforged D's (2026-10-25): planks, a red wooden lattice, wooden frames and shutters, a stone wall with dark slits
+    "12tr_amani_window_wood_01": "wood", "12tr_amani_window_wood_01_end": "wood", "pa_window": "wooden lattice",
+    "8hu_kultiras_windowmap01": "wooden frames", "rt_human_windows": "a stone wall with dark slits",
 }
 BROKEN_WORDS = ("abndn", "abandn", "abandon", "burn", "broken", "destroyed", "ruin")
 # Glass textures with no window in them (2026-10-24): no GlassWindows row (nothing seen through it, no room behind it);
@@ -397,9 +434,36 @@ def base_name(path):
     return b[:-4] if b.endswith(".blp") else b
 
 
+# The masks of the NAMED_GLASS atlases (64 x 64, the GlassMaterials mask plane over the texels), filled by
+# materials_table: an atlas maps its frames, shutters and wood onto triangles of their own, so a triangle is glass only
+# where the atlas is (atlas_glass below). Empty without the textures (--windows alone): then every triangle counts.
+ATLAS_MASKS = {}
+ATLAS_SIDE = 64
+
+
+def atlas_glass(texture, uvs):
+    """For a NAMED_GLASS atlas: the mean of its mask at the triangle's middle and half-way to each corner (frac(uv),
+    v down), or None for any other texture."""
+    m = ATLAS_MASKS.get(texture.lower())
+    if m is None or len(uvs) != 3:
+        return None
+    cu = sum(u for u, _v in uvs) / 3.0
+    cv = sum(v for _u, v in uvs) / 3.0
+    points = [(cu, cv)] + [((cu + u) / 2.0, (cv + v) / 2.0) for u, v in uvs]
+    total = 0.0
+    for u, v in points:
+        x = min(ATLAS_SIDE - 1, int((u - math.floor(u)) * ATLAS_SIDE))
+        y = min(ATLAS_SIDE - 1, int((v - math.floor(v)) * ATLAS_SIDE))
+        total += float(m[y][x])
+    return total / len(points)
+
+
 def not_glass(texture, uvs):
     """Whether a triangle (its three texture coordinates) lies in its texture's NOT_GLASS corner, in the tile its middle
-    is in (the shader's frac(uv))."""
+    is in (the shader's frac(uv)); or, on a NAMED_GLASS atlas, where its mask is mostly not glass (frames, shutters)."""
+    on_atlas = atlas_glass(texture, uvs)
+    if on_atlas is not None:
+        return on_atlas < 0.5
     corner = NOT_GLASS.get(base_name(texture))
     if corner is None or len(uvs) != 3:
         return False
@@ -411,7 +475,7 @@ def not_glass(texture, uvs):
 
 def is_candidate(path):
     b = base_name(path)
-    return bool(CANDIDATE.search(b)) and not any(n in b for n in NOT_CANDIDATES)
+    return b in NAMED_GLASS or (bool(CANDIDATE.search(b)) and not any(n in b for n in NOT_CANDIDATES))
 
 
 def classify(path):
@@ -1917,6 +1981,10 @@ def materials_table(scan, textures, sheets=None):
         px = texels(path)
         plane, bias, share = mask_plane(px, mode, hint)
         avg, light = glass_colours(px, plane, bias, kind)
+        if base_name(t) in NAMED_GLASS:
+            import numpy as np
+            small = texels(path, ATLAS_SIDE)
+            ATLAS_MASKS[t.lower()] = np.clip(small @ np.array(plane) + bias, 0.0, 1.0).reshape(ATLAS_SIDE, ATLAS_SIDE).tolist()
         report[kind] += 1
         rows.append([0, t, kind, flags | (BACKLIT_PULSE if base_name(t) == VEZAX else 0), *avg, *light, *plane, bias, share,
                      "%s (%s): %s" % (base_name(t), KIND_NAMES[kind], ", ".join(sorted(cands[t])[:3])), *backlit_values(t),

@@ -178,7 +178,9 @@ def light_for_texture(texture):
 
 # --- WMO files -----------------------------------------------------------------------------------------------------
 def chunks(b, start=0, end=None):
-    end = len(b) if end is None else end
+    # (never past the file's end: Project Reforged D's WMO groups give MOGP a size 44 bytes past it, 2026-10-25; the
+    # client reads on regardless)
+    end = len(b) if end is None else min(end, len(b))
     at = start
     while at + 8 <= end:
         tag = b[at:at + 4][::-1].decode("latin1")
