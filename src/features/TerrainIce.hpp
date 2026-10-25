@@ -40,8 +40,9 @@ namespace wxl_livingazeroth::terrainice
     /// inserts the copy of the alpha sample into r25 right after it. False: this variant gets no ice
     /// (the wet terrain and lights still go in).
     bool        Prepare(std::string& src, Variant& variant, std::string& why);
-    /// r25.x = ice weight (x c216.w), r25.y = 1 - it. Goes before the wet block (temps r10..r12).
-    std::string WeightBlock(const Variant& variant);
+    /// r25.x = ice weight (x c216.w), r25.y = 1 - it. Goes before the wet block (temps r10..r12). With `wetMask`, also
+    /// r25.z = the layers' wet shine by the same weights (features/WetSurfaces: c160 per chunk, as c215 for the ice).
+    std::string WeightBlock(const Variant& variant, bool wetMask = false);
     /// The wet block's darkening, times r25.y (no wet look on ice).
     std::string WetScale();
     /// The ice look on colour register r. After the wet block, before the point lights (r10..r22).
@@ -61,6 +62,10 @@ namespace wxl_livingazeroth::terrainice
     void FillModelConstants(float constants[4 * kModelConstantCount]);
     /// The shared detail texture (created on first use for this device), or null.
     IDirect3DTexture9* DetailTexture(IDirect3DDevice9* device);
+
+    /// The sun as the terrain was last lit by it: toward it (world, unit) and its colour (the sun band's by day). For
+    /// features/WetSurfaces' glint. False until the first terrain chunk was drawn.
+    bool Sun(float dir[3], float colour[3]);
 
     /// From WXL_Load: the chunk-draw hook.
     void Install(const WXL_Api* api);

@@ -19,12 +19,16 @@
 #include <d3d9.h>
 #include <string>
 
+namespace wxl_livingazeroth::wetsurfaces { struct TerrainPieces; }
+
 namespace wxl_livingazeroth::terrainlights
 {
     /// The assembly inserted into a terrain pixel shader before its fog ending. `colour` = the register
     /// holding the colour there; needs the wetness block before it (r29 = the moisture texture uv,
     /// r31.x = the near grid's edge fade). Returns the definitions to put after the version line in `defs`.
-    std::string PixelBlock(const std::string& colour, std::string& defs);
+    /// With `wet`, features/WetSurfaces' pieces go in: before the loop (the normal r24 known), in it (each light's
+    /// highlight) and after the lights.
+    std::string PixelBlock(const std::string& colour, std::string& defs, const wetsurfaces::TerrainPieces* wet = nullptr);
 
     /// Edits a terrain vertex shader so the stock point lights' colours pass through a switch (VS
     /// c250.x). Leaves variants without point lights unchanged.

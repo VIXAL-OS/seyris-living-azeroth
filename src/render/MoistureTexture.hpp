@@ -37,6 +37,18 @@ namespace wxl_livingazeroth::moisturetex
     bool BindFarVertex(IDirect3DDevice9* device, DWORD vertexSampler);
     bool FarMapping(float& inverseExtent, float box[4], int& size, float& outside);
 
+    /// Wet surfaces (features/WetSurfaces): the grid's surface bytes (fields::WetGrid::surface) as a second texture of the
+    /// same layout and mapping, red = the surface film, green = the puddle potential. Bound to `sampler` with linear
+    /// filtering and wrap addressing (the terrain samples it where it samples the moisture); false if unavailable.
+    bool BindSurface(IDirect3DDevice9* device, DWORD sampler);
+    /// Uploads of the surface texture so far (the panel: proof the data reaches the GPU).
+    unsigned SurfaceUploads();
+
+    /// The terrain wetness's debug views (features/TerrainWetness Debug): the moisture texture as it is, with its excess
+    /// replaced: 1 and 2 every cell soaked, 3 stripes every 10 yd of world x (5 soaked, 5 dry). The normals stay. Bound like
+    /// Bind; false if unavailable.
+    bool BindDebug(IDirect3DDevice9* device, DWORD sampler, int mode);
+
     /// Drops the textures (device lost or replaced).
     void Release();
 

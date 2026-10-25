@@ -27,6 +27,7 @@
 #include "features/SeeThrough.hpp"
 #include "features/SpellLights.hpp"
 #include "features/SunShafts.hpp"
+#include "features/WetSurfaces.hpp"
 #include "features/Windows.hpp"
 #include "render/PostAA.hpp"
 #include "wxl_seyris/SettingsApi.hpp"
@@ -414,6 +415,18 @@ namespace wxl_livingazeroth::config
             d.maxLights = d.maxLights < 0 ? 0 : (d.maxLights > distantlight::kMaxLightsCap ? distantlight::kMaxLightsCap : d.maxLights);
         }
 
+        // Wet surfaces: stone and soil shine in rain, puddles in low ground.
+        {
+            const char* f = kSectionWetSurfaces;
+            wetsurf::Settings& w = wetsurfaces::Config();
+            auto range = [](float v, float lo, float hi, float fallback) { return std::isfinite(v) ? (v < lo ? lo : (v > hi ? hi : v)) : fallback; };
+            w.enabled = In(s, f, "Enabled", "In rain, stone, soil, paths and roads darken and shine, the sky and our lamps (torches, lit windows, spell lights) gleam on them, and puddles gather in low, flat ground and mirror them; grass, leaves, snow and ice stay as they are. Nothing under roofs or indoors gets wet. It comes on as the rain starts and dries out after it stops (DryOutMinutes). Buildings too, with Buildings (needs dynamic shadows on).", w.enabled);
+            w.intensity = range(In(s, f, "Intensity", "How glossy and dark wet surfaces get and how bright what they reflect, 0..2 (0 = no wet look, 1 = as designed).", w.intensity), 0.0f, 2.0f, 1.0f);
+            w.puddles = range(In(s, f, "Puddles", "How much low, flat ground floods as the rain goes on, 0..2 (0 = no puddles, 1 = the hollows and a few flat patches, 2 = most flat bare ground).", w.puddles), 0.0f, 2.0f, 1.0f);
+            w.dryOutMinutes = range(In(s, f, "DryOutMinutes", "Minutes for soaked surfaces to dry once the rain stops, on a mild day (faster when it's hot, dry and windy, slower when it's cold and humid); puddles take half as long again.", w.dryOutMinutes), 0.5f, 240.0f, 15.0f);
+            w.buildings = In(s, f, "Buildings", "Buildings' outside stone, wood and roofs get wet too: a little darker, the sky in them at a slant and the sun's sheen after the rain; floors and streets the most, walls less, ceilings not at all; a building's rooms only where the sky is over them, as Stormwind's streets (needs dynamic shadows on).", w.buildings);
+        }
+
         // The memory readout: what uses the client's address space, and the warning before it runs out.
         {
             const char* f = kSectionMemory;
@@ -428,6 +441,6 @@ namespace wxl_livingazeroth::config
             m.warnMinutes = In(s, f, "WarnMinutes", "At most one warning in this many minutes, unless it gets worse (100 MB less free, or the largest free block halved).", m.warnMinutes);
         }
 
-        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass, kSectionSpellLights, kSectionMemory, kSectionLantern, kSectionDistantLights);
+        api->Log(WXL_LOG_INFO, kTag, "config: settings read from [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s], [%s] in WarcraftXL.ini.", kSection, kSectionFog, kSectionFogWake, kSectionStorm, kSectionWindows, kSectionShafts, kSectionGlass, kSectionSpellLights, kSectionMemory, kSectionLantern, kSectionDistantLights, kSectionWetSurfaces);
     }
 }

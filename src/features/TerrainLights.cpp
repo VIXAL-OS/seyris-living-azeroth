@@ -2,6 +2,7 @@
 
 #include "ModelLights.hpp"
 #include "TerrainWetness.hpp"
+#include "WetSurfaces.hpp"
 #include "../env/Lights.hpp"
 
 #include "game/Camera.hpp"
@@ -32,8 +33,13 @@ namespace wxl_livingazeroth::terrainlights
         std::string        g_status;
     }
 
-    std::string PixelBlock(const std::string& r, std::string& defs)
+    std::string PixelBlock(const std::string& r, std::string& defs, const wetsurfaces::TerrainPieces* wet)
     {
+        // Wet surfaces (features/WetSurfaces): their view, reflection and sun glint once the normal is known, each light's
+        // highlight in the loop (its direction r20, colour r19 and light r16.x there), the sky and the highlights last.
+        const std::string wetBefore = wet ? wet->beforeLoop : std::string();
+        const std::string wetInLoop = wet ? wet->inLoop : std::string();
+        const std::string wetAfter = wet ? wet->after : std::string();
         // c207 = (1 / W, 0, 0.5 / W, 0): texel steps along a row; c208 = (2, -1, 1 / 1.5, 0);
         // c209 = (0.7, 1 / ln 2, 0.05, 0.03); c210 = (1.5: header row + texel centre, 0, 0, 0);
         // c211 = (the knee's minimum 0.8, 0.001).
@@ -64,7 +70,8 @@ namespace wxl_livingazeroth::terrainlights
             "\n    dp2add r24.w, r24, -r24, c202.x"
             "\n    max r24.w, r24.w, c202.y"
             "\n    rsq r24.w, r24.w"
-            "\n    rcp r24.z, r24.w"
+            "\n    rcp r24.z, r24.w" +
+            wetBefore +
             // The cell: r22.y = its first entry.
             "\n    add r22.xy, v9, -c206"
             "\n    mul r22.xy, r22, c206.z"
@@ -167,7 +174,8 @@ namespace wxl_livingazeroth::terrainlights
             // Indoor lights (4th texel .w = 1, only while the panel's switch is on) stay off the terrain.
             "\n      add r10.w, c202.x, -r10.w"
             "\n      mul r16.x, r16.x, r10.w"
-            "\n      mad r23.xyz, r19, r16.x, r23"
+            "\n      mad r23.xyz, r19, r16.x, r23" +
+            wetInLoop +
             "\n      add r22.x, r22.x, c202.x"
             "\n    endrep"
             // Our sum through the knee every shader applies (lights::LampKnee): above c185.x its brightest channel goes
@@ -220,7 +228,8 @@ namespace wxl_livingazeroth::terrainlights
             "\n    rcp r13.y, r15.y"
             "\n    rcp r13.z, r15.z"
             "\n    mul r14.xyz, r14, r13"
-            "\n    mul " + r + ".xyz, " + r + ", r14";
+            "\n    mul " + r + ".xyz, " + r + ", r14" +
+            wetAfter;
     }
 
     void EditVertex(std::string& src)

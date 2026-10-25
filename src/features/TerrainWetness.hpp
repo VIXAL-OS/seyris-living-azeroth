@@ -4,8 +4,10 @@
 // Every terrain vertex shader passes its world position on (texcoord7 .xyz); every terrain pixel
 // shader samples the shared moisture texture (render/MoistureTexture, sampler s11) there and darkens
 // its colour right before fog, then adds the point lights (features/TerrainLights) and a lightning
-// strike's scorch mark (env/Storm). Only the inserted lines are ours -- every layer count, shadow
-// variant and output of the stock shaders stays as it was.
+// strike's scorch mark (env/Storm). Wet surfaces (features/WetSurfaces) go in with them: the surface
+// film and puddles (s15), their darkening with the soil's, and their sheen, sky and highlights with the
+// lights. Only the inserted lines are ours -- every layer count, shadow variant and output of the stock
+// shaders stays as it was.
 #pragma once
 
 #include "wxl/PluginApi.h"

@@ -17,6 +17,7 @@
 #include "../features/SunShafts.hpp"
 #include "../features/SurfaceCover.hpp"
 #include "../features/TerrainIce.hpp"
+#include "../features/WetSurfaces.hpp"
 #include "../features/WindowGlow.hpp"
 #include "../render/MoistureTexture.hpp"
 #include "../render/PostAA.hpp"
@@ -165,6 +166,7 @@ namespace wxl_livingazeroth::memory
             {memuse::kFog, &fogwake::GpuMemory},
             {memuse::kLights, &modellights::GpuMemory},
             {memuse::kEnv, &moisturetex::GpuMemory},
+            {memuse::kEnv, &wetsurfaces::GpuMemory},
             {memuse::kGlass, &glass::GpuMemory},
             {memuse::kGlass, &glassshafts::GpuMemory},
             {memuse::kSeeThrough, &seethrough::GpuMemory},

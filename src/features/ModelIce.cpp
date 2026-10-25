@@ -8,6 +8,7 @@
 #include "CoverRipples.hpp"
 
 #include "TerrainIce.hpp"
+#include "../env/WetSurfaceModel.hpp"
 #include "../render/M2Effects.hpp"
 #include "../render/ShaderPatch.hpp"
 
@@ -558,7 +559,11 @@ namespace wxl_livingazeroth::modelice
                 "\n      mul r29.y, r29.y, c80.w"
                 "\n      mad r31.xyz, r28, r29.y, r31"
                 "\n      add r31.xyz, r31, -r12"
-                "\n      mul r31.xyz, r31, c179.x"
+                // The weight by the facing (features/WetSurfaces' wet buildings, c77; zeros: c179.x as it was): x (1 -
+                // saturate(c77.x - N.z x c77.y)), N.z the world normal's up (r15.z): floors full, walls less, ceilings none.
+                "\n      mad_sat r30.w, -r15.z, c77.y, c77.x"
+                "\n      mad r30.w, -r30.w, c179.x, c179.x"
+                "\n      mul r31.xyz, r31, r30.w"
                 "\n      mov r30.xyz, c189"
                 "\n      mad r31.xyz, r30, c179.x, r31"
                 // Crystals: the inner glow, c81.rgb x (the facets' shading + c81.w) x |N.V| (already x the weight); then the
@@ -578,7 +583,7 @@ namespace wxl_livingazeroth::modelice
         bool EditPixel(std::string& src, std::string& why, bool rims, bool glassBlocks = false)
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
-            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c7[89]|c8[01]|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
+            static const std::regex clash(R"(\b(r1[2-9]|r2[0-9]|r3[01]|b\d+|i\d+|s14|c7[7-9]|c8[01]|c10[1-9]|c1[1-9][0-9]|c2[0-2][0-9])\b)");
             if (std::regex_search(src, clash)) { why = "uses a register the patch needs"; return false; }
             // (the glass's too: the rooms' samplers s8..s13 and the lead mask's s15, c15..c33 (the room's, the redraw's), c83..c100)
             static const std::regex glassClash(R"(\b(s([89]|1[0-35])|c1[5-9]|c2[0-9]|c3[0-3]|c8[3-9]|c9[0-9]|c100)\b)");
@@ -779,6 +784,21 @@ namespace wxl_livingazeroth::modelice
         constexpr float kDetailFadeStart = 60.0f, kDetailFadeEnd = 180.0f;
         c190[3] = -1.0f / (kDetailFadeEnd - kDetailFadeStart);
         look[39] = kDetailFadeEnd / (kDetailFadeEnd - kDetailFadeStart); // c189.w
+        if (style == Style::Wet)
+        {
+            // Wet stone, wood and roofs (features/WetSurfaces, which scales the darkening, the Fresnel and the glint by its
+            // intensity and the sun): the texture's own colour as the body, no clouds, no cracks or bubbles (c190.z -1),
+            // clear (it's all surface), 22% darker, the sky by Fresnel (F0 0.04 as the ice) at kBuildingFresnel, and a broad
+            // sheen of the sun rather than the ice's pin-point glint; no debug tint.
+            c190[0] = 1.0f; c190[1] = 0.0f; c190[2] = -1.0f;
+            c179[2] = -wetsurf::kBuildingDarkening;
+            look[19] = wetsurf::kBuildingGlintPower;                   // c184.w glint exponent
+            look[23] = wetsurf::kBuildingFresnel;                      // c185.w Fresnel strength
+            look[27] = 1.0f;                                           // c186.w clarity
+            look[35] = 1.0f;                                           // c188.w sky reflection brightness
+            look[36] = look[37] = look[38] = 0.0f;                     // c189.xyz debug tint
+            return;
+        }
         if (style == Style::Light || style == Style::SeaIce)
         {
             // Ice models and buildings: the texture's own colour is the body (icebergs, shoreline floes and

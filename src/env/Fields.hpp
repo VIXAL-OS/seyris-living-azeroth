@@ -67,8 +67,17 @@ namespace wxl_livingazeroth::fields
         // fast its moisture is changing now.
         uint32_t zone = 0;
         float zoneShare = 0.0f, zoneSoakMix = 0.0f, rainShare = 0.0f, changePerSecond = 0.0f;
+        // Wet surfaces (env/WetSurfaceModel): the water on the surface here (0..1, as the shaders get it), the spot's
+        // lowness (yd below the ground round it; known once enough of it is sampled) and its puddle potential.
+        float surfaceFilm = 0.0f, lowness = 0.0f, puddlePotential = 0.0f;
+        bool  lownessKnown = false;
     };
     MoistureDetail Moisture(const float pos[3]);
+
+    /// Wet surfaces: what a zone's surface film is (0..1; features/WetSurfaces keeps the zones'). Without one the grid's
+    /// surface bytes hold no film (the puddle potential is still worked out). Main thread.
+    using ZoneFilmFn = float (*)(int map, uint32_t zone);
+    void SetZoneFilm(ZoneFilmFn film);
 
     /// For GPU consumers: moisture above the material's rest (0..255 = 0..1), one byte per cell, in a
     /// world-aligned toroidal layout: cell (i, j) of the world (i = floor(x / cellSize)) lives at
@@ -81,6 +90,9 @@ namespace wxl_livingazeroth::fields
         int            firstI = 0, firstJ = 0;
         const uint8_t* excess = nullptr;
         const uint8_t* normal = nullptr; // per cell 2 bytes: the ground's normal x, y as 0..255 (128 = 0; z from them)
+        // Wet surfaces: per cell 2 bytes, the surface film there (its zone's x open sky, none under water, snow or on hot
+        // ground) and its puddle potential (env/WetSurfaceModel SpotFilm, SpotPotential), 0..255 = 0..1.
+        const uint8_t* surface = nullptr;
         uint32_t       version = 0;
         float          farExcess = 0.0f; // beyond the grid where no zone is known: the player's zone's value
 
@@ -133,6 +145,10 @@ namespace wxl_livingazeroth::fields
         bool     shorePending = false;            // a result is on its way
         unsigned shoreApplied = 0, shoreStale = 0; // results applied / dropped (the grid moved or reset)
         double   shoreCopyMs = 0.0, shoreApplyMs = 0.0;
+        // Wet surfaces: cells holding some film (> 0.05), cells that can flood (potential > 0.3), cells whose lowness is
+        // known; the lowness pass's time last frame (a slice of the grid a frame).
+        unsigned wetCells = 0, puddleCells = 0, lownessKnown = 0;
+        double   lownessMs = 0.0;
     };
     Stats GetStats();
 

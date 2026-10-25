@@ -5,8 +5,12 @@
 #include "Glass.hpp"
 #include "ModelIce.hpp"
 #include "SeeThrough.hpp"
+#include "CoverRooms.hpp"
 #include "SurfaceCover.hpp"
 #include "TerrainIce.hpp"
+#include "WetSurfaces.hpp"
+#include "../env/Shelter.hpp"
+#include "../env/WetSurfaceModel.hpp"
 
 #include "game/Gx.hpp"
 
@@ -114,6 +118,8 @@ namespace wxl_livingazeroth::wmoice
             bool anyCrystal = false;
             uint32_t crystalGeneration = 0; // the crystal table these were looked up in
             uint32_t path = 0;            // glass::PathHash of the root's WMO path (0 unread)
+            std::vector<uint8_t> wet;     // per material: its wet shine (features/WetSurfaces) x 255, 0 = never wet-looking
+            bool anyWet = false;
         };
         std::unordered_map<const void*, RootIce> g_cache;
         const RootIce* g_rootIce = nullptr;  // the current group's root, when it has ice materials
@@ -273,7 +279,8 @@ namespace wxl_livingazeroth::wmoice
                 r.motx = v.motx; r.materials = v.materials; r.ice.assign(v.count, 0); r.sand.assign(v.count, 0); r.glass.assign(v.count, 0);
                 r.selfLit.assign(v.count, 0);
                 r.crystal.assign(v.count, 0);
-                r.any = r.anySand = r.anyGlass = r.anyCrystal = false;
+                r.wet.assign(v.count, 0);
+                r.any = r.anySand = r.anyGlass = r.anyCrystal = r.anyWet = false;
                 r.glassGeneration = glass::Generation();
                 r.crystalGeneration = crystal::Generation();
                 r.path = ReadPathHash(root);
@@ -293,6 +300,14 @@ namespace wxl_livingazeroth::wmoice
                             r.anyGlass = true;
                             r.selfLit[i] = ReadSelfLit(v, i);
                         }
+                        // Wet surfaces: what isn't ice, a crystal or glass, by its texture and blend mode.
+                        else if (!r.ice[i] && !r.crystal[i])
+                            if (uint32_t flags = 0, blend = 0; ReadBlend(v, i, flags, blend))
+                                if (const float shine = wetsurfaces::BuildingShine(name, blend, flags); shine > 0.0f)
+                                {
+                                    r.wet[i] = static_cast<uint8_t>(std::lround(std::min(shine, 1.0f) * 255.0f));
+                                    r.anyWet = r.anyWet || r.wet[i] > 0;
+                                }
                     }
                 ++g_roots;
                 g_iceRoots += r.any ? 1 : 0;
@@ -311,11 +326,28 @@ namespace wxl_livingazeroth::wmoice
             dev->SetSamplerState(kSampler, D3DSAMP_SRGBTEXTURE, FALSE);
         }
 
+        // Wet surfaces (features/WetSurfaces): the block's facing constant (c77) is set for wet batches only, back to zeros
+        // (the weight as it was) before anything else uses the block.
+        bool    g_facingSet = false;
+        uint8_t g_onWetShine = 0;
+        bool    g_wetLoop = false;   // wet buildings for the current loop (an exterior group, wet weather)
+        float   g_groupWet = -1.0f;  // the group being drawn: 1 exterior, its sky share for a room, -1 unknown (by its flags)
+        float   g_loopWet = 0.0f;    // the batch loop's: g_groupWet, or by the group's own flags where that's unknown
+
+        void FacingOff(IDirect3DDevice9* dev)
+        {
+            if (!g_facingSet || !dev) return;
+            const float zero[4] = {};
+            dev->SetPixelShaderConstantF(wetsurf::kFacingConstant, zero, 1);
+            g_facingSet = false;
+        }
+
         void SwitchOn(modelice::Style style)
         {
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
             IDirect3DTexture9* detail = dev ? terrainice::DetailTexture(dev) : nullptr;
             if (!detail) return;
+            FacingOff(dev);
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
             float weight[4], more[4];
@@ -344,6 +376,7 @@ namespace wxl_livingazeroth::wmoice
             const crystal::Material* m = crystal::MaterialAt(cls & ~crystal::kUnlitBit);
             IDirect3DTexture9* detail = dev && m ? crystal::DetailTexture(dev) : nullptr;
             if (!detail) { SwitchOff(); return; }
+            FacingOff(dev);
             float look[4 * terrainice::kModelConstantCount];
             terrainice::FillModelConstants(look);
             float weight[4], more[4], c[4 * crystal::kRegisters];
@@ -370,7 +403,37 @@ namespace wxl_livingazeroth::wmoice
             {
                 const BOOL off = FALSE;
                 dev->SetPixelShaderConstantB(modelice::kSwitch, &off, 1);
+                FacingOff(dev);
             }
+        }
+
+        // The same block for a wet batch (features/WetSurfaces): its style's constants for its texture's shine, the facing,
+        // a 1 x 1 detail (the wet style reads none of it).
+        void SwitchOnWet(uint8_t shine)
+        {
+            if (g_on && g_onStyle == modelice::Style::Wet && g_onWetShine == shine) return;
+            auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
+            IDirect3DTexture9* detail = dev ? wetsurfaces::BuildingDetail(dev) : nullptr;
+            if (!detail) { SwitchOff(); return; }
+            float look[4 * terrainice::kModelConstantCount];
+            terrainice::FillModelConstants(look);
+            float weight[4], more[4], facing[4];
+            wetsurfaces::BuildingConstants(shine / 255.0f, look, weight, more, facing);
+            dev->SetPixelShaderConstantF(modelice::kWeightConstant, weight, 1);
+            dev->SetPixelShaderConstantF(modelice::kLookConstant, look, terrainice::kModelConstantCount);
+            dev->SetPixelShaderConstantF(modelice::kStyleConstant, more, 1);
+            const float noCrystal[4 * crystal::kRegisters] = {};
+            dev->SetPixelShaderConstantF(crystal::kConstant, noCrystal, crystal::kRegisters);
+            dev->SetPixelShaderConstantF(wetsurf::kFacingConstant, facing, 1);
+            g_facingSet = true;
+            glass::ViewTaken();        // c180..c183 are the floor light's too
+            BindDetail(dev, detail);
+            const BOOL on = TRUE;
+            dev->SetPixelShaderConstantB(modelice::kSwitch, &on, 1);
+            g_on = true;
+            g_onStyle = modelice::Style::Wet;
+            g_onCrystal = 0;
+            g_onWetShine = shine;
         }
 
         // The footprint rims (ModelIce's b8 block) for a sand or snow batch: the view (c180..c189, as for the ice), the
@@ -429,6 +492,7 @@ namespace wxl_livingazeroth::wmoice
             modelice::Style style = modelice::Style::None;
             uint8_t floor = 0;   // 1 sand, 2 snow
             uint16_t glassRow = 0, crystalClass = 0;
+            uint8_t wet = 0;
             bool selfLit = false, unlit = false;
             const RootIce* r = g_rootIce;
             uint8_t index = 0;
@@ -445,6 +509,7 @@ namespace wxl_livingazeroth::wmoice
                     glassRow = r->glass[index];
                     selfLit = r->selfLit[index] == 1;
                     unlit = r->selfLit[index] == 2;
+                    if (g_wetLoop && !glassRow && !floor) wet = static_cast<uint8_t>(std::lround(r->wet[index] * std::min(g_loopWet, 1.0f)));
                 }
             }
             if (floor) RingsOn(floor == 2);
@@ -461,6 +526,11 @@ namespace wxl_livingazeroth::wmoice
                 if (!g_on || g_onCrystal != crystalClass || g_onCrystalSize != size) SwitchOnCrystal(crystalClass, size);
                 if (g_on) crystal::NoteBatch(true);
             }
+            else if (wet)
+            {
+                SwitchOnWet(wet);
+                if (g_on) wetsurfaces::NoteBuildingBatch();
+            }
             else SwitchOff();
             // See-through windows (features/SeeThrough): a glass batch of an opened group may be drawn later, over the room.
             seethrough::Batch(g_group, record, glassRow);
@@ -469,12 +539,86 @@ namespace wxl_livingazeroth::wmoice
             return culled;
         }
 
+        // Wet buildings in a room's group (features/WetSurfaces). Stormwind's streets, canals and squares are interior groups
+        // (MOGI 0x2000) as its shops are, so a room is wet only as far as the roof checks (env/Shelter) see the sky over its
+        // floor: nine points over its box (MOGI, cover::rooms' guarded layout), 1.5 yd above its bottom, in the world through
+        // the instance's placement. Cached per instance and group for kRoomRecheck seconds; while the roof checks' budget is
+        // spent (they'd answer "open"), not cached and dry. 0..1: its batches' wet weight x this.
+        constexpr double kRoomRecheck = 30.0;
+        struct RoomOpen { float share = 0.0f; double at = -1.0e9; };
+        std::unordered_map<uint64_t, RoomOpen> g_roomOpen;
+        int   g_roomGuards = 0;          // 0 unchecked, 1 hold, -1 differ (rooms stay dry)
+        unsigned g_roomsChecked = 0, g_roomsOpen = 0;
+
+        bool ReadRaw(const void* src, void* dst, size_t n)
+        {
+            __try { std::memcpy(dst, src, n); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        float GroupWet(const void* root, int group, const void* instanceArg)
+        {
+            namespace rm = cover::rooms;
+            if (!root || group < 0 || !instanceArg) return -1.0f;
+            const auto* r = static_cast<const uint8_t*>(root);
+            const void* infos = nullptr;
+            uint32_t count = 0;
+            uint8_t info[rm::kGroupInfoStride];
+            if (!ReadRaw(r + rm::kRootGroupInfo, &infos, sizeof(infos)) || !ReadRaw(r + rm::kRootGroupCount, &count, sizeof(count)) || !infos ||
+                static_cast<uint32_t>(group) >= count || count > rm::kMaxGroups ||
+                !ReadRaw(static_cast<const uint8_t*>(infos) + static_cast<size_t>(group) * rm::kGroupInfoStride, info, sizeof(info)))
+                return -1.0f;
+            uint32_t flags;
+            float box[6];
+            std::memcpy(&flags, info, 4);
+            std::memcpy(box, info + 4, sizeof(box));
+            if (!(flags & rm::kInteriorGroup)) return 1.0f;
+            if (g_roomGuards == 0)
+            {
+                g_roomGuards = 1;
+                for (const coverprints::Guard& gd : rm::kGuards)
+                {
+                    uint8_t bytes[24];
+                    if (!ReadRaw(reinterpret_cast<const void*>(gd.address), bytes, gd.size) || std::memcmp(bytes, gd.bytes, gd.size) != 0) { g_roomGuards = -1; break; }
+                }
+            }
+            if (g_roomGuards < 0) return 0.0f;
+            const uint64_t key = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(instanceArg)) << 12) ^ static_cast<uint64_t>(group);
+            const double now = static_cast<double>(GetTickCount64()) / 1000.0;
+            RoomOpen& cached = g_roomOpen[key];
+            if (now - cached.at < kRoomRecheck) return cached.share;
+            const uint8_t* instance = static_cast<const uint8_t*>(instanceArg) - kInstanceArg;
+            float origin[3], axes[9];
+            if (!ReadOrigin(instance, origin) || !ReadAxes(instance, axes)) return cached.share;
+            for (int k = 0; k < 6; ++k) if (!std::isfinite(box[k])) return 0.0f;
+            const unsigned deferred = shelter::GetStats().deferredThisFrame;
+            float open = 0.0f;
+            for (int j = 0; j < 3; ++j)
+                for (int i = 0; i < 3; ++i)
+                {
+                    const float p[3] = { box[0] + (box[3] - box[0]) * (i + 0.5f) / 3.0f, box[1] + (box[4] - box[1]) * (j + 0.5f) / 3.0f, box[2] + 1.5f };
+                    float w[3];
+                    for (int k = 0; k < 3; ++k) w[k] = origin[k] + p[0] * axes[k] + p[1] * axes[3 + k] + p[2] * axes[6 + k];
+                    open += shelter::Openness(w);
+                }
+            if (shelter::GetStats().deferredThisFrame != deferred) return cached.at > -1.0e8 ? cached.share : 0.0f;  // asked again later
+            const float share = open / 9.0f;
+            cached.share = std::clamp((share - 0.15f) / 0.35f, 0.0f, 1.0f);
+            cached.at = now;
+            ++g_roomsChecked;
+            g_roomsOpen += cached.share > 0.0f ? 1u : 0u;
+            if (g_roomOpen.size() > 8192) g_roomOpen.clear();
+            return cached.share;
+        }
+
         // Around one placed instance's group (both loops run inside): which building it is, for the rooms behind its
         // glass (features/Glass; only for roots with glass), the windows opened in it (features/SeeThrough) and the
-        // rooms the surface cover keeps out of (features/SurfaceCoverRooms).
+        // rooms the surface cover keeps out of (features/SurfaceCoverRooms); for wet buildings, how open to the sky it is.
         void __fastcall hkRenderGroup(void* root, void* edx, int group, void* instanceArg, void* list)
         {
             memuse::Scope memory(memuse::kIce);
+            const float savedGroupWet = g_groupWet;
+            g_groupWet = wetsurfaces::BuildingsActive() ? GroupWet(root, group, instanceArg) : -1.0f;
             bool began = false;
             if (glass::Config().enabled && glass::PatchedVariants() > 0 && g_depth == 0)
                 if (const RootIce* r = IceOf(static_cast<const uint8_t*>(root)); r && r->anyGlass)
@@ -493,6 +637,7 @@ namespace wxl_livingazeroth::wmoice
             g_origGroup(root, edx, group, instanceArg, list);
             seethrough::EndGroupDraw();
             if (began) glass::EndInstance();
+            g_groupWet = savedGroupWet;
         }
 
         uint32_t ReadGroupFlags(const void* group)
@@ -508,15 +653,21 @@ namespace wxl_livingazeroth::wmoice
             memuse::Scope memory(memuse::kIce);
             const RootIce* saved = g_rootIce;
             const void* savedGroup = g_group;
-            const bool savedIce = g_iceLoop, savedCrystal = g_crystalLoop;
+            const bool savedIce = g_iceLoop, savedCrystal = g_crystalLoop, savedWet = g_wetLoop;
+            const float savedLoopWet = g_loopWet;
             g_rootIce = nullptr;
             g_group = group;
             g_iceLoop = g_enabled && modelice::Enabled() && modelice::PatchedVariants() > 0;
             g_crystalLoop = crystal::Active() && modelice::PatchedVariants() > 0;
+            // Wet buildings: an exterior group's batches, a room's as far as it's open to the sky (GroupWet, from the group
+            // draw around this loop: Stormwind's streets yes, its shops no).
+            g_loopWet = g_groupWet >= 0.0f ? g_groupWet : ((ReadGroupFlags(group) & 0x2000u) ? 0.0f : 1.0f);
+            g_wetLoop = wetsurfaces::BuildingsActive() && g_loopWet > 0.0f;
             const bool glassOn = glass::Config().enabled && glass::PatchedVariants() > 0;
-            if (g_iceLoop || g_crystalLoop || glassOn)
+            if (g_iceLoop || g_crystalLoop || glassOn || g_wetLoop)
                 if (const RootIce* r = IceOf(RootOf(group));
-                    r && ((g_iceLoop && (r->any || r->anySand)) || (g_crystalLoop && r->anyCrystal) || (glassOn && r->anyGlass)))
+                    r && ((g_iceLoop && (r->any || r->anySand)) || (g_crystalLoop && r->anyCrystal) || (glassOn && r->anyGlass) ||
+                          (g_wetLoop && r->anyWet)))
                 {
                     g_rootIce = r;
                     if (glassOn && r->anyGlass) glass::BeginGroup(ReadGroupFlags(group), true);
@@ -532,6 +683,8 @@ namespace wxl_livingazeroth::wmoice
             g_group = savedGroup;
             g_iceLoop = savedIce;
             g_crystalLoop = savedCrystal;
+            g_wetLoop = savedWet;
+            g_loopWet = savedLoopWet;
         }
     }
 
@@ -603,9 +756,11 @@ namespace wxl_livingazeroth::wmoice
 
     const char* StatusLine()
     {
-        char line[256];
-        std::snprintf(line, sizeof(line), "ice in buildings: %s; buildings seen %u, with ice %u; ice batches drawn so far %u; footprint rims on sand floors %u%s",
-                      g_enabled ? "on" : "off", g_roots, g_iceRoots, g_iceBatches, g_ringBatches,
+        char line[384];
+        std::snprintf(line, sizeof(line), "ice in buildings: %s; buildings seen %u, with ice %u; ice batches drawn so far %u; footprint rims on sand floors %u; "
+                      "wet buildings: rooms open to the sky %u of %u checked%s%s",
+                      g_enabled ? "on" : "off", g_roots, g_iceRoots, g_iceBatches, g_ringBatches, g_roomsOpen, g_roomsChecked,
+                      g_roomGuards < 0 ? " (the rooms' layout differs: rooms stay dry)" : "",
                       g_hookedInt && g_hookedExt && g_hookedCull ? (g_hookedGroup ? "" : "; the group hook is missing (rooms: the default house)") : "; a hook is missing");
         g_status = line;
         return g_status.c_str();

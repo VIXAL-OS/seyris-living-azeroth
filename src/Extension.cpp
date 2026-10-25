@@ -68,6 +68,7 @@
 #include "features/GlassShafts.hpp"
 #include "features/SeeThrough.hpp"
 #include "features/SpellLights.hpp"
+#include "features/WetSurfaces.hpp"
 #include "features/WindowGlow.hpp"
 #include "features/Windows.hpp"
 #include "features/WmoIce.hpp"
@@ -166,6 +167,8 @@ namespace
                    wxl_livingazeroth::terrainice::StatusLine(), wxl_livingazeroth::modelice::StatusLine(),
                    wxl_livingazeroth::wmoice::StatusLine(), wxl_livingazeroth::glass::StatusLine(), wxl_livingazeroth::crystal::StatusLine(),
                    wxl_livingazeroth::seethrough::StatusLine(), wxl_livingazeroth::treeshadows::LogLine(), wxl_livingazeroth::spelllights::StatusLine());
+        // Wet surfaces on a line of their own (the line above is near the core's 1,000 characters).
+        g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: %s", wxl_livingazeroth::wetsurfaces::StatusLine());
         g_api->Log(WXL_LOG_INFO, "wxl-seyris-living-azeroth", "status: in %s%s%s: %s", zone, sub ? ", " : "", sub ? s.subZoneText : "",
                    wxl_livingazeroth::memory::LogPart());
         // The lantern, the distant lights and the compare key (2026-10-25), on a line of their own (the core's lines hold 1,000
@@ -229,6 +232,7 @@ namespace
             wxl_livingazeroth::wind::Update(dt, snap);
             if (snap.inWorld)
                 wxl_livingazeroth::actors::Refresh(snap.playerPos, wxl_livingazeroth::grass::kActorRange);
+            wxl_livingazeroth::wetsurfaces::Update(dt, snap); // the zones' surface water, which the fields' step reads
             wxl_livingazeroth::fields::Update(dt, snap);
         }
         {

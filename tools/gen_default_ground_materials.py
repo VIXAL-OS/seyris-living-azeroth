@@ -11,7 +11,8 @@ design docs/r&d/immersion/world-fields.md).
                           parent), RestMoisture (0 bone dry .. 1 soaked: what the texture already
                           shows), Stiffness (0 gives way completely .. 1 rigid), Flags (0),
                           Absorbency (how much rain and water nearby reach it: rock ~0.1 .. sand ~0.9),
-                          Temperature (degC of the material itself; -1000 = none; liquids: magma ~1000).
+                          Temperature (degC of the material itself; -1000 = none; liquids: magma ~1000),
+                          WetShine (how much it takes the wet look in rain: 0 never .. 1 stone; -1 = by TerrainType).
   SurfaceCover            the cover a material carries, keyed by MaterialID; -1 fields come from the
                           parent material's row. CoverMaterial = what lies on top (0 = the ground
                           material itself; its Stiffness decides how far feet press the cover down).
@@ -44,8 +45,9 @@ PREVENT_UNDERWATER, PREVENT_ON_LAND, USE_MCCV, IGNORE_SPECULAR = 0x1, 0x2, 0x4, 
 T = -1000.0  # signed columns: not set
 
 
-def material(id, name, parent=0, rest_moisture=I, stiffness=I, flags=0, absorbency=I, temperature=T):
-    return (id, name, parent, rest_moisture, stiffness, flags, absorbency, temperature)
+def material(id, name, parent=0, rest_moisture=I, stiffness=I, flags=0, absorbency=I, temperature=T, wet_shine=I):
+    # wet_shine: WetShine (features/WetSurfaces), 0 never wet-looking .. 1 stone; -1 = the layer's TerrainType decides
+    return (id, name, parent, rest_moisture, stiffness, flags, absorbency, temperature, wet_shine)
 
 
 def selector(id, material_id, scope=GLOBAL, scope_id=0, texture="", effect=0, terrain=ANY, liquid=0, flags=0):

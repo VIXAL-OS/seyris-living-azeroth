@@ -4,7 +4,7 @@
 //
 // Each effect goes off through its own switch, the one its panel checkbox sets (Switches(): the ground fog, storms, darker
 // nights, our point lights with the window and spell lights and the lantern on them, the window glow, sun shafts, glass,
-// see-through windows, crystals, clear ice, wet ground, the surface cover, tree shadows, grass motion and density, the
+// see-through windows, crystals, clear ice, wet ground and wet surfaces, the surface cover, tree shadows, grass motion and density, the
 // doodad fade, anti-aliasing, mount wings' depth, distant lights), so each feature runs its own off path (clears its
 // lights, gives the client its own lights back, stops drawing) and nothing is left half on. The values it found are kept
 // and put back by the second press; a switch someone changed in a panel meanwhile keeps that change. Nothing here reads or

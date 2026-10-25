@@ -10,6 +10,7 @@
 #include "../features/ModelIce.hpp"
 #include "../features/TerrainIce.hpp"
 #include "../features/TerrainWetness.hpp"
+#include "../features/WetSurfaces.hpp"
 #include "../features/WmoIce.hpp"
 #include "../env/WorldQuery.hpp"
 #include "UiText.hpp"
@@ -167,6 +168,10 @@ namespace wxl_livingazeroth::debug
             if (g_api->UiCombo("wet terrain debug view", &debugView, kDebugViews, 4)) terrainwet::SetDebug(debugView);
             float strength = terrainwet::Strength();
             if (g_api->UiSliderFloat("wet terrain strength", &strength, 0.0f, 1.0f)) terrainwet::SetStrength(strength);
+
+            // Wet surfaces in rain: the shine, the puddles, wet buildings.
+            g_api->UiSeparator();
+            wetsurfaces::DrawPanelSection(g_api);
 
             g_api->UiSeparator();
             ui::Text(g_api, terrainice::StatusLine());

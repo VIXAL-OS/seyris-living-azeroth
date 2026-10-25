@@ -38,7 +38,9 @@ def as_int(u: int) -> int:
 
 def build(columns, rows) -> bytes:
     """columns: one type per column, "u" (uint32), "i" (int32), "f" (float) or "s" (string).
-    rows: tuples of Python values in that order; written sorted by the first column (ID)."""
+    rows: tuples of Python values in that order; written sorted by the first column (ID). A row of a known table
+    (TABLES) that is short of its newest columns gets their "not set" values, so tools written before a column was
+    appended keep working."""
     strings = bytearray(b"\x00")
     offsets = {"": 0}
 
@@ -48,9 +50,12 @@ def build(columns, rows) -> bytes:
             strings.extend(s.encode("utf-8") + b"\x00")
         return offsets[s]
 
+    missing = next((m for layout, m in TABLES.values() if layout is columns), None)
     fmt = "<" + "".join({"u": "I", "i": "i", "f": "f", "s": "I"}[c] for c in columns)
     records = bytearray()
     for r in sorted(rows, key=lambda r: r[0]):
+        if len(r) < len(columns) and missing is not None:
+            r = tuple(r) + tuple(missing[len(r):])
         if len(r) != len(columns):
             raise SystemExit(f"row {r[0]}: {len(r)} values for {len(columns)} columns")
         records += struct.pack(fmt, *(string(v) if c == "s" else v for c, v in zip(columns, r)))
@@ -59,8 +64,8 @@ def build(columns, rows) -> bytes:
 
 
 # The three ground tables' layouts (see docs/cdbc-tables.md). Append-only.
-GROUND_MATERIAL = ["u", "s", "u", "f", "f", "u", "f", "f"]
-#                  ID  Name Parent RestMoisture Stiffness Flags Absorbency Temperature
+GROUND_MATERIAL = ["u", "s", "u", "f", "f", "u", "f", "f", "f"]
+#                  ID  Name Parent RestMoisture Stiffness Flags Absorbency Temperature WetShine (appended 2026-10-25)
 GROUND_MATERIAL_SELECTOR = ["u", "u", "u", "s", "u", "i", "u", "u", "u"]
 #                  ID  ScopeType ScopeID TexturePath GroundEffectID TerrainType LiquidType MaterialID Flags
 SURFACE_COVER = ["u", "u", "u", "f", "f", "f", "f", "f", "f", "f", "u", "f", "s", "f", "f", "f", "f", "u", "f", "f", "f"]
@@ -85,7 +90,7 @@ DOODAD_LIGHT_ASSIGNMENT = ["u", "s", "u", "i", "s", "f", "f", "f", "f", "f", "f"
 # Per table: (layout, the "not set" value of every column). upgrade_tables.py appends missing
 # columns with these, so an upgraded file behaves exactly as before.
 TABLES = {
-    "GroundMaterial": (GROUND_MATERIAL, [0, "", 0, -1.0, -1.0, 0, -1.0, -1000.0]),
+    "GroundMaterial": (GROUND_MATERIAL, [0, "", 0, -1.0, -1.0, 0, -1.0, -1000.0, -1.0]),
     "GroundMaterialSelector": (GROUND_MATERIAL_SELECTOR, [0, 0, 0, "", 0, -1, 0, 0, 0]),
     "SurfaceCover": (SURFACE_COVER, [0, 0, 0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 0, -1.0, "", -1.0, -1.0, -1000.0, -1.0, 0, -1.0, -1000.0, -1.0]),
     "AreaClimate": (AREA_CLIMATE, [0, 0, 0, -1000.0, -1000.0, -1.0, -1.0, -1.0, 0, -1.0, "", -1000.0, -1000.0]),

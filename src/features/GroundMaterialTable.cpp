@@ -25,8 +25,9 @@ namespace wxl_livingazeroth::materials
             {"Flags",        5, WXL_CDBC_FIELD_VALUE},
             {"Absorbency",   6, WXL_CDBC_FIELD_VALUE}, // appended: older files without it still load
             {"Temperature",  7, WXL_CDBC_FIELD_VALUE}, // appended; signed (-1000 = none)
+            {"WetShine",     8, WXL_CDBC_FIELD_VALUE}, // appended 2026-10-25 (features/WetSurfaces); -1 = not set
         };
-        constexpr WXL_SeyrisCdbcDefinition kMaterialDef = { "GroundMaterial", "DBFilesClient\\GroundMaterial.cdbc", kMaterialFields, 8 };
+        constexpr WXL_SeyrisCdbcDefinition kMaterialDef = { "GroundMaterial", "DBFilesClient\\GroundMaterial.cdbc", kMaterialFields, 9 };
 
         constexpr WXL_SeyrisCdbcField kSelectorFields[] = {
             {"ID",             0, WXL_CDBC_FIELD_VALUE},
@@ -47,7 +48,7 @@ namespace wxl_livingazeroth::materials
         {
             std::string name;
             uint32_t    parent = 0;
-            float       restMoisture = -1.0f, stiffness = -1.0f, absorbency = -1.0f, temperature = -1000.0f;
+            float       restMoisture = -1.0f, stiffness = -1.0f, absorbency = -1.0f, temperature = -1000.0f, wetShine = -1.0f;
             uint32_t    flags = 0;
         };
         std::unordered_map<uint32_t, Material> g_materials;
@@ -153,6 +154,7 @@ namespace wxl_livingazeroth::materials
                 m.flags = cdbc->Value(table, rec, "Flags", 0);
                 m.absorbency = cdbcload::Float(cdbc, table, rec, "Absorbency", -1.0f);
                 m.temperature = cdbcload::Float(cdbc, table, rec, "Temperature", -1000.0f);
+                m.wetShine = cdbcload::Float(cdbc, table, rec, "WetShine", -1.0f);
                 if (m.parent == 0xFFFFFFFFu) m.parent = 0; // -1 written for "none" works too
                 g_materials[cdbc->Value(table, rec, "ID", 0)] = std::move(m);
             }
@@ -188,8 +190,10 @@ namespace wxl_livingazeroth::materials
         }
         else selectorStatus = std::string(" (GroundMaterialSelector: ") + err + ")";
 
+        unsigned shining = 0;   // rows that set WetShine (features/WetSurfaces)
+        for (const auto& m : g_materials) shining += m.second.wetShine >= 0.0f ? 1u : 0u;
         char line[160];
-        std::snprintf(line, sizeof(line), "%u material(s), %u selector(s)", static_cast<unsigned>(g_materials.size()), g_selectorCount);
+        std::snprintf(line, sizeof(line), "%u material(s) (%u with WetShine), %u selector(s)", static_cast<unsigned>(g_materials.size()), shining, g_selectorCount);
         g_status = line + materialStatus + selectorStatus;
     }
 
@@ -227,7 +231,7 @@ namespace wxl_livingazeroth::materials
     Values Get(uint32_t materialId)
     {
         Values v;
-        bool moisture = false, stiffness = false, absorbency = false, temperature = false;
+        bool moisture = false, stiffness = false, absorbency = false, temperature = false, shine = false;
         ForChain(materialId, [&](uint32_t id)
         {
             const Material* m = Find(id);
@@ -236,11 +240,13 @@ namespace wxl_livingazeroth::materials
             if (!stiffness && m->stiffness >= 0.0f)   { v.stiffness = m->stiffness > 1.0f ? 1.0f : m->stiffness; stiffness = true; }
             if (!absorbency && m->absorbency >= 0.0f) { v.absorbency = m->absorbency > 1.0f ? 1.0f : m->absorbency; absorbency = true; }
             if (!temperature && m->temperature > -1000.0f) { v.temperature = m->temperature; temperature = true; }
+            if (!shine && m->wetShine >= 0.0f)        { v.wetShine = m->wetShine > 1.0f ? 1.0f : m->wetShine; shine = true; }
             if (id == materialId) v.flags = m->flags;
-            return !(moisture && stiffness && absorbency && temperature);
+            return !(moisture && stiffness && absorbency && temperature && shine);
         });
         v.restMoistureSet = moisture;
         v.hasTemperature = temperature;
+        v.wetShineSet = shine;
         return v;
     }
 

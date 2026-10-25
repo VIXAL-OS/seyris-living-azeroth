@@ -7,4 +7,5 @@
     <Field Name="Flags" Type="int" />
     <Field Name="Absorbency" Type="float" />
     <Field Name="Temperature" Type="float" />
+    <Field Name="WetShine" Type="float" />
   </Table>

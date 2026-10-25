@@ -7,6 +7,7 @@
 #include "ShoreField.hpp"
 #include "Snow.hpp"
 #include "TerrainHeight.hpp"
+#include "WetSurfaceModel.hpp"
 #include "Wind.hpp"
 #include "../features/GrassPerf.hpp"
 #include "../features/GroundMaterialTable.hpp"
@@ -100,10 +101,19 @@ namespace wxl_livingazeroth::fields
             bool     snowStarted = false;
             float    lastSnowTarget = 0.0f, lastSnowMix = 0.0f, lastHold = 1.0f, lastTeff = 0.0f, lastSun = 0.0f,
                      lastZoneT = 0.0f, lastCap = 1.0f, lastReach = 0.0f;
+
+            // Wet surfaces (env/WetSurfaceModel): how much lower it lies than the ground round it (yd; the lowness pass,
+            // a slice of the grid a frame), its puddle potential from that, and its film last step.
+            float    lowness = 0.0f, potential = 0.0f, film = 0.0f;
+            bool     lownessKnown = false;
         };
         std::vector<Cell>    g_cells(kSize * kSize);
         std::vector<uint8_t> g_excess(kSize * kSize, 0);
         std::vector<uint8_t> g_normal(kSize * kSize * 2, 128); // the ground's normal x, y per cell (point lights on the terrain)
+        std::vector<uint8_t> g_surface(kSize * kSize * 2, 0);  // the surface film and puddle potential per cell (wet surfaces)
+        ZoneFilmFn g_zoneFilm = nullptr;
+        int        g_lownessCursor = 0;
+        constexpr int kLownessPerFrame = 256;                  // the whole grid in 64 frames
         std::vector<uint8_t> g_farBytes;   // per chunk of the zone map
         std::vector<float>   g_farValues;
 
@@ -671,12 +681,23 @@ namespace wxl_livingazeroth::fields
             unsigned ringCount = 0;
             uint32_t lastZone = 0xFFFFFFFFu;
             float temperature = 0.0f, humidity = 0.5f, zoneT = 0.0f, zoneKeep = 1.0f;
+            // Wet surfaces: the zones' films (the player's zone's, and each spot's own zone's), blended by the player's
+            // zone's share as the rain is.
+            const float playerFilm = g_zoneFilm ? g_zoneFilm(g_map, playerZone) : 0.0f;
+            uint32_t lastFilmZone = 0xFFFFFFFFu;
+            float zoneFilm = 0.0f;
+            unsigned wetCells = 0, puddleCells = 0, lownessKnown = 0;
             for (int b = 0; b < kSize; ++b)
                 for (int a = 0; a < kSize; ++a)
                 {
                     const int s = SlotOf(g_firstI + a, g_firstJ + b);
                     Cell* live = Live(a, b);
-                    if (!live) { g_excess[s] = 0; g_normal[s * 2] = g_normal[s * 2 + 1] = 128; g_snowNow.fallen[s] = -1.0f; g_snowNow.keep[s] = 1.0f; continue; }
+                    if (!live)
+                    {
+                        g_excess[s] = 0; g_normal[s * 2] = g_normal[s * 2 + 1] = 128; g_snowNow.fallen[s] = -1.0f; g_snowNow.keep[s] = 1.0f;
+                        g_surface[s * 2] = g_surface[s * 2 + 1] = 0;
+                        continue;
+                    }
                     Cell& c = *live;
                     g_normal[s * 2] = static_cast<uint8_t>(Clamp01(c.nx * 0.5f + 0.5f) * 255.0f + 0.5f);
                     g_normal[s * 2 + 1] = static_cast<uint8_t>(Clamp01(c.ny * 0.5f + 0.5f) * 255.0f + 0.5f);
@@ -767,6 +788,27 @@ namespace wxl_livingazeroth::fields
                     c.lastChange = c.value - before; c.lastDt = dt;
                     const float excess = c.value - c.rest;
                     g_excess[s] = static_cast<uint8_t>(Clamp01(excess) * 255.0f + 0.5f);
+
+                    // Wet surfaces: the film here and where it floods first (no film or puddles under a roof, water, snow
+                    // or on hot ground).
+                    {
+                        if (c.zone != lastFilmZone)
+                        {
+                            zoneFilm = g_zoneFilm && c.zone ? g_zoneFilm(g_map, c.zone) : playerFilm;
+                            lastFilmZone = c.zone;
+                        }
+                        const float sh = share[b * kSize + a];
+                        const float spotZoneFilm = sh * playerFilm + (1.0f - sh) * zoneFilm;
+                        const float snowYd = c.fallen + c.snowPainted * c.keep;
+                        const float hot = c.hotTemp >= 60.0f ? c.hotShare : 0.0f;
+                        c.film = wetsurf::SpotFilm(spotZoneFilm, c.open, snowYd, hot, c.submerged);
+                        const float potential = wetsurf::SpotPotential(c.potential, c.open, snowYd, hot, c.submerged);
+                        g_surface[s * 2] = static_cast<uint8_t>(Clamp01(c.film) * wetsurf::kSurfaceShare * 255.0f + 0.5f);
+                        g_surface[s * 2 + 1] = static_cast<uint8_t>(Clamp01(potential) * 255.0f + 0.5f);
+                        wetCells += c.film > 0.05f ? 1u : 0u;
+                        puddleCells += potential > 0.3f ? 1u : 0u;
+                        lownessKnown += c.lownessKnown ? 1u : 0u;
+                    }
                     // The outer ring (8 cells) on dry land feeds the value used beyond the grid.
                     if (!c.submerged && (a < kRing || b < kRing || a >= kSize - kRing || b >= kSize - kRing))
                     { ringSum += Clamp01(excess); ringTypical += TypicalExcess(mix); ++ringCount; }
@@ -801,7 +843,43 @@ namespace wxl_livingazeroth::fields
             }
             ++g_wet.version;
             PublishSnow();
+            g_stats.wetCells = wetCells;
+            g_stats.puddleCells = puddleCells;
+            g_stats.lownessKnown = lownessKnown;
             g_stats.tickMs = grassperf::Now() - t0;
+        }
+
+        // Wet surfaces: a slice of the grid's lowness each frame (the mean height of the two rings round a cell minus its
+        // own; needs kMinNeighbours of them sampled) and the puddle potential from it, the slope and the cell's noise. The
+        // terrain doesn't change, so a full pass every second or so only catches cells that came in.
+        void UpdateLowness()
+        {
+            const double t0 = grassperf::Now();
+            for (int n = 0; n < kLownessPerFrame; ++n)
+            {
+                const int k = g_lownessCursor;
+                g_lownessCursor = (g_lownessCursor + 1) % (kSize * kSize);
+                const int a = k % kSize, b = k / kSize;
+                Cell* live = Live(a, b);
+                if (!live) continue;
+                Cell& c = *live;
+                float sum = 0.0f;
+                int count = 0;
+                for (const auto& o : wetsurf::kRing)
+                {
+                    const int na = a + o[0], nb = b + o[1];
+                    if (na < 0 || nb < 0 || na >= kSize || nb >= kSize) continue;
+                    const Cell* other = Live(na, nb);
+                    if (!other || !std::isfinite(other->z)) continue;
+                    sum += other->z;
+                    ++count;
+                }
+                c.lownessKnown = count >= wetsurf::kMinNeighbours && std::isfinite(c.z);
+                c.lowness = c.lownessKnown ? sum / count - c.z : 0.0f;
+                const float slope = std::sqrt(c.nx * c.nx + c.ny * c.ny);
+                c.potential = c.lownessKnown ? wetsurf::PuddlePotential(c.lowness, slope, wetsurf::CellNoise(c.i, c.j)) : 0.0f;
+            }
+            g_stats.lownessMs = grassperf::Now() - t0;
         }
 
         const Cell* CellAt(const float pos[3])
@@ -939,8 +1017,11 @@ namespace wxl_livingazeroth::fields
         d.hotShare = c->hotShare; d.hotTemperature = c->hotTemp;
         d.groundHeat = c->groundHeat; d.groundHeatTemperature = c->groundHeatTemp; d.groundHeatDistance = c->groundHeatDist;
         d.value = c->value;
+        d.surfaceFilm = c->film; d.lowness = c->lowness; d.puddlePotential = c->potential; d.lownessKnown = c->lownessKnown;
         return d;
     }
+
+    void SetZoneFilm(ZoneFilmFn film) { g_zoneFilm = film; }
 
     const WetGrid& Wet() { return g_wet; }
     Stats GetStats()
@@ -988,6 +1069,7 @@ namespace wxl_livingazeroth::fields
         ++g_shoreRevision;
         for (Cell& c : g_cells) c = Cell{};
         std::fill(g_excess.begin(), g_excess.end(), 0);
+        std::fill(g_surface.begin(), g_surface.end(), 0);
         g_haveGrid = false;
         g_fillCursor = 0;
         ++g_wet.version;
@@ -1020,6 +1102,7 @@ namespace wxl_livingazeroth::fields
         }
         g_wet.size = kSize; g_wet.cellSize = kCell; g_wet.firstI = g_firstI; g_wet.firstJ = g_firstJ; g_wet.excess = g_excess.data();
         g_wet.normal = g_normal.data();
+        g_wet.surface = g_surface.data();
 
         // A shore result from the worker for this grid goes in before this frame's fills (with fills
         // every frame while terrain streams in, after them it would always be a revision behind).
@@ -1051,6 +1134,9 @@ namespace wxl_livingazeroth::fields
             const float pos[3] = { (c.i + 0.5f) * kCell, (c.j + 0.5f) * kCell, c.z + 0.5f };
             c.open = shelter::Openness(pos);
         }
+
+        // Where puddles can form (wet surfaces): a slice of the grid a frame.
+        UpdateLowness();
 
         g_shoreTime += dt;
         if (g_shoreDirty && g_shoreTime >= 0.5f)

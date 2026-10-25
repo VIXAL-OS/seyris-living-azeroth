@@ -23,6 +23,7 @@
 #include "../features/TerrainIce.hpp"
 #include "../features/TerrainWetness.hpp"
 #include "../features/TreeShadows.hpp"
+#include "../features/WetSurfaces.hpp"
 #include "../features/Windows.hpp"
 #include "../features/WmoIce.hpp"
 #include "../render/PostAA.hpp"
@@ -71,6 +72,7 @@ namespace wxl_livingazeroth::compare
             { "waterfall hats fading in", [] { return I(modelice::FadeHats()); }, [](float v) { modelice::SetFadeHats(N(v) != 0); }, 0.0f },
             { "waterfall hats hidden", [] { return I(modelice::HideHats()); }, [](float v) { modelice::SetHideHats(N(v) != 0); }, 0.0f },
             { "wet ground", [] { return I(terrainwet::Enabled()); }, [](float v) { terrainwet::SetEnabled(N(v) != 0); }, 0.0f },
+            { "wet surfaces", [] { return I(wetsurfaces::Config().enabled); }, [](float v) { wetsurfaces::Config().enabled = N(v); }, 0.0f },
             { "surface cover", [] { return I(cover::Enabled()); },
               [](float v) { cover::Configure(N(v) != 0, cover::Levels(), cover::Trenches(), cover::DepthMultiplier(), cover::FillBudgetMs()); }, 0.0f },
             { "tree shadows", [] { return I(treeshadows::Config().enabled); }, [](float v) { treeshadows::Config().enabled = N(v); }, 0.0f },

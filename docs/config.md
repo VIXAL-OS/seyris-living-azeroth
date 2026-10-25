@@ -3,8 +3,8 @@
 Read through `wxl-seyris-tools` (needs settings 1.1.0) from `WTF\WXL\WarcraftXL.ini`, or from
 `WarcraftXL.ini` in the client root if one exists there. Section `[LivingAzeroth]`, and the
 sub-sections `[LivingAzeroth.Fog]`, `[LivingAzeroth.FogWake]`, `[LivingAzeroth.Storm]`, `[LivingAzeroth.Windows]`,
-`[LivingAzeroth.Shafts]`, `[LivingAzeroth.Glass]`, `[LivingAzeroth.SpellLights]`, `[LivingAzeroth.Memory]`, `[LivingAzeroth.Lantern]` and
-`[LivingAzeroth.DistantLights]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
+`[LivingAzeroth.Shafts]`, `[LivingAzeroth.Glass]`, `[LivingAzeroth.SpellLights]`, `[LivingAzeroth.Memory]`, `[LivingAzeroth.Lantern]`,
+`[LivingAzeroth.DistantLights]` and `[LivingAzeroth.WetSurfaces]` (an ini has no real nesting; the dotted names keep them together). Missing keys are written with their default and a comment on
 first launch.
 
 The ini sets what each launch starts with. The debug panels (F9) still change everything at
@@ -59,7 +59,7 @@ says why.
 | TreeShadowsFarRate | 10 | Most redraws a second of the far trees' shadow map (0 = every frame). |
 | DebugWindArrows | 0 | Debug: draw the wind as arrows around the player. |
 | SnapshotKey | 122 | The key that writes a snapshot for a bug report (2026-10-22, "one key (and a panel button) that writes your exact situation to a file so bug reports don't need guessing"): where you are (map, zone, area, position, facing), the camera (its position, where it looks, its field of view, and in the nearest building's own space too: the building the camera is in, or the nearest one the see-through walks visited, with the windows open there), the time of day, the server's weather and Living Azeroth's, the settings that matter (see-through, fog, storm, glass), the frame rate and the see-through, fog and glass status lines, to `Logs\la-snapshots\<date>-<time>.txt` in the game folder, announced in chat. A Windows virtual-key code: 122 = F11, 123 = F12, 0 = no key; the overview page and the see-through section have a button too. The key still reaches the game. glass_tests (`GLASS_SNAPSHOT`) and seethrough_tests (`SEETHROUGH_SNAPSHOT`) draw a snapshot's view again. |
-| CompareKey | 119 | The compare key (2026-10-25, from Lumenveil's list: "one key for all effects off/on"): one press switches every Living Azeroth visual effect off, so you see the scene as the client draws it, and the next press switches them back on; a line in chat says which, the snapshot (F11) and the 30-second log line record it. Each effect goes off through its own switch, as its panel's checkbox would (the ground fog and fog wake, storms, darker nights, our point lights with the window lights, spell lights and the lantern on them, the window glow, distant lights, sun shafts, glass and see-through windows, crystals, clear ice, waterfall hats, wet ground, the surface cover, tree shadows, grass motion, denser and thinned grass, the doodad fade, anti-aliasing, mount wings' depth: `debug/Compare.cpp`), so each runs its own off path. The values it found come back on the second press; a switch you changed in a panel meanwhile keeps your change. Nothing is read from or written to this file by the key: your saved settings stay as they are. The instanced grass renderer stays on (it draws the client's own plants alike), and so does the raised grass distance (a patch of the client's code at start-up). A Windows virtual-key code: 119 = F8 (the client binds nothing to it; the core's panel is F9, the snapshot F11), 0 = no key; the overview page has a button too. The key still reaches the game. |
+| CompareKey | 119 | The compare key (2026-10-25, from Lumenveil's list: "one key for all effects off/on"): one press switches every Living Azeroth visual effect off, so you see the scene as the client draws it, and the next press switches them back on; a line in chat says which, the snapshot (F11) and the 30-second log line record it. Each effect goes off through its own switch, as its panel's checkbox would (the ground fog and fog wake, storms, darker nights, our point lights with the window lights, spell lights and the lantern on them, the window glow, distant lights, sun shafts, glass and see-through windows, crystals, clear ice, waterfall hats, wet ground, wet surfaces, the surface cover, tree shadows, grass motion, denser and thinned grass, the doodad fade, anti-aliasing, mount wings' depth: `debug/Compare.cpp`), so each runs its own off path. The values it found come back on the second press; a switch you changed in a panel meanwhile keeps your change. Nothing is read from or written to this file by the key: your saved settings stay as they are. The instanced grass renderer stays on (it draws the client's own plants alike), and so does the raised grass distance (a patch of the client's code at start-up). A Windows virtual-key code: 119 = F8 (the client binds nothing to it; the core's panel is F9, the snapshot F11), 0 = no key; the overview page has a button too. The key still reaches the game. |
 
 ## `[LivingAzeroth.Fog]`: the ground fog renderer
 
@@ -356,6 +356,47 @@ starts with the zone and sub-zone, to line the external memory log up with where
 | WarnFreeMB | 400 | Below this much free address space (MB), a line in chat warns once and a snapshot is written. 0 = no warning for it. |
 | WarnLargestFreeMB | 64 | The same when the largest free block falls below this (MB): a fragmented address space fails before it's full. 0 = no warning for it. |
 | WarnMinutes | 10 | At most one warning in this many minutes, unless it gets worse (100 MB less free, or the largest free block halved). |
+
+## `[LivingAzeroth.WetSurfaces]`: stone and soil shine in rain, puddles
+
+While it rains, the ground's stone, soil, paths and roads darken and take a wet sheen: the sky shows in them at a slant
+(the fog's colour, as the ice's reflection), our lamps (torches, braziers, lit windows, spell lights) gleam on them, and
+after the rain the sun glints along them. Puddles gather in low, flat ground as the rain goes on and mirror the sky and
+the lamps sharply. Grass, leaves, snow and ice stay as they are, and nothing under a roof or indoors gets wet (the roof
+checks the wind shelter uses, 4 yards at a time). Buildings' outside stone, wood and roofs get wet too (`Buildings`):
+floors and streets the most, walls less, ceilings not at all; a building's rooms only where the roof checks see the sky
+over their floor (Stormwind's streets and canals are rooms to the client, as its shops are). A building's own porch or
+arcade outside its rooms still gets wet: a batch is wet or dry as a whole.
+
+- **When:** each zone's surfaces wet through over about 45 seconds of heavy rain (light rain about three times slower),
+  then dry out over `DryOutMinutes` after it stops (on a mild day; up to twice as fast when it's hot, dry and windy,
+  half as fast when it's cold and humid). Puddles fill over about four minutes of heavy rain and take half as long
+  again to dry. Zones keep their wetness when you leave them and dry by the same rules; a zone you enter while it rains
+  starts part wet.
+- **What:** a terrain layer's shine is its material's `WetShine` (`GroundMaterial.cdbc`, along its Parent chain; see
+  docs/cdbc-tables.md), else its ground effect's TerrainType's: grass, leaves and snow 0, dusty grass 0.1, sand 0.5,
+  wood 0.6, dirt 0.8, soggy ground 0.9, stone, metal and water 1, a layer without a ground effect 0.6. Paved roads 1,
+  mud and muck 0.9, sand 0.35, ash 0.4. Clear ice, snow and hot ground (lava) never. A building texture's by its name:
+  walls, floors, cobbles, bricks, tiles, stairs and trim 1, metal 0.8, roof tiles and shingles 0.7, wood 0.5, thatch
+  0.15; glass, lights, banners, ropes, foliage, snow, ice and crystals never.
+- **Where puddles form:** each 2-yard cell of the ground near you (±128 yards) is compared with the ground round it
+  (4 and 8 yards out): the lower and flatter it lies, the sooner it floods; on flat bare ground a little noise breaks
+  the water into patches. Beyond 128 yards the ground keeps its wet sheen but has no puddles.
+- **Cost:** the terrain's patched shaders do it in the same pass (40 instruction slots on the largest of them, which
+  stays under ps_3_0's 512 at 506; 5 more for each of our lights a pixel loops over), on the CPU about 0.02 ms a moisture step (four a second) and 0.015 ms a frame for the puddles' lowness pass, a 64 KB texture upload four times a second;
+  buildings' wet batches run the clear ice's block (needs dynamic shadows on).
+
+The climate panel (F9) shows its state (your zone's wetness and puddles, what the shaders took, what drew last frame,
+the spot under you), its settings, and two test buttons: soak your zone now, dry every zone now. The climate panel's
+weather override makes it rain for a test. The same lines are in the log every 30 seconds and in F11 snapshots.
+
+| Key | Default | Meaning |
+|---|---|---|
+| Enabled | 1 | Wet surfaces in rain, as above. 0 = off (the ground and buildings exactly as before). |
+| Intensity | 1 | How glossy and dark wet surfaces get and how bright what they reflect, 0..2 (0 = no wet look, 1 = as designed). |
+| Puddles | 1 | How much low, flat ground floods as the rain goes on, 0..2 (0 = no puddles, 1 = the hollows and a few flat patches, 2 = most flat bare ground). |
+| DryOutMinutes | 15 | Minutes for soaked surfaces to dry once the rain stops, on a mild day; puddles take half as long again. 0.5..240. |
+| Buildings | 1 | Buildings' outside stone, wood and roofs get wet too (floors and streets the most, walls less, ceilings not at all; a building's rooms only where the sky is over them, as Stormwind's streets; needs dynamic shadows on). |
 
 ## `[LivingAzeroth.Shafts]`: sun shafts
 

@@ -22,8 +22,10 @@ namespace wxl_livingazeroth::materials
         float    absorbency = 0.5f;   // how much outside moisture (rain, water nearby) reaches it: rock ~0.1 .. sand/soil ~0.9
         float    temperature = 0.0f;  // degC of the material itself (liquids: magma ~1000); only if hasTemperature
         uint32_t flags = 0;           // the material's own row only (not inherited): kFlag* below
+        float    wetShine = 0.0f;     // how much it takes the wet look in rain (features/WetSurfaces): 0 none .. 1 stone; only if wetShineSet
         bool     hasTemperature = false;  // a row in the chain sets Temperature
         bool     restMoistureSet = false; // a row in the chain sets RestMoisture (else the default above)
+        bool     wetShineSet = false;     // a row in the chain sets WetShine (else the layer's TerrainType decides)
     };
 
     /// GroundMaterial Flags bits.

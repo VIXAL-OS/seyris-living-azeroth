@@ -3,7 +3,9 @@
 
 #include "GroundMaterialTable.hpp"
 #include "TerrainWetness.hpp"
+#include "WetSurfaces.hpp"
 #include "../env/TerrainHeight.hpp"
+#include "../env/WetSurfaceModel.hpp"
 #include "../env/WorldQuery.hpp"
 
 #include "game/Camera.hpp"
@@ -62,8 +64,10 @@ namespace wxl_livingazeroth::terrainice
         // Materials.
         uint32_t g_generation = 0;
         bool     g_anyIce = false;
-        struct CacheEntry { std::string name; uint32_t area = 0; uint32_t effect = 0; int terrain = -1; int map = -1; uint32_t generation = 0; bool ice = false; };
+        // Per layer texture (and its place): whether it's clear ice, and its wet shine (features/WetSurfaces).
+        struct CacheEntry { std::string name; uint32_t area = 0; uint32_t effect = 0; int terrain = -1; int map = -1; uint32_t generation = 0; bool ice = false; float shine = 0.0f; };
         std::unordered_map<const char*, CacheEntry> g_cache;
+        bool g_wetStage = false;   // wet surfaces want the chunks' layer masks this stage
 
         IDirect3DTexture9* g_detail = nullptr;
         IDirect3DDevice9*  g_detailDevice = nullptr;
@@ -71,17 +75,18 @@ namespace wxl_livingazeroth::terrainice
 
         std::string g_status;
 
-        bool IsIce(const terrain::Surface& s, int map)
+        const CacheEntry* Resolve(const terrain::Surface& s, int map)
         {
-            if (!s.texture) return false;
+            if (!s.texture) return nullptr;
             CacheEntry& e = g_cache[s.texture];
             if (e.generation == g_generation && e.area == s.area && e.effect == s.groundEffect && e.terrain == s.terrainType &&
                 e.map == map && e.name == s.texture)
-                return e.ice;
+                return &e;
             e.name = s.texture; e.area = s.area; e.effect = s.groundEffect; e.terrain = s.terrainType; e.map = map; e.generation = g_generation;
             const uint32_t material = materials::Select(s.area, map, s.texture, s.groundEffect, s.terrainType);
             e.ice = material && (materials::Get(material).flags & materials::kFlagClearIce) != 0;
-            return e.ice;
+            e.shine = wetsurfaces::LayerShine(material, s, map);
+            return &e;
         }
 
         // The glint's colour: the sun's own (the current light record's sun band, 0x00D38BD4 + 0x24, packed
@@ -143,26 +148,40 @@ namespace wxl_livingazeroth::terrainice
         void __fastcall hkChunkDraw(void* node, void* edx)
         {
             memuse::Scope memory(memuse::kIce);
-            float mask[4] = {};
+            float mask[4] = {}, shine[4] = {};
             bool masked = false;
             auto* dev = static_cast<IDirect3DDevice9*>(gx::RawDevice());
-            if (g_stageOn && node && dev)
+            if ((g_stageOn || g_wetStage) && node && dev)
             {
                 const auto* n = static_cast<const uint8_t*>(node);
                 const unsigned layers = n[kNodeLayerCount];
                 const void* chunk = *reinterpret_cast<void* const*>(n + kNodeChunk);
                 const int map = world::Current().mapId;
+                bool anyShine = false;
                 for (unsigned i = 0; i < layers && i < 4; ++i)
                 {
                     const uint32_t texId = *reinterpret_cast<const uint32_t*>(n + kNodeLayers + i * kLayerStride + kLayerTexId);
                     terrain::Surface s;
-                    if (terrain::ChunkLayerSurface(chunk, texId, s) && IsIce(s, map)) { mask[i] = 1.0f; masked = true; }
+                    const CacheEntry* e = terrain::ChunkLayerSurface(chunk, texId, s) ? Resolve(s, map) : nullptr;
+                    if (!e) continue;
+                    if (g_stageOn && e->ice) { mask[i] = 1.0f; masked = true; }
+                    shine[i] = e->shine;
+                    anyShine = anyShine || e->shine > 0.0f;
                 }
-                ++g_chunks;
-                if (masked)
+                if (g_stageOn)
                 {
-                    ++g_iceChunks;
-                    dev->SetPixelShaderConstantF(kMaskConstant, mask, 1);
+                    ++g_chunks;
+                    if (masked)
+                    {
+                        ++g_iceChunks;
+                        dev->SetPixelShaderConstantF(kMaskConstant, mask, 1);
+                    }
+                }
+                // Every chunk its own layers' shine (zeros where none shines: the stage's zeros would be stale by now).
+                if (g_wetStage)
+                {
+                    dev->SetPixelShaderConstantF(wetsurf::kMaskConstant, shine, 1);
+                    wetsurfaces::NoteChunk(anyShine);
                 }
             }
             g_origDraw(node, edx);
@@ -312,13 +331,14 @@ namespace wxl_livingazeroth::terrainice
         return true;
     }
 
-    std::string WeightBlock(const Variant& v)
+    std::string WeightBlock(const Variant& v, bool wetMask)
     {
         std::string b;
         switch (v.blend)
         {
         case Blend::Single:
             b = "\n    mov r25.x, c215.x";
+            if (wetMask) b += "\n    mov r25.z, c160.x";
             break;
         case Blend::Chain:
             // lerp(lerp(lerp(l0, l1, a.x), l2, a.y), l3, a.z): w3 = z, w2 = y(1 - z), w1 = x(1 - y)(1 - z),
@@ -332,15 +352,20 @@ namespace wxl_livingazeroth::terrainice
                  "\n    mov r11.z, r25.z"
                  "\n    mul r11.w, r10.x, r10.y"
                  "\n    mul r11.w, r11.w, r10.z"
-                 "\n    dp3 r12.x, r11, c215.yzww"
-                 "\n    mad r25.x, r11.w, c215.x, r12.x";
+                 "\n    dp3 r12.x, r11, c215.yzww";
+            if (wetMask) b += "\n    dp3 r12.y, r11, c160.yzww";
+            b += "\n    mad r25.x, r11.w, c215.x, r12.x";
+            if (wetMask) b += "\n    mad r25.z, r11.w, c160.x, r12.y";
             break;
         case Blend::Sum:
-            // l0 x (1 - saturate(x + y + z)) + l1 x + l2 y + l3 z, as the stock does.
+            // l0 x (1 - saturate(x + y + z)) + l1 x + l2 y + l3 z, as the stock does. (The wet mask reads the alphas in
+            // r25 before r25.x and r25.z are overwritten.)
             b = "\n    dp3_sat r11.w, r25, c190.x"
                 "\n    add r11.w, c190.x, -r11.w"
-                "\n    dp3 r12.x, r25, c215.yzww"
-                "\n    mad r25.x, r11.w, c215.x, r12.x";
+                "\n    dp3 r12.x, r25, c215.yzww";
+            if (wetMask) b += "\n    dp3 r12.y, r25, c160.yzww";
+            b += "\n    mad r25.x, r11.w, c215.x, r12.x";
+            if (wetMask) b += "\n    mad r25.z, r11.w, c160.x, r12.y";
             break;
         }
         b += "\n    mul r25.x, r25.x, c216.w"
@@ -525,6 +550,8 @@ namespace wxl_livingazeroth::terrainice
         g_chunks = g_iceChunks = 0;
         g_stageOn = false;
         g_needSun = false;
+        // Wet surfaces: each chunk's layers' shine (their constants are set already: features/TerrainWetness's stage).
+        g_wetStage = g_hooked && dev && wetsurfaces::StageOn();
         if (!dev) return;
         const float zero[4] = {};
         dev->SetPixelShaderConstantF(kMaskConstant, zero, 1);
@@ -586,6 +613,12 @@ namespace wxl_livingazeroth::terrainice
     }
 
     IDirect3DTexture9* DetailTexture(IDirect3DDevice9* dev) { return dev && EnsureDetail(dev) ? g_detail : nullptr; }
+
+    bool Sun(float dir[3], float colour[3])
+    {
+        for (int k = 0; k < 3; ++k) { dir[k] = g_sun[k]; colour[k] = g_sunColour[k]; }
+        return g_haveView;
+    }
 
     void  SetEnabled(bool enabled)   { g_enabled = enabled; }
     bool  Enabled()                  { return g_enabled; }

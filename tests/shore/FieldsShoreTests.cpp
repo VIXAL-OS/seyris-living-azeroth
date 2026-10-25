@@ -9,6 +9,7 @@
 #include "env/Shelter.hpp"
 #include "env/ShoreField.hpp"
 #include "env/TerrainHeight.hpp"
+#include "env/WetSurfaceModel.hpp"
 #include "env/Wind.hpp"
 #include "features/GrassPerf.hpp"
 #include "features/GroundMaterialTable.hpp"
@@ -44,11 +45,19 @@ namespace
         bool lateA = false, lateB = false; // two patches of terrain that load later
         bool nanCell = false;              // one cell's height comes back NaN
         bool realClock = false;            // grassperf::Now: real time (benchmarks) or frozen (no fill budget)
+        bool hollow = false;               // wet surfaces: a hollow 0.4 yd deep at (1040, 1012), where the ground is flat
+        bool roof = false;                 // wet surfaces: a roof over (1020..1030, 1020..1030)
     } g_world;
 
     bool In(float x, float y, float x0, float y0, float x1, float y1) { return x >= x0 && x < x1 && y >= y0 && y < y1; }
     bool Disc(float x, float y, float cx, float cy, float r) { return (x - cx) * (x - cx) + (y - cy) * (y - cy) < r * r; }
-    float Ground(float x, float y) { return 10.0f + 2.0f * std::sin(x / 17.0f) + 1.5f * std::cos(y / 23.0f) - 0.004f * (x - 1000.0f); }
+    float Ground(float x, float y)
+    {
+        const float h = 10.0f + 2.0f * std::sin(x / 17.0f) + 1.5f * std::cos(y / 23.0f) - 0.004f * (x - 1000.0f);
+        if (!g_world.hollow) return h;
+        const float d2 = (x - 1040.0f) * (x - 1040.0f) + (y - 1012.0f) * (y - 1012.0f);
+        return h - 0.4f * std::exp(-d2 / (2.0f * 3.0f * 3.0f));
+    }
     bool Loaded(float x, float y)
     {
         if (In(x, y, 1000.0f, 1080.0f, 1008.0f, 1086.0f)) return false;            // a hole: never there
@@ -118,7 +127,7 @@ namespace wxl_livingazeroth::regional
 }
 namespace wxl_livingazeroth::shelter
 {
-    float Openness(const float*) { return 1.0f; }
+    float Openness(const float* pos) { return g_world.roof && pos && In(pos[0], pos[1], 1020.0f, 1020.0f, 1030.0f, 1030.0f) ? 0.0f : 1.0f; }
 }
 namespace wxl_livingazeroth::climate
 {
@@ -683,6 +692,56 @@ int main()
             std::printf("TIMING worker mode, worker thread: calculation median %.3f ms, p95 %.3f ms, max %.3f ms\n", w.median, w.p95, w.max);
             ++g_passed;
         }
+
+        // Wet surfaces (env/WetSurfaceModel through the real Fields.cpp, 2026-10-25): the grid's surface bytes, as the terrain
+        // shaders get them (render/MoistureTexture BindSurface), after the lowness pass has covered the grid and a step ran.
+        Test("wet surfaces: the film by open sky, none under a roof, water or on hot ground; puddles in the hollow", [&]
+        {
+            Fresh(false);
+            g_world.hollow = true;
+            g_world.roof = true;
+            la::fields::SetZoneFilm([](int, uint32_t) { return 1.0f; });
+            Converge(home);
+            for (int k = 0; k < 70; ++k) Frame(0.0f, home);   // the lowness pass: 256 cells a frame, 16384 cells
+            Frame(0.3f, home);                                // a step writes the bytes
+            const la::fields::WetGrid& wet = la::fields::Wet();
+            CHECK(wet.surface != nullptr && wet.size == 128);
+            auto bytes = [&](float x, float y, int channel)
+            {
+                const int i = static_cast<int>(std::floor(x / wet.cellSize)), j = static_cast<int>(std::floor(y / wet.cellSize));
+                const int mi = ((i % wet.size) + wet.size) % wet.size, mj = ((j % wet.size) + wet.size) % wet.size;
+                return static_cast<int>(wet.surface[(mj * wet.size + mi) * 2 + channel]);
+            };
+            // The lake's cells that are under water (its bed rises above the water in places), the most film among them.
+            int lake = -1, underwater = 0;
+            for (float y = 990.0f; y < 1040.0f; y += 2.0f)
+                for (float x = 950.0f; x < 1000.0f; x += 2.0f)
+                {
+                    const float p[3] = { x + 1.0f, y + 1.0f, 10.0f };
+                    if (!la::fields::Moisture(p).submerged) continue;
+                    ++underwater;
+                    lake = std::max({ lake, bytes(p[0], p[1], 0), bytes(p[0], p[1], 1) });   // no film, no puddle
+                }
+            const int open = bytes(1060.0f, 990.0f, 0), roofed = bytes(1025.0f, 1025.0f, 0), lava = bytes(1013.0f, 1000.0f, 0);
+            const int expected = static_cast<int>(la::wetsurf::kSurfaceShare * 255.0f + 0.5f);
+            std::printf("  film bytes: open ground %d (expected %d), under the roof %d, the most in the lake's %d cells under water %d, on the lava stream %d\n",
+                        open, expected, roofed, underwater, lake, lava);
+            CHECK(open == expected && roofed == 0 && underwater > 20 && lake == 0 && lava == 0);
+            const float centre[3] = { 1040.0f, 1012.0f, 10.0f }, away[3] = { 1060.0f, 1060.0f, 10.0f };
+            const la::fields::MoistureDetail h = la::fields::Moisture(centre), a = la::fields::Moisture(away);
+            std::printf("  the hollow: lowness %.3f yd, potential %.2f (byte %d); open ground 20 yd off: lowness %.3f, potential %.2f; lowness known in %u cells\n",
+                        h.lowness, h.puddlePotential, bytes(1040.0f, 1012.0f, 1), a.lowness, a.puddlePotential, la::fields::GetStats().lownessKnown);
+            CHECK(h.lownessKnown && h.lowness > 0.2f && h.puddlePotential > 0.5f && bytes(1040.0f, 1012.0f, 1) > 120);
+            CHECK(a.lownessKnown && std::fabs(a.lowness) < 0.1f);
+            CHECK(la::wetsurf::PuddleAt(h.puddlePotential, 1.0f, 1.0f) > 0.5f && la::wetsurf::PuddleAt(h.puddlePotential, 0.0f, 1.0f) == 0.0f);
+            CHECK(bytes(1025.0f, 1025.0f, 1) == 0);
+            CHECK(la::fields::GetStats().wetCells > 10000 && la::fields::GetStats().puddleCells > 0);
+            // No film from the zones: no film anywhere, the potential stays.
+            la::fields::SetZoneFilm(nullptr);
+            Frame(0.3f, home);
+            CHECK(bytes(1060.0f, 990.0f, 0) == 0 && bytes(1040.0f, 1012.0f, 1) > 120);
+            std::printf("  without the zones' film: open ground %d, the hollow's potential byte %d\n", bytes(1060.0f, 990.0f, 0), bytes(1040.0f, 1012.0f, 1));
+        });
 
         Fresh(false);
         Frame(0.0f, Away());

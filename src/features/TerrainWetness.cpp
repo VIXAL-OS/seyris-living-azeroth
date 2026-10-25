@@ -2,6 +2,7 @@
 
 #include "TerrainIce.hpp"
 #include "TerrainLights.hpp"
+#include "WetSurfaces.hpp"
 #include "../render/MoistureTexture.hpp"
 #include "../render/ShaderPatch.hpp"
 
@@ -28,6 +29,8 @@ namespace wxl_livingazeroth::terrainwet
 
         // Registers the patch uses, all free in every stock variant (from the dumps: PS inputs up to
         // v8, temps up to r7, constants up to c13, samplers up to s8): PS v9, r29..r31, c200..c202, s11.
+        // Wet surfaces (features/WetSurfaces) add r1..r6 (the stock's temps, dead by the fog ending: only the
+        // colour, r0, is read after it), c160..c167 and s15.
         // The world XY rides as texcoord7 (.xy), the PS reads v9.xy. Where the VS has an output register
         // left (vs_3_0 allows 11 without point size), it gets its own. The 32 variants using all 11
         // declare texcoord3 as their view-space position (.xyz, `mov oN.xyz, r0`), which no terrain
@@ -35,11 +38,12 @@ namespace wxl_livingazeroth::terrainwet
         // paired with the VS that write it that way) -- that output is re-labelled texcoord7 and
         // carries the world XY instead. Packing a second semantic into a register's free .zw does NOT
         // work (in-client 2026-10-04: the PS read zeros, whichever components it declared).
-        // c200 = (1 / grid extent, debug: whole grid wet, beyond everything, strength), c201 = grid box
-        // (world yd), c203 = (debug: ignore the box, stripe scale, stripes on, 1 / edge fade yards),
-        // c204 = (1 / far map extent, 0, far map on, 0), c205 = the far map's box (world yd);
+        // c200 = (1 / grid extent, 0, beyond everything, strength), c201 = grid box (world yd), c203 = (0, 0, 0,
+        // 1 / edge fade yards), c204 = (1 / far map extent, 0, far map on, 0), c205 = the far map's box (world yd);
         // c202 is defined in the shader. Inside its last kEdgeFadeYards the grid fades into the one
-        // regional value used beyond it, so its edge doesn't show.
+        // regional value used beyond it, so its edge doesn't show. The debug views (whole grid wet, whole terrain,
+        // stripes) were in the shader until 2026-10-25; they are a debug copy of the texture now (moisturetex::BindDebug,
+        // the box made huge for "whole terrain"), which gave wet surfaces 9 of the 512 slots back.
         constexpr int kPsConstant = 200;
         // A scorch mark (SetScorch): c223 = (x, y, 1 / radius, strength), the last constant ps_3_0 has (the
         // light patch holds c206..c214, the ice c215..c222). Set at every terrain stage, zeros when none.
@@ -115,8 +119,9 @@ namespace wxl_livingazeroth::terrainwet
         {
             if (src.find("ps_3_0") == std::string::npos) { why = "not ps_3_0"; return false; }
             if (src.find(" v9") != std::string::npos || src.find(" s11") != std::string::npos || src.find(" s12") != std::string::npos ||
-                src.find(" s13") != std::string::npos || src.find("c200") != std::string::npos || src.find(" i0") != std::string::npos)
-            { why = "v9/s11/s12/s13/c200/i0 in use"; return false; }
+                src.find(" s13") != std::string::npos || src.find("c200") != std::string::npos || src.find(" i0") != std::string::npos ||
+                src.find(" s15") != std::string::npos || src.find("c160") != std::string::npos || src.find("c161") != std::string::npos)
+            { why = "v9/s11/s12/s13/s15/c160/c161/c200/i0 in use"; return false; }
             // Clear ice (features/TerrainIce): the variant's layer blend, copied right after its sample
             // (before the searches below, which take positions in the edited text).
             terrainice::Variant ice;
@@ -127,23 +132,21 @@ namespace wxl_livingazeroth::terrainwet
             std::smatch m;
             if (!std::regex_search(src, m, fog)) { why = "no fog ending"; return false; }
             const std::string r = m[2].str();
+            // Wet surfaces (features/WetSurfaces): with the layers' weights (the ice's alpha copy), r25.z = the pixel's
+            // share of shine (c160 per chunk), and the pieces it adds below; none without them. The stock's temps
+            // r1..r9 must be dead here: only the colour register may be read after the fog ending.
+            const bool withWet = withIce && r == "r0" && wetsurfaces::PiecesOn();
+            const wetsurfaces::TerrainPieces wet = withWet ? wetsurfaces::TerrainShader(r) : wetsurfaces::TerrainPieces{};
+            wetsurfaces::NoteVariant(withWet, !withIce ? "no layer weights (no ice code): " + iceWhy : (r != "r0" ? "the colour isn't r0" : "left out (tests)"));
             // The ice weight first (r25), then the wet look (none on ice), then the ice look.
-            const std::string block = (withIce ? terrainice::WeightBlock(ice) : std::string()) +
+            const std::string block = (withIce ? terrainice::WeightBlock(ice, withWet) : std::string()) +
                 "\n    add r31.xy, v9.xy, -c201.xy"
                 "\n    add r31.zw, -v9.xyxy, c201.zwzw"
                 "\n    min r31.xy, r31.xy, r31.zw"
                 "\n    min r31.x, r31.x, r31.y"
                 "\n    mul_sat r31.x, r31.x, c203.w"
-                "\n    max r31.x, r31.x, c203.x"
                 "\n    mul r29.xy, v9.xy, c200.x"
                 "\n    texld r30, r29, s11"
-                "\n    max r30.w, r30.w, c200.y"
-                "\n    mul r28.xy, v9.xy, c203.y"
-                "\n    frc r28.xy, r28"
-                "\n    add r28.xy, r28, -c202.z"
-                "\n    cmp r28.x, r28.x, c202.y, c202.x"
-                "\n    mul r28.x, r28.x, c203.z"
-                "\n    max r30.w, r30.w, r28.x"
                 // Beyond the near grid: the far map (per chunk, its zone's value) inside its box, the
                 // single fallback value outside it.
                 "\n    mul r27.xy, v9.xy, c204.x"
@@ -158,14 +161,16 @@ namespace wxl_livingazeroth::terrainwet
                 "\n    mad r27.w, r26.x, r27.w, c200.z"
                 "\n    add r30.w, r30.w, -r27.w"
                 "\n    mad r30.w, r31.x, r30.w, r27.w"
-                "\n    mov r30.x, r30.w"
-                "\n    mul r30.x, r30.x, c200.w" +
+                "\n    mul r30.x, r30.w, c200.w" +
+                // The surface's wetness (r1.x) and puddle (r1.y); its darkening joins the soil's.
+                wet.texel +
                 (withIce ? terrainice::WetScale() : std::string()) +
                 "\n    mad " + r + ".xyz, " + r + ", -r30.x, " + r +
                 (withIce ? terrainice::LookBlock(r) : std::string());
-            // Then the point lights (features/TerrainLights), on the wet colour.
+            // Then the point lights (features/TerrainLights), on the wet colour; wet surfaces' highlights of them and of
+            // the sun, and the sky in the water, with them.
             std::string lightDefs;
-            const std::string lightBlock = terrainlights::PixelBlock(r, lightDefs);
+            const std::string lightBlock = terrainlights::PixelBlock(r, lightDefs, withWet ? &wet : nullptr);
             // Last, before the fog: a scorch mark (c223, SetScorch) darkens the lit colour in a soft disc,
             // (1 - d^2)^2 of the way to strength at its centre; strength 0 leaves the colour exactly.
             const std::string scorchBlock =
@@ -178,7 +183,7 @@ namespace wxl_livingazeroth::terrainwet
                 "\n    mad " + r + ".xyz, " + r + ", -r28.x, " + r;
             src.insert(static_cast<size_t>(m.position(0)), block + lightBlock + scorchBlock);
             src.insert(src.find('\n') + 1, "    def c202, 1, 0, 0.5, 0\n" + lightDefs + (withIce ? terrainice::Definitions() : std::string()) +
-                                            "    dcl_texcoord7 v9.xyz\n    dcl_2d s11\n    dcl_2d s12\n");
+                                            "    dcl_texcoord7 v9.xyz\n    dcl_2d s11\n    dcl_2d s12\n" + wet.declarations);
             terrainice::NoteVariant(withIce, iceWhy);
             return true;
         }
@@ -213,20 +218,17 @@ namespace wxl_livingazeroth::terrainwet
         float c[16] = {};
         float inverseExtent = 0.0f, box[4] = {};
         // The moisture texture also carries the ground's normal for the point lights: bound whenever
-        // the patch is active, wet look or not.
-        const bool bound = PairOk(shaderpatch::Status()) && moisturetex::Mapping(inverseExtent, box) && moisturetex::Bind(device, 11);
+        // the patch is active, wet look or not. The debug views bind a copy with its excess replaced.
+        const bool mapped = PairOk(shaderpatch::Status()) && moisturetex::Mapping(inverseExtent, box);
+        const bool bound = mapped && (g_debug ? moisturetex::BindDebug(device, 11, g_debug) : moisturetex::Bind(device, 11));
         const bool on = g_enabled && bound;
         c[0] = inverseExtent;
-        c[1] = g_debug >= 1 ? 1.0f : 0.0f;
         c[3] = on ? (g_debug ? 0.8f : g_strength) : 0.0f;
         for (int k = 0; k < 4; ++k) c[4 + k] = box[k];
+        if (g_debug == 2) { c[4] = c[5] = -1.0e9f; c[6] = c[7] = 1.0e9f; } // the whole terrain: no box edge anywhere
         c[8] = 1.0f; c[9] = 1.0f; c[10] = 0.0f; c[11] = 0.0f; // c202: the shader's own def wins
         c[2] = g_debug ? 0.0f : moisturetex::FarExcess();
-        c[12] = g_debug >= 2 ? 1.0f : 0.0f;  // c203.x ignore the box
         c[15] = 1.0f / moisturetex::kEdgeFadeYards;
-        c[13] = 0.1f;                         // c203.y stripes every 10 yd (5 dark, 5 not)
-        c[14] = g_debug == 3 ? 1.0f : 0.0f;   // c203.z stripes on
-        if (g_debug == 3) c[1] = 0.0f;        // stripes only
         device->SetPixelShaderConstantF(kPsConstant, c, 2);
         device->SetPixelShaderConstantF(kPsConstant + 3, c + 12, 1);
 
@@ -241,6 +243,9 @@ namespace wxl_livingazeroth::terrainwet
         // The scorch mark, or none (a constant left over from anything else must not darken the ground).
         const float none[4] = {};
         device->SetPixelShaderConstantF(kScorchConstant, bound && g_scorch[3] > 0.0f ? g_scorch : none, 1);
+
+        // Wet surfaces: their texture on s15 and their constants (zeros, so nothing changes, when they're off).
+        wetsurfaces::BeforeTerrainStage(device, bound);
     }
 
     bool  PatchActive()            { return PairOk(shaderpatch::Status()); }

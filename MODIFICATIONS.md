@@ -224,6 +224,27 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
     creatures and weapons the table also lists (wisps, mage portals, the Saronite deposit), not a game object's own
     model (`GameObjectDisplayInfo.dbc`: instance portals) unless it hangs on a unit; those keep the light scan's doodad
     rules. Anything flying as a missile still counts, by its particles and own lights alone unless its file is a spell's.
+- **Wet surfaces** (25 October 2026, `[LivingAzeroth.WetSurfaces]`, on by default): in rain, stone, soil, paths and
+  roads darken and shine, the sky and our lamps gleam on them, and puddles gather in low, flat ground and mirror the sky,
+  torches, lit windows and spell lights; grass, leaves, snow and ice don't change, and nothing under roofs or indoors
+  gets wet. From Lumenveil's list, the idea only (its code is GPL v2).
+  - Each zone's surfaces wet through over about 45 s of heavy rain (longer in light rain) and dry linearly over
+    `DryOutMinutes` after it stops (faster when hot, dry and windy); puddles fill more slowly and last half as long
+    again (`env/WetSurfaceModel`).
+  - The moisture grid works out, per 2-yard cell, the surface water (its zone's x open sky by the roof checks; none under
+    water, snow or on hot ground) and a puddle potential (how much lower than the ground round it, how flat, a little
+    noise), uploaded as a second texture in the moisture texture's layout.
+  - Inside the patched terrain shaders, sharing the wetness block, the clear ice's layer weights and the point lights'
+    loop: each layer's shine (`GroundMaterial.cdbc`'s new `WetShine` column along the material's chain, else the
+    layer's TerrainType: grass and leaves 0, stone 1; `tools/add_wet_shine.py`), the darkening with the soil's own, the
+    sky by Fresnel, the sun's glint, and every light's highlight, a broad sheen on wet ground and a sharp image in a
+    puddle. 40 instruction slots on the largest variant; the terrain wetness's debug views moved out of the shader
+    into a debug copy of its texture to make room (475 -> 506 of 512).
+  - Buildings' outside stone, wood and roofs through the ice block in a wet style, weighted by facing: floors and
+    streets full, walls less, ceilings not at all (2 slots: 2027 -> 2029 of 2048). Rooms stay dry unless the roof
+    checks see the sky over their floor: Stormwind's streets and canals are rooms to the client, its shops too.
+  - Its lines are on the climate panel, in the 30-second log line and in F11 snapshots; `tests/wet`, and
+    `fields_shore_tests` for the grid's part.
 - **Snapshot key** (22 October 2026): one key (`SnapshotKey`, F11) or a panel button writes where you are, the camera
   (in the nearest building's own space too), the time, the weather, the settings that matter, the frame rate and the
   panels' status to `Logs\la-snapshots\` in the game folder, for bug reports; the glass and see-through test harnesses
@@ -259,6 +280,6 @@ Morfium-G, licensed under GPL-3.0 (see [LICENSE](LICENSE)). The modifications ar
     snapshot and the 30-second log line record its state.
   - Their status in the lights panel, the overview page, the 30-second log line and the snapshot; `tests/lumen`.
 - **Tests** under `tests/`: cover tables and prints, lights, shore, storms, windows, sun shafts, glass, crystals,
-  see-through windows, tree shadows, spell lights, the memory readout, the lantern, distant lights and the compare key.
+  see-through windows, tree shadows, spell lights, the memory readout, the lantern, distant lights, the compare key and wet surfaces.
 
 Shader-level GPU checks and a few offline harnesses live outside this repository for now.

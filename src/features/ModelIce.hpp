@@ -10,7 +10,8 @@
 // batch draws (M2.DrawBatch, M2.DrawBatchDoodad) switch b7 on for ice models only, so every other
 // model draw skips the block and comes out exactly as before.
 // Registers: r12..r31, b7, c174..c178 (defined), c179 (the batch's ice weight and style), c180..c189
-// (the look), c190 (more of the style), c78..c81 (the crystals': features/Crystal; zeros for the ice), s14. Stock M2
+// (the look), c190 (more of the style), c78..c81 (the crystals': features/Crystal; zeros for the ice), c77 (the weight's
+// facing: features/WetSurfaces' wet buildings; zeros everywhere else, the weight as before), s14. Stock M2
 // pixel shaders use r0..r11, c0..c14, s0..s7 and no b/i registers.
 //
 // The same block draws the crystals (features/Crystal): the batch-draw hooks switch it on for a crystal batch of any other
@@ -64,7 +65,10 @@ namespace wxl_livingazeroth::modelice
     /// ... and the glass blocks as well only with this many (tests/glass reports the largest variant's slots).
     constexpr unsigned kGlassMinSlots = 2048;
 
-    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3, Floe = 4, Glacier = 5, SeaIce = 6 };
+    /// Wet (features/WetSurfaces): not ice at all but a building's wet stone, wood and roofs in rain, through the same block:
+    /// the texture's own colour a little darker (c179.z), the sky by Fresnel and a broad glint, no detail (c190.z -1: the
+    /// cracks and bubbles nothing, whatever the detail texture holds), weighted per pixel by its facing (c77).
+    enum class Style : int { None = 0, Ice = 1, FrozenFall = 2, Light = 3, Floe = 4, Glacier = 5, SeaIce = 6, Wet = 7 };
     /// Which look a model path (stem or file name, any case or slashes) gets: none, light (the ice models),
     /// glacier (Dragonblight's ice rocks, shards, cliffs and icebergs), sea ice (the floating shoreline floes), or
     /// frozen fall. (Floe is a building texture's: features/WmoIce.)

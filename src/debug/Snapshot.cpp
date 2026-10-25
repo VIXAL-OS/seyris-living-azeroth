@@ -22,7 +22,9 @@
 #include "../features/SpellLights.hpp"
 #include "../features/SurfaceCover.hpp"
 #include "../features/TerrainLights.hpp"
+#include "../features/TerrainWetness.hpp"
 #include "../features/TreeShadows.hpp"
+#include "../features/WetSurfaces.hpp"
 
 #include "engine/events/Event.hpp"
 #include "game/Camera.hpp"
@@ -506,6 +508,12 @@ namespace wxl_livingazeroth::snapshot
             lines.clear();
             treeshadows::StatusLines(lines);
             for (const std::string& l : lines) t("%s", l.c_str());
+            t("");
+            t("Wet surfaces (the climate panel)");
+            lines.clear();
+            wetsurfaces::StatusLines(lines);
+            for (const std::string& l : lines) t("%s", l.c_str());
+            t("%s", terrainwet::StatusLine());
         }
 
         // What uses the client's address space (debug/Memory), the client's caches read again now: lines may be long, so
